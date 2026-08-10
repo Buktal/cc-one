@@ -183,7 +183,8 @@ pub(crate) fn atomic_write_file(path: &Path, content: &str) -> AppResult<()> {
 /// - claude：JSON 受控合并进 `~/.claude/settings.json`（本模块）。
 /// - codex：TOML 受控合并进 `~/.codex/config.toml` + 受控写
 ///   `~/.codex/auth.json`（`live_codex` 模块）。
-/// - gemini：写盘实现属后续批次，当前显式报错。
+/// - gemini：`.env` 整块替换 + `settings.json` 受控合并
+///   （`live_gemini` 模块，含 `selectedType` 认证标记）。
 pub fn write_live(app: App, provider: &Provider) -> AppResult<()> {
     match app {
         App::Claude => {
@@ -199,7 +200,9 @@ pub fn write_live(app: App, provider: &Provider) -> AppResult<()> {
                 &provider.settings_config,
             )
         }
-        App::Gemini => Err(AppError::Config("Gemini 写盘尚未实现（后续批次）".into())),
+        App::Gemini => {
+            crate::provider::live_gemini::write_gemini_live(&provider.settings_config)
+        }
     }
 }
 
@@ -254,7 +257,8 @@ fn find_unfilled_template_var(text: &str) -> Option<String> {
 }
 
 /// 解析 live 输入：空串/纯空白 → `{}`；非空但非法 JSON 或非对象 → `Err`。
-fn parse_live_or_empty(live: &str) -> AppResult<serde_json::Value> {
+/// `live_gemini` 复用同一条解析规则（现有 settings.json 缺失时视为 `{}`）。
+pub(crate) fn parse_live_or_empty(live: &str) -> AppResult<serde_json::Value> {
     let trimmed = live.trim();
     if trimmed.is_empty() {
         return Ok(serde_json::Value::Object(Default::default()));
@@ -263,7 +267,8 @@ fn parse_live_or_empty(live: &str) -> AppResult<serde_json::Value> {
 }
 
 /// 解析目标输入：空串 → `{}`；非法 JSON 或非对象 → `Err`。
-fn parse_target_or_empty(target: &str) -> AppResult<serde_json::Value> {
+/// `live_gemini` 复用同一条解析规则（目标 settingsConfig 空串 = 空目标）。
+pub(crate) fn parse_target_or_empty(target: &str) -> AppResult<serde_json::Value> {
     let trimmed = target.trim();
     if trimmed.is_empty() {
         return Ok(serde_json::Value::Object(Default::default()));

@@ -249,7 +249,7 @@ fn rollback_auth(auth_path: &Path, existing: &Option<String>) {
         None => fs::remove_file(auth_path).map_err(AppError::from),
     };
     if let Err(e) = result {
-        eprintln!("[vaultone] codex config write failed and auth.json rollback also failed: {e}");
+        eprintln!("[cc-one] codex config write failed and auth.json rollback also failed: {e}");
     }
 }
 

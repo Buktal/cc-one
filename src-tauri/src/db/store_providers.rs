@@ -121,6 +121,9 @@ impl super::Store {
             id,
             sort_index: sort_index as u32,
             updated_at,
+            // TEMP-APP-SHIM: #32 落地后按 provider.app 落 app 列；shim 期表
+            // 结构没有 app 列，返回值必须与持久化的实际内容一致（Claude）。
+            app: App::Claude,
             ..provider
         })
     }

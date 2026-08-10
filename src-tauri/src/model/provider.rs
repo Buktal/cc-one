@@ -147,17 +147,19 @@ pub(crate) fn generate_provider_id() -> String {
 
 /// Secret env-var keys stripped from `settingsConfig` before it leaves this
 /// device (the synced `providers.json`): API keys live in the `env` block
-/// (claude) or the `auth` object (codex) and must never enter the repo.
-/// `AWS_REGION` is deliberately NOT here — it is a non-secret region code (or
-/// a `${VAR}` template-variable placeholder), not a credential. This list is
-/// the single source of truth: `Provider::redacted`, the sync merge, and the
-/// export path (`provider::export_import`) all route through it.
+/// (claude `ANTHROPIC_*` / gemini `GEMINI_API_KEY`) or the `auth` object
+/// (codex `OPENAI_API_KEY`) and must never enter the repo. `AWS_REGION` is
+/// deliberately NOT here — it is a non-secret region code (or a `${VAR}`
+/// template-variable placeholder), not a credential. This list is the single
+/// source of truth: `Provider::redacted`, the sync merge, and the export path
+/// (`provider::export_import`) all route through it.
 pub const SECRET_ENV_KEYS: &[&str] = &[
     "ANTHROPIC_AUTH_TOKEN",
     "ANTHROPIC_API_KEY",
     "AWS_SECRET_ACCESS_KEY",
     "AWS_ACCESS_KEY_ID",
     "OPENAI_API_KEY",
+    "GEMINI_API_KEY",
 ];
 
 impl Provider {

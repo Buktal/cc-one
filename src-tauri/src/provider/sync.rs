@@ -109,7 +109,7 @@ fn read_device_providers(paths: &Paths, device_id: &str) -> Vec<Provider> {
     let doc = serde_json::from_str::<SyncedProvidersDoc>(&text).unwrap_or_default();
     if doc.v > SYNCED_PROVIDERS_DOC_VERSION {
         eprintln!(
-            "[vaultone] provider file for device {device_id} has schema v{} \
+            "[cc-one] provider file for device {device_id} has schema v{} \
              (this build reads ≤ v{SYNCED_PROVIDERS_DOC_VERSION}) — skipped; upgrade to see its providers",
             doc.v
         );
