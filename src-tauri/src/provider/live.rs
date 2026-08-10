@@ -1,5 +1,10 @@
 //! Provider 写盘（live）：受控合并 + 备份 + 原子写。
 //!
+//! 写盘分派点 `write_live(app, provider)`（claude / codex / gemini 三分支）
+//! 见本文件下方；codex 分支的 TOML 合并 + auth.json 在 `live_codex` 模块。
+//! 以下写盘语义是 claude 分支（JSON 受控合并）的精确规格，codex/gemini 各自
+//! 沿用同一套「受控合并 / 非受控保留 / 备份 / 原子写」语义：
+//!
 //! 写盘语义（必须精确实现）：
 //! - **受控字段**（Provider 接管，切换时整块替换/合并）：`env` 块 +
 //!   `includeCoAuthoredBy` / `attribution` / `effortLevel` / `enabledPlugins` /
@@ -25,6 +30,7 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 
 use crate::error::{AppError, AppResult};
+use crate::model::provider::{App, Provider};
 
 /// 写盘时从配置里剥掉的内部 meta 字段（类比 cc-switch
 /// `sanitize_claude_settings_for_live`）：这些键只供应用自己读，不是合法的
@@ -120,27 +126,44 @@ pub fn read_live_settings(path: &Path) -> AppResult<String> {
     }
 }
 
-/// 把当前 live 备份为 `settings.json.bak`（单份覆盖）。live 不存在时跳过——
-/// 没有可备份的内容。
+/// 把当前 live 备份为 `<name>.<ext>.bak`（单份覆盖）。live 不存在时跳过——
+/// 没有可备份的内容。claude `settings.json` 与 codex `config.toml` 共用同一
+/// 条备份规则（备份路径由文件扩展名推导，见 [`backup_path`]）。
 pub fn backup_live_settings(path: &Path) -> AppResult<()> {
+    backup_file(path)
+}
+
+/// 通用备份（写盘前调用）：目标存在才备份，`.bak` 单份覆盖不堆积。
+/// codex config.toml 的写前备份走这里（auth.json 是凭据/登录态，不备份）。
+pub(crate) fn backup_file(path: &Path) -> AppResult<()> {
     if !path.exists() {
         return Ok(());
     }
-    let bak = path.with_extension("json.bak");
-    fs::copy(path, &bak)?;
+    fs::copy(path, backup_path(path))?;
     Ok(())
 }
 
+/// 备份路径：`settings.json` → `settings.json.bak`，`config.toml` →
+/// `config.toml.bak`（保留原名，追加 `.bak` 到扩展名之后）。
+pub(crate) fn backup_path(path: &Path) -> PathBuf {
+    let ext = path
+        .extension()
+        .map(|e| e.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    path.with_extension(format!("{ext}.bak"))
+}
+
 /// 原子写：先把内容写入同目录的临时文件（独立名字，避免并发写冲突），再改名
-/// 覆盖目标。进程在写盘中途中断只会留下临时文件，不会产生半截 `settings.json`。
-pub fn write_live_settings(path: &Path, content: &str) -> AppResult<()> {
+/// 覆盖目标。进程在写盘中途中断只会留下临时文件，不会产生半截 live 文件。
+/// claude settings.json 与 codex config.toml/auth.json 共用（单一事实来源）。
+pub(crate) fn atomic_write_file(path: &Path, content: &str) -> AppResult<()> {
     let parent = path
         .parent()
-        .ok_or_else(|| AppError::Config("settings.json path has no parent dir".into()))?;
+        .ok_or_else(|| AppError::Config("live file path has no parent dir".into()))?;
     fs::create_dir_all(parent)?;
     let file_name = path
         .file_name()
-        .ok_or_else(|| AppError::Config("settings.json path has no file name".into()))?;
+        .ok_or_else(|| AppError::Config("live file path has no file name".into()))?;
     let nanos = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_nanos())
@@ -153,6 +176,37 @@ pub fn write_live_settings(path: &Path, content: &str) -> AppResult<()> {
     }
     fs::rename(&tmp, path)?;
     Ok(())
+}
+
+/// 写盘分派（`write_live(app, provider)`）：按应用选择写盘实现，各自保持
+/// 「只合并受控字段、非受控原地保留、写前备份、原子写」——
+/// - claude：JSON 受控合并进 `~/.claude/settings.json`（本模块）。
+/// - codex：TOML 受控合并进 `~/.codex/config.toml` + 受控写
+///   `~/.codex/auth.json`（`live_codex` 模块）。
+/// - gemini：写盘实现属后续批次，当前显式报错。
+pub fn write_live(app: App, provider: &Provider) -> AppResult<()> {
+    match app {
+        App::Claude => {
+            let path = claude_settings_path()?;
+            switch_live_settings(&path, &provider.settings_config)
+        }
+        App::Codex => {
+            let config_path = crate::provider::live_codex::codex_config_path()?;
+            let auth_path = crate::provider::live_codex::codex_auth_path()?;
+            crate::provider::live_codex::switch_codex_live(
+                &config_path,
+                &auth_path,
+                &provider.settings_config,
+            )
+        }
+        App::Gemini => Err(AppError::Config("Gemini 写盘尚未实现（后续批次）".into())),
+    }
+}
+
+/// claude settings.json 的原子写（`atomic_write_file` 的既有公开面，调用方
+/// 与测试沿用此名）。
+pub fn write_live_settings(path: &Path, content: &str) -> AppResult<()> {
+    atomic_write_file(path, content)
 }
 
 /// 切换写盘全流程（薄壳，按序调用）：读 live → 受控合并（含清洗）→ 备份 .bak →

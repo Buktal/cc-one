@@ -4,7 +4,7 @@
 //! local sort_index preserved — see its doc).
 
 use super::*;
-use crate::model::{Provider, ProviderCategory};
+use crate::model::{App, Provider, ProviderCategory};
 
 impl super::Store {
     /// All providers, in user order (`sort_index`, name as the deterministic
@@ -199,6 +199,9 @@ impl super::Store {
 
 fn row_to_provider(r: &rusqlite::Row) -> rusqlite::Result<Provider> {
     Ok(Provider {
+        // TEMP-APP-SHIM: #32 合并后移除，以 #32 实现为准——#32 的 DDL 加 app
+        // 列后从此处读取；当前表无该列，全部存量行归 claude。
+        app: App::Claude,
         id: r.get(0)?,
         name: r.get(1)?,
         website_url: r.get(2)?,
@@ -223,6 +226,7 @@ mod tests {
     /// helper takes no id.
     fn provider(name: &str, category: ProviderCategory) -> Provider {
         Provider {
+            app: App::Claude,
             id: String::new(),
             name: name.into(),
             website_url: "https://example.com".into(),
@@ -459,6 +463,7 @@ mod tests {
         let before_updated = before.updated_at.clone();
 
         let peer = Provider {
+            app: App::Claude,
             id: created.id.clone(),
             name: "Kimi Pro".into(),
             website_url: "https://x.dev".into(),
@@ -491,6 +496,7 @@ mod tests {
         s.save_provider(provider_with_config("Beta", "{}")).unwrap();
 
         let peer = Provider {
+            app: App::Claude,
             id: "newpeer01".into(),
             name: "New Peer".into(),
             website_url: "https://x.dev".into(),

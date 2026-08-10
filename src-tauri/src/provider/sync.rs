@@ -262,6 +262,7 @@ mod tests {
         updated_at: &str,
     ) -> Provider {
         Provider {
+            app: crate::model::App::Claude,
             id: id.into(),
             name: name.into(),
             website_url: "https://example.com".into(),

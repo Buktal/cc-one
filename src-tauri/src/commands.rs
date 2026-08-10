@@ -17,9 +17,9 @@ use crate::db::Store;
 use crate::error::{AppError, AppResult};
 use crate::library::{self, DeviceLibrarySummary, LibraryEntry, UploadItem};
 use crate::model::{
-    CommonConfigSnippet, DeviceInfo, LocalGroup, LogsQuery, ModelStatsRow, PricingEntry, Provider,
-    RunMode, SessionFilter, SessionGroup, SessionMessage, SessionRow, SyncedGroup, TrendBucket,
-    TrendPoint, UsageFilter, UsageLogRow, UsageStats,
+    App, CommonConfigSnippet, DeviceInfo, LocalGroup, LogsQuery, ModelStatsRow, PricingEntry,
+    Provider, RunMode, SessionFilter, SessionGroup, SessionMessage, SessionRow, SyncedGroup,
+    TrendBucket, TrendPoint, UsageFilter, UsageLogRow, UsageStats,
 };
 use crate::pricing;
 use crate::provider::export_import::{ProviderImportMode, ProviderImportReport};
@@ -806,15 +806,25 @@ fn emit_providers_changed(app_handle: &tauri::AppHandle) {
     let _ = app_handle.emit("providers_changed", ());
 }
 
+/// 某应用的全部供应商（按用户顺序）。`app` 参数必填——供应商按应用归属，
+/// 前端传入当前分段 tab。
 #[tauri::command]
 #[specta::specta]
-pub fn list_providers_cmd(state: State<'_, AppState>) -> AppResult<Vec<Provider>> {
-    state.store.list_providers()
+pub fn list_providers_cmd(state: State<'_, AppState>, app: App) -> AppResult<Vec<Provider>> {
+    // TEMP-APP-SHIM: #32 合并后移除，以 #32 实现为准——store 层按 app 限定
+    // 属 #32 数据模型迁移（DDL 加 app 列），此处先按行内 app 过滤。
+    Ok(state
+        .store
+        .list_providers()?
+        .into_iter()
+        .filter(|p| p.app == app)
+        .collect())
 }
 
 /// Upsert a provider (empty id = create, non-empty = edit). Returns the
 /// persisted row so the caller learns the assigned id / sort position without
-/// a second read.
+/// a second read. `app` 归属随 provider 本身（`Provider.app`）落地——
+/// TEMP-APP-SHIM: #32 合并后移除，以 #32 实现为准（当前 DB 无 app 列）。
 #[tauri::command]
 #[specta::specta]
 pub fn save_provider_cmd(
@@ -827,40 +837,53 @@ pub fn save_provider_cmd(
     Ok(saved)
 }
 
+/// 删除某应用的一个供应商。`app` 参数按命令契约对齐；id 全局唯一（跨应用
+/// 不冲突），store 层按 app 限定删除属 #32 数据模型迁移范围，当前不改变
+/// 行为。
 #[tauri::command]
 #[specta::specta]
 pub fn delete_provider_cmd(
     state: State<'_, AppState>,
     app_handle: tauri::AppHandle,
+    app: App,
     id: String,
 ) -> AppResult<()> {
+    let _ = app;
     state.store.delete_provider(&id)?;
     emit_providers_changed(&app_handle);
     Ok(())
 }
 
+/// 重排某应用的全部供应商（拖拽后的新顺序）。`app` 参数按命令契约对齐；
+/// store 层按 app 限定属 #32 数据模型迁移范围，当前不改变行为。
 #[tauri::command]
 #[specta::specta]
 pub fn reorder_providers_cmd(
     state: State<'_, AppState>,
     app_handle: tauri::AppHandle,
+    app: App,
     ordered_ids: Vec<String>,
 ) -> AppResult<()> {
+    let _ = app;
     state.store.reorder_providers(&ordered_ids)?;
     emit_providers_changed(&app_handle);
     Ok(())
 }
 
-/// 切换供应商（核心动作）：查 provider → 读 live → （片段启用则先合并
-/// 片段）→ 受控合并 → 备份 .bak → 原子写 → 记激活状态。写盘语义：只替换
-/// 受控字段（env + 少数顶层开关），非受控字段（hooks / MCP / permissions /
-/// model 等）从 live 原地保留，不整文件覆盖、不做 Backfill。「保存」只写
-/// DB（save_provider_cmd），本命令才真正写盘。
+/// 切换供应商（核心动作）：查 provider → 按应用分派写盘 → 记激活状态。
+/// 写盘分派 `write_live(app, provider)`：claude 分支走 JSON 受控合并 +
+/// 备份 + 原子写；codex 分支走 TOML 受控合并 + auth.json（登录态版不写
+/// auth.json）。各分支语义一致：只替换受控字段、非受控字段（hooks / MCP /
+/// permissions / model / mcp_servers 等）从 live 原地保留，不整文件覆盖、
+/// 不做 Backfill。claude 的通用片段合并与模板变量拦截是 claude 专属步骤
+/// （片段是 settings.json JSON 合并；codex 的片段与模板变量属后续批次）。
+/// 「保存」只写 DB（save_provider_cmd），本命令才真正写盘。
 #[tauri::command]
 #[specta::specta]
 pub async fn switch_provider_cmd(
     state: State<'_, AppState>,
     app_handle: tauri::AppHandle,
+    app: App,
     id: String,
 ) -> AppResult<Provider> {
     let store = state.store.clone();
@@ -869,20 +892,29 @@ pub async fn switch_provider_cmd(
         let provider = store
             .get_provider(&id)?
             .ok_or_else(|| AppError::Config(format!("provider not found: {id}")))?;
-        let path = crate::provider::live::claude_settings_path()?;
-        // 通用配置片段：启用了先合并进 settingsConfig 再走受控写盘（片段是
-        // 共享默认值，供应商显式配置优先；非受控键被忽略）。启用片段解析
-        // 不了会让切换失败——宁可显式报错，也不静默丢片段效果。
-        let cfg = config.get();
-        let settings_config = crate::provider::snippet::apply_snippet(
-            &provider.settings_config,
-            &cfg.common_config_snippet,
-            cfg.common_config_snippet_enabled,
-        )?;
-        // 未物化的模板变量不能进 live（前端保存时已拦截，但导入/手改的
-        // 配置可能绕过）：字面量 `${VAR}` 写进 settings.json 等于写一份废配置。
-        crate::provider::live::validate_no_unfilled_template_vars(&settings_config)?;
-        crate::provider::live::switch_live_settings(&path, &settings_config)?;
+        match app {
+            App::Claude => {
+                // 通用配置片段：启用了先合并进 settingsConfig 再走受控写盘
+                // （片段是共享默认值，供应商显式配置优先；非受控键被忽略）。
+                // 启用片段解析不了会让切换失败——宁可显式报错，也不静默丢
+                // 片段效果。
+                let cfg = config.get();
+                let settings_config = crate::provider::snippet::apply_snippet(
+                    &provider.settings_config,
+                    &cfg.common_config_snippet,
+                    cfg.common_config_snippet_enabled,
+                )?;
+                // 未物化的模板变量不能进 live（前端保存时已拦截，但导入/
+                // 手改的配置可能绕过）：字面量 `${VAR}` 写进 settings.json
+                // 等于写一份废配置。
+                crate::provider::live::validate_no_unfilled_template_vars(&settings_config)?;
+                let mut p = provider.clone();
+                p.settings_config = settings_config;
+                crate::provider::live::write_live(App::Claude, &p)?;
+            }
+            App::Codex => crate::provider::live::write_live(App::Codex, &provider)?,
+            App::Gemini => crate::provider::live::write_live(App::Gemini, &provider)?,
+        }
         config.update(|c| c.active_provider_id = Some(id))?;
         Ok(provider)
     })
@@ -893,15 +925,20 @@ pub async fn switch_provider_cmd(
 }
 
 /// 当前激活的完整 provider（前端「当前使用」光卡用）。未激活、或激活的
-/// provider 已被删除 → `None`。
+/// provider 已被删除 → `None`。按 app 过滤——TEMP-APP-SHIM: #32 合并后
+/// 移除，以 #32 实现为准（per-app 激活状态存 config.json 属 #32 迁移）。
 #[tauri::command]
 #[specta::specta]
-pub fn get_active_provider_cmd(state: State<'_, AppState>) -> AppResult<Option<Provider>> {
+pub fn get_active_provider_cmd(
+    state: State<'_, AppState>,
+    app: App,
+) -> AppResult<Option<Provider>> {
     let id = match state.config.get().active_provider_id {
         Some(id) => id,
         None => return Ok(None),
     };
-    state.store.get_provider(&id)
+    let p = state.store.get_provider(&id)?;
+    Ok(p.filter(|p| p.app == app))
 }
 
 /// 读全局通用配置片段（内容 + 启用开关）。一条记录跨供应商共享，存本机
