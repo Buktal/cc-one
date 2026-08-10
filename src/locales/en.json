@@ -445,6 +445,7 @@
   "usage.logs.pageInfo": "Page {{page}} / {{totalPages}} · {{total}} rows",
   "usage.logs.prevPage": "Previous",
   "usage.logs.title": "Request logs",
+  "usage.models.cacheHit": "Cache hit",
   "usage.models.cost": "Cost",
   "usage.models.empty": "No model data",
   "usage.models.others": "Others ({{n}})",

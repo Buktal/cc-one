@@ -64,17 +64,28 @@ impl super::Store {
             "SELECT model,
                 COUNT(*),
                 COALESCE(SUM(input_tokens+output_tokens+cache_creation_tokens+cache_read_tokens),0),
-                COALESCE(SUM(CAST(total_cost_usd AS REAL)),0)
+                COALESCE(SUM(CAST(total_cost_usd AS REAL)),0),
+                COALESCE(SUM(input_tokens),0),
+                COALESCE(SUM(cache_creation_tokens),0),
+                COALESCE(SUM(cache_read_tokens),0)
              FROM usage_records {clause}
              GROUP BY model ORDER BY 4 DESC"
         );
         let mut stmt = conn.prepare(&sql)?;
         let rows = stmt.query_map(params_from_iter(params_vec.iter()), |r| {
+            // 缓存命中率复用 TokenCounts 的唯一实现 (与 query_stats 一致)。
+            let cache = TokenCounts {
+                input: r.get::<_, i64>(4)? as u32,
+                output: 0,
+                cache_creation: r.get::<_, i64>(5)? as u32,
+                cache_read: r.get::<_, i64>(6)? as u32,
+            };
             Ok(ModelStatsRow {
                 model: r.get(0)?,
                 request_count: r.get::<_, i64>(1)? as u32,
                 total_tokens: r.get::<_, i64>(2)? as u32,
                 total_cost_usd: r.get(3)?,
+                cache_hit_rate: cache.cache_hit_rate(),
             })
         })?;
         rows.collect::<rusqlite::Result<Vec<_>>>()
@@ -324,5 +335,27 @@ mod tests {
         .unwrap();
         let models = s.query_models(&UsageFilter::default()).unwrap();
         assert_eq!(models.len(), 2);
+        // 无缓存数据的模型命中率为 0。
+        assert!(models.iter().all(|m| m.cache_hit_rate == 0.0));
+    }
+
+    #[test]
+    fn models_breakdown_reports_cache_hit_rate() {
+        let s = mem();
+        s.ingest(&[
+            rec("a", "2026-07-13", "glm-5.2", "d", 100, 0, 1.0),
+            {
+                let mut r = rec("b", "2026-07-13", "gpt-4o", "d", 50, 0, 2.0);
+                r.tokens.cache_read = 50;
+                r
+            },
+        ])
+        .unwrap();
+        let models = s.query_models(&UsageFilter::default()).unwrap();
+        let by_model = |m: &str| models.iter().find(|x| x.model == m).unwrap();
+        // cache_read / (input + cache_creation + cache_read) = 50 / 100.
+        assert!((by_model("gpt-4o").cache_hit_rate - 0.5).abs() < 1e-9);
+        // 纯输入、无任何缓存活动 → 0。
+        assert_eq!(by_model("glm-5.2").cache_hit_rate, 0.0);
     }
 }

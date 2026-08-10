@@ -428,6 +428,7 @@
   "usage.logs.pageInfo": "{{page}} / {{totalPages}} ページ · 全 {{total}} 件",
   "usage.logs.prevPage": "前へ",
   "usage.logs.title": "リクエストログ",
+  "usage.models.cacheHit": "キャッシュヒット",
   "usage.models.cost": "コスト",
   "usage.models.empty": "モデルデータなし",
   "usage.models.others": "その他 ({{n}})",

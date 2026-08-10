@@ -43,8 +43,19 @@ function stats(totalTokens: number): UsageStats {
   }
 }
 
-function modelRow(model: string, tokens: number, cost: number): ModelStatsRow {
-  return { model, request_count: 1, total_tokens: tokens, total_cost_usd: cost }
+function modelRow(
+  model: string,
+  tokens: number,
+  cost: number,
+  cache_hit_rate: number | null = 0,
+): ModelStatsRow {
+  return {
+    model,
+    request_count: 1,
+    total_tokens: tokens,
+    total_cost_usd: cost,
+    cache_hit_rate,
+  }
 }
 
 describe("zeroFillTrend", () => {
@@ -138,13 +149,27 @@ describe("topNModels", () => {
   it("total is >= 1 over empty input so callers can divide safely", () => {
     expect(topNModels([], "tokens", 5).total).toBe(1)
   })
+
+  it("carries the backend cache hit rate through to top rows", () => {
+    const rows = [modelRow("a", 10, 1, 0.87), modelRow("b", 30, 3, null)]
+    const res = topNModels(rows, "tokens", 5)
+    expect(res.top.find((t) => t.model === "a")?.cache_hit_rate).toBe(0.87)
+    // null (后端无数据) 兜底为 0, 调用方按 rate > 0 条件渲染。
+    expect(res.top.find((t) => t.model === "b")?.cache_hit_rate).toBe(0)
+  })
 })
 
 describe("modelMetricValue", () => {
   it("treats null cost as 0", () => {
     expect(
       modelMetricValue(
-        { model: "x", request_count: 0, total_tokens: 0, total_cost_usd: null },
+        {
+          model: "x",
+          request_count: 0,
+          total_tokens: 0,
+          total_cost_usd: null,
+          cache_hit_rate: null,
+        },
         "cost",
       ),
     ).toBe(0)

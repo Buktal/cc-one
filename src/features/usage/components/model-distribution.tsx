@@ -29,15 +29,22 @@ export function ModelDistribution({
 }) {
   const { t } = useTranslation()
   const { data: rows = [] } = useModelsQuery(filter)
-  const [metric, setMetric] = useState<"cost" | "tokens">("cost")
+  // 默认按 tokens 展示 (token-first cockpit), 开关同样 tokens 在前。
+  const [metric, setMetric] = useState<"cost" | "tokens">("tokens")
 
   const fmt = metric === "cost" ? formatCost : formatTokens
   const { top, rest, total } = topNModels(rows, metric, TOP_N)
-  const items: Array<{ label: string; value: number; model: string | null }> = [
+  const items: Array<{
+    label: string
+    value: number
+    model: string | null
+    cache_hit_rate?: number
+  }> = [
     ...top.map((row) => ({
       label: row.model,
       value: row.value,
       model: row.model,
+      cache_hit_rate: row.cache_hit_rate,
     })),
     ...(rest.count > 0
       ? [
@@ -60,7 +67,7 @@ export function ModelDistribution({
             与同目录 usage-trend-chart 的 header 写法一致。 */}
         <CardAction>
           <div className="bg-muted/60 inline-flex items-center gap-0.5 rounded-md p-0.5">
-            {(["cost", "tokens"] as const).map((m) => (
+            {(["tokens", "cost"] as const).map((m) => (
               <button
                 key={m}
                 type="button"
@@ -71,9 +78,9 @@ export function ModelDistribution({
                     : "text-muted-foreground hover:text-foreground"
                 }`}
               >
-                {m === "cost"
-                  ? t("usage.models.cost")
-                  : t("usage.models.tokens")}
+                {m === "tokens"
+                  ? t("usage.models.tokens")
+                  : t("usage.models.cost")}
               </button>
             ))}
           </div>
@@ -101,6 +108,15 @@ export function ModelDistribution({
                   </span>
                   <span className="text-muted-foreground shrink-0 tabular-nums">
                     {fmt(it.value)} · {formatPct(it.value / total)}
+                    {/* 缓存命中率只在有命中 (rate > 0) 时显示; "其他" 聚合行
+                        没有后端算好的 rate, 同样不显示。 */}
+                    {it.cache_hit_rate ? (
+                      <>
+                        {" · "}
+                        {t("usage.models.cacheHit")}{" "}
+                        {formatPct(it.cache_hit_rate)}
+                      </>
+                    ) : null}
                   </span>
                 </div>
                 <div className="bg-muted h-1.5 w-full overflow-hidden rounded-full">

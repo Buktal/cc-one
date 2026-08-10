@@ -223,6 +223,9 @@ pub struct ModelStatsRow {
     pub request_count: u32,
     pub total_tokens: u32,
     pub total_cost_usd: f64,
+    /// Cache-hit rate over this model's cacheable input pool, [0,1]
+    /// (`TokenCounts::cache_hit_rate`, computed at query time).
+    pub cache_hit_rate: f64,
 }
 
 /// One point on the trend chart. `day` carries the bucket key: a `YYYY-MM-DD`

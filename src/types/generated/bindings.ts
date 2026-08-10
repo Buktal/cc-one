@@ -474,6 +474,11 @@ export type ModelStatsRow = {
 	request_count: number,
 	total_tokens: number,
 	total_cost_usd: number | null,
+	/**
+	 *  Cache-hit rate over this model's cacheable input pool, [0,1]
+	 *  (`TokenCounts::cache_hit_rate`, computed at query time).
+	 */
+	cache_hit_rate: number | null,
 };
 
 /**  User-tunable preferences surfaced in the Settings「通用」card. */

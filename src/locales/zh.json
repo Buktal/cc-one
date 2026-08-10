@@ -443,6 +443,7 @@
   "usage.logs.pageInfo": "第 {{page}} / {{totalPages}} 页 · 共 {{total}} 条",
   "usage.logs.prevPage": "上一页",
   "usage.logs.title": "请求日志",
+  "usage.models.cacheHit": "缓存命中",
   "usage.models.cost": "成本",
   "usage.models.empty": "无模型数据",
   "usage.models.others": "其他 ({{n}})",

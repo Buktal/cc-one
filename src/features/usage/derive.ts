@@ -93,14 +93,16 @@ export function modelMetricValue(
 }
 
 export interface TopNResult {
-  top: { model: string; value: number }[]
+  top: { model: string; value: number; cache_hit_rate: number }[]
   rest: { count: number; sum: number }
   /** Sum of all rows (>= 1, so callers can divide safely). */
   total: number
 }
 
 /** Top-N models by metric plus an aggregate of the remainder. Pure — the
- *  caller renders the "others" label via i18n from `rest.count`. */
+ *  caller renders the "others" label via i18n from `rest.count`. The cache
+ *  hit rate is carried through from the backend (single implementation);
+ *  the "others" aggregate has none, callers render it conditionally. */
 export function topNModels(
   rows: ModelStatsRow[],
   metric: ModelMetric,
@@ -118,6 +120,7 @@ export function topNModels(
     top: topRows.map((r) => ({
       model: r.model,
       value: modelMetricValue(r, metric),
+      cache_hit_rate: Number(r.cache_hit_rate ?? 0),
     })),
     rest: { count: rest.length, sum: restSum },
     total,
