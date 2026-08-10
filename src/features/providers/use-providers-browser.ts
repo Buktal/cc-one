@@ -19,7 +19,8 @@ import type { ProviderImportMode } from "@/types/generated/bindings"
 
 export function useProvidersBrowser() {
   const { t } = useTranslation()
-  const { data: providers = [], isLoading } = useListProvidersQuery()
+  // 当前只服务 claude 池——应用分段切换（后续批次）会把这个参数接上 tab。
+  const { data: providers = [], isLoading } = useListProvidersQuery("claude")
   const [reorder] = useReorderProvidersMutation()
   const [exportMut, { isLoading: exporting }] = useExportProvidersMutation()
   const [importMut, { isLoading: importing }] = useImportProvidersMutation()
@@ -33,7 +34,7 @@ export function useProvidersBrowser() {
       activeId,
       overId,
     )
-    if (next) void reorder(next)
+    if (next) void reorder({ app: "claude", orderedIds: next })
   }
 
   /** Export all providers to a user-chosen path (save dialog), optionally

@@ -1,6 +1,11 @@
 //! 供应商导出 / 导入（手动迁移）：全部供应商序列化为一份 JSON 文档（可选剔除
 //! API key），或从文档按「合并 / 覆盖」模式写回本机 DB。供换设备迁移 / 留档用。
 //!
+//! **应用维度**：文档每行（Provider 序列化）自带 `app` 字段；冲突规划键从
+//! `id` 变为 `(app, id)`——同一 id 在不同应用池是两个条目，互不冲突。旧文档
+//! （应用维度之前导出的）行没有 `app` 字段，读为 claude（serde default）——
+//! 存量数据全部归入 Claude 池。
+//!
 //! 本模块**不经过 git 同步**：导入只走 `store.save_provider` 写 DB，绝不写
 //! providers.json 同步文件——导入的 key 只进本机库。「不触发同步写」是结构性的
 //! （本模块没有同步文件路径，命令只调 `apply_import`），不用测试守。
@@ -18,16 +23,19 @@ use specta::Type;
 
 use crate::db::Store;
 use crate::error::{AppError, AppResult};
-use crate::model::Provider;
+use crate::model::{App, Provider};
 
 /// 当前导出文档版本。导入只认这个版本——未来格式演进时，旧版 app 读到新文档
-/// 会明确报错而不是静默错解。
+/// 会明确报错而不是静默错解。版本号**不因加 app 字段而升**：老文档（行无 app）
+/// 与新文档（行带 app）都是 v1——serde 对未知字段忽略，新读旧 = 全归 claude
+/// 池，旧读新 = app 字段被忽略；版本只在格式真的不兼容时才升。
 pub const EXPORT_VERSION: u32 = 1;
 
-/// 导入冲突模式：merge = 已有 id 跳过（保留双方，按 id 去重）；overwrite =
-/// 同 id 以导入为准（后者胜），本地独有 id 保留（不做删除——保守迁移）。
-/// 两种模式都不还原导出方的排序：已存在行保留本地 `sort_index`（排序是本地
-/// 偏好，导入不做重排），导入的新行追加在末尾（`save_provider` 语义）。
+/// 导入冲突模式：merge = 已有 `(app, id)` 跳过（保留双方，按 (app, id) 去重）；
+/// overwrite = 同 `(app, id)` 以导入为准（后者胜），本地独有保留（不做删除——
+/// 保守迁移）。两种模式都不还原导出方的排序：已存在行保留本地 `sort_index`
+/// （排序是本地偏好，导入不做重排），导入的新行追加在末尾（`save_provider`
+/// 语义）。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Type)]
 #[serde(rename_all = "lowercase")]
 pub enum ProviderImportMode {
@@ -36,8 +44,9 @@ pub enum ProviderImportMode {
 }
 
 /// 导出文档：版本号 + 导出时间 + provider 列表。Provider 自身序列化已有
-/// `rename_all = "camelCase"`，直接复用。不跨 Rust→JS 边界（导出返回 JSON
-/// 文本、导入收 JSON 文本），所以不需要 `specta::Type`。
+/// `rename_all = "camelCase"`，直接复用（每行自带 `app` 字段）。不跨
+/// Rust→JS 边界（导出返回 JSON 文本、导入收 JSON 文本），所以不需要
+/// `specta::Type`。
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ProviderExportDocument {
@@ -53,9 +62,9 @@ pub struct ProviderExportDocument {
 #[derive(Debug, Clone, Serialize, Type)]
 #[serde(rename_all = "camelCase")]
 pub struct ProviderImportReport {
-    /// 实际写入的行数（merge = 新 id；overwrite = 全部导入行）。
+    /// 实际写入的行数（merge = 新 (app, id)；overwrite = 全部导入行）。
     pub imported: u32,
-    /// merge 模式下因 id 冲突被跳过的行数（overwrite 恒为 0）。
+    /// merge 模式下因 (app, id) 冲突被跳过的行数（overwrite 恒为 0）。
     pub skipped: u32,
 }
 
@@ -109,11 +118,12 @@ pub fn parse_export_document(json: &str) -> AppResult<Vec<Provider>> {
 }
 
 /// 冲突规划（纯函数）：按模式把 incoming 并入 existing，产出要落库的行。
-/// - merge：incoming 里 id 已存在 → 跳过（existing 原样保留，不改写）；其余
-///   （新 id、空 id）→ 追加。空 id 行视为新建——没有冲突，由 `save_provider`
-///   生成新 id。
-/// - overwrite：同 id → 用 incoming 整行替换；新 id / 空 id → 追加；本地独有
-///   id → 保留（「覆盖 = 后者胜」按 upsert 实现，不做删除）。
+/// 冲突键是 `(app, id)`——同一 id 在不同应用池是两个独立条目。
+/// - merge：incoming 里 `(app, id)` 已存在 → 跳过（existing 原样保留，不
+///   改写）；其余（新键、空 id）→ 追加。空 id 行视为新建——没有冲突，由
+///   `save_provider` 生成新 id。
+/// - overwrite：同 `(app, id)` → 用 incoming 整行替换；新键 / 空 id → 追加；
+///   本地独有 → 保留（「覆盖 = 后者胜」按 upsert 实现，不做删除）。
 pub fn plan_import(
     existing: &[Provider],
     incoming: &[Provider],
@@ -121,12 +131,16 @@ pub fn plan_import(
 ) -> ImportPlan {
     match mode {
         ProviderImportMode::Merge => {
-            let existing_ids: HashSet<&str> = existing.iter().map(|p| p.id.as_str()).collect();
+            let existing_keys: HashSet<(String, String)> = existing
+                .iter()
+                .map(|p| (p.app.as_str().to_string(), p.id.clone()))
+                .collect();
             let mut to_save = Vec::new();
             let mut imported = 0;
             let mut skipped = 0;
             for p in incoming {
-                if !p.id.is_empty() && existing_ids.contains(p.id.as_str()) {
+                let key = (p.app.as_str().to_string(), p.id.clone());
+                if !p.id.is_empty() && existing_keys.contains(&key) {
                     skipped += 1;
                     continue;
                 }
@@ -203,6 +217,7 @@ mod tests {
             name: name.into(),
             website_url: "https://example.com".into(),
             category: ProviderCategory::Custom,
+            app: App::Claude,
             icon: String::new(),
             icon_color: String::new(),
             sort_index: 0,
@@ -397,8 +412,8 @@ mod tests {
 
         let doc = export_document(&before, true, "2026-08-07T00:00:00Z").unwrap();
         // 清空：模拟换机后空库。
-        s.delete_provider(&alpha.id).unwrap();
-        s.delete_provider(&beta.id).unwrap();
+        s.delete_provider(App::Claude, &alpha.id).unwrap();
+        s.delete_provider(App::Claude, &beta.id).unwrap();
         assert!(s.list_providers().unwrap().is_empty());
 
         let report = apply_import(&s, &doc, ProviderImportMode::Overwrite).unwrap();
@@ -434,9 +449,9 @@ mod tests {
             .save_provider(provider("", "Beta", r#"{"env":{}}"#))
             .unwrap();
         // 本地顺序：Beta 在前、Alpha 在后。
-        s.reorder_providers(&[beta.id.clone(), alpha.id.clone()])
+        s.reorder_providers(App::Claude, &[beta.id.clone(), alpha.id.clone()])
             .unwrap();
-        let alpha_local = s.get_provider(&alpha.id).unwrap().unwrap();
+        let alpha_local = s.get_provider(App::Claude, &alpha.id).unwrap().unwrap();
         assert_eq!(alpha_local.sort_index, 1, "本地顺序已生效");
 
         // 「另一台设备」的导出：同 id 但携带不同的 sort_index，外加一个本地
@@ -483,8 +498,59 @@ mod tests {
         let report = apply_import(&s, &doc, ProviderImportMode::Merge).unwrap();
         assert_eq!(report.imported, 0);
         assert_eq!(report.skipped, 1);
-        let row = s.get_provider(&alpha.id).unwrap().unwrap();
+        let row = s.get_provider(App::Claude, &alpha.id).unwrap().unwrap();
         assert_eq!(row.updated_at, alpha.updated_at, "merge 冲突行不得重写");
         assert_eq!(row.settings_config, alpha.settings_config);
+    }
+
+    /// 冲突键是 (app, id)：同一 id 出现在两个应用池 → merge 不互相跳过，
+    /// overwrite 也不互相覆盖。
+    #[test]
+    fn plan_import_keeps_same_id_across_apps_separate() {
+        fn provider_for(app: App, id: &str, name: &str) -> Provider {
+            Provider {
+                app,
+                ..provider(id, name, r#"{"env":{}}"#)
+            }
+        }
+        let existing = [provider_for(App::Claude, "p1", "Claude-pool")];
+        let incoming = [
+            // 同 (app, id)：merge 跳过。
+            provider_for(App::Claude, "p1", "Claude-renamed"),
+            // 同 id、不同池：是独立条目，merge 追加。
+            provider_for(App::Codex, "p1", "Codex-pool"),
+        ];
+        let merge = plan_import(&existing, &incoming, ProviderImportMode::Merge);
+        assert_eq!(merge.imported, 1, "codex 池的 p1 是新条目");
+        assert_eq!(merge.skipped, 1, "claude 池的 p1 冲突跳过");
+        assert_eq!(merge.to_save[0].app, App::Codex);
+        assert_eq!(merge.to_save[0].name, "Codex-pool");
+
+        let overwrite = plan_import(&existing, &incoming, ProviderImportMode::Overwrite);
+        assert_eq!(overwrite.imported, 2, "两个池的行各自按 (app, id) 落");
+    }
+
+    /// 导出文档每行带 app 字段（版本号不升——v1 兼容新旧格式）；旧文档行
+    /// 无 app → 读为 claude。
+    #[test]
+    fn export_carries_app_per_line_and_old_doc_reads_as_claude() {
+        let ps = [
+            provider("a", "Claude-A", r#"{"env":{}}"#),
+            Provider {
+                app: App::Codex,
+                ..provider("b", "Codex-B", r#"{"env":{}}"#)
+            },
+        ];
+        let text = export_document(&ps, true, "ts").unwrap();
+        assert!(text.contains(r#""app":"claude""#), "claude 行带 app");
+        assert!(text.contains(r#""app":"codex""#), "codex 行带 app");
+        let got = parse_export_document(&text).unwrap();
+        assert_eq!(got.len(), 2);
+
+        // 应用维度之前的旧文档：行没有 app 字段 → 全归 claude 池。
+        let old_doc = r#"{"version":1,"exportedAt":"ts","providers":[{"id":"a","name":"Old","websiteUrl":"","category":"custom","icon":"","iconColor":"","sortIndex":0,"notes":"","settingsConfig":"{}","meta":"{}","updatedAt":"2026-08-01T00:00:00Z"}]}"#;
+        let old = parse_export_document(old_doc).unwrap();
+        assert_eq!(old.len(), 1);
+        assert_eq!(old[0].app, App::Claude, "旧行归 claude 池");
     }
 }

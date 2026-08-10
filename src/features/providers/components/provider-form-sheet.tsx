@@ -234,6 +234,9 @@ export function ProviderFormSheet({
       return
     }
     const result = await fetchModels({
+      // 当前表单只编辑 claude 池的供应商——应用分段切换（后续批次）会把
+      // 这个参数接上 tab。
+      app: "claude",
       baseUrl: endpoint.trim(),
       apiKey: apiKey.trim(),
       // 端点等于某预设默认值时，带上该预设声明的 modelsUrl 覆写（如火山

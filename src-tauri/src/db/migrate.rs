@@ -83,6 +83,33 @@ pub(super) fn migrate_schema(conn: &Connection) -> AppResult<()> {
         }
     }
 
+    // `provider.app`（应用维度，后续批次加入）— 旧库没有该列，存量行靠
+    // DEFAULT 'claude' 自动归入 Claude 池，无需逐行回填。与 local_groups
+    // 同样的 probe-ALTER：表可能不存在于比供应商功能更老的库上，先查
+    // sqlite_master 再 PRAGMA table_info。
+    {
+        let has_table: i64 = conn.query_row(
+            "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='provider'",
+            [],
+            |r| r.get(0),
+        )?;
+        if has_table > 0 {
+            let mut have_provider: std::collections::HashSet<String> =
+                std::collections::HashSet::new();
+            let mut stmt = conn.prepare("PRAGMA table_info(provider)")?;
+            let names = stmt.query_map([], |r| r.get::<_, String>(1))?;
+            for n in names {
+                have_provider.insert(n?);
+            }
+            if !have_provider.contains("app") {
+                conn.execute(
+                    "ALTER TABLE provider ADD COLUMN app TEXT NOT NULL DEFAULT 'claude'",
+                    [],
+                )?;
+            }
+        }
+    }
+
     // uuid 单列 PRIMARY KEY → (uuid, device_id) 复合主键。旧库的 usage_records /
     // turn_durations 以 uuid 为单列主键,把"同 uuid、不同设备"的记录折叠成一条
     // (后导入者被丢)——同一份 ~/.claude/projects 被两个 device_id 扫描,或
@@ -355,6 +382,50 @@ mod tests {
             })
             .unwrap();
         assert_eq!(pos, 0, "legacy rows default to position 0");
+    }
+
+    /// Regression: a legacy `provider` table without the `app` column
+    /// (pre-app-dimension) is upgraded in place by probe-ALTER, and
+    /// pre-existing rows fall back to 'claude' — the whole pre-dimension pool
+    /// lands in Claude without a row-by-row backfill.
+    #[test]
+    fn migrate_adds_provider_app() {
+        let conn = Connection::open_in_memory().unwrap();
+        // usage_records must exist (migrate_schema probes it first) — built
+        // with the full current column set so only provider is legacy.
+        conn.execute_batch(
+            "CREATE TABLE usage_records (
+                uuid TEXT PRIMARY KEY, timestamp TEXT NOT NULL, day TEXT NOT NULL,
+                model TEXT NOT NULL, pricing_model TEXT NOT NULL, source TEXT NOT NULL,
+                device_id TEXT NOT NULL,
+                input_tokens INTEGER NOT NULL, output_tokens INTEGER NOT NULL,
+                cache_creation_tokens INTEGER NOT NULL, cache_read_tokens INTEGER NOT NULL,
+                server_tool_use TEXT NOT NULL DEFAULT '{}', stop_reason TEXT NOT NULL DEFAULT '',
+                service_tier TEXT NOT NULL DEFAULT '', iterations INTEGER NOT NULL DEFAULT 0,
+                session_id TEXT NOT NULL DEFAULT '',
+                input_cost_usd TEXT NOT NULL, output_cost_usd TEXT NOT NULL,
+                cache_read_cost_usd TEXT NOT NULL, cache_creation_cost_usd TEXT NOT NULL,
+                total_cost_usd TEXT NOT NULL
+            );
+            CREATE TABLE provider (
+                id TEXT PRIMARY KEY, name TEXT NOT NULL, website_url TEXT NOT NULL DEFAULT '',
+                category TEXT NOT NULL DEFAULT 'custom', icon TEXT NOT NULL DEFAULT '',
+                icon_color TEXT NOT NULL DEFAULT '', sort_index INTEGER NOT NULL DEFAULT 0,
+                notes TEXT NOT NULL DEFAULT '', settings_config TEXT NOT NULL DEFAULT '{}',
+                meta TEXT NOT NULL DEFAULT '{}', updated_at TEXT NOT NULL
+            );
+            INSERT INTO provider (id, name, updated_at)
+                VALUES ('p1', 'Legacy', '2026-08-01T00:00:00Z');",
+        )
+        .unwrap();
+        assert!(conn.prepare("SELECT app FROM provider").is_err());
+
+        migrate_schema(&conn).unwrap();
+
+        let app: String = conn
+            .query_row("SELECT app FROM provider WHERE id='p1'", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(app, "claude", "legacy rows fall back to the claude pool");
     }
 
     /// Regression companion: a legacy DB ALREADY on the composite (uuid,

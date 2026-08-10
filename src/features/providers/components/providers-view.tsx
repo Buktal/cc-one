@@ -77,7 +77,7 @@ export function ProvidersView() {
     transferring,
   } = useProvidersBrowser()
   const { data: activeProvider, isLoading: activeLoading } =
-    useGetActiveProviderQuery()
+    useGetActiveProviderQuery("claude")
   const [remove] = useDeleteProviderMutation()
   const [switchProvider] = useSwitchProviderMutation()
   const runWithToast = useMutateWithToast()
@@ -127,14 +127,14 @@ export function ProvidersView() {
     setSheetOpen(true)
   }
   async function onDelete(p: Provider) {
-    await runWithToast(remove, p.id, {
+    await runWithToast(remove, { app: "claude", id: p.id }, {
       success: { key: "providers.toast.deleted", vars: { name: p.name } },
       failed: { key: "providers.toast.deleteFailed" },
     })
   }
 
   async function doSwitch(p: Provider) {
-    await runWithToast(switchProvider, p.id, {
+    await runWithToast(switchProvider, { app: "claude", id: p.id }, {
       success: { key: "providers.toast.switched", vars: { name: p.name } },
       failed: { key: "providers.toast.switchFailed" },
     })
