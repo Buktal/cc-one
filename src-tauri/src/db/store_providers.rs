@@ -4,7 +4,7 @@
 //! local sort_index preserved — see its doc).
 
 use super::*;
-use crate::model::{Provider, ProviderCategory};
+use crate::model::{App, Provider, ProviderCategory};
 
 impl super::Store {
     /// All providers, in user order (`sort_index`, name as the deterministic
@@ -103,6 +103,9 @@ impl super::Store {
             id,
             sort_index: sort_index as u32,
             updated_at,
+            // TEMP-APP-SHIM: #32 落地后按 provider.app 落 app 列；shim 期表
+            // 结构没有 app 列，返回值必须与持久化的实际内容一致（Claude）。
+            app: App::Claude,
             ..provider
         })
     }
@@ -200,6 +203,9 @@ impl super::Store {
 fn row_to_provider(r: &rusqlite::Row) -> rusqlite::Result<Provider> {
     Ok(Provider {
         id: r.get(0)?,
+        // TEMP-APP-SHIM: #32 落地后从 app 列读取；shim 期表结构没有该列，
+        // 读恒为 Claude（存量数据本来也全归 claude）。
+        app: App::Claude,
         name: r.get(1)?,
         website_url: r.get(2)?,
         category: ProviderCategory::from_db_str(&r.get::<_, String>(3)?),
@@ -224,6 +230,7 @@ mod tests {
     fn provider(name: &str, category: ProviderCategory) -> Provider {
         Provider {
             id: String::new(),
+            app: App::Claude,
             name: name.into(),
             website_url: "https://example.com".into(),
             category,
@@ -460,6 +467,7 @@ mod tests {
 
         let peer = Provider {
             id: created.id.clone(),
+            app: App::Claude,
             name: "Kimi Pro".into(),
             website_url: "https://x.dev".into(),
             category: ProviderCategory::Custom,
@@ -492,6 +500,7 @@ mod tests {
 
         let peer = Provider {
             id: "newpeer01".into(),
+            app: App::Claude,
             name: "New Peer".into(),
             website_url: "https://x.dev".into(),
             category: ProviderCategory::Custom,

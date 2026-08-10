@@ -17,9 +17,9 @@ use crate::db::Store;
 use crate::error::{AppError, AppResult};
 use crate::library::{self, DeviceLibrarySummary, LibraryEntry, UploadItem};
 use crate::model::{
-    CommonConfigSnippet, DeviceInfo, LocalGroup, LogsQuery, ModelStatsRow, PricingEntry, Provider,
-    RunMode, SessionFilter, SessionGroup, SessionMessage, SessionRow, SyncedGroup, TrendBucket,
-    TrendPoint, UsageFilter, UsageLogRow, UsageStats,
+    App, CommonConfigSnippet, DeviceInfo, LocalGroup, LogsQuery, ModelStatsRow, PricingEntry,
+    Provider, RunMode, SessionFilter, SessionGroup, SessionMessage, SessionRow, SyncedGroup,
+    TrendBucket, TrendPoint, UsageFilter, UsageLogRow, UsageStats,
 };
 use crate::pricing;
 use crate::provider::export_import::{ProviderImportMode, ProviderImportReport};
@@ -808,8 +808,14 @@ fn emit_providers_changed(app_handle: &tauri::AppHandle) {
 
 #[tauri::command]
 #[specta::specta]
-pub fn list_providers_cmd(state: State<'_, AppState>) -> AppResult<Vec<Provider>> {
-    state.store.list_providers()
+pub fn list_providers_cmd(state: State<'_, AppState>, app: App) -> AppResult<Vec<Provider>> {
+    // TEMP-APP-SHIM: #32 落地后由 store 按 app 过滤，删掉内存过滤。
+    Ok(state
+        .store
+        .list_providers()?
+        .into_iter()
+        .filter(|p| p.app == app)
+        .collect())
 }
 
 /// Upsert a provider (empty id = create, non-empty = edit). Returns the
@@ -832,8 +838,14 @@ pub fn save_provider_cmd(
 pub fn delete_provider_cmd(
     state: State<'_, AppState>,
     app_handle: tauri::AppHandle,
+    app: App,
     id: String,
 ) -> AppResult<()> {
+    // TEMP-APP-SHIM: #32 落地后由 store 按 (app, id) 查询，删掉此校验。
+    match state.store.get_provider(&id)? {
+        Some(p) if p.app == app => {}
+        _ => return Err(AppError::Config(format!("provider not found: {id}"))),
+    }
     state.store.delete_provider(&id)?;
     emit_providers_changed(&app_handle);
     Ok(())
@@ -844,23 +856,37 @@ pub fn delete_provider_cmd(
 pub fn reorder_providers_cmd(
     state: State<'_, AppState>,
     app_handle: tauri::AppHandle,
+    app: App,
     ordered_ids: Vec<String>,
 ) -> AppResult<()> {
+    // TEMP-APP-SHIM: #32 落地后由 store 按 (app, id) 约束重排，删掉此校验。
+    let providers = state.store.list_providers()?;
+    let app_ids: std::collections::HashSet<String> = providers
+        .into_iter()
+        .filter(|p| p.app == app)
+        .map(|p| p.id)
+        .collect();
+    for id in &ordered_ids {
+        if !app_ids.contains(id) {
+            return Err(AppError::Config(format!("provider not found: {id}")));
+        }
+    }
     state.store.reorder_providers(&ordered_ids)?;
     emit_providers_changed(&app_handle);
     Ok(())
 }
 
-/// 切换供应商（核心动作）：查 provider → 读 live → （片段启用则先合并
-/// 片段）→ 受控合并 → 备份 .bak → 原子写 → 记激活状态。写盘语义：只替换
-/// 受控字段（env + 少数顶层开关），非受控字段（hooks / MCP / permissions /
-/// model 等）从 live 原地保留，不整文件覆盖、不做 Backfill。「保存」只写
-/// DB（save_provider_cmd），本命令才真正写盘。
+/// 切换供应商（核心动作）：按 app 查 provider → 写盘分派（claude 走受控
+/// 合并写 `~/.claude/settings.json`，gemini 走 env 整块替换 + settings.json
+/// 受控合并）→ 记激活状态。写盘语义：只替换受控字段，非受控字段从 live
+/// 原地保留，不整文件覆盖、不做 Backfill。「保存」只写 DB
+/// （save_provider_cmd），本命令才真正写盘。
 #[tauri::command]
 #[specta::specta]
 pub async fn switch_provider_cmd(
     state: State<'_, AppState>,
     app_handle: tauri::AppHandle,
+    app: App,
     id: String,
 ) -> AppResult<Provider> {
     let store = state.store.clone();
@@ -869,20 +895,32 @@ pub async fn switch_provider_cmd(
         let provider = store
             .get_provider(&id)?
             .ok_or_else(|| AppError::Config(format!("provider not found: {id}")))?;
-        let path = crate::provider::live::claude_settings_path()?;
-        // 通用配置片段：启用了先合并进 settingsConfig 再走受控写盘（片段是
-        // 共享默认值，供应商显式配置优先；非受控键被忽略）。启用片段解析
-        // 不了会让切换失败——宁可显式报错，也不静默丢片段效果。
-        let cfg = config.get();
-        let settings_config = crate::provider::snippet::apply_snippet(
-            &provider.settings_config,
-            &cfg.common_config_snippet,
-            cfg.common_config_snippet_enabled,
-        )?;
-        // 未物化的模板变量不能进 live（前端保存时已拦截，但导入/手改的
-        // 配置可能绕过）：字面量 `${VAR}` 写进 settings.json 等于写一份废配置。
-        crate::provider::live::validate_no_unfilled_template_vars(&settings_config)?;
-        crate::provider::live::switch_live_settings(&path, &settings_config)?;
+        // TEMP-APP-SHIM: #32 落地后由 store 按 (app, id) 查询，删掉此校验。
+        if provider.app != app {
+            return Err(AppError::Config(format!("provider not found: {id}")));
+        }
+        // 通用配置片段与模板变量校验是 claude 侧语义：片段启用了先合并进
+        // settingsConfig 再走受控写盘（片段是共享默认值，供应商显式配置
+        // 优先；非受控键被忽略）。启用片段解析不了会让切换失败——宁可显式
+        // 报错，也不静默丢片段效果。未物化的模板变量不能进 live（前端保存
+        // 时已拦截，但导入/手改的配置可能绕过）。gemini 分支直接写 provider
+        // 配置（其片段支持尚未实现）。
+        let write_provider = if app == App::Claude {
+            let cfg = config.get();
+            let settings_config = crate::provider::snippet::apply_snippet(
+                &provider.settings_config,
+                &cfg.common_config_snippet,
+                cfg.common_config_snippet_enabled,
+            )?;
+            crate::provider::live::validate_no_unfilled_template_vars(&settings_config)?;
+            Provider {
+                settings_config,
+                ..provider.clone()
+            }
+        } else {
+            provider.clone()
+        };
+        crate::provider::live::write_live(app, &write_provider)?;
         config.update(|c| c.active_provider_id = Some(id))?;
         Ok(provider)
     })
@@ -892,16 +930,21 @@ pub async fn switch_provider_cmd(
     Ok(provider)
 }
 
-/// 当前激活的完整 provider（前端「当前使用」光卡用）。未激活、或激活的
-/// provider 已被删除 → `None`。
+/// 当前激活的完整 provider（前端「当前使用」光卡用）。未激活、激活的
+/// provider 已被删除、或激活的 provider 不属于该 app → `None`。
 #[tauri::command]
 #[specta::specta]
-pub fn get_active_provider_cmd(state: State<'_, AppState>) -> AppResult<Option<Provider>> {
+pub fn get_active_provider_cmd(
+    state: State<'_, AppState>,
+    app: App,
+) -> AppResult<Option<Provider>> {
     let id = match state.config.get().active_provider_id {
         Some(id) => id,
         None => return Ok(None),
     };
-    state.store.get_provider(&id)
+    // TEMP-APP-SHIM: per-app 激活状态是 #32 的迁移范围（按 app 各存一份）；
+    // shim 期沿用全局 active_provider_id + app 校验。
+    Ok(state.store.get_provider(&id)?.filter(|p| p.app == app))
 }
 
 /// 读全局通用配置片段（内容 + 启用开关）。一条记录跨供应商共享，存本机

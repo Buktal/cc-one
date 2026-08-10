@@ -990,6 +990,7 @@ mod tests {
         fn provider(token: &str, endpoint: &str) -> Provider {
             Provider {
                 id: "abcdef01".into(),
+                app: crate::model::App::Claude,
                 name: "Kimi".into(),
                 website_url: "https://platform.kimi.com".into(),
                 category: ProviderCategory::Custom,

@@ -200,6 +200,7 @@ mod tests {
     fn provider_with_meta(id: &str, name: &str, settings_config: &str, meta: &str) -> Provider {
         Provider {
             id: id.into(),
+            app: crate::model::App::Claude,
             name: name.into(),
             website_url: "https://example.com".into(),
             category: ProviderCategory::Custom,

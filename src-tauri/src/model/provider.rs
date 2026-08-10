@@ -15,6 +15,24 @@ use specta::Type;
 
 use crate::error::{AppError, AppResult};
 
+// TEMP-APP-SHIM: #32 合并后移除，以 #32 实现为准。
+/// 应用（App）：供应商归属的 CLI 工具（Claude Code / Codex CLI / Gemini CLI）。
+/// shim 期只用于命令签名与写盘分派；`Provider.app` 在 DB 读取时恒为
+/// `Claude`（表结构还没有 app 列）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Type)]
+#[serde(rename_all = "snake_case")]
+pub enum App {
+    Claude,
+    Codex,
+    Gemini,
+}
+
+impl Default for App {
+    fn default() -> Self {
+        App::Claude
+    }
+}
+
 /// Provider category. `Custom` is the value for user-created providers; the
 /// rest label and theme the built-in presets in the list view.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Type)]
@@ -60,6 +78,11 @@ impl ProviderCategory {
 #[serde(rename_all = "camelCase")]
 pub struct Provider {
     pub id: String,
+    /// TEMP-APP-SHIM: #32 合并后移除，以 #32 实现为准。
+    /// 供应商归属的应用。shim 期无 DB 列：读恒为 `Claude`；`#[serde(default)]`
+    /// 让旧同步文件 / 旧导出文档（无 app 字段）照常解析为 `Claude`。
+    #[serde(default)]
+    pub app: App,
     pub name: String,
     pub website_url: String,
     pub category: ProviderCategory,
@@ -260,6 +283,7 @@ mod tests {
     fn provider_serializes_camel_case() {
         let p = Provider {
             id: "p1".into(),
+            app: App::Claude,
             name: "Kimi".into(),
             website_url: "https://platform.kimi.com".into(),
             category: ProviderCategory::CnOfficial,
@@ -293,6 +317,7 @@ mod tests {
     fn keyed_provider() -> Provider {
         Provider {
             id: "p1".into(),
+            app: App::Claude,
             name: "Bedrock".into(),
             website_url: "https://bedrock.aws".into(),
             category: ProviderCategory::CloudProvider,

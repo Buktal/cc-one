@@ -25,6 +25,7 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 
 use crate::error::{AppError, AppResult};
+use crate::model::{App, Provider};
 
 /// 写盘时从配置里剥掉的内部 meta 字段（类比 cc-switch
 /// `sanitize_claude_settings_for_live`）：这些键只供应用自己读，不是合法的
@@ -132,15 +133,16 @@ pub fn backup_live_settings(path: &Path) -> AppResult<()> {
 }
 
 /// 原子写：先把内容写入同目录的临时文件（独立名字，避免并发写冲突），再改名
-/// 覆盖目标。进程在写盘中途中断只会留下临时文件，不会产生半截 `settings.json`。
-pub fn write_live_settings(path: &Path, content: &str) -> AppResult<()> {
+/// 覆盖目标。进程在写盘中途中断只会留下临时文件，不会产生半截目标文件。
+/// claude 的 `settings.json`、gemini 的 `.env` 与 `settings.json` 共用。
+pub fn write_atomic_text(path: &Path, content: &str) -> AppResult<()> {
     let parent = path
         .parent()
-        .ok_or_else(|| AppError::Config("settings.json path has no parent dir".into()))?;
+        .ok_or_else(|| AppError::Config("live config path has no parent dir".into()))?;
     fs::create_dir_all(parent)?;
     let file_name = path
         .file_name()
-        .ok_or_else(|| AppError::Config("settings.json path has no file name".into()))?;
+        .ok_or_else(|| AppError::Config("live config path has no file name".into()))?;
     let nanos = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_nanos())
@@ -161,8 +163,25 @@ pub fn switch_live_settings(path: &Path, settings_config: &str) -> AppResult<()>
     let live = read_live_settings(path)?;
     let merged = merge_live_settings(&live, settings_config, LIVE_INTERNAL_KEYS)?;
     backup_live_settings(path)?;
-    write_live_settings(path, &merged)?;
+    write_atomic_text(path, &merged)?;
     Ok(())
+}
+
+/// 写盘分派（按应用）：claude 沿用现有受控合并写 `~/.claude/settings.json`
+/// （`merge_live_settings` + 备份 + 原子写）；gemini 走 env 整块替换 +
+/// settings.json 受控合并（见 `live_gemini`）；codex 未实现（另行落地）。
+///
+/// 通用配置片段与模板变量校验是 claude 侧语义，由命令层在调用前合并进
+/// `provider.settings_config`；gemini 分支直接使用 `provider.settings_config`
+/// （其片段支持尚未实现）。
+pub fn write_live(app: App, provider: &Provider) -> AppResult<()> {
+    match app {
+        App::Claude => switch_live_settings(&claude_settings_path()?, &provider.settings_config),
+        App::Gemini => crate::provider::live_gemini::write_gemini_live(&provider.settings_config),
+        App::Codex => Err(AppError::Config(
+            "codex live write is not implemented yet".into(),
+        )),
+    }
 }
 
 /// 拒绝写盘前的未物化模板变量：settingsConfig 里残留 `${VAR}` 占位符（保存时
@@ -200,7 +219,8 @@ fn find_unfilled_template_var(text: &str) -> Option<String> {
 }
 
 /// 解析 live 输入：空串/纯空白 → `{}`；非空但非法 JSON 或非对象 → `Err`。
-fn parse_live_or_empty(live: &str) -> AppResult<serde_json::Value> {
+/// `live_gemini` 复用同一条解析规则（现有 settings.json 缺失时视为 `{}`）。
+pub(crate) fn parse_live_or_empty(live: &str) -> AppResult<serde_json::Value> {
     let trimmed = live.trim();
     if trimmed.is_empty() {
         return Ok(serde_json::Value::Object(Default::default()));
@@ -209,7 +229,8 @@ fn parse_live_or_empty(live: &str) -> AppResult<serde_json::Value> {
 }
 
 /// 解析目标输入：空串 → `{}`；非法 JSON 或非对象 → `Err`。
-fn parse_target_or_empty(target: &str) -> AppResult<serde_json::Value> {
+/// `live_gemini` 复用同一条解析规则（目标 settingsConfig 空串 = 空目标）。
+pub(crate) fn parse_target_or_empty(target: &str) -> AppResult<serde_json::Value> {
     let trimmed = target.trim();
     if trimmed.is_empty() {
         return Ok(serde_json::Value::Object(Default::default()));
@@ -465,7 +486,7 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let path = tmp.path().join("settings.json");
         fs::write(&path, "old").unwrap();
-        write_live_settings(&path, r#"{"env":{"A":"1"}}"#).unwrap();
+        write_atomic_text(&path, r#"{"env":{"A":"1"}}"#).unwrap();
         assert_eq!(fs::read_to_string(&path).unwrap(), r#"{"env":{"A":"1"}}"#);
         // 临时文件已改名，目录里没有残留 .tmp.*。
         let leftovers: Vec<_> = fs::read_dir(tmp.path())
@@ -549,5 +570,31 @@ mod tests {
         )
         .is_ok());
         assert!(validate_no_unfilled_template_vars("  ").is_ok());
+    }
+
+    /// 占位 provider：codex 分支尚未实现（另行落地），分派必须显式失败，
+    /// 绝不静默落到别的分支。
+    fn provider_for_app(app: App) -> Provider {
+        Provider {
+            id: "p1".into(),
+            app,
+            name: "x".into(),
+            website_url: "https://example.com".into(),
+            category: crate::model::ProviderCategory::Custom,
+            icon: String::new(),
+            icon_color: String::new(),
+            sort_index: 0,
+            notes: String::new(),
+            settings_config: r#"{"env":{}}"#.into(),
+            meta: r#"{}"#.into(),
+            updated_at: String::new(),
+        }
+    }
+
+    #[test]
+    fn write_live_codex_arm_is_explicitly_unimplemented() {
+        let err = write_live(App::Codex, &provider_for_app(App::Codex)).unwrap_err();
+        let msg = format!("{err}");
+        assert!(msg.contains("codex"), "报错要说明是 codex: {msg}");
     }
 }

@@ -12,6 +12,7 @@
 
 pub mod export_import;
 pub mod live;
+pub mod live_gemini;
 pub mod model_fetch;
 pub mod snippet;
 pub mod sync;

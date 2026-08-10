@@ -263,6 +263,7 @@ mod tests {
     ) -> Provider {
         Provider {
             id: id.into(),
+            app: crate::model::App::Claude,
             name: name.into(),
             website_url: "https://example.com".into(),
             category: ProviderCategory::Custom,
