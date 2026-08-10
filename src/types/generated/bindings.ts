@@ -201,12 +201,14 @@ export const commands = {
 	deleteProviderCmd: (app: App, id: string) => typedError<null, AppError>(__TAURI_INVOKE("delete_provider_cmd", { app, id })),
 	reorderProvidersCmd: (app: App, orderedIds: string[]) => typedError<null, AppError>(__TAURI_INVOKE("reorder_providers_cmd", { app, orderedIds })),
 	/**
-	 *  切换供应商（核心动作）：查 provider → 读 live → （片段启用则先合并
-	 *  片段）→ 受控合并 → 备份 .bak → 原子写 → 记激活状态（按应用）。写盘
-	 *  语义：只替换受控字段（env + 少数顶层开关），非受控字段（hooks / MCP /
-	 *  permissions / model 等）从 live 原地保留，不整文件覆盖、不做 Backfill。
-	 *  「保存」只写 DB（save_provider_cmd），本命令才真正写盘。`app` 是目标
-	 *  应用池；激活记录落在该应用的键上。
+	 *  切换供应商（核心动作）：按 (app, id) 查 provider → 按应用分派写盘 →
+	 *  记该应用的激活状态。写盘分派 `write_live(app, provider)`：claude 走 JSON
+	 *  受控合并进 `~/.claude/settings.json`（合并前先叠该应用的通用片段、拦截
+	 *  未物化模板变量），codex 走 TOML 受控合并 + auth.json，gemini 走 env 整块
+	 *  替换 + settings.json 受控合并。各分支语义一致：只替换受控字段、非受控
+	 *  字段（hooks / MCP / permissions / model / mcp_servers 等）从 live 原地
+	 *  保留，不整文件覆盖、不做 Backfill。「保存」只写 DB（save_provider_cmd），
+	 *  本命令才真正写盘。
 	 */
 	switchProviderCmd: (app: App, id: string) => typedError<Provider, AppError>(__TAURI_INVOKE("switch_provider_cmd", { app, id })),
 	/**
@@ -224,7 +226,10 @@ export const commands = {
 	iconColor: string,
 	sortIndex: number,
 	notes: string,
-	/**  Claude Code `settings.json` snapshot, raw JSON text. */
+	/**
+	 *  应用 live 文件快照，raw JSON text：claude = `settings.json` 内容；
+	 *  codex = `{"auth": ..., "config": "TOML"}` 对象（auth 镜像 auth.json）。
+	 */
 	settingsConfig: string,
 	/**  App-side extras, raw JSON text. Never written to the live file. */
 	meta: string,
@@ -557,9 +562,11 @@ export type PricingEntry = {
 
 /**
  *  A provider (供应商): `settingsConfig` is the owning app's live-file
- *  snapshot (raw JSON text); `meta` carries app-side info the live file never
- *  sees. `sortIndex` is the user-ordered display rank *within the provider's
- *  app pool*. Missing `app` in a JSON document (old sync files, old exports)
+ *  snapshot (raw JSON text) — Claude 是 `settings.json` 快照，Codex 是
+ *  `{"auth", "config"}` 快照（auth = auth.json 内容、config = config.toml
+ *  TOML 文本）；`meta` carries app-side info the live file never sees.
+ *  `sortIndex` is the user-ordered display rank *within the provider's app
+ *  pool*. Missing `app` in a JSON document (old sync files, old exports)
  *  deserializes as `Claude` — the pre-app-dimension data all belongs there.
  */
 export type Provider = {
@@ -573,7 +580,10 @@ export type Provider = {
 	iconColor: string,
 	sortIndex: number,
 	notes: string,
-	/**  Claude Code `settings.json` snapshot, raw JSON text. */
+	/**
+	 *  应用 live 文件快照，raw JSON text：claude = `settings.json` 内容；
+	 *  codex = `{"auth": ..., "config": "TOML"}` 对象（auth 镜像 auth.json）。
+	 */
 	settingsConfig: string,
 	/**  App-side extras, raw JSON text. Never written to the live file. */
 	meta: string,

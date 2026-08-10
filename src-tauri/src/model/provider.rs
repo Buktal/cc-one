@@ -98,9 +98,11 @@ impl ProviderCategory {
 }
 
 /// A provider (供应商): `settingsConfig` is the owning app's live-file
-/// snapshot (raw JSON text); `meta` carries app-side info the live file never
-/// sees. `sortIndex` is the user-ordered display rank *within the provider's
-/// app pool*. Missing `app` in a JSON document (old sync files, old exports)
+/// snapshot (raw JSON text) — Claude 是 `settings.json` 快照，Codex 是
+/// `{"auth", "config"}` 快照（auth = auth.json 内容、config = config.toml
+/// TOML 文本）；`meta` carries app-side info the live file never sees.
+/// `sortIndex` is the user-ordered display rank *within the provider's app
+/// pool*. Missing `app` in a JSON document (old sync files, old exports)
 /// deserializes as `Claude` — the pre-app-dimension data all belongs there.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Type)]
 #[serde(rename_all = "camelCase")]
@@ -116,7 +118,8 @@ pub struct Provider {
     pub icon_color: String,
     pub sort_index: u32,
     pub notes: String,
-    /// Claude Code `settings.json` snapshot, raw JSON text.
+    /// 应用 live 文件快照，raw JSON text：claude = `settings.json` 内容；
+    /// codex = `{"auth": ..., "config": "TOML"}` 对象（auth 镜像 auth.json）。
     pub settings_config: String,
     /// App-side extras, raw JSON text. Never written to the live file.
     pub meta: String,
@@ -143,33 +146,35 @@ pub(crate) fn generate_provider_id() -> String {
 }
 
 /// Secret env-var keys stripped from `settingsConfig` before it leaves this
-/// device (the synced `providers.json`): API keys live in the `env` block and
-/// must never enter the repo. `AWS_REGION` is deliberately NOT here — it is a
-/// non-secret region code (or a `${VAR}` template-variable placeholder), not a
-/// credential. This list is the single source of truth: `Provider::redacted`,
-/// the sync merge, and the export path (`provider::export_import`) all route
-/// through it.
+/// device (the synced `providers.json`): API keys live in the `env` block
+/// (claude) or the `auth` object (codex) and must never enter the repo.
+/// `AWS_REGION` is deliberately NOT here — it is a non-secret region code (or
+/// a `${VAR}` template-variable placeholder), not a credential. This list is
+/// the single source of truth: `Provider::redacted`, the sync merge, and the
+/// export path (`provider::export_import`) all route through it.
 pub const SECRET_ENV_KEYS: &[&str] = &[
     "ANTHROPIC_AUTH_TOKEN",
     "ANTHROPIC_API_KEY",
     "AWS_SECRET_ACCESS_KEY",
     "AWS_ACCESS_KEY_ID",
+    "OPENAI_API_KEY",
 ];
 
 impl Provider {
-    /// The sync-safe projection: [`SECRET_ENV_KEYS`] removed from two places —
-    /// the `settingsConfig` `env` object and the `meta.templateValues` object.
-    /// The `env` block is where API keys normally live; `meta.templateValues`
-    /// is the frontend's record of filled `${VAR}` template variables, and the
-    /// Bedrock presets route AK/SK through those, so a redaction that stops at
-    /// `env` would still publish credentials. Blank config passes through
-    /// unchanged (nothing to strip); a config or meta that carries a secret key
-    /// is re-serialized deterministically (serde_json's default `Value` map
-    /// sorts keys), so the written file is byte-stable across pushes. Returns
-    /// `Err` when the config is not valid JSON / not an object / has a
-    /// non-object `env`, or the meta cannot be parsed to an object — a provider
-    /// whose secrets cannot be proven absent must not be published (the sync
-    /// writer skips it).
+    /// The sync-safe projection: [`SECRET_ENV_KEYS`] removed from three places —
+    /// the `settingsConfig` `env` object, the `settingsConfig` `auth` object
+    /// (codex providers carry `OPENAI_API_KEY` there — the auth.json mirror),
+    /// and the `meta.templateValues` object. The `env` block is where claude
+    /// API keys normally live; `meta.templateValues` is the frontend's record
+    /// of filled `${VAR}` template variables, and the Bedrock presets route
+    /// AK/SK through those, so a redaction that stops at `env` would still
+    /// publish credentials. Blank config passes through unchanged (nothing to
+    /// strip); a config or meta that carries a secret key is re-serialized
+    /// deterministically (serde_json's default `Value` map sorts keys), so the
+    /// written file is byte-stable across pushes. Returns `Err` when the config
+    /// is not valid JSON / not an object / has a non-object `env` or `auth`, or
+    /// the meta cannot be parsed to an object — a provider whose secrets cannot
+    /// be proven absent must not be published (the sync writer skips it).
     pub fn redacted(&self) -> AppResult<Provider> {
         let trimmed = self.settings_config.trim();
         if trimmed.is_empty() {
@@ -188,6 +193,19 @@ impl Provider {
             })?;
             for key in SECRET_ENV_KEYS {
                 if env.remove(*key).is_some() {
+                    stripped = true;
+                }
+            }
+        }
+        // Codex 供应商的 `auth` 对象是 auth.json 的镜像，`OPENAI_API_KEY`
+        // 住在里面——同样受密钥清单约束，剥离规则与 `env` 一致：非对象
+        // auth 无法证明密钥缺失，宁可不发布。
+        if let Some(auth) = obj.get_mut("auth") {
+            let auth = auth.as_object_mut().ok_or_else(|| {
+                AppError::Config("provider settingsConfig auth is not a JSON object".into())
+            })?;
+            for key in SECRET_ENV_KEYS {
+                if auth.remove(*key).is_some() {
                     stripped = true;
                 }
             }
@@ -504,6 +522,59 @@ mod tests {
         assert!(bad.redacted().is_err(), "non-object must error");
         bad.settings_config = r#"{"env":"nope"}"#.into();
         assert!(bad.redacted().is_err(), "non-object env must error");
+    }
+
+    /// Codex 供应商的 `auth` 对象镜像 auth.json：`OPENAI_API_KEY` 必须随
+    /// `SECRET_ENV_KEYS` 一起剥掉，密钥名绝不出现在同步投影里。
+    #[test]
+    fn redacted_strips_codex_auth_key() {
+        let mut p = keyed_provider();
+        p.settings_config =
+            r#"{"auth":{"OPENAI_API_KEY":"sk-codex-123"},"config":"model = \"gpt-5.6\""}"#.into();
+        let r = p.redacted().unwrap();
+        let v: serde_json::Value = serde_json::from_str(&r.settings_config).unwrap();
+        assert!(
+            v["auth"].get("OPENAI_API_KEY").is_none(),
+            "codex key stripped"
+        );
+        assert!(
+            !r.settings_config.contains("OPENAI_API_KEY"),
+            "key name must not appear in the projection"
+        );
+        assert!(!r.settings_config.contains("sk-codex-123"));
+        // 非密钥字段（config TOML 文本）原样保留。
+        assert_eq!(v["config"], serde_json::json!("model = \"gpt-5.6\""));
+        // 幂等且字节稳定。
+        assert_eq!(r.settings_config, r.redacted().unwrap().settings_config);
+    }
+
+    #[test]
+    fn redacted_rejects_non_object_auth() {
+        let mut p = keyed_provider();
+        p.settings_config = r#"{"auth":"sk-plain-string","config":""}"#.into();
+        assert!(
+            p.redacted().is_err(),
+            "非对象 auth 无法证明密钥缺失，必须拒绝发布"
+        );
+    }
+
+    /// TEMP-APP-SHIM 语义：无 app 字段的旧同步文件 / 导出文档读为 claude
+    ///（#32 迁移后同样语义）；带 app 字段的新文档按值解析。
+    #[test]
+    fn provider_app_missing_defaults_to_claude_and_value_roundtrips() {
+        let old: Provider = serde_json::from_str(
+            r#"{"id":"p1","name":"Kimi","websiteUrl":"https://x.dev","category":"custom","icon":"","iconColor":"","sortIndex":0,"notes":"","settingsConfig":"{}","meta":"{}","updatedAt":"2026-08-01T00:00:00Z"}"#,
+        )
+        .unwrap();
+        assert_eq!(old.app, App::Claude);
+
+        let codex: Provider = serde_json::from_str(
+            r#"{"app":"codex","id":"p2","name":"Kimi","websiteUrl":"https://x.dev","category":"custom","icon":"","iconColor":"","sortIndex":0,"notes":"","settingsConfig":"{}","meta":"{}","updatedAt":"2026-08-01T00:00:00Z"}"#,
+        )
+        .unwrap();
+        assert_eq!(codex.app, App::Codex);
+        let back: Provider = serde_json::from_str(&serde_json::to_string(&codex).unwrap()).unwrap();
+        assert_eq!(back.app, App::Codex);
     }
 
     #[test]

@@ -46,6 +46,9 @@ dirs = "5"
 walkdir = "2"
 # LiteLLM upstream pricing fetch. ureq = blocking + rustls (pure Rust).
 ureq = "2"
+# Codex config.toml 受控合并（写盘）：编辑型 TOML 解析器，保留未改动部分的
+# 注释与格式；只读型 `toml` 重写会丢注释，故不用。
+toml_edit = "0.22"
 # GitHub-repo sync over libgit2. HTTPS-only (PAT); no SSH feature to
 # keep the dependency surface small. Windows TLS uses Schannel via libgit2.
 git2 = { version = "0.19", default-features = false, features = ["https"] }

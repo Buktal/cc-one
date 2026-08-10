@@ -882,12 +882,14 @@ pub fn reorder_providers_cmd(
     Ok(())
 }
 
-/// 切换供应商（核心动作）：查 provider → 读 live → （片段启用则先合并
-/// 片段）→ 受控合并 → 备份 .bak → 原子写 → 记激活状态（按应用）。写盘
-/// 语义：只替换受控字段（env + 少数顶层开关），非受控字段（hooks / MCP /
-/// permissions / model 等）从 live 原地保留，不整文件覆盖、不做 Backfill。
-/// 「保存」只写 DB（save_provider_cmd），本命令才真正写盘。`app` 是目标
-/// 应用池；激活记录落在该应用的键上。
+/// 切换供应商（核心动作）：按 (app, id) 查 provider → 按应用分派写盘 →
+/// 记该应用的激活状态。写盘分派 `write_live(app, provider)`：claude 走 JSON
+/// 受控合并进 `~/.claude/settings.json`（合并前先叠该应用的通用片段、拦截
+/// 未物化模板变量），codex 走 TOML 受控合并 + auth.json，gemini 走 env 整块
+/// 替换 + settings.json 受控合并。各分支语义一致：只替换受控字段、非受控
+/// 字段（hooks / MCP / permissions / model / mcp_servers 等）从 live 原地
+/// 保留，不整文件覆盖、不做 Backfill。「保存」只写 DB（save_provider_cmd），
+/// 本命令才真正写盘。
 #[tauri::command]
 #[specta::specta]
 pub async fn switch_provider_cmd(
@@ -902,23 +904,29 @@ pub async fn switch_provider_cmd(
         let provider = store
             .get_provider(app, &id)?
             .ok_or_else(|| AppError::Config(format!("provider not found in {app:?} pool: {id}")))?;
-        let path = crate::provider::live::claude_settings_path()?;
-        // 通用配置片段：启用了先合并进 settingsConfig 再走受控写盘（片段是
-        // 该应用的共享默认值，供应商显式配置优先；非受控键被忽略）。片段按
-        // provider 归属的应用读取——claude 池读 claude 片段（存量迁移后即
-        // 原全局片段，行为不变），其余应用读各自的片段。启用片段解析不了
-        // 会让切换失败——宁可显式报错，也不静默丢片段效果。
-        let cfg = config.get();
-        let snippet = cfg.snippet_for(provider.app);
-        let settings_config = crate::provider::snippet::apply_snippet(
-            &provider.settings_config,
-            &snippet.content,
-            snippet.enabled,
-        )?;
-        // 未物化的模板变量不能进 live（前端保存时已拦截，但导入/手改的
-        // 配置可能绕过）：字面量 `${VAR}` 写进 settings.json 等于写一份废配置。
-        crate::provider::live::validate_no_unfilled_template_vars(&settings_config)?;
-        crate::provider::live::switch_live_settings(&path, &settings_config)?;
+        // 写盘分派（provider::live::write_live）：claude 侧先叠该应用的通用
+        // 片段（片段按 provider 归属的应用读取——claude 池读 claude 片段，
+        // 存量迁移后即原全局片段，行为不变）并拦截未物化模板变量，再受控
+        // 写盘；codex/gemini 直接写 provider 配置（其片段支持属后续批次）。
+        // 各分支写盘语义一致——只替换受控字段、非受控字段从 live 原地保留。
+        let write_provider = if app == App::Claude {
+            let cfg = config.get();
+            let snippet = cfg.snippet_for(provider.app);
+            let settings_config = crate::provider::snippet::apply_snippet(
+                &provider.settings_config,
+                &snippet.content,
+                snippet.enabled,
+            )?;
+            // 字面量 `${VAR}` 写进 live 文件等于写一份废配置。
+            crate::provider::live::validate_no_unfilled_template_vars(&settings_config)?;
+            Provider {
+                settings_config,
+                ..provider.clone()
+            }
+        } else {
+            provider.clone()
+        };
+        crate::provider::live::write_live(app, &write_provider)?;
         config.update(|c| c.set_active_provider(app, &id))?;
         Ok(provider)
     })
