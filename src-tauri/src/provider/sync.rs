@@ -1,8 +1,17 @@
 //! Provider structure sync — the per-device `providers.json`, following the
 //! Synced Group / device-registry pattern: each device writes ONLY its own
 //! `repo/data/<deviceId>/providers.json` (a JSON object with one `providers`
-//! array); reading merges every device's file by id, latest `updated_at` wins
-//! (ties → first seen). This is the structure half of provider sync.
+//! array and a schema version `v`); reading merges every device's file by
+//! `(app, id)`, latest `updated_at` wins (ties → first seen). This is the
+//! structure half of provider sync.
+//!
+//! **App dimension.** Every line carries `app` (`claude` / `codex` / `gemini`);
+//! the merge/dedup key is `(app, id)`, so the same vendor id in two app pools
+//! stays two entries. An old file without `app` fields reads every line as
+//! claude (serde default) — pre-dimension data all belongs there. A file with
+//! a schema `v` NEWER than [`SYNCED_PROVIDERS_DOC_VERSION`] is skipped whole
+//! (the sessions-snapshot version gate): this binary cannot attribute it, so
+//! it must not mis-merge it by id.
 //!
 //! **API keys never enter the file.** Every provider is
 //! [`Provider::redacted`] on write: the four `SECRET_ENV_KEYS` are stripped
@@ -34,13 +43,23 @@
 use crate::config::Paths;
 use crate::db::Store;
 use crate::error::{AppError, AppResult};
-use crate::model::{Provider, SECRET_ENV_KEYS};
+use crate::model::{App, Provider, SECRET_ENV_KEYS};
+
+/// The providers.json schema version this binary reads (sessions-snapshot
+/// style `v` gate). Files with a HIGHER `v` are skipped whole on read — this
+/// binary cannot attribute their app fields, so merging them by id could
+/// mis-attribute entries; their providers simply arrive after an upgrade.
+pub const SYNCED_PROVIDERS_DOC_VERSION: u32 = 1;
 
 /// One device's provider-file wrapper: a stable JSON object with one
-/// `providers` array (a versioned wrapper object — adding a sibling key later
-/// won't break old readers). Missing file ⇒ empty doc.
+/// `providers` array + schema version `v`. Files without `v` (pre-version
+/// format) read as 0 — old format, still attributable (lines default to
+/// claude). Missing file ⇒ empty doc.
 #[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
 struct SyncedProvidersDoc {
+    /// Schema version; absent (old format) ⇒ 0, read as an old file.
+    #[serde(default)]
+    v: u32,
     #[serde(default)]
     providers: Vec<Provider>,
 }
@@ -68,53 +87,69 @@ pub fn write_own_providers(store: &Store, paths: &Paths, device_id: &str) -> App
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)?;
     }
-    let doc = SyncedProvidersDoc { providers };
+    let doc = SyncedProvidersDoc {
+        v: SYNCED_PROVIDERS_DOC_VERSION,
+        providers,
+    };
     let json = serde_json::to_string_pretty(&doc)?;
     std::fs::write(&path, format!("{json}\n"))?;
     Ok(())
 }
 
 /// Read one device's provider file. Missing/unreadable/unparseable ⇒ empty —
-/// a corrupt peer file must never abort a pull.
+/// a corrupt peer file must never abort a pull. A file whose schema `v` is
+/// HIGHER than this binary's is skipped whole with a logged warning (the
+/// version gate): merging it by `(app, id)` would silently mis-attribute
+/// entries this binary does not understand.
 fn read_device_providers(paths: &Paths, device_id: &str) -> Vec<Provider> {
     let path = paths.providers_json_path(device_id);
     let Ok(text) = std::fs::read_to_string(&path) else {
         return Vec::new();
     };
-    serde_json::from_str::<SyncedProvidersDoc>(&text)
-        .unwrap_or_default()
-        .providers
+    let doc = serde_json::from_str::<SyncedProvidersDoc>(&text).unwrap_or_default();
+    if doc.v > SYNCED_PROVIDERS_DOC_VERSION {
+        eprintln!(
+            "[vaultone] provider file for device {device_id} has schema v{} \
+             (this build reads ≤ v{SYNCED_PROVIDERS_DOC_VERSION}) — skipped; upgrade to see its providers",
+            doc.v
+        );
+        return Vec::new();
+    }
+    doc.providers
 }
 
-/// Merge every device's providers by id: the newest `updated_at` wins, ties →
-/// first seen (the sessions rule). Pure — no IO — so the dedup rule is
-/// directly unit-testable. Output sorted by `(sort_index, name, id)` for a
-/// deterministic, list-friendly order.
+/// Merge every device's providers by `(app, id)`: the newest `updated_at`
+/// wins, ties → first seen (the sessions rule). Pure — no IO — so the dedup
+/// rule is directly unit-testable. Output sorted by
+/// `(sort_index, name, id, app)` for a deterministic, list-friendly order.
 pub fn merge_providers_latest_wins(providers: impl IntoIterator<Item = Provider>) -> Vec<Provider> {
-    let mut by_id: std::collections::BTreeMap<String, Provider> = std::collections::BTreeMap::new();
+    let mut by_key: std::collections::BTreeMap<(String, String), Provider> =
+        std::collections::BTreeMap::new();
     for p in providers {
-        let take = by_id
-            .get(&p.id)
+        let key = (p.app.as_str().to_string(), p.id.clone());
+        let take = by_key
+            .get(&key)
             .map(|e| e.updated_at < p.updated_at)
             .unwrap_or(true);
         if take {
-            by_id.insert(p.id.clone(), p);
+            by_key.insert(key, p);
         }
     }
-    let mut out: Vec<Provider> = by_id.into_values().collect();
+    let mut out: Vec<Provider> = by_key.into_values().collect();
     out.sort_by(|a, b| {
         a.sort_index
             .cmp(&b.sort_index)
             .then_with(|| a.name.cmp(&b.name))
             .then_with(|| a.id.cmp(&b.id))
+            .then_with(|| a.app.as_str().cmp(b.app.as_str()))
     });
     out
 }
 
-/// Read every PEER's provider file, merged by id (latest wins). Self's own
-/// directory is skipped — self is local-authoritative (see the module doc).
-/// Only valid device dirs are walked, so a stray folder never shows up as a
-/// providers source.
+/// Read every PEER's provider file, merged by `(app, id)` (latest wins).
+/// Self's own directory is skipped — self is local-authoritative (see the
+/// module doc). Only valid device dirs are walked, so a stray folder never
+/// shows up as a providers source.
 pub fn read_all_peer_providers(paths: &Paths, self_device_id: &str) -> AppResult<Vec<Provider>> {
     let mut all = Vec::new();
     for dev in crate::devices::iter_data_device_ids(paths)? {
@@ -214,7 +249,8 @@ fn merge_local_keys(local: &Provider, peer: &Provider) -> AppResult<Provider> {
 }
 
 /// Pull-side import of peers' provider structure into the local store,
-/// latest-wins by `updated_at` and always keeping this device's keys:
+/// latest-wins by `updated_at` (per `(app, id)` entry) and always keeping
+/// this device's keys:
 /// - no local row ⇒ insert the peer version as-is (keys absent — the user
 ///   fills them locally);
 /// - local row at least as fresh as the peer (tie counts) ⇒ skip — a pull
@@ -227,7 +263,7 @@ fn merge_local_keys(local: &Provider, peer: &Provider) -> AppResult<Provider> {
 pub fn import_peer_providers(store: &Store, paths: &Paths, self_device_id: &str) -> AppResult<()> {
     for peer in read_all_peer_providers(paths, self_device_id)? {
         let peer_id = peer.id.clone();
-        let local = store.get_provider(&peer_id)?;
+        let local = store.get_provider(peer.app, &peer_id)?;
         let import = match &local {
             None => Ok(Some(peer)),
             Some(l) if l.updated_at >= peer.updated_at => Ok(None),
@@ -266,6 +302,7 @@ mod tests {
             name: name.into(),
             website_url: "https://example.com".into(),
             category: ProviderCategory::Custom,
+            app: App::Claude,
             icon: String::new(),
             icon_color: String::new(),
             sort_index: 0,
@@ -281,6 +318,7 @@ mod tests {
         let path = paths.providers_json_path(device_id);
         std::fs::create_dir_all(path.parent().unwrap()).unwrap();
         let doc = SyncedProvidersDoc {
+            v: SYNCED_PROVIDERS_DOC_VERSION,
             providers: providers.to_vec(),
         };
         std::fs::write(&path, serde_json::to_string_pretty(&doc).unwrap()).unwrap();
@@ -421,7 +459,7 @@ mod tests {
             .unwrap();
         write_own_providers(&s, &paths, "aabbccddeeff").unwrap();
         assert!(paths.providers_json_path("aabbccddeeff").exists());
-        s.delete_provider(&p.id).unwrap();
+        s.delete_provider(App::Claude, &p.id).unwrap();
         write_own_providers(&s, &paths, "aabbccddeeff").unwrap();
         let doc: SyncedProvidersDoc = serde_json::from_str(
             &std::fs::read_to_string(paths.providers_json_path("aabbccddeeff")).unwrap(),
@@ -598,7 +636,7 @@ mod tests {
 
         import_peer_providers(&s, &paths, "aabbccddeeff").unwrap();
 
-        let kimi = s.get_provider("aaaaaaaa").unwrap().unwrap();
+        let kimi = s.get_provider(App::Claude, "aaaaaaaa").unwrap().unwrap();
         assert_eq!(
             kimi.updated_at, "2026-08-02T00:00:00.000Z",
             "peer freshness"
@@ -613,7 +651,7 @@ mod tests {
             "local key merged back, never overwritten"
         );
         // A provider the peer has and we don't is inserted as-is (keys absent).
-        let fresh = s.get_provider("bbbbbbbb").unwrap().unwrap();
+        let fresh = s.get_provider(App::Claude, "bbbbbbbb").unwrap().unwrap();
         assert_eq!(fresh.name, "Brand New");
         assert_eq!(fresh.updated_at, "2026-08-02T00:00:00.000Z");
         assert!(!fresh.settings_config.contains("ANTHROPIC_AUTH_TOKEN"));
@@ -651,7 +689,7 @@ mod tests {
 
         import_peer_providers(&s, &paths, "aabbccddeeff").unwrap();
 
-        let row = s.get_provider("aaaaaaaa").unwrap().unwrap();
+        let row = s.get_provider(App::Claude, "aaaaaaaa").unwrap().unwrap();
         // Peer structure imported (new region)…
         let cfg: serde_json::Value = serde_json::from_str(&row.settings_config).unwrap();
         assert_eq!(cfg["env"]["AWS_REGION"], "eu-west-1");
@@ -692,7 +730,7 @@ mod tests {
 
         import_peer_providers(&s, &paths, "aabbccddeeff").unwrap();
 
-        let row = s.get_provider("aaaaaaaa").unwrap().unwrap();
+        let row = s.get_provider(App::Claude, "aaaaaaaa").unwrap().unwrap();
         assert_eq!(
             row.updated_at, "2026-08-02T00:00:00.000Z",
             "local freshness kept"
@@ -732,7 +770,7 @@ mod tests {
 
         import_peer_providers(&s, &paths, "aabbccddeeff").unwrap();
 
-        let row = s.get_provider("aaaaaaaa").unwrap().unwrap();
+        let row = s.get_provider(App::Claude, "aaaaaaaa").unwrap().unwrap();
         assert_eq!(row.updated_at, "2026-08-01T00:00:00.000Z");
         assert!(
             row.settings_config.contains("sk-local-key"),
@@ -770,7 +808,7 @@ mod tests {
 
         import_peer_providers(&s, &paths, "aabbccddeeff").unwrap();
 
-        let row = s.get_provider("aaaaaaaa").unwrap().unwrap();
+        let row = s.get_provider(App::Claude, "aaaaaaaa").unwrap().unwrap();
         assert_eq!(
             row.updated_at, "2026-08-02T00:00:00.000Z",
             "peer structure imported despite local row having no env"
@@ -809,7 +847,7 @@ mod tests {
 
         import_peer_providers(&s, &paths, "aabbccddeeff").unwrap();
 
-        let row = s.get_provider("aaaaaaaa").unwrap().unwrap();
+        let row = s.get_provider(App::Claude, "aaaaaaaa").unwrap().unwrap();
         let cfg: serde_json::Value = serde_json::from_str(&row.settings_config).unwrap();
         assert_eq!(
             cfg["env"]["ANTHROPIC_BASE_URL"], "https://api.kimi.com",
@@ -838,7 +876,7 @@ mod tests {
             )],
         );
         import_peer_providers(&s, &paths, "aabbccddeeff").unwrap();
-        assert!(s.get_provider("p1").unwrap().is_none());
+        assert!(s.get_provider(App::Claude, "p1").unwrap().is_none());
         // No device dirs at all ⇒ no-op.
         let empty_tmp = tempfile::tempdir().unwrap();
         import_peer_providers(&s, &Paths::resolve(empty_tmp.path()), "aabbccddeeff").unwrap();
@@ -851,5 +889,118 @@ mod tests {
             paths.providers_json_path("aabbccddeeff"),
             PathBuf::from("/root/repo/data/aabbccddeeff/providers.json")
         );
+    }
+
+    // ---- 应用维度：去重键 (app, id)、版本门、旧文件读为 claude ----
+
+    /// A provider pinned to a specific app pool.
+    fn provider_for(app: App, id: &str, name: &str, updated_at: &str) -> Provider {
+        Provider {
+            app,
+            ..provider(id, name, r#"{"env":{}}"#, updated_at)
+        }
+    }
+
+    /// Hand-write a raw providers.json body (version / line shape under test).
+    fn write_raw(paths: &Paths, device_id: &str, body: &str) {
+        let path = paths.providers_json_path(device_id);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(&path, body).unwrap();
+    }
+
+    /// The same id in two app pools stays two entries: dedup key is (app, id),
+    /// not id alone — the Claude pool's entry never wins over the Codex pool's.
+    #[test]
+    fn merge_providers_latest_wins_dedupes_by_app_and_id() {
+        let claude_new = provider_for(
+            App::Claude,
+            "p1",
+            "Claude-Latest",
+            "2026-08-02T00:00:00.000Z",
+        );
+        let codex_new = provider_for(App::Codex, "p1", "Codex-Latest", "2026-08-02T00:00:00.000Z");
+        let claude_old = provider_for(App::Claude, "p1", "Claude-Old", "2026-08-01T00:00:00.000Z");
+        let merged = merge_providers_latest_wins([
+            claude_old.clone(),
+            claude_new.clone(),
+            codex_new.clone(),
+        ]);
+        assert_eq!(merged.len(), 2, "same id across apps is two entries");
+        let by_key: std::collections::HashMap<(String, String), String> = merged
+            .iter()
+            .map(|p| ((p.app.as_str().to_string(), p.id.clone()), p.name.clone()))
+            .collect();
+        assert_eq!(
+            by_key
+                .get(&("claude".into(), "p1".into()))
+                .map(String::as_str),
+            Some("Claude-Latest")
+        );
+        assert_eq!(
+            by_key
+                .get(&("codex".into(), "p1".into()))
+                .map(String::as_str),
+            Some("Codex-Latest")
+        );
+        // 同 (app, id) 的平局 → 先见先得，与原来按 id 的规则一致。
+        let tie = merge_providers_latest_wins([claude_old.clone(), claude_old]);
+        assert_eq!(tie.len(), 1);
+    }
+
+    /// 旧格式文件（无 v 字段、行无 app 字段）整体读为 claude——存量数据
+    /// 全部归入 Claude 池，原样可用。
+    #[test]
+    fn old_format_file_without_app_reads_every_line_as_claude() {
+        let tmp = tempfile::tempdir().unwrap();
+        let paths = Paths::resolve(tmp.path());
+        // 手工写应用维度之前的文件形状：{"providers": [...]}，行没有 app。
+        write_raw(
+            &paths,
+            "bbccddee0011",
+            r#"{"providers":[{"id":"p1","name":"Kimi","websiteUrl":"https://x.dev","category":"custom","icon":"","iconColor":"","sortIndex":0,"notes":"","settingsConfig":"{}","meta":"{}","updatedAt":"2026-08-01T00:00:00.000Z"}]}"#,
+        );
+        let all = read_all_peer_providers(&paths, "aabbccddeeff").unwrap();
+        assert_eq!(all.len(), 1);
+        assert_eq!(all[0].app, App::Claude, "old line defaults to claude");
+        assert_eq!(all[0].name, "Kimi");
+    }
+
+    /// 版本门：文件 `v` 高于本版本 → 整个文件跳过（老版本不能按 (app, id)
+    /// 合并它无法归属的行）；`v` 等于或低于当前版本正常读。
+    #[test]
+    fn higher_schema_version_file_is_skipped_whole() {
+        let tmp = tempfile::tempdir().unwrap();
+        let paths = Paths::resolve(tmp.path());
+        write_raw(
+            &paths,
+            "bbccddee0011",
+            r#"{"v":99,"providers":[{"id":"p1","name":"Future","websiteUrl":"https://x.dev","category":"custom","app":"gemini","icon":"","iconColor":"","sortIndex":0,"notes":"","settingsConfig":"{}","meta":"{}","updatedAt":"2026-08-01T00:00:00.000Z"}]}"#,
+        );
+        assert!(
+            read_all_peer_providers(&paths, "aabbccddeeff")
+                .unwrap()
+                .is_empty(),
+            "newer-schema file must be skipped, not mis-merged"
+        );
+    }
+
+    /// 写出文件带 schema 版本号 v（与 sessions 快照同款版本门）。
+    #[test]
+    fn write_own_providers_writes_schema_version() {
+        let s = mem();
+        s.save_provider(provider(
+            "aaaaaaaa",
+            "Kimi",
+            r#"{"env":{"ANTHROPIC_BASE_URL":"https://api.kimi.com"}}"#,
+            "2026-08-01T00:00:00.000Z",
+        ))
+        .unwrap();
+        let tmp = tempfile::tempdir().unwrap();
+        let paths = Paths::resolve(tmp.path());
+        write_own_providers(&s, &paths, "aabbccddeeff").unwrap();
+        let text = std::fs::read_to_string(paths.providers_json_path("aabbccddeeff")).unwrap();
+        let doc: SyncedProvidersDoc = serde_json::from_str(&text).unwrap();
+        assert_eq!(doc.v, SYNCED_PROVIDERS_DOC_VERSION);
+        assert_eq!(doc.providers[0].app, App::Claude, "每行带 app");
     }
 }

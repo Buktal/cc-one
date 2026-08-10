@@ -13,7 +13,7 @@ use std::sync::Mutex;
 use rand::Rng;
 
 use crate::error::{AppError, AppResult};
-use crate::model::RunMode;
+use crate::model::{App, CommonConfigSnippet, RunMode};
 
 /// Root of all cc one local data: `~/.config/cc-one`.
 pub fn root_dir() -> AppResult<PathBuf> {
@@ -259,18 +259,27 @@ pub struct ConfigData {
     /// on it, but it rides ConfigData so every Settings preference is unified.
     #[serde(default)]
     pub skin: Skin,
-    /// 当前激活的供应商 id（「切换供应商」时记录）。存本机 config.json，
-    /// 重启后保持、不进 git。未激活时为 `None`。
+    /// 当前激活的供应商 id，**按应用各一份**（`app → provider id`）：
+    /// claude / codex / gemini 各自独立，切换时记录对应应用的键。存本机
+    /// config.json，重启后保持、不进 git。某应用未激活时没有它的键。
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub active_providers: BTreeMap<String, String>,
+    /// 应用维度之前的单键激活记录（旧写法，只有 claude 池）。保留仅为
+    /// [`ConfigStore::load`] 迁移到 [`Self::active_providers`] 的 claude 键；
+    /// 迁移后不再读取、下次写盘时被剥掉（`skip_serializing_if`）。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub active_provider_id: Option<String>,
-    /// 通用配置片段（全局一条，跨供应商共享）：settings.json 片段原文，
-    /// 勾选启用后切换写盘时合并进受控字段。存本机 config.json——与
-    /// `active_provider_id` 同属本机配置，不进 git、不随同步仓库走。默认
-    /// `{"includeCoAuthoredBy": false}`（隐藏署名）。
+    /// 通用配置片段，**按应用各一份**（`app → 片段`）：claude / codex /
+    /// gemini 各自独立。存本机 config.json——与 `active_providers` 同属本机
+    /// 配置，不进 git、不随同步仓库走。见 [`Self::snippet_for`]。
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub common_config_snippets: BTreeMap<String, CommonConfigSnippet>,
+    /// 应用维度之前的全局单条片段（旧写法，只有 claude 池）：settings.json
+    /// 片段原文 + 启用开关。保留仅为 [`ConfigStore::load`] 迁移到
+    /// [`Self::common_config_snippets`] 的 claude 键；迁移后不再读取。
     #[serde(default = "default_common_config_snippet")]
     pub common_config_snippet: String,
-    /// 通用配置片段启用开关：勾选后写盘时片段合并进受控字段；取消勾选后
-    /// 下次写盘不再合并。仅本机生效。
+    /// 应用维度之前的全局单条片段启用开关（见 [`Self::common_config_snippet`]）。
     #[serde(default)]
     pub common_config_snippet_enabled: bool,
 }
@@ -292,7 +301,9 @@ impl Default for ConfigData {
             language: Language::En,
             lightweight_expand: LightweightExpand::Click,
             skin: Skin::Neutral,
+            active_providers: BTreeMap::new(),
             active_provider_id: None,
+            common_config_snippets: BTreeMap::new(),
             common_config_snippet: default_common_config_snippet(),
             common_config_snippet_enabled: false,
         }
@@ -312,6 +323,40 @@ impl ConfigData {
 
     pub fn is_synced(&self) -> bool {
         self.mode() == RunMode::Synced
+    }
+
+    /// 某应用当前激活的供应商 id；未激活 → `None`。
+    pub fn active_provider_id_for(&self, app: App) -> Option<String> {
+        self.active_providers.get(app.as_str()).cloned()
+    }
+
+    /// 记录某应用的激活供应商 id（切换写盘后调用）。
+    pub fn set_active_provider(&mut self, app: App, id: &str) {
+        self.active_providers
+            .insert(app.as_str().to_string(), id.to_string());
+    }
+
+    /// 某应用的通用配置片段：已有条目原样返回；缺省（新应用池 / 手改
+    /// config.json 删了键）按应用给默认——claude 沿用隐藏署名片段，其余应用
+    /// 默认空片段（它们的配置里没有署名概念，留空由用户自填）。
+    pub fn snippet_for(&self, app: App) -> CommonConfigSnippet {
+        self.common_config_snippets
+            .get(app.as_str())
+            .cloned()
+            .unwrap_or_else(|| CommonConfigSnippet {
+                enabled: false,
+                content: if app == App::Claude {
+                    default_common_config_snippet()
+                } else {
+                    String::new()
+                },
+            })
+    }
+
+    /// 写入某应用的通用配置片段（set 命令；内容合法性由调用方校验）。
+    pub fn set_snippet(&mut self, app: App, snippet: CommonConfigSnippet) {
+        self.common_config_snippets
+            .insert(app.as_str().to_string(), snippet);
     }
 
     /// Mask the token for any non-storage surface (logs / UI echoes).
@@ -381,6 +426,12 @@ impl ConfigStore {
             dirty = true;
         }
 
+        // 应用维度迁移（存量 config.json 只有 claude 池的旧写法）——纯函数，
+        // 见 [`migrate_legacy_fields`]；返回「是否需要重写文件」。
+        if migrate_legacy_fields(&mut data) {
+            dirty = true;
+        }
+
         if dirty {
             Self::write_config(&paths, &data)?;
         }
@@ -417,6 +468,35 @@ impl ConfigStore {
         fs::write(&paths.config_json, bytes)?;
         Ok(())
     }
+}
+
+/// 应用维度迁移（纯函数，`ConfigStore::load` 在生产路径调用）：把存量
+/// config.json 的旧写法迁到按应用存的字段——
+/// - 单键 `active_provider_id` → `active_providers["claude"]`（旧写法只有
+///   claude 池；map 里已有 claude 键时以 map 为准，旧键是 stale 的）；
+/// - 全局片段 `common_config_snippet` / `common_config_snippet_enabled` →
+///   `common_config_snippets["claude"]`（已有 claude 键则不覆盖）。
+/// 迁移即剥离旧字段（旧字段 `take()` / 后续写盘不再序列化）。返回「数据是否
+/// 变化、需要重写 config.json」——幂等：新格式（没有旧字段）返回 `false`。
+fn migrate_legacy_fields(data: &mut ConfigData) -> bool {
+    let mut dirty = false;
+    if let Some(id) = data.active_provider_id.take() {
+        data.active_providers
+            .entry("claude".to_string())
+            .or_insert(id);
+        dirty = true;
+    }
+    if !data.common_config_snippets.contains_key("claude") {
+        data.common_config_snippets.insert(
+            "claude".to_string(),
+            CommonConfigSnippet {
+                enabled: data.common_config_snippet_enabled,
+                content: data.common_config_snippet.clone(),
+            },
+        );
+        dirty = true;
+    }
+    dirty
 }
 
 /// Test-only constructor: back a `ConfigStore` with `paths` and `data` without
@@ -564,5 +644,128 @@ mod tests {
             r#"{"includeCoAuthoredBy": true, "attribution": "x"}"#
         );
         assert!(back.common_config_snippet_enabled);
+    }
+
+    // ---- 应用维度：per-app 激活与片段存取 ----
+
+    #[test]
+    fn per_app_active_provider_accessors() {
+        let mut c = ConfigData::default();
+        assert_eq!(c.active_provider_id_for(App::Claude), None);
+        assert_eq!(c.active_provider_id_for(App::Codex), None);
+        c.set_active_provider(App::Claude, "claude-1");
+        c.set_active_provider(App::Codex, "codex-1");
+        assert_eq!(
+            c.active_provider_id_for(App::Claude).as_deref(),
+            Some("claude-1")
+        );
+        assert_eq!(
+            c.active_provider_id_for(App::Codex).as_deref(),
+            Some("codex-1")
+        );
+        assert_eq!(c.active_provider_id_for(App::Gemini), None);
+        // 覆盖同应用的旧记录。
+        c.set_active_provider(App::Claude, "claude-2");
+        assert_eq!(
+            c.active_provider_id_for(App::Claude).as_deref(),
+            Some("claude-2")
+        );
+        // 经 config.json 序列化往返不丢。
+        let json = serde_json::to_string(&c).unwrap();
+        let back: ConfigData = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.active_providers.len(), 2);
+        assert_eq!(
+            back.active_provider_id_for(App::Codex).as_deref(),
+            Some("codex-1")
+        );
+    }
+
+    #[test]
+    fn snippet_for_defaults_per_app() {
+        let c = ConfigData::default();
+        // claude 默认隐藏署名片段；codex/gemini 默认空片段（留空自填）。
+        let claude = c.snippet_for(App::Claude);
+        assert_eq!(claude.content, r#"{"includeCoAuthoredBy": false}"#);
+        assert!(!claude.enabled);
+        assert_eq!(c.snippet_for(App::Codex).content, "");
+        assert_eq!(c.snippet_for(App::Gemini).content, "");
+    }
+
+    #[test]
+    fn snippet_set_and_roundtrip_per_app() {
+        let mut c = ConfigData::default();
+        c.set_snippet(
+            App::Codex,
+            CommonConfigSnippet {
+                enabled: true,
+                content: r#"{"custom": 1}"#.into(),
+            },
+        );
+        let codex = c.snippet_for(App::Codex);
+        assert!(codex.enabled);
+        assert_eq!(codex.content, r#"{"custom": 1}"#);
+        let json = serde_json::to_string(&c).unwrap();
+        let back: ConfigData = serde_json::from_str(&json).unwrap();
+        assert!(back.snippet_for(App::Codex).enabled);
+        assert_eq!(back.snippet_for(App::Codex).content, r#"{"custom": 1}"#);
+        // claude 键未被写入 → 仍回退默认。
+        assert_eq!(
+            back.snippet_for(App::Claude).content,
+            r#"{"includeCoAuthoredBy": false}"#
+        );
+    }
+
+    // ---- 应用维度迁移：存量单键归 claude ----
+
+    /// 旧 config.json（单键 active_provider_id + 全局片段）加载后迁移：
+    /// 激活记录归 claude 键、片段归 claude 键，旧字段被剥离，重写文件。
+    #[test]
+    fn migrate_legacy_fields_moves_single_keys_to_claude() {
+        // 反序列化旧 config.json 的形状（模拟 `ConfigStore::load` 的读入）。
+        let c: ConfigData = serde_json::from_str(
+            r#"{"device_id":"abc123def456","display_name":"V","active_provider_id":"p1","common_config_snippet":"{\"includeCoAuthoredBy\": true}","common_config_snippet_enabled":true}"#,
+        )
+        .unwrap();
+        let mut c = c;
+        assert!(migrate_legacy_fields(&mut c), "旧字段存在 → 需要重写");
+        assert_eq!(
+            c.active_provider_id_for(App::Claude).as_deref(),
+            Some("p1"),
+            "存量激活归 claude 键"
+        );
+        let claude = c.snippet_for(App::Claude);
+        assert!(claude.enabled);
+        assert_eq!(claude.content, r#"{"includeCoAuthoredBy": true}"#);
+        // 旧字段被剥离。
+        assert!(c.active_provider_id.is_none());
+        // 幂等：再跑一遍 → 无变化，不再标记重写。
+        assert!(!migrate_legacy_fields(&mut c), "新格式幂等：无需重写");
+        assert_eq!(c.active_provider_id_for(App::Claude).as_deref(), Some("p1"));
+    }
+
+    /// 新旧字段并存（手改/回滚残留）→ 新字段（map）为准，旧键是 stale 的。
+    #[test]
+    fn migrate_keeps_existing_per_app_values_over_legacy() {
+        let mut c = ConfigData::default();
+        c.active_provider_id = Some("stale".into());
+        c.active_providers
+            .insert("claude".to_string(), "current".into());
+        assert!(migrate_legacy_fields(&mut c));
+        assert_eq!(
+            c.active_provider_id_for(App::Claude).as_deref(),
+            Some("current"),
+            "map 里已有的 claude 键优先，旧键不覆盖"
+        );
+        // 片段同理：已有 claude 键则保留，不覆盖。
+        let mut c2 = ConfigData::default();
+        c2.common_config_snippets.insert(
+            "claude".to_string(),
+            CommonConfigSnippet {
+                enabled: true,
+                content: "{}".into(),
+            },
+        );
+        migrate_legacy_fields(&mut c2);
+        assert_eq!(c2.snippet_for(App::Claude).content, "{}");
     }
 }

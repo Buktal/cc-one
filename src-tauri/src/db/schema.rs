@@ -208,14 +208,18 @@ pub(super) const SESSION_MESSAGES_INDEXES: &str = "\
 
 /// `provider` — user-created providers (供应商). `settings_config` and `meta`
 /// are raw JSON *text* (the store round-trips them without parsing); the API
-/// key lives inside `settings_config`'s `env` block. Local-only for now —
-/// sync (`providers.json`) and live write are later tickets. `sort_index` is
-/// the user-ordered display rank.
+/// key lives inside `settings_config`'s `env` block. `app` is the owning app
+/// (`claude` / `codex` / `gemini`) — the merge/dedup key across sync and
+/// export/import is `(app, id)`, and `sort_index` is the user-ordered display
+/// rank *within one app pool*. `app` defaults to `'claude'` so pre-dimension
+/// rows (and legacy tables ALTERed by `migrate_schema`) all land in the
+/// Claude pool.
 pub(super) const PROVIDERS_COLS_DDL: &str = "\
     id TEXT PRIMARY KEY, \
     name TEXT NOT NULL, \
     website_url TEXT NOT NULL DEFAULT '', \
     category TEXT NOT NULL DEFAULT 'custom', \
+    app TEXT NOT NULL DEFAULT 'claude', \
     icon TEXT NOT NULL DEFAULT '', \
     icon_color TEXT NOT NULL DEFAULT '', \
     sort_index INTEGER NOT NULL DEFAULT 0, \

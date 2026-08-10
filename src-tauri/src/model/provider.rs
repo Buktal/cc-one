@@ -1,19 +1,63 @@
 //! Provider (供应商) entity types.
 //!
-//! One provider is a vendor cc one can switch Claude Code to: a
-//! `settings.json` snapshot (`settingsConfig`) plus app-side extras (`meta`).
-//! The snapshot is the single authority — every form field, preset and snippet
-//! reads/writes it — and API keys live inside its `env` block
-//! (`ANTHROPIC_AUTH_TOKEN` / `ANTHROPIC_API_KEY`). Both `settingsConfig` and
-//! `meta` cross the boundary as raw JSON *text*: the store persists them as
-//! TEXT as-is, and the future CodeMirror editor edits that text directly, so
-//! nothing here parses or prettifies it (that is the frontend `derive.ts`'s
-//! job).
+//! One provider is a vendor CC One can switch one of its apps (Claude Code /
+//! Codex CLI / Gemini CLI) to: a `settings.json` snapshot (`settingsConfig`)
+//! plus app-side extras (`meta`). Every provider belongs to exactly one
+//! [`App`]; the merge/dedup key across sync and export/import is `(app, id)`,
+//! so the same vendor appears as separate entries in each app's pool (their
+//! live config formats differ). The snapshot is the single authority — every
+//! form field, preset and snippet reads/writes it — and API keys live inside
+//! its `env` block (`ANTHROPIC_AUTH_TOKEN` / `ANTHROPIC_API_KEY`). Both
+//! `settingsConfig` and `meta` cross the boundary as raw JSON *text*: the
+//! store persists them as TEXT as-is, and the future CodeMirror editor edits
+//! that text directly, so nothing here parses or prettifies it (that is the
+//! frontend `derive.ts`'s job).
 
 use serde::{Deserialize, Serialize};
 use specta::Type;
 
 use crate::error::{AppError, AppResult};
+
+/// The app (应用) a provider pool belongs to. Each app owns an independent
+/// provider pool, per-app active state and per-app common-config snippet.
+/// Serialized snake_case ("claude" / "codex" / "gemini") — the same spelling
+/// crosses as JSON, the sync file and the DB.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, Type)]
+#[serde(rename_all = "snake_case")]
+pub enum App {
+    /// Claude Code — the original pool; existing data all belongs here.
+    #[default]
+    Claude,
+    /// Codex CLI.
+    Codex,
+    /// Gemini CLI.
+    Gemini,
+}
+
+impl App {
+    /// The stored spelling (DB column / config.json key; identical to the
+    /// serde snake_case JSON spelling).
+    pub(crate) fn as_str(self) -> &'static str {
+        match self {
+            App::Claude => "claude",
+            App::Codex => "codex",
+            App::Gemini => "gemini",
+        }
+    }
+
+    /// Parse the stored spelling; anything unrecognised falls back to
+    /// [`App::Claude`] so an unknown value (a typo, a future app) never fails
+    /// the whole list read — the sync-file version gate is the stricter guard
+    /// for files this binary cannot attribute at all.
+    pub(crate) fn from_db_str(s: &str) -> App {
+        match s {
+            "claude" => App::Claude,
+            "codex" => App::Codex,
+            "gemini" => App::Gemini,
+            _ => App::Claude,
+        }
+    }
+}
 
 /// Provider category. `Custom` is the value for user-created providers; the
 /// rest label and theme the built-in presets in the list view.
@@ -53,9 +97,11 @@ impl ProviderCategory {
     }
 }
 
-/// A provider (供应商): `settingsConfig` is a Claude Code `settings.json`
+/// A provider (供应商): `settingsConfig` is the owning app's live-file
 /// snapshot (raw JSON text); `meta` carries app-side info the live file never
-/// sees. `sortIndex` is the user-ordered display rank.
+/// sees. `sortIndex` is the user-ordered display rank *within the provider's
+/// app pool*. Missing `app` in a JSON document (old sync files, old exports)
+/// deserializes as `Claude` — the pre-app-dimension data all belongs there.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Type)]
 #[serde(rename_all = "camelCase")]
 pub struct Provider {
@@ -63,6 +109,9 @@ pub struct Provider {
     pub name: String,
     pub website_url: String,
     pub category: ProviderCategory,
+    /// 归属应用；合并/去重键是 (app, id)。缺省读为 claude（旧数据/旧文件）。
+    #[serde(default)]
+    pub app: App,
     pub icon: String,
     pub icon_color: String,
     pub sort_index: u32,
@@ -196,6 +245,7 @@ impl Provider {
             || self.name != other.name
             || self.website_url != other.website_url
             || self.category != other.category
+            || self.app != other.app
             || self.icon != other.icon
             || self.icon_color != other.icon_color
             || self.notes != other.notes
@@ -257,12 +307,39 @@ mod tests {
     }
 
     #[test]
+    fn app_db_str_roundtrips_and_defaults_to_claude() {
+        assert_eq!(App::from_db_str(App::Claude.as_str()), App::Claude);
+        assert_eq!(App::from_db_str(App::Codex.as_str()), App::Codex);
+        assert_eq!(App::from_db_str(App::Gemini.as_str()), App::Gemini);
+        assert_eq!(App::default(), App::Claude);
+        assert_eq!(App::Claude.as_str(), "claude");
+        assert_eq!(App::Codex.as_str(), "codex");
+        assert_eq!(App::Gemini.as_str(), "gemini");
+    }
+
+    #[test]
+    fn app_unknown_db_str_falls_back_to_claude() {
+        assert_eq!(App::from_db_str("bogus"), App::Claude);
+        assert_eq!(App::from_db_str(""), App::Claude);
+    }
+
+    /// A provider JSON document without an `app` field (pre-app-dimension
+    /// sync lines / exports) reads as Claude — old data all belongs there.
+    #[test]
+    fn provider_without_app_field_deserializes_as_claude() {
+        let json = r#"{"id":"p1","name":"Kimi","websiteUrl":"https://x.dev","category":"custom","icon":"","iconColor":"","sortIndex":0,"notes":"","settingsConfig":"{}","meta":"{}","updatedAt":"2026-08-01T00:00:00Z"}"#;
+        let p: Provider = serde_json::from_str(json).unwrap();
+        assert_eq!(p.app, App::Claude);
+    }
+
+    #[test]
     fn provider_serializes_camel_case() {
         let p = Provider {
             id: "p1".into(),
             name: "Kimi".into(),
             website_url: "https://platform.kimi.com".into(),
             category: ProviderCategory::CnOfficial,
+            app: App::Claude,
             icon: "kimi".into(),
             icon_color: "#6366F1".into(),
             sort_index: 0,
@@ -276,6 +353,7 @@ mod tests {
         assert!(json.contains("\"sortIndex\""));
         assert!(json.contains("\"settingsConfig\""));
         assert!(json.contains("\"cn_official\""));
+        assert!(json.contains("\"app\":\"claude\""));
         // The raw JSON text fields stay raw — the value is escaped (inner
         // quotes → `\"`) but never re-parsed or prettified.
         assert!(json.contains(r#""settingsConfig":"{\"env\":{}}""#));
@@ -296,6 +374,7 @@ mod tests {
             name: "Bedrock".into(),
             website_url: "https://bedrock.aws".into(),
             category: ProviderCategory::CloudProvider,
+            app: App::Claude,
             icon: "bedrock".into(),
             icon_color: "#ff0".into(),
             sort_index: 2,

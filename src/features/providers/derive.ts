@@ -440,14 +440,16 @@ export function withAllRolesFromFirstInText(configText: string): string | null {
   return withAllRolesInText(configText, picked)
 }
 
-/** A blank provider for the "new provider" sheet (custom category, empty env).
- *  `id` is empty so `save_provider_cmd` allocates a fresh one. */
+/** A blank provider for the "new provider" sheet (custom category, empty env,
+ *  Claude pool — the form currently only edits claude providers). `id` is
+ *  empty so `save_provider_cmd` allocates a fresh one. */
 export function emptyProvider(): Provider {
   return {
     id: "",
     name: "",
     websiteUrl: "",
     category: "custom",
+    app: "claude",
     icon: "",
     iconColor: "",
     sortIndex: 0,
@@ -470,6 +472,8 @@ export function providerFromPreset(preset: ProviderPreset): Provider {
     name: preset.name,
     websiteUrl: preset.websiteUrl,
     category: "custom",
+    // 预设池按应用归属：当前只有 claude 预设（后续批次会按应用拆池）。
+    app: "claude",
     icon: preset.icon,
     iconColor: preset.iconColor,
     sortIndex: 0,

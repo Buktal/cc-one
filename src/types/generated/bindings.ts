@@ -190,32 +190,36 @@ export const commands = {
 	reorderSyncedGroupsCmd: (orderedIds: string[]) => typedError<null, AppError>(__TAURI_INVOKE("reorder_synced_groups_cmd", { orderedIds })),
 	/**  Unified groups list (local + synced) for one-shot UI fetch. */
 	listGroupsCmd: () => typedError<SessionGroup[], AppError>(__TAURI_INVOKE("list_groups_cmd")),
-	listProvidersCmd: () => typedError<Provider[], AppError>(__TAURI_INVOKE("list_providers_cmd")),
+	/**  列出一个应用池的供应商（app 必填——前端传当前分段 tab，后端按池过滤）。 */
+	listProvidersCmd: (app: App) => typedError<Provider[], AppError>(__TAURI_INVOKE("list_providers_cmd", { app })),
 	/**
 	 *  Upsert a provider (empty id = create, non-empty = edit). Returns the
 	 *  persisted row so the caller learns the assigned id / sort position without
-	 *  a second read.
+	 *  a second read. The provider carries its `app` (the pool it belongs to).
 	 */
 	saveProviderCmd: (provider: Provider) => typedError<Provider, AppError>(__TAURI_INVOKE("save_provider_cmd", { provider })),
-	deleteProviderCmd: (id: string) => typedError<null, AppError>(__TAURI_INVOKE("delete_provider_cmd", { id })),
-	reorderProvidersCmd: (orderedIds: string[]) => typedError<null, AppError>(__TAURI_INVOKE("reorder_providers_cmd", { orderedIds })),
+	deleteProviderCmd: (app: App, id: string) => typedError<null, AppError>(__TAURI_INVOKE("delete_provider_cmd", { app, id })),
+	reorderProvidersCmd: (app: App, orderedIds: string[]) => typedError<null, AppError>(__TAURI_INVOKE("reorder_providers_cmd", { app, orderedIds })),
 	/**
 	 *  切换供应商（核心动作）：查 provider → 读 live → （片段启用则先合并
-	 *  片段）→ 受控合并 → 备份 .bak → 原子写 → 记激活状态。写盘语义：只替换
-	 *  受控字段（env + 少数顶层开关），非受控字段（hooks / MCP / permissions /
-	 *  model 等）从 live 原地保留，不整文件覆盖、不做 Backfill。「保存」只写
-	 *  DB（save_provider_cmd），本命令才真正写盘。
+	 *  片段）→ 受控合并 → 备份 .bak → 原子写 → 记激活状态（按应用）。写盘
+	 *  语义：只替换受控字段（env + 少数顶层开关），非受控字段（hooks / MCP /
+	 *  permissions / model 等）从 live 原地保留，不整文件覆盖、不做 Backfill。
+	 *  「保存」只写 DB（save_provider_cmd），本命令才真正写盘。`app` 是目标
+	 *  应用池；激活记录落在该应用的键上。
 	 */
-	switchProviderCmd: (id: string) => typedError<Provider, AppError>(__TAURI_INVOKE("switch_provider_cmd", { id })),
+	switchProviderCmd: (app: App, id: string) => typedError<Provider, AppError>(__TAURI_INVOKE("switch_provider_cmd", { app, id })),
 	/**
-	 *  当前激活的完整 provider（前端「当前使用」光卡用）。未激活、或激活的
-	 *  provider 已被删除 → `None`。
+	 *  当前激活的完整 provider（前端「当前使用」光卡用，按应用查询）。未激活、
+	 *  或激活的 provider 已被删除 → `None`。
 	 */
-	getActiveProviderCmd: () => typedError<{
+	getActiveProviderCmd: (app: App) => typedError<{
 	id: string,
 	name: string,
 	websiteUrl: string,
 	category: ProviderCategory,
+	/**  归属应用；合并/去重键是 (app, id)。缺省读为 claude（旧数据/旧文件）。 */
+	app?: App,
 	icon: string,
 	iconColor: string,
 	sortIndex: number,
@@ -225,18 +229,19 @@ export const commands = {
 	/**  App-side extras, raw JSON text. Never written to the live file. */
 	meta: string,
 	updatedAt: string,
-} | null, AppError>(__TAURI_INVOKE("get_active_provider_cmd")),
+} | null, AppError>(__TAURI_INVOKE("get_active_provider_cmd", { app })),
 	/**
-	 *  读全局通用配置片段（内容 + 启用开关）。一条记录跨供应商共享，存本机
-	 *  config.json。
+	 *  读某应用的通用配置片段（内容 + 启用开关）。按应用各存一份（claude /
+	 *  codex / gemini），存本机 config.json。缺省键按应用回退默认（claude 为
+	 *  隐藏署名片段，其余为空片段）。
 	 */
-	getCommonConfigSnippetCmd: () => typedError<CommonConfigSnippet, AppError>(__TAURI_INVOKE("get_common_config_snippet_cmd")),
+	getCommonConfigSnippetCmd: (app: App) => typedError<CommonConfigSnippet, AppError>(__TAURI_INVOKE("get_common_config_snippet_cmd", { app })),
 	/**
-	 *  保存全局通用配置片段。内容必须是合法 JSON 对象（空串视为空片段）；
+	 *  保存某应用的通用配置片段。内容必须是合法 JSON 对象（空串视为空片段）；
 	 *  非法 JSON 拒绝保存（`AppError::Config`）。写盘合并只认受控字段，非受控
 	 *  键在写盘时被忽略。
 	 */
-	setCommonConfigSnippetCmd: (snippet: CommonConfigSnippet) => typedError<CommonConfigSnippet, AppError>(__TAURI_INVOKE("set_common_config_snippet_cmd", { snippet })),
+	setCommonConfigSnippetCmd: (app: App, json: string, enabled: boolean) => typedError<CommonConfigSnippet, AppError>(__TAURI_INVOKE("set_common_config_snippet_cmd", { app, json, enabled })),
 	/**
 	 *  导出全部供应商为 JSON 文档，写入 `target_path`（前端 save 对话框选的位置）。
 	 *  `include_keys=false` 时剔除 settingsConfig env 里的密钥键。换设备迁移 /
@@ -250,14 +255,17 @@ export const commands = {
 	 */
 	importProvidersCmd: (sourcePath: string, mode: ProviderImportMode) => typedError<ProviderImportReport, AppError>(__TAURI_INVOKE("import_providers_cmd", { sourcePath, mode })),
 	/**
-	 *  获取供应商的可用模型列表（OpenAI 兼容 `GET /v1/models`）。WebView fetch
-	 *  撞 CORS，所以请求由后端发（ureq）。`models_url` 非空时精确覆写候选列表
-	 *  （只试这一个）；否则对 baseURL 构造候选 URL（版本段识别 + 兼容子路径
-	 *  剥离，见 `provider::model_fetch::candidate_models_urls`），按序尝试首个
-	 *  成功。错误串带稳定前缀标签（AUTH_FAILED / ENDPOINT_CLOSED / TIMEOUT /
-	 *  BAD_FORMAT / NETWORK），前端按标签分桶提示。
+	 *  获取供应商的可用模型列表。`app` 决定端点格式：claude / codex 走 OpenAI
+	 *  兼容 `GET /v1/models`（当前实现），gemini 的 Google 原生路径由后续批次
+	 *  实现——本票只把 app 维度接进签名，gemini 分支显式报错而不是静默走错
+	 *  端点。WebView fetch 撞 CORS，所以请求由后端发（ureq）。`models_url`
+	 *  非空时精确覆写候选列表（只试这一个）；否则对 baseURL 构造候选 URL
+	 *  （版本段识别 + 兼容子路径剥离，见 `provider::model_fetch::
+	 *  candidate_models_urls`），按序尝试首个成功。错误串带稳定前缀标签
+	 *  （AUTH_FAILED / ENDPOINT_CLOSED / TIMEOUT / BAD_FORMAT / NETWORK），
+	 *  前端按标签分桶提示。
 	 */
-	fetchModelsCmd: (baseUrl: string, apiKey: string, modelsUrl: string | null) => typedError<string[], AppError>(__TAURI_INVOKE("fetch_models_cmd", { baseUrl, apiKey, modelsUrl })),
+	fetchModelsCmd: (app: App, baseUrl: string, apiKey: string, modelsUrl: string | null) => typedError<string[], AppError>(__TAURI_INVOKE("fetch_models_cmd", { app, baseUrl, apiKey, modelsUrl })),
 	/**
 	 *  Dock the given window against the right edge of its current monitor.
 	 * 
@@ -314,6 +322,20 @@ export type AlignReport = {
 	/**  Per-step failures (`collect: …`, `pull: …`, `push: …`). Empty on success. */
 	errors: string[],
 };
+
+/**
+ *  The app (应用) a provider pool belongs to. Each app owns an independent
+ *  provider pool, per-app active state and per-app common-config snippet.
+ *  Serialized snake_case ("claude" / "codex" / "gemini") — the same spelling
+ *  crosses as JSON, the sync file and the DB.
+ */
+export type App = 
+/**  Claude Code — the original pool; existing data all belongs here. */
+"claude" | 
+/**  Codex CLI. */
+"codex" | 
+/**  Gemini CLI. */
+"gemini";
 
 /**
  *  The single error type crossing the Rust→JS boundary.
@@ -534,15 +556,19 @@ export type PricingEntry = {
 };
 
 /**
- *  A provider (供应商): `settingsConfig` is a Claude Code `settings.json`
+ *  A provider (供应商): `settingsConfig` is the owning app's live-file
  *  snapshot (raw JSON text); `meta` carries app-side info the live file never
- *  sees. `sortIndex` is the user-ordered display rank.
+ *  sees. `sortIndex` is the user-ordered display rank *within the provider's
+ *  app pool*. Missing `app` in a JSON document (old sync files, old exports)
+ *  deserializes as `Claude` — the pre-app-dimension data all belongs there.
  */
 export type Provider = {
 	id: string,
 	name: string,
 	websiteUrl: string,
 	category: ProviderCategory,
+	/**  归属应用；合并/去重键是 (app, id)。缺省读为 claude（旧数据/旧文件）。 */
+	app?: App,
 	icon: string,
 	iconColor: string,
 	sortIndex: number,
@@ -561,10 +587,11 @@ export type Provider = {
 export type ProviderCategory = "official" | "cn_official" | "aggregator" | "cloud_provider" | "custom";
 
 /**
- *  导入冲突模式：merge = 已有 id 跳过（保留双方，按 id 去重）；overwrite =
- *  同 id 以导入为准（后者胜），本地独有 id 保留（不做删除——保守迁移）。
- *  两种模式都不还原导出方的排序：已存在行保留本地 `sort_index`（排序是本地
- *  偏好，导入不做重排），导入的新行追加在末尾（`save_provider` 语义）。
+ *  导入冲突模式：merge = 已有 `(app, id)` 跳过（保留双方，按 (app, id) 去重）；
+ *  overwrite = 同 `(app, id)` 以导入为准（后者胜），本地独有保留（不做删除——
+ *  保守迁移）。两种模式都不还原导出方的排序：已存在行保留本地 `sort_index`
+ *  （排序是本地偏好，导入不做重排），导入的新行追加在末尾（`save_provider`
+ *  语义）。
  */
 export type ProviderImportMode = "merge" | "overwrite";
 
@@ -575,9 +602,9 @@ export type ProviderImportMode = "merge" | "overwrite";
  *  会让 bindings.ts 生成失败。计数是行数（一次导入顶多几条），`u32` 足够。
  */
 export type ProviderImportReport = {
-	/**  实际写入的行数（merge = 新 id；overwrite = 全部导入行）。 */
+	/**  实际写入的行数（merge = 新 (app, id)；overwrite = 全部导入行）。 */
 	imported: number,
-	/**  merge 模式下因 id 冲突被跳过的行数（overwrite 恒为 0）。 */
+	/**  merge 模式下因 (app, id) 冲突被跳过的行数（overwrite 恒为 0）。 */
 	skipped: number,
 };
 

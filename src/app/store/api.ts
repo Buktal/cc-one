@@ -1,6 +1,7 @@
 import { createApi, fakeBaseQuery } from "@reduxjs/toolkit/query/react"
 import type {
   AlignReport,
+  App,
   AppError,
   AppInfo,
   CommonConfigSnippet,
@@ -413,49 +414,51 @@ export const vaultApi = createApi({
     }),
 
     // ---- providers ----
-    // Provider CRUD (local DB only for now — live write / sync / presets are
-    // later tickets). Every write emits `providers_changed`, which providers.tsx
-    // maps to a whole-`Providers` tag invalidate; the endpoint-level
-    // invalidatesTags below cover writes that go through the api anyway.
-    listProviders: b.query<Provider[], void>({
-      queryFn: async () => run(commands.listProvidersCmd()),
+    // Provider CRUD (app-dimensioned: every query/mutation takes the app pool
+    // it targets — the UI passes the current tab). Every write emits
+    // `providers_changed`, which providers.tsx maps to a whole-`Providers` tag
+    // invalidate; the endpoint-level invalidatesTags below cover writes that
+    // go through the api anyway.
+    listProviders: b.query<Provider[], App>({
+      queryFn: async (app) => run(commands.listProvidersCmd(app)),
       providesTags: ["Providers"],
     }),
-    /** 当前激活的完整 provider（「当前使用」光卡）；未激活/已删除 → null。 */
-    getActiveProvider: b.query<Provider | null, void>({
-      queryFn: async () => run(commands.getActiveProviderCmd()),
+    /** 当前激活的完整 provider（「当前使用」光卡，按应用）；未激活/已删除 → null。 */
+    getActiveProvider: b.query<Provider | null, App>({
+      queryFn: async (app) => run(commands.getActiveProviderCmd(app)),
       providesTags: ["Providers"],
     }),
     saveProvider: b.mutation<Provider, Provider>({
       queryFn: async (provider) => run(commands.saveProviderCmd(provider)),
       invalidatesTags: ["Providers"],
     }),
-    deleteProvider: b.mutation<null, string>({
-      queryFn: async (id) => run(commands.deleteProviderCmd(id)),
+    deleteProvider: b.mutation<null, { app: App; id: string }>({
+      queryFn: async ({ app, id }) => run(commands.deleteProviderCmd(app, id)),
       invalidatesTags: ["Providers"],
     }),
-    reorderProviders: b.mutation<null, string[]>({
-      queryFn: async (orderedIds) =>
-        run(commands.reorderProvidersCmd(orderedIds)),
+    reorderProviders: b.mutation<null, { app: App; orderedIds: string[] }>({
+      queryFn: async ({ app, orderedIds }) =>
+        run(commands.reorderProvidersCmd(app, orderedIds)),
       invalidatesTags: ["Providers"],
     }),
-    /** 切换供应商：写盘 + 备份 + 记激活（只合并受控字段，非受控字段原地保留）。 */
-    switchProvider: b.mutation<Provider, string>({
-      queryFn: async (id) => run(commands.switchProviderCmd(id)),
+    /** 切换供应商（按应用）：写盘 + 备份 + 记该应用的激活状态（只合并受控
+     *  字段，非受控字段原地保留）。 */
+    switchProvider: b.mutation<Provider, { app: App; id: string }>({
+      queryFn: async ({ app, id }) => run(commands.switchProviderCmd(app, id)),
       invalidatesTags: ["Providers"],
     }),
-    /** 全局通用配置片段（一条记录跨供应商共享）。 */
-    getCommonConfigSnippet: b.query<CommonConfigSnippet, void>({
-      queryFn: async () => run(commands.getCommonConfigSnippetCmd()),
+    /** 某应用的通用配置片段（claude/codex/gemini 各一份）。 */
+    getCommonConfigSnippet: b.query<CommonConfigSnippet, App>({
+      queryFn: async (app) => run(commands.getCommonConfigSnippetCmd(app)),
       providesTags: ["Providers"],
     }),
-    /** 保存全局通用配置片段（后端校验 JSON 合法性）。 */
+    /** 保存某应用的通用配置片段（后端校验 JSON 合法性）。 */
     setCommonConfigSnippet: b.mutation<
       CommonConfigSnippet,
-      CommonConfigSnippet
+      { app: App; snippet: CommonConfigSnippet }
     >({
-      queryFn: async (snippet) =>
-        run(commands.setCommonConfigSnippetCmd(snippet)),
+      queryFn: async ({ app, snippet }) =>
+        run(commands.setCommonConfigSnippetCmd(app, snippet.content, snippet.enabled)),
       invalidatesTags: ["Providers"],
     }),
     /** 导出全部供应商为 JSON 文档（`includeKeys=false` 剔除 API key）到用户
@@ -477,16 +480,16 @@ export const vaultApi = createApi({
         run(commands.importProvidersCmd(sourcePath, mode)),
       invalidatesTags: ["Providers"],
     }),
-    /** 拉取供应商的模型列表（OpenAI 兼容 GET /v1/models，后端发请求避免
-     *  WebView CORS）。失败时 error 是 `FetchModels` 变体，data 为带分桶
-     *  标签的错误串——表单按标签映射成对应 toast（model-fetch.ts 的
-     *  `bucketFetchModelsError`）。 */
+    /** 拉取供应商的模型列表（按应用分派端点格式；claude/codex 走 OpenAI
+     *  兼容 GET /v1/models，后端发请求避免 WebView CORS）。失败时 error 是
+     *  `FetchModels` 变体，data 为带分桶标签的错误串——表单按标签映射成
+     *  对应 toast（model-fetch.ts 的 `bucketFetchModelsError`）。 */
     fetchModels: b.mutation<
       string[],
-      { baseUrl: string; apiKey: string; modelsUrl: string | null }
+      { app: App; baseUrl: string; apiKey: string; modelsUrl: string | null }
     >({
-      queryFn: async ({ baseUrl, apiKey, modelsUrl }) =>
-        run(commands.fetchModelsCmd(baseUrl, apiKey, modelsUrl)),
+      queryFn: async ({ app, baseUrl, apiKey, modelsUrl }) =>
+        run(commands.fetchModelsCmd(app, baseUrl, apiKey, modelsUrl)),
     }),
 
     // ---- preferences ----

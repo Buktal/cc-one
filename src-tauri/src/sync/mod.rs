@@ -991,7 +991,7 @@ mod tests {
     /// contains a key value or key name.
     #[test]
     fn provider_structure_syncs_across_devices_but_keys_stay_local() {
-        use crate::model::{Provider, ProviderCategory};
+        use crate::model::{App, Provider, ProviderCategory};
 
         fn dev_cfg(url: &str, dev: &str) -> ConfigData {
             let mut cfg = synced_cfg(url, "tok");
@@ -1004,6 +1004,7 @@ mod tests {
                 name: "Kimi".into(),
                 website_url: "https://platform.kimi.com".into(),
                 category: ProviderCategory::Custom,
+                app: App::Claude,
                 icon: String::new(),
                 icon_color: String::new(),
                 sort_index: 0,
@@ -1046,7 +1047,7 @@ mod tests {
         let store_b = crate::db::Store::open(std::path::Path::new(":memory:")).unwrap();
         pull_and_import(&store_b, &paths_b, &cfg_b).unwrap();
         let b_p = store_b
-            .get_provider("abcdef01")
+            .get_provider(App::Claude, "abcdef01")
             .unwrap()
             .expect("B sees A's provider");
         assert_eq!(b_p.name, "Kimi");
@@ -1069,7 +1070,7 @@ mod tests {
         // keyless copy — B's copy is not even newer, same author timestamp).
         pull_and_import(&store_a, &paths_a, &cfg_a).unwrap();
         let a_p = store_a
-            .get_provider("abcdef01")
+            .get_provider(App::Claude, "abcdef01")
             .unwrap()
             .expect("A still has its provider");
         assert!(
@@ -1085,7 +1086,7 @@ mod tests {
         assert!(push_usage(&store_a, &paths_a, &cfg_a).unwrap());
         pull_and_import(&store_b, &paths_b, &cfg_b).unwrap();
         let b_p2 = store_b
-            .get_provider("abcdef01")
+            .get_provider(App::Claude, "abcdef01")
             .unwrap()
             .expect("B still has its provider");
         assert_eq!(b_p2.name, "Kimi Pro", "A's structural edit reached B");

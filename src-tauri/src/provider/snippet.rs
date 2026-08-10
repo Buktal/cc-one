@@ -15,10 +15,12 @@
 //!   启用 → 合并。「取消勾选后下次写盘不再合并」这个验收不变量落在可测的
 //!   纯函数里，而不是命令薄壳里。
 //!
-//! 存储：片段是**全局一条**记录，存本机 config.json（`ConfigData` 的
-//! `common_config_snippet` / `common_config_snippet_enabled`），与
-//! `active_provider_id` 同属本机配置——config.json 从不进 git、不随同步仓库
-//! 走，因此本模块不碰任何 sync 文件。
+//! 存储：片段**按应用各一份**（claude / codex / gemini），存本机
+//! config.json（`ConfigData::common_config_snippets`，存取走
+//! [`ConfigData::snippet_for`] / [`ConfigData::set_snippet`]；存量单条已迁移
+//! 到 claude 键），与激活状态同属本机配置——config.json 从不进 git、不随
+//! 同步仓库走，因此本模块不碰任何 sync 文件。写盘合并按应用分派（codex /
+//! gemini 的合并语义）归后续批次，本模块只负责合并纯函数本身。
 //!
 //! 校验：`validate_snippet` 供 set 命令用——非法 JSON 或非对象 → `Err`；
 //! 空/纯空白合法（合并时视为 `{}`，即无操作）。写盘时启用的片段解析不了 →

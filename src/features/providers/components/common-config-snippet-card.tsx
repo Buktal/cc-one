@@ -26,8 +26,9 @@ import type { CommonConfigSnippet } from "@/types/generated/bindings"
 
 export function CommonConfigSnippetCard() {
   const { t } = useTranslation()
-  const { data: snippet, isLoading } = useGetCommonConfigSnippetQuery()
-  const { data: activeProvider } = useGetActiveProviderQuery()
+  // 当前只服务 claude 池——应用分段切换（后续批次）会把这个参数接上 tab。
+  const { data: snippet, isLoading } = useGetCommonConfigSnippetQuery("claude")
+  const { data: activeProvider } = useGetActiveProviderQuery("claude")
   const [save, { isLoading: saving }] = useSetCommonConfigSnippetMutation()
   const runWithToast = useMutateWithToast()
 
@@ -52,7 +53,10 @@ export function CommonConfigSnippetCard() {
     }
     await runWithToast(
       save,
-      { enabled, content } satisfies CommonConfigSnippet,
+      {
+        app: "claude",
+        snippet: { enabled, content } satisfies CommonConfigSnippet,
+      },
       {
         success: { key: "providers.snippet.saved" },
         failed: { key: "providers.snippet.saveFailed" },

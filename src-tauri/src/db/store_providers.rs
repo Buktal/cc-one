@@ -4,16 +4,18 @@
 //! local sort_index preserved — see its doc).
 
 use super::*;
-use crate::model::{Provider, ProviderCategory};
+use crate::model::{App, Provider, ProviderCategory};
 
 impl super::Store {
-    /// All providers, in user order (`sort_index`, name as the deterministic
-    /// tie-break so rows created before reorder support keep a stable order —
-    /// same rule as `list_local_groups`).
+    /// All providers across every app pool, in `sort_index` order (name as the
+    /// deterministic tie-break so rows created before reorder support keep a
+    /// stable order — same rule as `list_local_groups`). The sync-file writer
+    /// and the exporter read every pool; the UI reads one pool via
+    /// [`Store::list_providers_for`].
     pub fn list_providers(&self) -> AppResult<Vec<Provider>> {
         let conn = self.conn.lock().expect("db mutex poisoned");
         let mut stmt = conn.prepare(
-            "SELECT id, name, website_url, category, icon, icon_color, sort_index, \
+            "SELECT id, name, website_url, category, app, icon, icon_color, sort_index, \
              notes, settings_config, meta, updated_at FROM provider \
              ORDER BY sort_index, name",
         )?;
@@ -22,25 +24,40 @@ impl super::Store {
             .map_err(AppError::from)
     }
 
+    /// One app pool's providers, in user order — the UI list per app tab.
+    pub fn list_providers_for(&self, app: App) -> AppResult<Vec<Provider>> {
+        let conn = self.conn.lock().expect("db mutex poisoned");
+        let mut stmt = conn.prepare(
+            "SELECT id, name, website_url, category, app, icon, icon_color, sort_index, \
+             notes, settings_config, meta, updated_at FROM provider \
+             WHERE app = ?1 ORDER BY sort_index, name",
+        )?;
+        let rows = stmt.query_map(params![app.as_str()], row_to_provider)?;
+        rows.collect::<rusqlite::Result<Vec<_>>>()
+            .map_err(AppError::from)
+    }
+
     /// Insert-or-replace one provider. An empty `id` means "create": a fresh
     /// id is generated and the row is appended at the END of the current order
-    /// (max `sort_index` + 1). A non-empty `id` edits the existing row and
-    /// keeps its `sort_index` (saving must never move the user's order).
-    /// Returns the persisted row — the caller gets the assigned id / position
-    /// without a second read. `updated_at` is refreshed on save only when the
-    /// syncable structure changed: a key-only edit (the one local-only field)
-    /// must not advance the freshness timestamp, or a key fill on device B
-    /// would make B's row look structurally newer than a peer's real edit and
-    /// the next pull would silently reverse the peer's change. The structural
-    /// comparison is `Provider::structure_equals` (key-stripped, pure) — the
-    /// invariant lives in code, not prose.
+    /// within the provider's app pool (max `sort_index` + 1 in that pool). A
+    /// non-empty `id` edits the existing row and keeps its `sort_index`
+    /// (saving must never move the user's order). Returns the persisted row —
+    /// the caller gets the assigned id / position without a second read.
+    /// `updated_at` is refreshed on save only when the syncable structure
+    /// changed: a key-only edit (the one local-only field) must not advance
+    /// the freshness timestamp, or a key fill on device B would make B's row
+    /// look structurally newer than a peer's real edit and the next pull would
+    /// silently reverse the peer's change. The structural comparison is
+    /// `Provider::structure_equals` (key-stripped, pure) — the invariant lives
+    /// in code, not prose.
     pub fn save_provider(&self, provider: Provider) -> AppResult<Provider> {
         let conn = self.conn.lock().expect("db mutex poisoned");
+        let app = provider.app.as_str();
         let (id, sort_index, updated_at) = if provider.id.is_empty() {
             let id = crate::model::generate_provider_id();
             let sort_index: i64 = conn.query_row(
-                "SELECT COALESCE(MAX(sort_index), -1) + 1 FROM provider",
-                [],
+                "SELECT COALESCE(MAX(sort_index), -1) + 1 FROM provider WHERE app = ?1",
+                params![app],
                 |r| r.get(0),
             )?;
             (id, sort_index, crate::time::now_iso())
@@ -48,12 +65,12 @@ impl super::Store {
             // Editing: keep the row's CURRENT sort_index — the value on disk,
             // never the caller's (saving must not move the user's order, and an
             // outdated caller must not corrupt it). A missing row (deleted since
-            // the caller read it) falls back to appending at the end, so the
-            // upsert "revives" it into a sane position instead of whatever the
-            // caller carried.
+            // the caller read it) falls back to appending at the end of its
+            // app pool, so the upsert "revives" it into a sane position instead
+            // of whatever the caller carried.
             let existing: Option<Provider> = conn
                 .query_row(
-                    "SELECT id, name, website_url, category, icon, icon_color, \
+                    "SELECT id, name, website_url, category, app, icon, icon_color, \
                      sort_index, notes, settings_config, meta, updated_at \
                      FROM provider WHERE id = ?1",
                     params![provider.id],
@@ -63,8 +80,8 @@ impl super::Store {
             let sort_index = match &existing {
                 Some(e) => e.sort_index as i64,
                 None => conn.query_row(
-                    "SELECT COALESCE(MAX(sort_index), -1) + 1 FROM provider",
-                    [],
+                    "SELECT COALESCE(MAX(sort_index), -1) + 1 FROM provider WHERE app = ?1",
+                    params![app],
                     |r| r.get(0),
                 )?,
             };
@@ -76,12 +93,12 @@ impl super::Store {
         };
         conn.execute(
             "INSERT INTO provider \
-             (id, name, website_url, category, icon, icon_color, sort_index, notes, \
+             (id, name, website_url, category, app, icon, icon_color, sort_index, notes, \
               settings_config, meta, updated_at) \
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11) \
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12) \
              ON CONFLICT(id) DO UPDATE SET \
                name = excluded.name, website_url = excluded.website_url, \
-               category = excluded.category, icon = excluded.icon, \
+               category = excluded.category, app = excluded.app, icon = excluded.icon, \
                icon_color = excluded.icon_color, notes = excluded.notes, \
                settings_config = excluded.settings_config, meta = excluded.meta, \
                updated_at = excluded.updated_at",
@@ -90,6 +107,7 @@ impl super::Store {
                 provider.name,
                 provider.website_url,
                 provider.category.as_str(),
+                app,
                 provider.icon,
                 provider.icon_color,
                 sort_index,
@@ -117,6 +135,7 @@ impl super::Store {
     /// key-merge — this method only lands the row.
     pub fn import_provider(&self, provider: &Provider) -> AppResult<()> {
         let conn = self.conn.lock().expect("db mutex poisoned");
+        let app = provider.app.as_str();
         let sort_index: i64 = match conn
             .query_row(
                 "SELECT sort_index FROM provider WHERE id = ?1",
@@ -127,19 +146,19 @@ impl super::Store {
         {
             Some(i) => i,
             None => conn.query_row(
-                "SELECT COALESCE(MAX(sort_index), -1) + 1 FROM provider",
-                [],
+                "SELECT COALESCE(MAX(sort_index), -1) + 1 FROM provider WHERE app = ?1",
+                params![app],
                 |r| r.get(0),
             )?,
         };
         conn.execute(
             "INSERT INTO provider \
-             (id, name, website_url, category, icon, icon_color, sort_index, notes, \
+             (id, name, website_url, category, app, icon, icon_color, sort_index, notes, \
               settings_config, meta, updated_at) \
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11) \
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12) \
              ON CONFLICT(id) DO UPDATE SET \
                name = excluded.name, website_url = excluded.website_url, \
-               category = excluded.category, icon = excluded.icon, \
+               category = excluded.category, app = excluded.app, icon = excluded.icon, \
                icon_color = excluded.icon_color, notes = excluded.notes, \
                settings_config = excluded.settings_config, meta = excluded.meta, \
                updated_at = excluded.updated_at",
@@ -148,6 +167,7 @@ impl super::Store {
                 provider.name,
                 provider.website_url,
                 provider.category.as_str(),
+                app,
                 provider.icon,
                 provider.icon_color,
                 sort_index,
@@ -160,36 +180,44 @@ impl super::Store {
         Ok(())
     }
 
-    pub fn delete_provider(&self, id: &str) -> AppResult<()> {
+    /// 按 (app, id) 删一个 provider：id 属于别的应用池时不动（防御性——
+    /// id 全局唯一，正常不会出现跨池误删）。
+    pub fn delete_provider(&self, app: App, id: &str) -> AppResult<()> {
         let conn = self.conn.lock().expect("db mutex poisoned");
-        conn.execute("DELETE FROM provider WHERE id = ?1", params![id])?;
+        conn.execute(
+            "DELETE FROM provider WHERE id = ?1 AND app = ?2",
+            params![id, app.as_str()],
+        )?;
         Ok(())
     }
 
-    /// 按 id 取一个 provider；不存在 → `None`。供「切换」与「当前使用」光卡
-    /// 用——避免拉全表再过滤。
-    pub fn get_provider(&self, id: &str) -> AppResult<Option<Provider>> {
+    /// 按 (app, id) 取一个 provider；不存在 → `None`。供「切换」与「当前
+    /// 使用」光卡用——避免拉全表再过滤。
+    pub fn get_provider(&self, app: App, id: &str) -> AppResult<Option<Provider>> {
         let conn = self.conn.lock().expect("db mutex poisoned");
         let mut stmt = conn.prepare(
-            "SELECT id, name, website_url, category, icon, icon_color, sort_index, \
-             notes, settings_config, meta, updated_at FROM provider WHERE id = ?1",
+            "SELECT id, name, website_url, category, app, icon, icon_color, \
+             sort_index, notes, settings_config, meta, updated_at \
+             FROM provider WHERE id = ?1 AND app = ?2",
         )?;
-        let row = stmt.query_row(params![id], row_to_provider).optional()?;
+        let row = stmt
+            .query_row(params![id, app.as_str()], row_to_provider)
+            .optional()?;
         Ok(row)
     }
 
-    /// Apply a full new display order: each id's `sort_index` becomes its
-    /// index in `ordered_ids`. Unknown ids are ignored and absent ids keep
-    /// their old position — same tolerant semantics as
-    /// `reorder_local_groups` (a stale caller must not fail the whole drop).
-    /// One transaction so the new order lands atomically.
-    pub fn reorder_providers(&self, ordered_ids: &[String]) -> AppResult<()> {
+    /// Apply a full new display order within one app pool: each id's
+    /// `sort_index` becomes its index in `ordered_ids`. Unknown ids are
+    /// ignored and absent ids keep their old position — same tolerant
+    /// semantics as `reorder_local_groups` (a stale caller must not fail the
+    /// whole drop). One transaction so the new order lands atomically.
+    pub fn reorder_providers(&self, app: App, ordered_ids: &[String]) -> AppResult<()> {
         let mut conn = self.conn.lock().expect("db mutex poisoned");
         let tx = conn.transaction()?;
         for (i, id) in ordered_ids.iter().enumerate() {
             tx.execute(
-                "UPDATE provider SET sort_index = ?2 WHERE id = ?1",
-                params![id, i as i64],
+                "UPDATE provider SET sort_index = ?2 WHERE id = ?1 AND app = ?3",
+                params![id, i as i64, app.as_str()],
             )?;
         }
         tx.commit()?;
@@ -203,13 +231,14 @@ fn row_to_provider(r: &rusqlite::Row) -> rusqlite::Result<Provider> {
         name: r.get(1)?,
         website_url: r.get(2)?,
         category: ProviderCategory::from_db_str(&r.get::<_, String>(3)?),
-        icon: r.get(4)?,
-        icon_color: r.get(5)?,
-        sort_index: r.get::<_, i64>(6)? as u32,
-        notes: r.get(7)?,
-        settings_config: r.get(8)?,
-        meta: r.get(9)?,
-        updated_at: r.get(10)?,
+        app: App::from_db_str(&r.get::<_, String>(4)?),
+        icon: r.get(5)?,
+        icon_color: r.get(6)?,
+        sort_index: r.get::<_, i64>(7)? as u32,
+        notes: r.get(8)?,
+        settings_config: r.get(9)?,
+        meta: r.get(10)?,
+        updated_at: r.get(11)?,
     })
 }
 
@@ -227,6 +256,7 @@ mod tests {
             name: name.into(),
             website_url: "https://example.com".into(),
             category,
+            app: App::Claude,
             icon: String::new(),
             icon_color: String::new(),
             sort_index: 0,
@@ -266,7 +296,7 @@ mod tests {
             .save_provider(provider("First", ProviderCategory::Custom))
             .unwrap();
         // Reorder so First is last, then edit it.
-        s.reorder_providers(std::slice::from_ref(&created.id))
+        s.reorder_providers(App::Claude, std::slice::from_ref(&created.id))
             .unwrap();
         let mut edited = created.clone();
         edited.name = "Renamed".into();
@@ -298,7 +328,7 @@ mod tests {
         let b = s
             .save_provider(provider("Beta", ProviderCategory::Custom))
             .unwrap();
-        s.delete_provider(&a.id).unwrap();
+        s.delete_provider(App::Claude, &a.id).unwrap();
         // The caller still holds the deleted row (id + a stale sort_index 0);
         // the upsert revives it as a fresh append (max + 1) rather than at the
         // old slot, so the order stays sane.
@@ -319,7 +349,7 @@ mod tests {
         let p = s
             .save_provider(provider("Gone", ProviderCategory::Custom))
             .unwrap();
-        s.delete_provider(&p.id).unwrap();
+        s.delete_provider(App::Claude, &p.id).unwrap();
         assert!(s.list_providers().unwrap().is_empty());
     }
 
@@ -329,11 +359,14 @@ mod tests {
         let p = s
             .save_provider(provider("Alpha", ProviderCategory::Custom))
             .unwrap();
-        let found = s.get_provider(&p.id).unwrap().expect("row must exist");
+        let found = s
+            .get_provider(App::Claude, &p.id)
+            .unwrap()
+            .expect("row must exist");
         assert_eq!(found.id, p.id);
         assert_eq!(found.name, "Alpha");
         assert_eq!(found.settings_config, r#"{"env":{}}"#);
-        assert!(s.get_provider("no-such-id").unwrap().is_none());
+        assert!(s.get_provider(App::Claude, "no-such-id").unwrap().is_none());
     }
 
     #[test]
@@ -347,7 +380,7 @@ mod tests {
             ids.push(p.id);
         }
         ids.reverse();
-        s.reorder_providers(&ids).unwrap();
+        s.reorder_providers(App::Claude, &ids).unwrap();
         let got: Vec<String> = s
             .list_providers()
             .unwrap()
@@ -369,7 +402,7 @@ mod tests {
         }
         // "c" was deleted between fetch and drop — the reorder still lands,
         // and an injected unknown id is ignored.
-        s.reorder_providers(&[ids[1].clone(), "zz".into(), ids[0].clone()])
+        s.reorder_providers(App::Claude, &[ids[1].clone(), "zz".into(), ids[0].clone()])
             .unwrap();
         let got: Vec<String> = s
             .list_providers()
@@ -429,7 +462,7 @@ mod tests {
         );
         // The key itself IS persisted — keys live in the local DB, only the
         // freshness timestamp is untouched.
-        let row = s.get_provider(&created.id).unwrap().unwrap();
+        let row = s.get_provider(App::Claude, &created.id).unwrap().unwrap();
         assert!(row.settings_config.contains("sk-new"));
 
         // A structural edit (endpoint) refreshes it.
@@ -452,9 +485,9 @@ mod tests {
         let s = mem();
         let created = s.save_provider(provider_with_config("Kimi", "{}")).unwrap();
         s.save_provider(provider_with_config("Beta", "{}")).unwrap();
-        s.reorder_providers(std::slice::from_ref(&created.id))
+        s.reorder_providers(App::Claude, std::slice::from_ref(&created.id))
             .unwrap();
-        let before = s.get_provider(&created.id).unwrap().unwrap();
+        let before = s.get_provider(App::Claude, &created.id).unwrap().unwrap();
         assert_eq!(before.sort_index, 0, "local order put Kimi first");
         let before_updated = before.updated_at.clone();
 
@@ -463,6 +496,7 @@ mod tests {
             name: "Kimi Pro".into(),
             website_url: "https://x.dev".into(),
             category: ProviderCategory::Custom,
+            app: App::Claude,
             icon: String::new(),
             icon_color: String::new(),
             sort_index: 99, // the peer's order — must not land here
@@ -473,7 +507,7 @@ mod tests {
         };
         s.import_provider(&peer).unwrap();
 
-        let row = s.get_provider(&created.id).unwrap().unwrap();
+        let row = s.get_provider(App::Claude, &created.id).unwrap().unwrap();
         assert_eq!(row.name, "Kimi Pro");
         assert_eq!(
             row.updated_at, "2026-08-01T00:00:00.000Z",
@@ -495,6 +529,7 @@ mod tests {
             name: "New Peer".into(),
             website_url: "https://x.dev".into(),
             category: ProviderCategory::Custom,
+            app: App::Claude,
             icon: String::new(),
             icon_color: String::new(),
             sort_index: 0,
@@ -505,8 +540,113 @@ mod tests {
         };
         s.import_provider(&peer).unwrap();
 
-        let row = s.get_provider("newpeer01").unwrap().unwrap();
+        let row = s.get_provider(App::Claude, "newpeer01").unwrap().unwrap();
         assert_eq!(row.sort_index, 2, "new import appends after existing rows");
         assert_eq!(row.updated_at, "2026-08-01T00:00:00.000Z");
+    }
+
+    // ---- 应用维度：池隔离、per-app 排序、per-app 删除/查找/重排 ----
+
+    /// A provider literal pinned to one app pool.
+    fn provider_for(app: App, name: &str) -> Provider {
+        Provider {
+            app,
+            ..provider(name, ProviderCategory::Custom)
+        }
+    }
+
+    #[test]
+    fn list_providers_for_filters_by_app() {
+        let s = mem();
+        s.save_provider(provider_for(App::Claude, "Claude-A"))
+            .unwrap();
+        s.save_provider(provider_for(App::Codex, "Codex-A"))
+            .unwrap();
+        s.save_provider(provider_for(App::Claude, "Claude-B"))
+            .unwrap();
+
+        let claude: Vec<String> = s
+            .list_providers_for(App::Claude)
+            .unwrap()
+            .into_iter()
+            .map(|p| p.name)
+            .collect();
+        assert_eq!(claude, ["Claude-A", "Claude-B"]);
+        let codex: Vec<String> = s
+            .list_providers_for(App::Codex)
+            .unwrap()
+            .into_iter()
+            .map(|p| p.name)
+            .collect();
+        assert_eq!(codex, ["Codex-A"]);
+        // 全表读（同步写 / 导出用）包含两个池。
+        assert_eq!(s.list_providers().unwrap().len(), 3);
+        // 每个池的行都带自己的 app。
+        let codex_row = s.list_providers_for(App::Codex).unwrap();
+        assert_eq!(codex_row[0].app, App::Codex);
+    }
+
+    #[test]
+    fn per_app_sort_index_appends_independently() {
+        let s = mem();
+        let c1 = s.save_provider(provider_for(App::Claude, "C1")).unwrap();
+        let x1 = s.save_provider(provider_for(App::Codex, "X1")).unwrap();
+        let c2 = s.save_provider(provider_for(App::Claude, "C2")).unwrap();
+        let x2 = s.save_provider(provider_for(App::Codex, "X2")).unwrap();
+        // 每个池各自从 0 起排：claude 池 0/1，codex 池 0/1。
+        assert_eq!(c1.sort_index, 0);
+        assert_eq!(c2.sort_index, 1);
+        assert_eq!(x1.sort_index, 0);
+        assert_eq!(x2.sort_index, 1);
+    }
+
+    #[test]
+    fn delete_provider_is_scoped_by_app() {
+        let s = mem();
+        let p = s.save_provider(provider_for(App::Claude, "Keep")).unwrap();
+        // 用错误的池删 → 行不动（防御性：id 全局唯一，正常不会跨池误删）。
+        s.delete_provider(App::Codex, &p.id).unwrap();
+        assert!(
+            s.get_provider(App::Claude, &p.id).unwrap().is_some(),
+            "wrong app delete must not remove the row"
+        );
+        s.delete_provider(App::Claude, &p.id).unwrap();
+        assert!(s.get_provider(App::Claude, &p.id).unwrap().is_none());
+    }
+
+    #[test]
+    fn get_provider_requires_app_match() {
+        let s = mem();
+        let p = s.save_provider(provider_for(App::Claude, "Kimi")).unwrap();
+        assert!(s.get_provider(App::Claude, &p.id).unwrap().is_some());
+        assert!(
+            s.get_provider(App::Codex, &p.id).unwrap().is_none(),
+            "same id under a different app is a different entry"
+        );
+    }
+
+    #[test]
+    fn reorder_is_scoped_by_app() {
+        let s = mem();
+        let c1 = s.save_provider(provider_for(App::Claude, "C1")).unwrap();
+        let c2 = s.save_provider(provider_for(App::Claude, "C2")).unwrap();
+        let x1 = s.save_provider(provider_for(App::Codex, "X1")).unwrap();
+        // 只重排 claude 池（倒序）；codex 池的排序不受影响。
+        s.reorder_providers(App::Claude, &[c2.id.clone(), c1.id.clone()])
+            .unwrap();
+        let claude: Vec<String> = s
+            .list_providers_for(App::Claude)
+            .unwrap()
+            .into_iter()
+            .map(|p| p.id)
+            .collect();
+        assert_eq!(claude, [c2.id, c1.id]);
+        let codex: Vec<String> = s
+            .list_providers_for(App::Codex)
+            .unwrap()
+            .into_iter()
+            .map(|p| p.id)
+            .collect();
+        assert_eq!(codex, [x1.id], "codex pool untouched");
     }
 }
