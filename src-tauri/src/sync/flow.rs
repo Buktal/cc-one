@@ -101,7 +101,7 @@ fn import_peer_sessions(store: &Store, paths: &Paths, self_device_id: &str) -> A
 /// Commit any local Artifact/config change and push it (push). A clean worktree
 /// AND no commits ahead of origin is a no-op (returns `false`). `message` is
 /// the commit body — pass the semantic of the change so the log reads
-/// "vaultone: sync" vs "vaultone: library sync". Errors propagate; for
+/// "cc-one: sync" vs "cc-one: library sync". Errors propagate; for
 /// daemon/exit paths that must not bubble, use [`commit_and_push_best_effort`].
 /// Synced-only.
 ///
@@ -134,7 +134,7 @@ pub fn commit_and_push_best_effort(paths: &Paths, cfg: &ConfigData, message: &st
         return;
     }
     if let Err(e) = commit_and_push(paths, cfg, message) {
-        eprintln!("[vaultone] push failed: {e}");
+        eprintln!("[cc-one] push failed: {e}");
     }
 }
 
@@ -217,7 +217,7 @@ pub fn push_usage(store: &Store, paths: &Paths, cfg: &ConfigData) -> AppResult<b
     // store rewrites identical bytes and `commit_and_push` below no-ops.
     crate::provider::sync::write_own_providers(store, paths, &cfg.device_id)?;
 
-    let pushed = commit_and_push(paths, cfg, "vaultone: sync")?;
+    let pushed = commit_and_push(paths, cfg, "cc-one: sync")?;
     if pushed {
         // Push landed ⇒ the recomputed days/sessions are on the remote; drop
         // them so the next push only touches things with fresh local changes.
@@ -235,6 +235,6 @@ pub fn push_usage_best_effort(store: &Store, paths: &Paths, cfg: &ConfigData) {
         return;
     }
     if let Err(e) = push_usage(store, paths, cfg) {
-        eprintln!("[vaultone] usage push failed: {e}");
+        eprintln!("[cc-one] usage push failed: {e}");
     }
 }

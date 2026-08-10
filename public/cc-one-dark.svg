@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" width="1024" height="1024">
+  <!-- cc one mark · seven uneven rays (irregular thickness & length) into a center cutout ("归一"), terracotta after Claude Code. -->
+  <rect x="0" y="0" width="1024" height="1024" rx="220" fill="#16181C"/>
+  <g fill="none" stroke="#D97757" stroke-linecap="round">
+    <line x1="625.0" y1="512.0" x2="898.0" y2="512.0" stroke-width="102"/>
+    <line x1="575.6" y1="591.7" x2="705.3" y2="754.4" stroke-width="80"/>
+    <line x1="490.9" y1="604.6" x2="432.3" y2="861.0" stroke-width="66"/>
+    <line x1="415.6" y1="558.4" x2="245.3" y2="640.4" stroke-width="90"/>
+    <line x1="423.3" y1="469.3" x2="205.7" y2="364.5" stroke-width="73"/>
+    <line x1="488.9" y1="410.6" x2="441.2" y2="202.0" stroke-width="84"/>
+    <line x1="580.6" y1="426.0" x2="743.9" y2="221.2" stroke-width="96"/>
+  </g>
+  <circle cx="512" cy="512" r="62" fill="#16181C"/>
+</svg>

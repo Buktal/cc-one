@@ -59,7 +59,7 @@ pub fn write_own_providers(store: &Store, paths: &Paths, device_id: &str) -> App
     for p in store.list_providers()? {
         match p.redacted() {
             Ok(r) => providers.push(r),
-            Err(e) => eprintln!("[vaultone] provider {} skipped from sync file: {e}", p.id),
+            Err(e) => eprintln!("[cc-one] provider {} skipped from sync file: {e}", p.id),
         }
     }
     if providers.is_empty() && !path.exists() {
@@ -236,7 +236,7 @@ pub fn import_peer_providers(store: &Store, paths: &Paths, self_device_id: &str)
         match import {
             Ok(Some(p)) => store.import_provider(&p)?,
             Ok(None) => {}
-            Err(e) => eprintln!("[vaultone] provider {peer_id} skipped from import: {e}"),
+            Err(e) => eprintln!("[cc-one] provider {peer_id} skipped from import: {e}"),
         }
     }
     Ok(())

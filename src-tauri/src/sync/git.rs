@@ -130,7 +130,7 @@ pub fn reset_local_git(repo: &Path) {
     let dot_git = repo.join(".git");
     if dot_git.exists() {
         if let Err(e) = std::fs::remove_dir_all(&dot_git) {
-            eprintln!("[vaultone] reset_local_git: failed to remove .git: {e}");
+            eprintln!("[cc-one] reset_local_git: failed to remove .git: {e}");
         }
     }
 }
@@ -428,7 +428,7 @@ pub fn ensure_repo(cfg: &ConfigData, local: &Path) -> AppResult<Repository> {
 
 /// Deterministic commit identity for this device (device-scoped).
 pub(crate) fn author_email(cfg: &ConfigData) -> String {
-    format!("{}@devices.vaultone", cfg.device_id)
+    format!("{}@devices.cc-one", cfg.device_id)
 }
 
 /// Whether the worktree has any change to commit.
@@ -474,8 +474,8 @@ pub(crate) fn seed_remote(remote_path: &Path) {
     let repo = Repository::init(work.path()).unwrap();
     repo.remote("origin", &remote_path.to_string_lossy())
         .unwrap();
-    std::fs::write(work.path().join("README"), "vaultone sync seed\n").unwrap();
-    commit_all(&repo, "seed", "VaultOne", "seed@devices.vaultone").unwrap();
+    std::fs::write(work.path().join("README"), "cc-one sync seed\n").unwrap();
+    commit_all(&repo, "seed", "cc one", "seed@devices.cc-one").unwrap();
     push(&repo, "").unwrap();
 }
 

@@ -1,8 +1,8 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "VaultOne",
+  "productName": "CC One",
   "version": "1.8.0",
-  "identifier": "app.vaultone",
+  "identifier": "app.cc-one",
   "build": {
     "beforeDevCommand": "yarn web:dev",
     "devUrl": "http://localhost:1420",
@@ -13,7 +13,7 @@
     "windows": [
       {
         "label": "main",
-        "title": "VaultOne",
+        "title": "CC One",
         "width": 920,
         "height": 680,
         "minWidth": 840,
@@ -26,7 +26,7 @@
       "csp": null,
       "assetProtocol": {
         "enable": true,
-        "scope": ["$HOME/.config/vaultone/repo/library/**"]
+        "scope": ["$HOME/.config/cc-one/repo/library/**"]
       }
     }
   },
@@ -45,7 +45,7 @@
   "plugins": {
     "updater": {
       "endpoints": [
-        "https://github.com/Buktal/VaultOne/releases/latest/download/latest.json"
+        "https://github.com/Buktal/cc-one/releases/latest/download/latest.json"
       ],
       "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDkwQzk4OTYzMEZDRURBMwpSV1NqN2Z3d2xwZ01DYitXRW0ySVFkWkNzQi9WUi85WTVOVmFla1NBTlpZOFEwZWJ3dVQwbjl3MAo=",
       "windows": {

@@ -342,14 +342,11 @@ mod tests {
     #[test]
     fn models_breakdown_reports_cache_hit_rate() {
         let s = mem();
-        s.ingest(&[
-            rec("a", "2026-07-13", "glm-5.2", "d", 100, 0, 1.0),
-            {
-                let mut r = rec("b", "2026-07-13", "gpt-4o", "d", 50, 0, 2.0);
-                r.tokens.cache_read = 50;
-                r
-            },
-        ])
+        s.ingest(&[rec("a", "2026-07-13", "glm-5.2", "d", 100, 0, 1.0), {
+            let mut r = rec("b", "2026-07-13", "gpt-4o", "d", 50, 0, 2.0);
+            r.tokens.cache_read = 50;
+            r
+        }])
         .unwrap();
         let models = s.query_models(&UsageFilter::default()).unwrap();
         let by_model = |m: &str| models.iter().find(|x| x.model == m).unwrap();

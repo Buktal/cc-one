@@ -5,8 +5,9 @@
 // follow the active theme. TooltipProvider is mounted once here so every
 // <Tooltip> in the tree shares delay/hover config without re-wrapping.
 
+import { invoke } from "@tauri-apps/api/core"
 import { listen } from "@tauri-apps/api/event"
-import { ThemeProvider } from "next-themes"
+import { ThemeProvider, useTheme } from "next-themes"
 import type { ReactNode } from "react"
 import { useEffect } from "react"
 import { Provider } from "react-redux"
@@ -25,6 +26,18 @@ import { store } from "./store/store"
  *  theming). Must live inside the Redux <Provider> — it reads prefs. */
 function SkinEffect() {
   useSkinEffect()
+  return null
+}
+
+/** Pushes the resolved (actual) dark/light theme to the Rust tray so its icon
+ *  badge matches the sidebar. Must live inside <ThemeProvider> — it reads
+ *  useTheme(). Pushes resolvedTheme (not the user's "system" choice): `system`
+ *  only resolves here via the OS theme, and the tray needs a concrete icon. */
+function TrayThemeSync() {
+  const { resolvedTheme } = useTheme()
+  useEffect(() => {
+    void invoke("set_tray_theme", { dark: resolvedTheme !== "light" })
+  }, [resolvedTheme])
   return null
 }
 
@@ -101,6 +114,7 @@ export function AppProviders({ children }: { children: ReactNode }) {
         enableSystem
         disableTransitionOnChange
       >
+        <TrayThemeSync />
         <TooltipProvider>
           {children}
           <CloseRequestedDialog />

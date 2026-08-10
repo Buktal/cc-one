@@ -54,7 +54,7 @@ pub struct Store {
 }
 
 impl Store {
-    /// Open (or create) `vaultone.db` and ensure the schema + seed pricing.
+    /// Open (or create) `cc-one.db` and ensure the schema + seed pricing.
     pub fn open(path: &std::path::Path) -> AppResult<Self> {
         let conn = Connection::open(path)?;
         conn.execute_batch("PRAGMA journal_mode = WAL; PRAGMA foreign_keys = ON;")?;

@@ -100,15 +100,15 @@ pub async fn set_sync_repo(
             let outcome = crate::collect::sync_round(&store, &config);
             if outcome.imported > 0 {
                 eprintln!(
-                    "[vaultone] set_sync_repo imported {} row(s)",
+                    "[cc-one] set_sync_repo imported {} row(s)",
                     outcome.imported
                 );
             }
             if outcome.pushed {
-                eprintln!("[vaultone] set_sync_repo pushed local changes");
+                eprintln!("[cc-one] set_sync_repo pushed local changes");
             }
             for e in &outcome.errors {
-                eprintln!("[vaultone] set_sync_repo sync error: {e}");
+                eprintln!("[cc-one] set_sync_repo sync error: {e}");
             }
         }
         Ok(cfg.mode())
@@ -501,6 +501,34 @@ pub fn set_language(
         }
     }
     Ok(to_preferences(&cfg))
+}
+
+/// Swap the tray AND taskbar/Alt-Tab icon between the dark-badge and
+/// light-badge PNG so both track the resolved UI theme. Stateless — theme
+/// truth lives in next-themes (localStorage); Rust never persists or reads it
+/// back. The frontend pushes the *resolved* dark/light value, not the user's
+/// "system" choice, because `system` only resolves on the JS side (via the OS
+/// theme) and the icon needs a concrete asset now. The taskbar icon is set
+/// live via `set_icon`; the Start-menu / exe icon is a packaged resource that
+/// can't change at runtime.
+#[tauri::command]
+#[specta::specta]
+pub fn set_tray_theme(app_handle: tauri::AppHandle, dark: bool) -> AppResult<()> {
+    if let Some(tray) = app_handle.tray_by_id("main") {
+        let bytes: &[u8] = if dark {
+            include_bytes!("../icons/tray-dark.png")
+        } else {
+            include_bytes!("../icons/tray-light.png")
+        };
+        if let Ok(icon) = tauri::image::Image::from_bytes(bytes) {
+            let _ = tray.set_icon(Some(icon.clone()));
+            if let Some(window) = app_handle.get_webview_window("main") {
+                // window.set_icon swaps the taskbar + Alt-Tab icon live.
+                let _ = window.set_icon(icon);
+            }
+        }
+    }
+    Ok(())
 }
 
 /// Persist the lightweight half-icon expand trigger. Pure frontend

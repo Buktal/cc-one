@@ -29,7 +29,7 @@ const stores = new Map<string, FreshnessState>()
 const listeners = new Set<() => void>()
 
 function storageKey(deviceId: string) {
-  return `vaultone:freshness:${deviceId}`
+  return `cc-one:freshness:${deviceId}`
 }
 
 function readStorage(deviceId: string): FreshnessState {

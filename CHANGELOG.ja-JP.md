@@ -1,10 +1,14 @@
 # 更新履歴
 
-VaultOne の主な変更点をすべて記録します。
+cc one の主な変更点をすべて記録します。
 
 形式は [Keep a Changelog](https://keepachangelog.com/ja/1.1.0/) に基づき、本プロジェクトは[セマンティックバージョニング](https://semver.org/lang/ja/)に従います。
 
 ## [Unreleased]
+
+### 変更
+
+- **VaultOne から cc one に改名** —— アプリ・リポジトリ・パッケージは `cc-one`、中国語名は「归一（きいち）」に統一。旧構成ディレクトリは初回起動時に自動移行されます。
 
 ### 修正
 
@@ -185,16 +189,16 @@ VaultOne の主な変更点をすべて記録します。
 
 ### 既知の制限
 
-- **macOS**: Apple Silicon（arm64）のみ。ビルドは未署名——初回起動時に右クリック → **開く**（または `xattr -dr com.apple.quarantine /Applications/VaultOne.app`）。Intel Mac ユーザーはソースからビルド可能。
+- **macOS**: Apple Silicon（arm64）のみ。ビルドは未署名——初回起動時に右クリック → **開く**（または `xattr -dr com.apple.quarantine /Applications/cc one.app`）。Intel Mac ユーザーはソースからビルド可能。
 - **プロバイダ**: 現在は Claude Code のみ。追加プロバイダ（Codex、Cursor など）を計画中。
 
-[Unreleased]: https://github.com/Buktal/VaultOne/compare/v1.7.1...HEAD
-[1.6.0]: https://github.com/Buktal/VaultOne/releases/tag/v1.6.0
-[1.5.1]: https://github.com/Buktal/VaultOne/releases/tag/v1.5.1
-[1.5.0]: https://github.com/Buktal/VaultOne/releases/tag/v1.5.0
-[1.4.0]: https://github.com/Buktal/VaultOne/releases/tag/v1.4.0
-[1.3.1]: https://github.com/Buktal/VaultOne/releases/tag/v1.3.1
-[1.3.0]: https://github.com/Buktal/VaultOne/releases/tag/v1.3.0
-[1.2.0]: https://github.com/Buktal/VaultOne/releases/tag/v1.2.0
-[1.1.0]: https://github.com/Buktal/VaultOne/releases/tag/v1.1.0
-[1.0.0]: https://github.com/Buktal/VaultOne/releases/tag/v1.0.0
+[Unreleased]: https://github.com/Buktal/cc-one/compare/v1.7.1...HEAD
+[1.6.0]: https://github.com/Buktal/cc-one/releases/tag/v1.6.0
+[1.5.1]: https://github.com/Buktal/cc-one/releases/tag/v1.5.1
+[1.5.0]: https://github.com/Buktal/cc-one/releases/tag/v1.5.0
+[1.4.0]: https://github.com/Buktal/cc-one/releases/tag/v1.4.0
+[1.3.1]: https://github.com/Buktal/cc-one/releases/tag/v1.3.1
+[1.3.0]: https://github.com/Buktal/cc-one/releases/tag/v1.3.0
+[1.2.0]: https://github.com/Buktal/cc-one/releases/tag/v1.2.0
+[1.1.0]: https://github.com/Buktal/cc-one/releases/tag/v1.1.0
+[1.0.0]: https://github.com/Buktal/cc-one/releases/tag/v1.0.0

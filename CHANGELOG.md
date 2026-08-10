@@ -1,9 +1,15 @@
 # Changelog
 
-All notable changes to VaultOne are documented in this file.
+All notable changes to cc one are documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+
+## [Unreleased]
+
+### Changed
+
+- **Renamed from VaultOne to cc one** — the app, repo, and packages are now `cc-one`, with the Chinese name 归一 (all AI CLIs converge into one hub). Old config directories are migrated automatically on first launch.
 
 ## [1.8.0] - 2026-08-07
 
@@ -40,7 +46,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- **Update checks on launch** — VaultOne probes GitHub Releases for a newer version on every launch and re-checks every 6 hours while it stays open; the footer shows when one is available.
+- **Update checks on launch** — cc one probes GitHub Releases for a newer version on every launch and re-checks every 6 hours while it stays open; the footer shows when one is available.
 
 - **Drag to reorder groups** — grab any custom group in the sessions sidebar and drag it to a new spot; the list keeps your order, and on the Favorites tab that order follows the group to every other device. Order lives per track — a `position` column in the local database for local groups, a `position` field in the synced-groups artifact for the Favorites tab — and new groups always land at the end. The All / Ungrouped rows stay pinned.
 
@@ -210,16 +216,16 @@ First public, open-source release.
 
 ### Known limitations
 
-- **macOS**: Apple Silicon (arm64) only; builds are unsigned — right-click → **Open** on first launch (or `xattr -dr com.apple.quarantine /Applications/VaultOne.app`). Intel Mac users can build from source.
+- **macOS**: Apple Silicon (arm64) only; builds are unsigned — right-click → **Open** on first launch (or `xattr -dr com.apple.quarantine /Applications/cc one.app`). Intel Mac users can build from source.
 - **Providers**: Claude Code only; additional providers (Codex, Cursor, …) are planned.
 
-[1.8.0]: https://github.com/Buktal/VaultOne/releases/tag/v1.8.0
-[1.6.0]: https://github.com/Buktal/VaultOne/releases/tag/v1.6.0
-[1.5.1]: https://github.com/Buktal/VaultOne/releases/tag/v1.5.1
-[1.5.0]: https://github.com/Buktal/VaultOne/releases/tag/v1.5.0
-[1.4.0]: https://github.com/Buktal/VaultOne/releases/tag/v1.4.0
-[1.3.1]: https://github.com/Buktal/VaultOne/releases/tag/v1.3.1
-[1.3.0]: https://github.com/Buktal/VaultOne/releases/tag/v1.3.0
-[1.2.0]: https://github.com/Buktal/VaultOne/releases/tag/v1.2.0
-[1.1.0]: https://github.com/Buktal/VaultOne/releases/tag/v1.1.0
-[1.0.0]: https://github.com/Buktal/VaultOne/releases/tag/v1.0.0
+[1.8.0]: https://github.com/Buktal/cc-one/releases/tag/v1.8.0
+[1.6.0]: https://github.com/Buktal/cc-one/releases/tag/v1.6.0
+[1.5.1]: https://github.com/Buktal/cc-one/releases/tag/v1.5.1
+[1.5.0]: https://github.com/Buktal/cc-one/releases/tag/v1.5.0
+[1.4.0]: https://github.com/Buktal/cc-one/releases/tag/v1.4.0
+[1.3.1]: https://github.com/Buktal/cc-one/releases/tag/v1.3.1
+[1.3.0]: https://github.com/Buktal/cc-one/releases/tag/v1.3.0
+[1.2.0]: https://github.com/Buktal/cc-one/releases/tag/v1.2.0
+[1.1.0]: https://github.com/Buktal/cc-one/releases/tag/v1.1.0
+[1.0.0]: https://github.com/Buktal/cc-one/releases/tag/v1.0.0

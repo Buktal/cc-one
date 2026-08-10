@@ -24,7 +24,7 @@ dist-ssr
 *.sw?
 
 # Local
-/.claude/
+.claude/
 docs/adr/
 docs/agents/
 docs/prototype/

@@ -118,7 +118,7 @@ fn read_one_session_snapshot(path: &Path, device_id: &str) -> Option<ParsedSessi
             Ok(SessionSnapshotLine::Session(m)) => {
                 if m.v > SESSION_SNAPSHOT_VERSION {
                     eprintln!(
-                        "[vaultone] session snapshot {} is v{} (this build supports v{}); skipping — upgrade to read it",
+                        "[cc-one] session snapshot {} is v{} (this build supports v{}); skipping — upgrade to read it",
                         m.id, m.v, SESSION_SNAPSHOT_VERSION
                     );
                     return None;

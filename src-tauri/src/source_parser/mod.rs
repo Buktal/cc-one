@@ -342,7 +342,7 @@ pub(super) fn parse_jsonl_full(
 }
 
 /// Normalize a cache-inclusive `input` — one whose value already contains its
-/// `cache_read` portion — into VaultOne's fresh-input representation: subtract
+/// `cache_read` portion — into cc one's fresh-input representation: subtract
 /// `cache_read` (floored at 0) and clamp `cache_read` so it can never exceed
 /// `input`. Returns `(fresh_input, clamped_cache_read)`.
 ///

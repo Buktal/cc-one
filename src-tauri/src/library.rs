@@ -3,7 +3,7 @@
 //! Users drop arbitrary files / dirs in; they land under
 //! `repo/library/<deviceId>/` and ride the normal Git sync. Upload is the only
 //! automatic direction (drag ⇒ write + push). Download is manual — the user
-//! exports an item to a path they choose; VaultOne never writes into an AI
+//! exports an item to a path they choose; cc one never writes into an AI
 //! tool's own config dir. Same-name same-kind overwrites (Git history is the
 //! safety net); same-name different-kind is rejected (a path cannot be both a
 //! file and a directory, and the delete-then-create it would need is
@@ -276,7 +276,7 @@ fn ensure_gitkeep(dir: &Path) -> AppResult<()> {
 // ---------------------------------------------------------------------------
 
 /// Copy a library entry (file or dir) into a target dir the user chose. The
-/// entry keeps its name; VaultOne never writes into an AI tool's own paths.
+/// entry keeps its name; cc one never writes into an AI tool's own paths.
 pub fn export_entry(
     paths: &crate::config::Paths,
     rel_path: &str,
@@ -448,7 +448,7 @@ pub(crate) fn count_subtree(dir: &Path) -> DeviceLibrarySummary {
 /// push. Delegates to sync's commit+push core; push failures are logged there,
 /// not propagated — the next collect/sync round carries the change up.
 pub(crate) fn commit_push_library(paths: &crate::config::Paths, cfg: &ConfigData) {
-    crate::sync::commit_and_push_best_effort(paths, cfg, "vaultone: library sync");
+    crate::sync::commit_and_push_best_effort(paths, cfg, "cc-one: library sync");
 }
 
 /// Text-preview cap: files larger than this are not read into the webview

@@ -40,7 +40,7 @@ export function useProvidersBrowser() {
    *  including API keys. Canceled save dialog → no-op, returns false. */
   async function exportProviders(includeKeys: boolean): Promise<boolean> {
     const path = await save({
-      defaultPath: "vaultone-providers.json",
+      defaultPath: "cc-one-providers.json",
       filters: [{ name: "JSON", extensions: ["json"] }],
     })
     if (!path) return false

@@ -1,26 +1,26 @@
-# VaultOne
+# cc one
 
-> **あなたの AI CLI 使用量は、あなたのもの。** VaultOne は AI CLI がすでに書き出しているセッションログを読み取り、トークン・コスト・キャッシュ効率・トレンドに変換します。ローカルファーストのデスクトップダッシュボードで、自分が管理する GitHub リポジトリ経由の複数端末間同期もオプションで利用できます。
+> **あなたの AI CLI 使用量は、あなたのもの。** cc one は AI CLI がすでに書き出しているセッションログを読み取り、トークン・コスト・キャッシュ効率・トレンドに変換します。ローカルファーストのデスクトップダッシュボードで、自分が管理する GitHub リポジトリ経由の複数端末間同期もオプションで利用できます。
 
-[![Version](https://img.shields.io/github/v/release/Buktal/VaultOne?color=blue&label=version)](https://github.com/Buktal/VaultOne/releases)
-[![Platforms](https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux-lightgrey.svg)](https://github.com/Buktal/VaultOne/releases)
+[![Version](https://img.shields.io/github/v/release/Buktal/cc-one?color=blue&label=version)](https://github.com/Buktal/cc-one/releases)
+[![Platforms](https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux-lightgrey.svg)](https://github.com/Buktal/cc-one/releases)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](./LICENSE)
 [![Built with Tauri](https://img.shields.io/badge/built%20with-Tauri%202-orange.svg)](https://tauri.app/)
 
 [English](./README.md) | [简体中文](./README.zh-CN.md) | **日本語** | [更新履歴](./CHANGELOG.ja-JP.md)
 
-<img src="./docs/images/ad-ja.png" alt="VaultOne ダッシュボード" width="800">
+<img src="./docs/images/ad-ja.png" alt="cc one ダッシュボード" width="800">
 
 ---
 
 ## 問題
 
-AI CLI——**Claude Code、Codex、Gemini CLI、Grok CLI、OpenCode**——を使うたびに、セッションログがディスクに書き出されます。入力トークン、出力トークン、キャッシュのヒットとミス、使ったお金——それらすべてがプレーンテキストで端末に眠っています。VaultOne はそのログを読み取り、**いくら使ったか、何を得たか、トークンがどこへ消えたか**を鮮明な形にします。
+AI CLI——**Claude Code、Codex、Gemini CLI、Grok CLI、OpenCode**——を使うたびに、セッションログがディスクに書き出されます。入力トークン、出力トークン、キャッシュのヒットとミス、使ったお金——それらすべてがプレーンテキストで端末に眠っています。cc one はそのログを読み取り、**いくら使ったか、何を得たか、トークンがどこへ消えたか**を鮮明な形にします。
 
 製品全体は 2 つの姿勢で形作られています：
 
 - **ローカルファースト。** フル機能のダッシュボードはゼロネットワークで動作します。ログはすでにあなたのディスクにある——それだけで十分です。
-- **読み取り専用。** VaultOne はセッションログを*読むだけ*です。ログを変更せず、ツールの動作にも一切触れません。ツールはこれまで通り動き続けます。
+- **読み取り専用。** cc one はセッションログを*読むだけ*です。ログを変更せず、ツールの動作にも一切触れません。ツールはこれまで通り動き続けます。
 
 複数端末間同期は純粋に **opt-in** の追加レイヤーであり、利用の前提条件ではありません。
 
@@ -64,13 +64,13 @@ AI CLI——**Claude Code、Codex、Gemini CLI、Grok CLI、OpenCode**——を�
 
 - **ドラッグで中継アップロード** —— ファイル / ディレクトリをウィンドウにドロップすると、同期リポジトリ経由でその端末のサブツリーへ push。任意の深さのネストディレクトリに対応。
 - **アプリ内プレビュー** —— 画像は幅フィット + ctrl+ホイールでズーム。テキストと JSON はテーマ対応でプリティプリント。それ以外はサンドボックス iframe で表示。
-- **手動エクスポート** —— エントリを自分で選んだパスへ保存。VaultOne は対象パスを知らず、AI ツール自身の設定ディレクトリにも一切書き込みません。
+- **手動エクスポート** —— エントリを自分で選んだパスへ保存。cc one は対象パスを知らず、AI ツール自身の設定ディレクトリにも一切書き込みません。
 - **安全な上書き** —— 同名同種は上書き（git 履歴が安全網）、同名異種は拒否。
 - **端末別・ゼロ衝突** —— 各端末は自分のサブツリーを持ちます。ピアの忘却時には、そのファイルを `from-<peer>/` 配下へ移行するか削除するかを選択できます。
 
 ### コストと価格
 
-- **モデル別に価格を編集可能** —— シード価格を上書きし、VaultOne はあなたの数値を使います。
+- **モデル別に価格を編集可能** —— シード価格を上書きし、cc one はあなたの数値を使います。
 - **LiteLLM から取得** —— ワンクリックで最新のモデルコスト表を取得。
 - **Rebill（再請求）** —— 収集時に価格のなかったレコードを、既存履歴を再計算せずにバックフィル。
 - **価格表の持ち運び** —— 価格表を JSON でインポート / エクスポート。
@@ -116,7 +116,7 @@ AI CLI——**Claude Code、Codex、Gemini CLI、Grok CLI、OpenCode**——を�
 
 ## クイックスタート
 
-お使いの OS のインストーラは **[Releases](https://github.com/Buktal/VaultOne/releases)** ページから入手できます。
+お使いの OS のインストーラは **[Releases](https://github.com/Buktal/cc-one/releases)** ページから入手できます。
 
 | OS | インストーラ |
 | --- | --- |
@@ -124,11 +124,11 @@ AI CLI——**Claude Code、Codex、Gemini CLI、Grok CLI、OpenCode**——を�
 | **macOS** | `.dmg`（Apple Silicon / arm64） |
 | **Linux** | `.deb`、`.AppImage`（一部で `.rpm`） |
 
-**初回起動：** VaultOne を起動すると、ローカルの AI CLI セッションログをスキャンしてダッシュボードが埋まります。アカウントもサインインもネットワークも不要。複数端末で使用量を見たい場合は、**設定**で同期を有効にし、自分が管理する GitHub リポジトリを指定してください。
+**初回起動：** cc one を起動すると、ローカルの AI CLI セッションログをスキャンしてダッシュボードが埋まります。アカウントもサインインもネットワークも不要。複数端末で使用量を見たい場合は、**設定**で同期を有効にし、自分が管理する GitHub リポジトリを指定してください。
 
 > **macOS の注意：** 現在のビルドは未署名です。初回起動時はアプリを右クリック → **開く**、または隔離属性を除去してください：
 > ```bash
-> xattr -dr com.apple.quarantine /Applications/VaultOne.app
+> xattr -dr com.apple.quarantine /Applications/cc one.app
 > ```
 
 ## ソースからビルド
@@ -148,11 +148,13 @@ yarn test        # テストスイートを実行
 
 ## よくある質問
 
-**VaultOne はデータを外部へ送信しますか？** いいえ。すべてローカルログから読み取り、ローカルに保存します。データが端末の外へ出る唯一の経路は同期への opt-in であり、その場合も行き先は*あなたが管理する* GitHub リポジトリ、形式はプレーンテキストです。
+**「cc one（归一）」という名前の由来は？** —— "cc" は Claude Code エコシステム（cc-switch、cc-connect の仲間）に連なる印で、"one" はすべての AI CLI の使用量・設定・同期・将来のエージェント橋渡しを、あなたの手元の一つのツールに収束させるハブです。中国語名は「归一（きいち）」。旧名は VaultOne でした。
 
-**API キーやプロキシは必要ですか？** いいえ。VaultOne は AI CLI がすでに書き出したログファイルを解析するだけで、モデルプロバイダーへ呼び出しを行いません。
+**cc one はデータを外部へ送信しますか？** いいえ。すべてローカルログから読み取り、ローカルに保存します。データが端末の外へ出る唯一の経路は同期への opt-in であり、その場合も行き先は*あなたが管理する* GitHub リポジトリ、形式はプレーンテキストです。
 
-**ログを変更しますか？** 絶対にしません。VaultOne はセッションログと AI ツール設定に対して厳密に読み取り専用です。
+**API キーやプロキシは必要ですか？** いいえ。cc one は AI CLI がすでに書き出したログファイルを解析するだけで、モデルプロバイダーへ呼び出しを行いません。
+
+**ログを変更しますか？** 絶対にしません。cc one はセッションログと AI ツール設定に対して厳密に読み取り専用です。
 
 **対応している AI CLI は？** Claude Code・Codex・Gemini CLI・Grok CLI・OpenCode——それぞれネイティブなログ形式（JSONL・JSON・SQLite）から解析し、トークンのセマンティクスを 1 つのモデルに正規化します。
 
@@ -164,7 +166,7 @@ issue と提案は歓迎します。PR の前には `yarn check` と `yarn test`
 
 ## ライセンス
 
-[MIT](./LICENSE) © VaultOne Contributors
+[MIT](./LICENSE) © cc one Contributors
 
 - [LINUX DO コミュニティ](https://linux.do) - 誠実・親切・団結・専門的な Linux & 技术交流コミュニティ
 

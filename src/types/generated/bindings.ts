@@ -101,6 +101,17 @@ export const commands = {
 	 */
 	setLanguage: (language: Language) => typedError<Preferences_Serialize, AppError>(__TAURI_INVOKE("set_language", { language })),
 	/**
+	 *  Swap the tray AND taskbar/Alt-Tab icon between the dark-badge and
+	 *  light-badge PNG so both track the resolved UI theme. Stateless — theme
+	 *  truth lives in next-themes (localStorage); Rust never persists or reads it
+	 *  back. The frontend pushes the *resolved* dark/light value, not the user's
+	 *  "system" choice, because `system` only resolves on the JS side (via the OS
+	 *  theme) and the icon needs a concrete asset now. The taskbar icon is set
+	 *  live via `set_icon`; the Start-menu / exe icon is a packaged resource that
+	 *  can't change at runtime.
+	 */
+	setTrayTheme: (dark: boolean) => typedError<null, AppError>(__TAURI_INVOKE("set_tray_theme", { dark })),
+	/**
 	 *  Persist the lightweight half-icon expand trigger. Pure frontend
 	 *  behavior; Rust doesn't read it back, but it rides ConfigData for unity.
 	 */

@@ -87,7 +87,7 @@ fn deny(message: &str) -> VerifyReport {
 /// that closure.
 fn try_verify_remote(url: &str, token: &str) -> Result<(), git2::Error> {
     let dir = std::env::temp_dir().join(format!(
-        "vaultone-verify-{}-{}",
+        "cc-one-verify-{}-{}",
         std::process::id(),
         std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)

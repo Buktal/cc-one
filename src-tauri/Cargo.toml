@@ -1,22 +1,22 @@
 [package]
-name = "vaultone"
+name = "cc-one"
 version = "1.8.0"
-description = "VaultOne — local LLM usage dashboard with optional GitHub-repo multi-device sync."
-authors = ["VaultOne"]
+description = "cc one — local LLM usage dashboard with optional GitHub-repo multi-device sync."
+authors = ["cc one"]
 edition = "2021"
 
 [lib]
 # The `_lib` suffix may seem redundant but it is necessary
 # to make the lib name unique and wouldn't conflict with the bin name.
 # This seems to be only an issue on Windows, see https://github.com/rust-lang/cargo/issues/8519
-name = "vaultone_lib"
+name = "cc_one_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
 
 [dependencies]
-tauri = { version = "2", features = ["protocol-asset", "specta", "tray-icon"] }
+tauri = { version = "2", features = ["protocol-asset", "specta", "tray-icon", "image-png"] }
 tauri-plugin-opener = "2"
 # Native file open / save dialogs (Library export + "Add files").
 tauri-plugin-dialog = "2"
@@ -40,7 +40,7 @@ rust_decimal = { version = "1", features = ["serde"] }
 chrono = { version = "0.4", features = ["serde"] }
 # Device identity + record ids.
 rand = "0.8"
-# ~/.config/vaultone home-relative paths.
+# ~/.config/cc-one home-relative paths.
 dirs = "5"
 # Session-log discovery: walk ~/.claude/projects/**/*.jsonl.
 walkdir = "2"

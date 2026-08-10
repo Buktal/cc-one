@@ -1,7 +1,7 @@
 // Library view — per-device, git-mediated cloud storage. Drag files / dirs in
 // to upload (= push to the sync repo); drill into directories (the same surface
 // at every depth — drag-in, export, single-file download all work inside);
-// preview a file in the webview; export to a path you choose. VaultOne never
+// preview a file in the webview; export to a path you choose. cc one never
 // writes into an AI tool's own config dir.
 //
 // Pure rendering only — all state, queries, mutations and navigation live in

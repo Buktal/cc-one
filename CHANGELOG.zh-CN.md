@@ -1,10 +1,14 @@
 # 更新日志
 
-VaultOne 的所有显著变更记录于此。
+cc one 的所有显著变更记录于此。
 
 格式基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，并遵循[语义化版本](https://semver.org/lang/zh-CN/)。
 
 ## [Unreleased]
+
+### 变更
+
+- **从 VaultOne 更名为 cc one** —— 应用、仓库、安装包统一为 `cc-one`，中文名「归一」（所有 AI CLI 归于一个中枢）；旧配置目录首次启动时自动迁移。
 
 ### 修复
 
@@ -185,16 +189,16 @@ VaultOne 的所有显著变更记录于此。
 
 ### 已知限制
 
-- **macOS**：仅 Apple Silicon（arm64）；构建未签名——首次启动右键 →「打开」（或 `xattr -dr com.apple.quarantine /Applications/VaultOne.app`）。Intel Mac 用户可从源码构建。
+- **macOS**：仅 Apple Silicon（arm64）；构建未签名——首次启动右键 →「打开」（或 `xattr -dr com.apple.quarantine /Applications/cc one.app`）。Intel Mac 用户可从源码构建。
 - **Provider**：当前仅 Claude Code；更多 provider（Codex、Cursor 等）规划中。
 
-[Unreleased]: https://github.com/Buktal/VaultOne/compare/v1.7.1...HEAD
-[1.6.0]: https://github.com/Buktal/VaultOne/releases/tag/v1.6.0
-[1.5.1]: https://github.com/Buktal/VaultOne/releases/tag/v1.5.1
-[1.5.0]: https://github.com/Buktal/VaultOne/releases/tag/v1.5.0
-[1.4.0]: https://github.com/Buktal/VaultOne/releases/tag/v1.4.0
-[1.3.1]: https://github.com/Buktal/VaultOne/releases/tag/v1.3.1
-[1.3.0]: https://github.com/Buktal/VaultOne/releases/tag/v1.3.0
-[1.2.0]: https://github.com/Buktal/VaultOne/releases/tag/v1.2.0
-[1.1.0]: https://github.com/Buktal/VaultOne/releases/tag/v1.1.0
-[1.0.0]: https://github.com/Buktal/VaultOne/releases/tag/v1.0.0
+[Unreleased]: https://github.com/Buktal/cc-one/compare/v1.7.1...HEAD
+[1.6.0]: https://github.com/Buktal/cc-one/releases/tag/v1.6.0
+[1.5.1]: https://github.com/Buktal/cc-one/releases/tag/v1.5.1
+[1.5.0]: https://github.com/Buktal/cc-one/releases/tag/v1.5.0
+[1.4.0]: https://github.com/Buktal/cc-one/releases/tag/v1.4.0
+[1.3.1]: https://github.com/Buktal/cc-one/releases/tag/v1.3.1
+[1.3.0]: https://github.com/Buktal/cc-one/releases/tag/v1.3.0
+[1.2.0]: https://github.com/Buktal/cc-one/releases/tag/v1.2.0
+[1.1.0]: https://github.com/Buktal/cc-one/releases/tag/v1.1.0
+[1.0.0]: https://github.com/Buktal/cc-one/releases/tag/v1.0.0

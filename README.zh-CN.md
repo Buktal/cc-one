@@ -1,26 +1,26 @@
-# VaultOne
+# cc one
 
-> **你的 AI CLI 用量，由你掌控。** VaultOne 读取你的 AI CLI 已经写下的会话日志，把它们变成 token、成本、缓存效率与趋势——一个本地优先的桌面看板，并可选地通过你掌控的 GitHub 仓库在多设备间同步。
+> **你的 AI CLI 用量，由你掌控。** cc one 读取你的 AI CLI 已经写下的会话日志，把它们变成 token、成本、缓存效率与趋势——一个本地优先的桌面看板，并可选地通过你掌控的 GitHub 仓库在多设备间同步。
 
-[![Version](https://img.shields.io/github/v/release/Buktal/VaultOne?color=blue&label=version)](https://github.com/Buktal/VaultOne/releases)
-[![平台](https://img.shields.io/badge/%E5%B9%B3%E5%8F%B0-Windows%20%7C%20macOS%20%7C%20Linux-lightgrey.svg)](https://github.com/Buktal/VaultOne/releases)
+[![Version](https://img.shields.io/github/v/release/Buktal/cc-one?color=blue&label=version)](https://github.com/Buktal/cc-one/releases)
+[![平台](https://img.shields.io/badge/%E5%B9%B3%E5%8F%B0-Windows%20%7C%20macOS%20%7C%20Linux-lightgrey.svg)](https://github.com/Buktal/cc-one/releases)
 [![License](https://img.shields.io/badge/license-MIT-green.svg)](./LICENSE)
 [![Built with Tauri](https://img.shields.io/badge/built%20with-Tauri%202-orange.svg)](https://tauri.app/)
 
 [English](./README.md) | **简体中文** | [日本語](./README.ja-JP.md) | [更新日志](./CHANGELOG.zh-CN.md)
 
-<img src="./docs/images/ad-zh.png" alt="VaultOne 看板" width="800">
+<img src="./docs/images/ad-zh.png" alt="cc one 看板" width="800">
 
 ---
 
 ## 问题
 
-每次你用 AI CLI——**Claude Code、Codex、Gemini CLI、Grok CLI、OpenCode**——它都会在磁盘上写下一份会话日志。输入 token、输出 token、缓存命中与未命中、花掉的钱：全都以纯文本躺在你的机器上，无人问津。VaultOne 读取这些日志，把它们变成清晰的图景：**你花了多少、换来了什么、token 用在了哪里。**
+每次你用 AI CLI——**Claude Code、Codex、Gemini CLI、Grok CLI、OpenCode**——它都会在磁盘上写下一份会话日志。输入 token、输出 token、缓存命中与未命中、花掉的钱：全都以纯文本躺在你的机器上，无人问津。cc one 读取这些日志，把它们变成清晰的图景：**你花了多少、换来了什么、token 用在了哪里。**
 
 整个产品由两点立场所塑造：
 
 - **本地优先。** 完整看板在零网络环境下即可工作。日志本来就在你的磁盘上——有它就够了。
-- **只读。** VaultOne 只*读取*会话日志，绝不修改，也绝不干预这些工具的行为。它们照常运行，一如往常。
+- **只读。** cc one 只*读取*会话日志，绝不修改，也绝不干预这些工具的行为。它们照常运行，一如往常。
 
 多设备同步纯粹是一层 **opt-in** 的叠加能力，绝非使用本应用的前提。
 
@@ -64,13 +64,13 @@
 
 - **拖入即中转上传** —— 把文件 / 目录拖进窗口，即经同步仓库 push 到该设备的子目录；任意深度的嵌套目录均可。
 - **应用内预览** —— 图片按宽适配、ctrl+滚轮缩放；文本与 JSON 主题化渲染、pretty-print；其余内容在沙箱 iframe 中加载。
-- **手动导出** —— 保存条目到自选路径；VaultOne 从不知晓目标路径，也绝不写入 AI 工具自身的配置目录。
+- **手动导出** —— 保存条目到自选路径；cc one 从不知晓目标路径，也绝不写入 AI 工具自身的配置目录。
 - **安全的覆盖** —— 同名同类型直接覆盖（git 历史兜底）；同名异类型拒绝。
 - **按设备、零冲突** —— 每台设备持有自己的子树；遗忘对端时可选将其文件迁移到本机 `from-<peer>/` 下，或删除。
 
 ### 成本与定价
 
-- **逐模型可编辑定价** —— 覆盖种子价格；VaultOne 用你的数字。
+- **逐模型可编辑定价** —— 覆盖种子价格；cc one 用你的数字。
 - **从 LiteLLM 拉取** —— 一键获取最新模型成本表。
 - **Rebill 补账** —— 为采集时没有价格的记录补齐成本，不动已有历史。
 - **定价书可携带** —— 定价表支持 JSON 导入导出。
@@ -116,7 +116,7 @@
 
 ## 快速开始
 
-从 **[Releases](https://github.com/Buktal/VaultOne/releases)** 页面获取对应平台的安装包。
+从 **[Releases](https://github.com/Buktal/cc-one/releases)** 页面获取对应平台的安装包。
 
 | 平台 | 安装包 |
 | --- | --- |
@@ -124,11 +124,11 @@
 | **macOS** | `.dmg`（Apple Silicon / arm64） |
 | **Linux** | `.deb`、`.AppImage`（部分版本提供 `.rpm`） |
 
-**首次运行：** 启动 VaultOne——它会扫描本地的 AI CLI 会话日志，看板随即填充。无需账号、无需登录、无需联网。若要在多台机器间查看用量，在 **设置** 中开启同步，并指向一个你掌控的 GitHub 仓库。
+**首次运行：** 启动 cc one——它会扫描本地的 AI CLI 会话日志，看板随即填充。无需账号、无需登录、无需联网。若要在多台机器间查看用量，在 **设置** 中开启同步，并指向一个你掌控的 GitHub 仓库。
 
 > **macOS 提示：** 当前构建未签名。首次启动时请右键点击应用 → **打开**，或去除隔离属性：
 > ```bash
-> xattr -dr com.apple.quarantine /Applications/VaultOne.app
+> xattr -dr com.apple.quarantine /Applications/cc one.app
 > ```
 
 ## 从源码构建
@@ -148,11 +148,13 @@ yarn test        # 运行测试套件
 
 ## 常见问题
 
-**VaultOne 会把我的数据发送到任何地方吗？** 不会。一切数据都从本地日志读取、存在本地。唯一让数据离开你机器的途径是你主动开启同步——而那时它去的也是*你掌控的* GitHub 仓库，且是纯文本。
+**为什么叫 cc one（归一）？** —— "cc" 让它站在 Claude Code 生态家族里（cc-switch、cc-connect 的同伴），"one" 是一个中枢：所有 AI CLI 的用量、配置、同步、未来的 agent 桥接，都收敛进这一个归你所有的工具。中文名「归一」——九九归一。旧名 VaultOne。
 
-**需要 API key 或代理吗？** 不需要。VaultOne 解析你的 AI CLI 已经写下的日志文件，从不调用模型供应商。
+**cc one 会把我的数据发送到任何地方吗？** 不会。一切数据都从本地日志读取、存在本地。唯一让数据离开你机器的途径是你主动开启同步——而那时它去的也是*你掌控的* GitHub 仓库，且是纯文本。
 
-**它会修改我的日志吗？** 绝不会。VaultOne 对会话日志与 AI 工具配置严格只读。
+**需要 API key 或代理吗？** 不需要。cc one 解析你的 AI CLI 已经写下的日志文件，从不调用模型供应商。
+
+**它会修改我的日志吗？** 绝不会。cc one 对会话日志与 AI 工具配置严格只读。
 
 **支持哪些 AI CLI？** Claude Code、Codex、Gemini CLI、Grok CLI 与 OpenCode——各自以原生日志格式（JSONL、JSON 或 SQLite）解析，token 语义归一为同一套模型。
 
@@ -164,31 +166,31 @@ yarn test        # 运行测试套件
 
 ## 许可证
 
-[MIT](./LICENSE) © VaultOne Contributors
+[MIT](./LICENSE) © cc one Contributors
 
-# VaultOne
+# cc one
 
-> **Your AI CLI usage, owned by you.** VaultOne reads the session logs your AI CLIs already write and turns them into tokens, cost, cache efficiency, and trends — a local-first dashboard with optional multi-device sync through a GitHub repo you control.
+> **Your AI CLI usage, owned by you.** cc one reads the session logs your AI CLIs already write and turns them into tokens, cost, cache efficiency, and trends — a local-first dashboard with optional multi-device sync through a GitHub repo you control.
 
-[![Version](https://img.shields.io/github/v/release/Buktal/VaultOne?color=blue&label=version)](https://github.com/Buktal/VaultOne/releases)
-[![Platforms](https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux-lightgrey.svg)](https://github.com/Buktal/VaultOne/releases)
+[![Version](https://img.shields.io/github/v/release/Buktal/cc-one?color=blue&label=version)](https://github.com/Buktal/cc-one/releases)
+[![Platforms](https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux-lightgrey.svg)](https://github.com/Buktal/cc-one/releases)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](./LICENSE)
 [![Built with Tauri](https://img.shields.io/badge/built%20with-Tauri%202-orange.svg)](https://tauri.app/)
 
 **English** | [简体中文](./README.zh-CN.md) | [日本語](./README.ja-JP.md) | [Changelog](./CHANGELOG.md)
 
-<img src="./docs/images/ad-en.png" alt="VaultOne dashboard" width="800">
+<img src="./docs/images/ad-en.png" alt="cc one dashboard" width="800">
 
 ---
 
 ## The problem
 
-Every time you work with an AI CLI — **Claude Code, Codex, Gemini CLI, Grok CLI, OpenCode** — it writes a session log to disk. Tokens in, tokens out, cache hits and misses, money spent: it all sits in plain text on your machine, unread. VaultOne reads those logs and turns them into a clear picture: **what you spent, what you got, and where your tokens went.**
+Every time you work with an AI CLI — **Claude Code, Codex, Gemini CLI, Grok CLI, OpenCode** — it writes a session log to disk. Tokens in, tokens out, cache hits and misses, money spent: it all sits in plain text on your machine, unread. cc one reads those logs and turns them into a clear picture: **what you spent, what you got, and where your tokens went.**
 
 Two stances shape the whole product:
 
 - **Local-first.** The full dashboard works with zero network. The logs are already on your disk — that's all it needs.
-- **Read-only.** VaultOne only ever *reads* session logs. It never modifies them and never touches the tools' behavior. They keep running exactly as before.
+- **Read-only.** cc one only ever *reads* session logs. It never modifies them and never touches the tools' behavior. They keep running exactly as before.
 
 Multi-device sync is a purely **opt-in** layer on top — never a precondition.
 
@@ -232,13 +234,13 @@ Multi-device sync is a purely **opt-in** layer on top — never a precondition.
 
 - **Drag-to-relay upload** — drop a file or directory onto the window to push it through your sync repo into that device's subtree; nested directories work at every depth.
 - **In-app preview** — images fit-to-width with ctrl+wheel zoom; text and JSON render themed and pretty-printed; everything else loads in a sandboxed iframe.
-- **Manual export** — save an entry to a path you choose; VaultOne never learns the target path and never writes into an AI tool's config dir.
+- **Manual export** — save an entry to a path you choose; cc one never learns the target path and never writes into an AI tool's config dir.
 - **Safe overwrites** — same-name same-kind overwrites (git history is the safety net); same-name different-kind is rejected.
 - **Per-device, zero conflict** — each device holds its own subtree; forgetting a peer offers to migrate its files into yours (`from-<peer>/`) or delete them.
 
 ### Cost & pricing
 
-- **Editable per-model pricing** — override seed prices; VaultOne uses your numbers.
+- **Editable per-model pricing** — override seed prices; cc one uses your numbers.
 - **Pull from LiteLLM** — fetch the latest model cost map with one click.
 - **Rebill** — backfill records that had no price when collected, without re-costing existing history.
 - **Portable pricing book** — import and export your pricing table as JSON.
@@ -284,7 +286,7 @@ A [Tauri 2](https://tauri.app/) app: a Rust backend handles collection, the loca
 
 ## Quick start
 
-Grab the installer for your OS from the **[Releases](https://github.com/Buktal/VaultOne/releases)** page.
+Grab the installer for your OS from the **[Releases](https://github.com/Buktal/cc-one/releases)** page.
 
 | OS | Installer |
 | --- | --- |
@@ -292,11 +294,11 @@ Grab the installer for your OS from the **[Releases](https://github.com/Buktal/V
 | **macOS** | `.dmg` (Apple Silicon, arm64) |
 | **Linux** | `.deb`, `.AppImage` (`.rpm` where available) |
 
-**First run:** launch VaultOne — it scans your local AI CLI session logs and the dashboard fills in. No account, no sign-in, no network. To see usage across machines, enable sync in **Settings** and point VaultOne at a GitHub repo you control.
+**First run:** launch cc one — it scans your local AI CLI session logs and the dashboard fills in. No account, no sign-in, no network. To see usage across machines, enable sync in **Settings** and point cc one at a GitHub repo you control.
 
 > **macOS note:** builds are currently unsigned. On first launch, right-click the app → **Open**, or strip the quarantine attribute:
 > ```bash
-> xattr -dr com.apple.quarantine /Applications/VaultOne.app
+> xattr -dr com.apple.quarantine /Applications/cc one.app
 > ```
 
 ## Build from source
@@ -316,11 +318,11 @@ yarn test        # run the test suite
 
 ## FAQ
 
-**Does VaultOne send my data anywhere?** No. Everything is read from local logs and stored locally. The only way data leaves your machine is if you opt into sync — and then it goes to a GitHub repo *you* own, as plain text.
+**Does cc one send my data anywhere?** No. Everything is read from local logs and stored locally. The only way data leaves your machine is if you opt into sync — and then it goes to a GitHub repo *you* own, as plain text.
 
-**Does it need an API key or a proxy?** No. VaultOne parses the log files your AI CLIs already write; it never calls the model providers.
+**Does it need an API key or a proxy?** No. cc one parses the log files your AI CLIs already write; it never calls the model providers.
 
-**Does it modify my logs?** Never. VaultOne is strictly read-only with respect to session logs and AI tool configuration.
+**Does it modify my logs?** Never. cc one is strictly read-only with respect to session logs and AI tool configuration.
 
 **Which AI CLIs are supported?** Claude Code, Codex, Gemini CLI, Grok CLI, and OpenCode — each parsed from its native log format (JSONL, JSON, or SQLite), with token semantics normalized into one model.
 
@@ -332,7 +334,7 @@ Issues and suggestions are welcome. Before a PR, run `yarn check` and `yarn test
 
 ## License
 
-[MIT](./LICENSE) © VaultOne Contributors
+[MIT](./LICENSE) © cc one Contributors
 
 [![LINUX DO](https://img.shields.io/badge/LINUX%20DO-%E7%A4%BE%E5%8C%BA%E8%AE%A4%E5%8F%AF-blue?style=flat-square&logo=linux)](https://linux.do)
   

@@ -46,7 +46,7 @@ import { DeviceScopeControl } from "./device-scope-control"
 
 const ALL = "__all__"
 
-const CONTROL_COLLAPSE_KEY = "vaultone:control-collapsed"
+const CONTROL_COLLAPSE_KEY = "cc-one:control-collapsed"
 
 const PRESETS: DateRangePreset[] = [
   { value: "today", key: "usage.control.today" },

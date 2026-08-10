@@ -208,8 +208,8 @@ pub fn reconcile_devices(store: &Store, paths: &Paths, cfg: &ConfigData) -> AppR
             continue;
         }
         match store.forget_device_local(&id) {
-            Ok(n) => eprintln!("[vaultone] reconciled stale device {id} ({n} rows dropped)"),
-            Err(e) => eprintln!("[vaultone] failed to reconcile device {id}: {e}"),
+            Ok(n) => eprintln!("[cc-one] reconciled stale device {id} ({n} rows dropped)"),
+            Err(e) => eprintln!("[cc-one] failed to reconcile device {id}: {e}"),
         }
     }
     Ok(())
@@ -228,7 +228,7 @@ pub(crate) fn reload_devices_into_store(
     for a in read_all_device_artifacts(paths) {
         let is_self = is_self(cfg, &a.device_id);
         if let Err(e) = store.upsert_device(&a.device_id, &a.display_name, is_self) {
-            eprintln!("[vaultone] device reload skipped {}: {e}", a.device_id);
+            eprintln!("[cc-one] device reload skipped {}: {e}", a.device_id);
         }
     }
     reconcile_devices(store, paths, cfg)
@@ -360,7 +360,7 @@ fn remove_device_data_dir(paths: &Paths, device_id: &str) {
     if dir.exists() {
         if let Err(e) = std::fs::remove_dir_all(&dir) {
             eprintln!(
-                "[vaultone] forget_device: failed to remove {}: {e}",
+                "[cc-one] forget_device: failed to remove {}: {e}",
                 dir.display()
             );
         }
@@ -376,7 +376,7 @@ fn remove_device_artifact_file(paths: &Paths, device_id: &str) {
     if file.exists() {
         if let Err(e) = std::fs::remove_file(&file) {
             eprintln!(
-                "[vaultone] forget_device: failed to remove {}: {e}",
+                "[cc-one] forget_device: failed to remove {}: {e}",
                 file.display()
             );
         }
@@ -425,7 +425,7 @@ pub fn forget_device(
         peer_name,
     ) {
         eprintln!(
-            "[vaultone] forget_device: library {:?} failed: {e}",
+            "[cc-one] forget_device: library {:?} failed: {e}",
             library_action
         );
     }

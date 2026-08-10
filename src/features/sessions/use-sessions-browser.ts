@@ -57,7 +57,7 @@ import {
 } from "./derive"
 
 /** Persisted-tab key — the chosen tab (local / favorites) survives restarts. */
-const TAB_KEY = "vaultone:sessions-tab"
+const TAB_KEY = "cc-one:sessions-tab"
 
 export function useSessionsBrowser() {
   const { t } = useTranslation()

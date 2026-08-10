@@ -22,7 +22,7 @@ import {
 } from "@/lib/date-range"
 import type { UsageFilter } from "@/types/generated/bindings"
 
-export const FILTER_STORAGE_KEY = "vaultone:usage-filter"
+export const FILTER_STORAGE_KEY = "cc-one:usage-filter"
 
 export interface FilterState extends DayRange {
   model: string

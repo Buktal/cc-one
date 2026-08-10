@@ -1,7 +1,7 @@
 //! Local data layout + config.
 //!
-//! Everything lives under `~/.config/vaultone/` (even on Windows:
-//! `C:\Users\<user>\.config\vaultone\`, CodeBurn-style). The local
+//! Everything lives under `~/.config/cc-one/` (even on Windows:
+//! `C:\Users\<user>\.config\cc-one\`, CodeBurn-style). The local
 //! `config.json` (token / deviceId / repo URL / display-name map) never enters
 //! the repo. First start defaults to Standalone.
 
@@ -15,11 +15,31 @@ use rand::Rng;
 use crate::error::{AppError, AppResult};
 use crate::model::RunMode;
 
-/// Root of all VaultOne local data: `~/.config/vaultone`.
+/// Root of all cc one local data: `~/.config/cc-one`.
 pub fn root_dir() -> AppResult<PathBuf> {
     let home =
         dirs::home_dir().ok_or_else(|| AppError::Config("cannot resolve home dir".into()))?;
-    Ok(home.join(".config").join("vaultone"))
+    Ok(home.join(".config").join("cc-one"))
+}
+
+/// One-time migration from the pre-rename `~/.config/vaultone` directory.
+///
+/// When the legacy dir exists and the new root doesn't, the whole tree
+/// (config.json, local DB, sync repo, library) is moved over so an installed
+/// cc one keeps its data. Skipped when the new root already exists; a failed
+/// rename (e.g. the legacy dir locked by a still-running old version) only
+/// logs a warning — the app boots fresh rather than crash.
+fn migrate_legacy_dir(root: &Path) {
+    if root.exists() {
+        return;
+    }
+    let Some(home) = dirs::home_dir() else { return };
+    let legacy = home.join(".config").join("vaultone");
+    if legacy.exists() {
+        if let Err(e) = fs::rename(&legacy, root) {
+            eprintln!("[cc-one] legacy config migration skipped: {e}");
+        }
+    }
 }
 
 /// All well-known paths under the root.
@@ -41,7 +61,7 @@ impl Paths {
         Self {
             root: root.to_path_buf(),
             config_json: root.join("config.json"),
-            db: root.join("vaultone.db"),
+            db: root.join("cc-one.db"),
             repo: root.join("repo"),
             repo_config: root.join("repo").join("config"),
             repo_data: root.join("repo").join("data"),
@@ -261,7 +281,7 @@ impl Default for ConfigData {
         // this default is only a fallback if config.json lacks the field.
         Self {
             device_id: String::new(),
-            display_name: "VaultOne".to_string(),
+            display_name: "CC One".to_string(),
             repo_url: None,
             github_token: None,
             device_names: BTreeMap::new(),
@@ -323,6 +343,10 @@ impl ConfigStore {
         let root = root_dir()?;
         let paths = Paths::resolve(&root);
 
+        // Renamed CC One → cc one: move the old config tree over on first
+        // launch so existing users keep their settings, DB, and sync repo.
+        migrate_legacy_dir(&root);
+
         // Full directory layout up front.
         for dir in [
             &paths.root,
@@ -339,7 +363,7 @@ impl ConfigStore {
             Ok(bytes) => serde_json::from_slice::<ConfigData>(&bytes).unwrap_or_else(|e| {
                 // Corrupt config shouldn't brick the app; log + fall back, then
                 // re-bootstrap a sane deviceId below.
-                eprintln!("[vaultone] config.json unreadable, re-bootstrapping: {e}");
+                eprintln!("[cc-one] config.json unreadable, re-bootstrapping: {e}");
                 ConfigData::default()
             }),
             Err(_) => ConfigData::default(),
@@ -351,7 +375,7 @@ impl ConfigStore {
         // deviceId first-generation: persistent 12-hex, collision-checked.
         if data.device_id.is_empty() || !is_valid_device_id(&data.device_id) {
             data.device_id = generate_device_id(&paths);
-            if data.display_name.trim().is_empty() || data.display_name == "VaultOne" {
+            if data.display_name.trim().is_empty() || data.display_name == "CC One" {
                 data.display_name = default_display_name(&data.device_id);
             }
             dirty = true;

@@ -177,7 +177,7 @@ fn fetch_models_with_timeout(
             .set("Authorization", &format!("Bearer {trimmed_key}"))
             .set(
                 "User-Agent",
-                &format!("VaultOne/{}", env!("CARGO_PKG_VERSION")),
+                &format!("cc one/{}", env!("CARGO_PKG_VERSION")),
             );
         match request.call() {
             Ok(response) => {

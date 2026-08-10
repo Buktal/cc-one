@@ -49,7 +49,7 @@ export type WindowGeometry = {
   tucked: { y: number }
 }
 
-const KEY = "vaultone:window-geometry"
+const KEY = "cc-one:window-geometry"
 const DEBOUNCE_MS = 300
 
 function defaults(): WindowGeometry {

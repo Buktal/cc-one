@@ -149,7 +149,7 @@ pub fn create_synced_group_owned(
     };
     groups.push(group.clone());
     write_own_synced_groups(paths, &cfg.device_id, &groups)?;
-    crate::sync::commit_and_push_best_effort(paths, cfg, "vaultone: groups sync");
+    crate::sync::commit_and_push_best_effort(paths, cfg, "cc-one: groups sync");
     Ok(group)
 }
 
@@ -172,7 +172,7 @@ pub fn rename_synced_group_owned(
     g.name = name.to_string();
     g.updated_at = crate::time::now_iso();
     write_own_synced_groups(paths, &cfg.device_id, &groups)?;
-    crate::sync::commit_and_push_best_effort(paths, cfg, "vaultone: groups sync");
+    crate::sync::commit_and_push_best_effort(paths, cfg, "cc-one: groups sync");
     Ok(())
 }
 
@@ -208,7 +208,7 @@ pub fn reorder_synced_groups_owned(
         return Ok(());
     }
     write_own_synced_groups(paths, &cfg.device_id, &groups)?;
-    crate::sync::commit_and_push_best_effort(paths, cfg, "vaultone: groups sync");
+    crate::sync::commit_and_push_best_effort(paths, cfg, "cc-one: groups sync");
     Ok(())
 }
 
@@ -223,7 +223,7 @@ pub fn delete_synced_group_owned(paths: &Paths, cfg: &ConfigData, id: &str) -> A
         )));
     }
     write_own_synced_groups(paths, &cfg.device_id, &groups)?;
-    crate::sync::commit_and_push_best_effort(paths, cfg, "vaultone: groups sync");
+    crate::sync::commit_and_push_best_effort(paths, cfg, "cc-one: groups sync");
     Ok(())
 }
 

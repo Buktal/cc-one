@@ -60,28 +60,28 @@ const NAV: Array<{
   { id: "settings", key: "nav.settings", icon: Settings },
 ]
 
-const COLLAPSE_KEY = "vaultone:sidebar-collapsed"
+const COLLAPSE_KEY = "cc-one:sidebar-collapsed"
 
-// Logo: the radial "One" mark — dark sidebar gets the cream badge, light
-// sidebar gets the ink badge, so the mark always stands off its surface.
-// Same radial mark as the app/tray icon (vaultone-cream / vaultone-ink).
+// Logo: the radial "One" mark in Claude Code terracotta — dark sidebar gets
+// the dark badge, light sidebar the light one, so the mark always stands off
+// its surface. Same mark as the app/tray icon (cc-one-dark / cc-one-light).
 function Logo({ collapsed }: { collapsed: boolean }) {
   const { t } = useTranslation()
   return (
     <div className="flex items-center gap-2.5">
       <img
-        src="/vaultone-cream.svg"
+        src="/cc-one-dark.svg"
         alt=""
         className="hidden dark:block size-9 shrink-0"
       />
       <img
-        src="/vaultone-ink.svg"
+        src="/cc-one-light.svg"
         alt=""
         className="block dark:hidden size-9 shrink-0"
       />
       {collapsed ? null : (
         <div className="flex flex-col leading-tight">
-          <span className="text-sm font-semibold">VaultOne</span>
+          <span className="text-sm font-semibold">cc one</span>
           <span className="text-muted-foreground text-[10px]">
             {t("shell.logoSubtitle")}
           </span>

@@ -1,4 +1,4 @@
-//! VaultOne Tauri backend library.
+//! cc one Tauri backend library.
 //!
 //! Module tree: config / db / source_parser / ingest / artifact / session_snapshot
 //! / jsonl / collect / pricing / sync / proxy / commands / window_geom, behind a tauri-specta typed
@@ -68,6 +68,7 @@ fn specta_builder() -> Builder<tauri::Wry> {
         commands::set_collect_interval,
         commands::set_push_interval,
         commands::set_language,
+        commands::set_tray_theme,
         commands::set_lightweight_expand,
         commands::set_skin,
         commands::verify_sync_repo,
@@ -261,8 +262,8 @@ pub fn run() {
 
     // Boot: load config (bootstraps dir + deviceId),
     // open the Local Store (seeds pricing), register this device.
-    let config = ConfigStore::load().expect("vaultone: failed to load local config");
-    let store = Store::open(&config.paths().db).expect("vaultone: failed to open Local Store");
+    let config = ConfigStore::load().expect("cc-one: failed to load local config");
+    let store = Store::open(&config.paths().db).expect("cc-one: failed to open Local Store");
     {
         // Register this device in the Local Store and publish its name
         // artifact (covers both first run and an upgrade from a version that
@@ -273,11 +274,11 @@ pub fn run() {
         // Best-effort zero-cost top-up on boot: newly-seeded pricing
         // may price rows that were imported while the model was missing.
         let book = store.load_pricing_book().unwrap_or_else(|e| {
-            eprintln!("[vaultone] boot rebill skipped: {e}");
+            eprintln!("[cc-one] boot rebill skipped: {e}");
             pricing::seed_book()
         });
         if let Err(e) = store.rebill_zero_cost(&book) {
-            eprintln!("[vaultone] boot rebill failed: {e}");
+            eprintln!("[cc-one] boot rebill failed: {e}");
         }
     }
 
@@ -330,8 +331,8 @@ pub fn run() {
                 }
                 let paths = config.paths();
                 match crate::sync::pull_and_import(&store, &paths, &cfg) {
-                    Ok(n) => eprintln!("[vaultone] startup pull imported {n} row(s)"),
-                    Err(e) => eprintln!("[vaultone] startup pull failed: {e}"),
+                    Ok(n) => eprintln!("[cc-one] startup pull imported {n} row(s)"),
+                    Err(e) => eprintln!("[cc-one] startup pull failed: {e}"),
                 }
             });
 
@@ -340,9 +341,15 @@ pub fn run() {
             // The Quit label follows the persisted display language;
             // `set_language` rebuilds this menu on a live language change.
             let menu = tray_menu_for(app.handle(), state.config.get().language)?;
+            // Tray starts on the dark badge (next-themes `defaultTheme="dark"`);
+            // the frontend pushes `set_tray_theme` once it resolves the actual
+            // theme on mount, so the icon follows light/system/dark afterwards.
             let _tray = TrayIconBuilder::with_id("main")
-                .tooltip("VaultOne")
-                .icon(app.default_window_icon().cloned().unwrap())
+                .tooltip("CC One")
+                .icon(
+                    tauri::image::Image::from_bytes(include_bytes!("../icons/tray-dark.png"))
+                        .expect("embedded tray icon"),
+                )
                 .menu(&menu)
                 .on_menu_event(|app, event| match event.id.as_ref() {
                     "show" => show_main_window(app),
@@ -418,7 +425,7 @@ pub fn run() {
                         match action {
                             TickAction::Collect => {
                                 if let Err(e) = collect::collect_into(&store, &config) {
-                                    eprintln!("[vaultone] scheduled collect failed: {e}");
+                                    eprintln!("[cc-one] scheduled collect failed: {e}");
                                 }
                                 let _ = app_handle.emit("usage_changed", ());
                             }
@@ -429,7 +436,7 @@ pub fn run() {
                                 // this device's up.
                                 let sr = collect::sync_round(&store, &config);
                                 for e in &sr.errors {
-                                    eprintln!("[vaultone] scheduled sync error: {e}");
+                                    eprintln!("[cc-one] scheduled sync error: {e}");
                                 }
                                 let _ = app_handle.emit("usage_changed", ());
                             }
@@ -467,7 +474,7 @@ mod tests {
     /// Synced-mode config: repo URL + PAT present ⇒ `is_synced()` true.
     fn synced_config() -> ConfigData {
         ConfigData {
-            repo_url: Some("https://github.com/vaultone/test".to_string()),
+            repo_url: Some("https://github.com/cc-one/test".to_string()),
             github_token: Some("github_pat_test".to_string()),
             collect_interval_secs: 30,
             push_interval_secs: 600,

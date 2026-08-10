@@ -1,6 +1,6 @@
 //! Provider (供应商) entity types.
 //!
-//! One provider is a vendor VaultOne can switch Claude Code to: a
+//! One provider is a vendor cc one can switch Claude Code to: a
 //! `settings.json` snapshot (`settingsConfig`) plus app-side extras (`meta`).
 //! The snapshot is the single authority — every form field, preset and snippet
 //! reads/writes it — and API keys live inside its `env` block

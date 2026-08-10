@@ -1,8 +1,0 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" width="1024" height="1024">
-  <!-- VaultOne mark · radial "One", rounded square (rx220). macOS/iOS apply their own mask; Windows renders the source rounding as-is. Default = Ink. -->
-  <rect x="0" y="0" width="1024" height="1024" rx="220" fill="#16181C"/>
-  <path d="M 311 499 Q 609 212 874 311" fill="none" stroke="#EFE7D6" stroke-width="18" stroke-opacity="0.42" stroke-linecap="round"/>
-  <circle cx="315" cy="710" r="204" fill="none" stroke="#E8B34A" stroke-width="68"/>
-  <text x="571" y="548" font-family="Geist Variable, Geist, system-ui, sans-serif" font-weight="800" font-size="281" fill="#E8B34A">n</text>
-  <text x="824" y="422" font-family="Geist Variable, Geist, system-ui, sans-serif" font-weight="800" font-size="166" fill="#E8B34A">e</text>
-</svg>

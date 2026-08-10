@@ -29,7 +29,7 @@ import {
 } from "@/app/store/slices/updateSlice"
 import { toStructuredError } from "@/lib/error"
 
-const RELEASES_URL = "https://github.com/Buktal/VaultOne/releases/latest"
+const RELEASES_URL = "https://github.com/Buktal/cc-one/releases/latest"
 // While the app stays open, re-probe this often so a long-lived session still
 // catches a new release (startup always probes immediately).
 const POLL_INTERVAL_MS = 6 * 60 * 60 * 1000
