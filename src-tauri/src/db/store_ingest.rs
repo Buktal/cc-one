@@ -48,17 +48,43 @@ impl super::Store {
             .map(|i| format!("?{i}"))
             .collect::<Vec<_>>()
             .join(",");
-        let insert_sql = format!(
-            "INSERT INTO usage_records ({cols}) VALUES ({placeholders})
-             ON CONFLICT (uuid, device_id) DO NOTHING
-             RETURNING uuid"
-        );
+        let insert_sql = if mark_dirty {
+            // Collect path: the Codex parser can re-emit a row its earlier pass
+            // wrote with model "unknown" (the log's model context can follow the
+            // token events), and ONLY those rows must be rewritten — model +
+            // pricing_model + the cost columns, which all derive from the model.
+            // Known-model rows are never touched. The pulled rows' days are
+            // flagged dirty like new rows so the push path recomputes the
+            // derived artifact, which still holds the stale row.
+            format!(
+                "INSERT INTO usage_records ({cols}) VALUES ({placeholders})
+                 ON CONFLICT (uuid, device_id) DO UPDATE SET
+                   model = excluded.model,
+                   pricing_model = excluded.pricing_model,
+                   input_cost_usd = excluded.input_cost_usd,
+                   output_cost_usd = excluded.output_cost_usd,
+                   cache_read_cost_usd = excluded.cache_read_cost_usd,
+                   cache_creation_cost_usd = excluded.cache_creation_cost_usd,
+                   total_cost_usd = excluded.total_cost_usd
+                 WHERE usage_records.model = 'unknown'
+                 RETURNING uuid"
+            )
+        } else {
+            // Pull path: imported rows are already on git; re-importing must
+            // never modify an existing row (pure dedup).
+            format!(
+                "INSERT INTO usage_records ({cols}) VALUES ({placeholders})
+                 ON CONFLICT (uuid, device_id) DO NOTHING
+                 RETURNING uuid"
+            )
+        };
 
-        // Dedup is the `(uuid, device_id)` primary key itself: ON CONFLICT DO
-        // NOTHING, and RETURNING tells us exactly which rows actually landed (so
-        // `rows_inserted` and the dirty-day set reflect real new rows, not a
-        // pre-check that can drift from the table). Device-scoped — the same
-        // source event replayed on two devices must be counted per device.
+        // Dedup is the `(uuid, device_id)` primary key itself: RETURNING tells
+        // us exactly which rows actually landed — inserted, plus (collect path)
+        // rows rewritten from "unknown" — so `rows_inserted` and the dirty-day
+        // set reflect real changes, not a pre-check that can drift from the
+        // table. Device-scoped — the same source event replayed on two devices
+        // must be counted per device.
         let mut inserted: Vec<UsageRecord> = Vec::new();
         for r in records {
             let landed: Option<String> = tx
@@ -241,6 +267,110 @@ mod tests {
         let r = rec("u1", "2026-07-13", "glm-5.2", "dev1", 100, 50, 1.0);
         assert_eq!(s.ingest(std::slice::from_ref(&r)).unwrap().len(), 1);
         assert_eq!(s.ingest(&[r]).unwrap().len(), 0, "same uuid must dedupe");
+    }
+
+    /// Codex can place the model context AFTER the token events, so a collect
+    /// pass may write a row with model "unknown" that a later pass can resolve.
+    /// The collect-path ingest must rewrite EXACTLY those rows (model +
+    /// pricing_model + cost) when the parser re-emits them corrected, and flag
+    /// the corrected row's day dirty so the push path recomputes the artifact.
+    /// Rows whose model is already known are never touched.
+    #[test]
+    fn ingest_marking_dirty_corrects_unknown_model_rows_only() {
+        let s = mem();
+        let first = rec(
+            "codex:thread-v1:t1:1",
+            "2026-08-07",
+            "unknown",
+            "dev1",
+            100,
+            10,
+            0.0,
+        );
+        assert_eq!(
+            s.ingest_marking_dirty(std::slice::from_ref(&first))
+                .unwrap()
+                .len(),
+            1
+        );
+
+        // Re-collect: same uuid, model now resolved (parser re-emitted it).
+        let mut corrected = first.clone();
+        corrected.model = "gpt-5.6-sol".into();
+        corrected.pricing_model = "gpt-5.6-sol".into();
+        corrected.cost = CostBreakdown {
+            input_usd: rust_decimal::Decimal::try_from(0.0001).unwrap(),
+            total_usd: rust_decimal::Decimal::try_from(0.0001).unwrap(),
+            ..corrected.cost
+        };
+        let landed = s.ingest_marking_dirty(&[corrected]).unwrap();
+        assert_eq!(
+            landed.len(),
+            1,
+            "the corrected re-emission lands as an update"
+        );
+        let out = s.usage_for_day_device("2026-08-07", "dev1").unwrap();
+        assert_eq!(out.len(), 1, "still one row — updated, not duplicated");
+        assert_eq!(out[0].model, "gpt-5.6-sol");
+        assert_eq!(out[0].pricing_model, "gpt-5.6-sol");
+        assert_eq!(
+            out[0].cost.total_usd,
+            rust_decimal::Decimal::try_from(0.0001).unwrap()
+        );
+        // The corrected day is dirty: the local artifact (usage-<day>.jsonl)
+        // holds the stale "unknown" row and push must recompute it.
+        assert!(s.dirty_days().unwrap().contains(&"2026-08-07".to_string()));
+
+        // A known-model row re-ingested with the same uuid stays untouched.
+        let again = s.usage_for_day_device("2026-08-07", "dev1").unwrap()[0].clone();
+        let mut reemit = again.clone();
+        reemit.cost = CostBreakdown {
+            input_usd: rust_decimal::Decimal::try_from(9.99).unwrap(),
+            total_usd: rust_decimal::Decimal::try_from(9.99).unwrap(),
+            ..again.cost
+        };
+        assert_eq!(
+            s.ingest_marking_dirty(&[reemit]).unwrap().len(),
+            0,
+            "known-model rows are not rewritten"
+        );
+        let out = s.usage_for_day_device("2026-08-07", "dev1").unwrap();
+        assert_eq!(
+            out[0].cost.total_usd,
+            rust_decimal::Decimal::try_from(0.0001).unwrap(),
+            "cost untouched"
+        );
+    }
+
+    /// The PULL path must keep DO NOTHING semantics: re-ingesting a row never
+    /// modifies it, even when the pulled copy carries a resolved model — the
+    /// guarded upsert is a local-collect correction, not an import overwrite.
+    #[test]
+    fn ingest_pull_path_never_touches_existing_rows() {
+        let s = mem();
+        let first = rec(
+            "codex:thread-v1:t1:1",
+            "2026-08-07",
+            "unknown",
+            "dev1",
+            100,
+            10,
+            0.0,
+        );
+        s.ingest(std::slice::from_ref(&first)).unwrap();
+        let mut corrected = first.clone();
+        corrected.model = "gpt-5.6-sol".into();
+        corrected.pricing_model = "gpt-5.6-sol".into();
+        assert_eq!(
+            s.ingest(&[corrected]).unwrap().len(),
+            0,
+            "pull re-ingest still dedupes"
+        );
+        let out = s.usage_for_day_device("2026-08-07", "dev1").unwrap();
+        assert_eq!(
+            out[0].model, "unknown",
+            "pull never modifies an existing row"
+        );
     }
 
     /// Regression: the same uuid on two DIFFERENT devices must both be kept —

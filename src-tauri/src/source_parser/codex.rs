@@ -170,6 +170,14 @@ struct CodexFileState {
     current_model: String,
     prev_total: Option<CumulativeTokens>,
     event_index: u32,
+    /// Events built before the model was known (deferred — see `learn_model`).
+    pending_unknown: Vec<RawUsage>,
+    /// Rows an earlier pass already wrote as "unknown" (correction candidates —
+    /// see `learn_model`).
+    stale_unknown: Vec<RawUsage>,
+    /// Whether this pass has learned the model yet (guards `learn_model`'s
+    /// one-shot flush against a later model switch re-flushing).
+    model_resolved: bool,
 }
 
 /// A Codex session's identity: its unique thread id + whether it carries a
@@ -239,6 +247,12 @@ fn prescan_codex_text(text: &str) -> (Option<CodexSessionIdentity>, Option<i64>)
 /// are not re-emitted as usages/messages (0 ⇒ emit all). Session meta is always
 /// rebuilt from the full file.
 ///
+/// The model context can lag the token events (Codex writes `turn_context`
+/// only when the model is resolved; early token_count `info` carries no
+/// model). Events built while the model is unknown are deferred — see
+/// [`learn_model`] — so they get the model once it appears instead of being
+/// permanently stamped "unknown".
+///
 /// Sub-agent / fork sessions (`source.subagent` / `forked_from_id` / session id
 /// ≠ thread id) emit no [`RawSession`] and no transcript — only their own
 /// post-boundary usage (with an empty `session_id`, since they have no
@@ -255,6 +269,9 @@ fn fold_codex_file(file: &Path, text: &str, start_line: i64) -> FileParseOutcome
         current_model: "unknown".to_string(),
         prev_total: None,
         event_index: 0,
+        pending_unknown: Vec::new(),
+        stale_unknown: Vec::new(),
+        model_resolved: false,
     };
     // Sub-agent usage keeps an empty session_id — no top-level session exists.
     let session_id_for_usage = if is_subagent {
@@ -352,7 +369,7 @@ fn fold_codex_file(file: &Path, text: &str, start_line: i64) -> FileParseOutcome
                         .or_else(|| payload.get("info").and_then(|i| i.get("model")))
                         .and_then(|v| v.as_str())
                     {
-                        state.current_model = crate::model::normalize_model_key(model);
+                        learn_model(model, &mut state, &mut events);
                     }
                 }
             }
@@ -373,7 +390,7 @@ fn fold_codex_file(file: &Path, text: &str, start_line: i64) -> FileParseOutcome
                     .or_else(|| payload.get("model"))
                     .and_then(|v| v.as_str())
                 {
-                    state.current_model = crate::model::normalize_model_key(model);
+                    learn_model(model, &mut state, &mut events);
                 }
                 // Prefer cumulative total_token_usage; fall back to last_token_usage
                 // (already a per-call delta).
@@ -416,11 +433,6 @@ fn fold_codex_file(file: &Path, text: &str, start_line: i64) -> FileParseOutcome
                     }
                     continue;
                 }
-                // Already-synced lines rebuild state but are not re-emitted.
-                if line_no <= start_line {
-                    continue;
-                }
-
                 let thread_id = state.thread_id.as_deref().unwrap_or("unknown");
                 let timestamp = value
                     .get("timestamp")
@@ -430,7 +442,7 @@ fn fold_codex_file(file: &Path, text: &str, start_line: i64) -> FileParseOutcome
                 // shared helper (clamp already applied above for the zero-gate).
                 let (fresh_input, clamped_cache_read) =
                     normalize_cache_inclusive(delta.input, delta.cached_input);
-                events.push(RawUsage {
+                let usage = RawUsage {
                     uuid: format!("codex:thread-v1:{thread_id}:{}", state.event_index),
                     timestamp: timestamp.unwrap_or_else(crate::time::now_iso),
                     model: state.current_model.clone(),
@@ -446,7 +458,27 @@ fn fold_codex_file(file: &Path, text: &str, start_line: i64) -> FileParseOutcome
                     stop_reason: String::new(),
                     service_tier: String::new(),
                     iterations: 0,
-                });
+                };
+                // Model resolution lags the token events (see `learn_model`),
+                // so route each built event accordingly:
+                //   - already-synced lines (≤ cursor) rebuild state but are not
+                //     re-emitted — unless their model was "unknown", in which
+                //     case they become correction candidates for the pass that
+                //     first sees the model;
+                //   - lines past the cursor emit now when the model is known,
+                //     and are deferred otherwise (flushed by `learn_model`, or
+                //     with the "unknown" fallback at EOF).
+                if line_no <= start_line {
+                    if state.current_model == "unknown" {
+                        state.stale_unknown.push(usage);
+                    }
+                    continue;
+                }
+                if state.current_model == "unknown" {
+                    state.pending_unknown.push(usage);
+                } else {
+                    events.push(usage);
+                }
             }
             // Transcript messages — only past the cursor, only for top-level
             // sessions (sub-agent transcripts are dropped). The guard collapses
@@ -460,6 +492,12 @@ fn fold_codex_file(file: &Path, text: &str, start_line: i64) -> FileParseOutcome
             _ => {}
         }
     }
+
+    // The file carried no model context this pass — deferred events fall back
+    // to "unknown" (unchanged from pre-fix behavior; the pass that later sees
+    // the model re-emits them as corrections via `learn_model`). Stale
+    // candidates are dropped: they were already written by an earlier pass.
+    events.extend(std::mem::take(&mut state.pending_unknown));
 
     let sessions = if !is_subagent && saw_any_event {
         // Title priority: first real user message (noise-filtered) → cwd basename.
@@ -500,6 +538,43 @@ fn fold_codex_file(file: &Path, text: &str, start_line: i64) -> FileParseOutcome
 
 fn is_history_snapshot_event(boundary: Option<i64>, line_offset: i64) -> bool {
     boundary.is_some_and(|b| line_offset < b)
+}
+
+/// Learn the current model from a `turn_context` / token_count `info` line and
+/// resolve the events that had to wait for it.
+///
+/// Codex writes the model context AFTER the first token events (it is resolved
+/// per turn; early token_count `info` carries no model), so events built before
+/// it must not be permanently stamped "unknown". Two deferral lists on `state`
+/// are flushed here:
+///   - `pending_unknown` — events emitted THIS pass before the model line;
+///   - `stale_unknown` — events at or before the cursor, written by an EARLIER
+///     pass as "unknown"; re-emitted with their original uuids so the ingest
+///     layer's guarded upsert rewrites exactly those store rows.
+///
+/// The stale re-emission runs in EVERY pass that sees the model, cursor or
+/// not: the parser cannot tell which pre-model rows an earlier pass wrote
+/// before the fix — re-emitting costs a few deduped rows per file, and the
+/// store's `WHERE model = 'unknown'` guard makes the rewrite a no-op for rows
+/// that already carry the model. Subsequent model switches in the same pass
+/// just update `current_model`; later events use it directly.
+fn learn_model(model: &str, state: &mut CodexFileState, events: &mut Vec<RawUsage>) {
+    state.current_model = crate::model::normalize_model_key(model);
+    if state.model_resolved {
+        return;
+    }
+    state.model_resolved = true;
+    let model = state.current_model.clone();
+    for usage in state
+        .stale_unknown
+        .drain(..)
+        .chain(state.pending_unknown.drain(..))
+    {
+        events.push(RawUsage {
+            model: model.clone(),
+            ..usage
+        });
+    }
 }
 
 // ---- Session id resolution (session_meta id → filename UUID fallback) ----
@@ -1173,6 +1248,266 @@ mod tests {
         assert_eq!(r2.events.len(), 1);
         assert_eq!(r2.events[0].tokens.input, 200);
         assert_eq!(r2.events[0].tokens.output, 20);
+    }
+
+    // ---- model context appearing after token events (the "unknown" bug) ----
+
+    /// Codex writes `turn_context` only when the model is resolved; early
+    /// `token_count` events often carry no `info.model`. Events emitted before
+    /// the model line must NOT be permanently stamped "unknown" — they are held
+    /// back and flushed with the model once it becomes known.
+    #[test]
+    fn codex_events_before_model_context_get_the_model() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("sessions").join("s.jsonl");
+        std::fs::create_dir_all(file.parent().unwrap()).unwrap();
+        write_jsonl(
+            &file,
+            &[
+                codex_session_meta_cwd("t1", "/tmp"), // no model in the meta
+                codex_token_count(100, 50, 10),
+                codex_token_count(300, 100, 40),
+                codex_turn_context("gpt-5.6-sol"),
+                codex_token_count(500, 200, 60),
+            ],
+        );
+        let p = CodexSourceParser::with_dir(dir.path().to_path_buf());
+        let result = p.parse(&p.discover().unwrap()).unwrap();
+        assert_eq!(result.events.len(), 3);
+        assert!(
+            result.events.iter().all(|e| e.model == "gpt-5.6-sol"),
+            "events before the model line must get the model, not 'unknown': {:?}",
+            result
+                .events
+                .iter()
+                .map(|e| e.model.clone())
+                .collect::<Vec<_>>()
+        );
+    }
+
+    /// Incremental self-heal: pass 1 scans the pre-model prefix (rows written
+    /// "unknown"); pass 2 — the pass that first sees the model — re-emits the
+    /// stale events as corrections (same uuids, model now known) so the ingest
+    /// layer's guarded upsert can rewrite the store rows. Later passes must NOT
+    /// re-emit them again.
+    #[test]
+    fn codex_incremental_corrects_stale_unknown_events_when_model_appears() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("sessions").join("s.jsonl");
+        std::fs::create_dir_all(file.parent().unwrap()).unwrap();
+        write_jsonl(
+            &file,
+            &[
+                codex_session_meta_cwd("t1", "/tmp"),
+                codex_token_count(100, 50, 10),
+                codex_token_count(300, 100, 40),
+            ],
+        );
+        let p = CodexSourceParser::with_dir(dir.path().to_path_buf());
+        let (r1, delta) = p.collect_incremental(&ScanProgress::new()).unwrap();
+        // Pass 1 never saw a model → events flushed with the fallback.
+        assert_eq!(r1.events.len(), 2);
+        assert!(r1.events.iter().all(|e| e.model == "unknown"));
+        let progress: ScanProgress = delta;
+
+        // Model context + one more usage event arrive (session kept running).
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        {
+            use std::io::Write;
+            let mut f = std::fs::OpenOptions::new()
+                .append(true)
+                .open(&file)
+                .unwrap();
+            writeln!(f, "{}", codex_turn_context("gpt-5.6-sol")).unwrap();
+            writeln!(f, "{}", codex_token_count(500, 200, 60)).unwrap();
+        }
+        let (r2, progress2) = p.collect_incremental(&progress).unwrap();
+        // The firing pass re-emits the 2 stale events (corrected) + the 1 new
+        // event — all with the model.
+        assert_eq!(r2.events.len(), 3, "stale events re-emitted as corrections");
+        assert!(
+            r2.events.iter().all(|e| e.model == "gpt-5.6-sol"),
+            "{:?}",
+            r2.events
+                .iter()
+                .map(|e| e.model.clone())
+                .collect::<Vec<_>>()
+        );
+        // The corrections keep the ORIGINAL uuids so the store upsert hits the
+        // already-written rows.
+        let mut uuids: Vec<String> = r2.events.iter().map(|e| e.uuid.clone()).collect();
+        uuids.sort();
+        assert_eq!(
+            uuids,
+            vec![
+                "codex:thread-v1:t1:1".to_string(),
+                "codex:thread-v1:t1:2".to_string(),
+                "codex:thread-v1:t1:3".to_string()
+            ]
+        );
+
+        // A later pass (cursor past the model line) re-emits the pre-model
+        // events AGAIN as corrections — the parser cannot tell which pre-model
+        // rows were written before the fix, so every pass re-offers them with
+        // their original uuids and the store's guarded upsert turns the
+        // re-emission into a no-op for rows that already carry the model. Plus
+        // the one appended event.
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        {
+            use std::io::Write;
+            let mut f = std::fs::OpenOptions::new()
+                .append(true)
+                .open(&file)
+                .unwrap();
+            writeln!(f, "{}", codex_token_count(700, 300, 80)).unwrap();
+        }
+        let (r3, _) = p.collect_incremental(&progress2).unwrap();
+        // The 2 corrections (same uuids :1, :2 — store dedup/guarded upsert
+        // make them no-ops) + the 1 appended event (:4).
+        assert_eq!(r3.events.len(), 3);
+        assert!(r3.events.iter().all(|e| e.model == "gpt-5.6-sol"));
+        let mut uuids3: Vec<String> = r3.events.iter().map(|e| e.uuid.clone()).collect();
+        uuids3.sort();
+        assert_eq!(
+            uuids3,
+            vec![
+                "codex:thread-v1:t1:1".to_string(),
+                "codex:thread-v1:t1:2".to_string(),
+                "codex:thread-v1:t1:4".to_string()
+            ]
+        );
+    }
+
+    /// End-to-end production chain (parser → ingest → store): rows written
+    /// "unknown" before the model line self-heal once the model appears.
+    #[test]
+    fn codex_unknown_model_rows_self_heal_across_collect_passes() {
+        use crate::collect::ingest::ingest_collected;
+        use crate::config::Paths;
+        use crate::db::Store;
+        use crate::pricing::seed_book;
+
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("sessions").join("s.jsonl");
+        std::fs::create_dir_all(file.parent().unwrap()).unwrap();
+        write_jsonl(
+            &file,
+            &[
+                codex_session_meta_cwd("t1", "/tmp"),
+                codex_token_count(100, 50, 10),
+                codex_token_count(300, 100, 40),
+            ],
+        );
+        let p = CodexSourceParser::with_dir(dir.path().to_path_buf());
+        let store = Store::open(std::path::Path::new(":memory:")).unwrap();
+        let paths = Paths::resolve(dir.path());
+        let book = seed_book();
+        let dev = "0123456789ab";
+        let day = "2026-07-10";
+
+        // Collect 1: model context not yet written → rows land as "unknown".
+        let (r1, progress) = p.collect_incremental(&ScanProgress::new()).unwrap();
+        ingest_collected(&store, &paths, dev, &book, r1).unwrap();
+        let rows = store.usage_for_day_device(day, dev).unwrap();
+        assert_eq!(rows.len(), 2);
+        assert!(rows.iter().all(|r| r.model == "unknown"));
+
+        // The session keeps running: model context + more usage appended.
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        {
+            use std::io::Write;
+            let mut f = std::fs::OpenOptions::new()
+                .append(true)
+                .open(&file)
+                .unwrap();
+            writeln!(f, "{}", codex_turn_context("gpt-5.6-sol")).unwrap();
+            writeln!(f, "{}", codex_token_count(500, 200, 60)).unwrap();
+        }
+        let (r2, _) = p.collect_incremental(&progress).unwrap();
+        ingest_collected(&store, &paths, dev, &book, r2).unwrap();
+
+        let rows = store.usage_for_day_device(day, dev).unwrap();
+        assert_eq!(rows.len(), 3);
+        assert!(
+            rows.iter().all(|r| r.model == "gpt-5.6-sol"),
+            "stale 'unknown' rows must self-heal: {:?}",
+            rows.iter().map(|r| r.model.clone()).collect::<Vec<_>>()
+        );
+
+        // Legacy rows written BEFORE the fix: a second session file whose DB
+        // rows carry "unknown" (the pre-fix parser emitted them before the
+        // model line), with a cursor that already passed the model line — a
+        // plain rescan would never re-touch them. Any later pass still
+        // re-emits the pre-model events (same uuids), and the store's guarded
+        // upsert rewrites exactly the "unknown" rows.
+        let file2 = dir.path().join("sessions").join("legacy.jsonl");
+        write_jsonl(
+            &file2,
+            &[
+                codex_session_meta_cwd("legacy", "/tmp"),
+                codex_token_count(100, 50, 10),
+                codex_token_count(300, 100, 40),
+                codex_turn_context("gpt-5.6-sol"),
+                codex_token_count(500, 200, 60),
+            ],
+        );
+        store
+            .ingest_marking_dirty(&[
+                crate::db::testutil::rec(
+                    "codex:thread-v1:legacy:1",
+                    day,
+                    "unknown",
+                    dev,
+                    50,
+                    10,
+                    0.0,
+                ),
+                crate::db::testutil::rec(
+                    "codex:thread-v1:legacy:2",
+                    day,
+                    "unknown",
+                    dev,
+                    100,
+                    20,
+                    0.0,
+                ),
+            ])
+            .unwrap();
+        // The pre-fix pass's cursor already covered the whole file.
+        let meta = std::fs::metadata(&file2).unwrap();
+        let mut progress_legacy = progress.clone();
+        progress_legacy.insert(
+            crate::source_parser::scan_progress_key(&file2),
+            crate::source_parser::FileCursor {
+                last_modified: crate::source_parser::metadata_modified_nanos(&meta),
+                last_line_offset: 5,
+            },
+        );
+
+        // One more append forces a normal pass (cursor past the model line).
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        {
+            use std::io::Write;
+            let mut f = std::fs::OpenOptions::new()
+                .append(true)
+                .open(&file2)
+                .unwrap();
+            writeln!(f, "{}", codex_token_count(700, 300, 80)).unwrap();
+        }
+        let (r3, _) = p.collect_incremental(&progress_legacy).unwrap();
+        ingest_collected(&store, &paths, dev, &book, r3).unwrap();
+        let rows = store.usage_for_day_device(day, dev).unwrap();
+        let legacy: Vec<&String> = rows
+            .iter()
+            .filter(|r| r.uuid.contains("legacy"))
+            .map(|r| &r.model)
+            .collect();
+        assert_eq!(legacy.len(), 3);
+        assert!(
+            legacy.iter().all(|m| m.as_str() == "gpt-5.6-sol"),
+            "pre-fix 'unknown' rows must self-heal on any later pass: {:?}",
+            legacy
+        );
     }
 
     // ---- session + transcript extraction (Codex, this phase) ----
