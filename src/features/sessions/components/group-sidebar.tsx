@@ -26,6 +26,16 @@ import {
 } from "lucide-react"
 import { useState } from "react"
 import { useTranslation } from "react-i18next"
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import {
@@ -34,6 +44,11 @@ import {
   PopoverTrigger,
 } from "@/components/ui/popover"
 import { ScrollArea } from "@/components/ui/scroll-area"
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipTrigger,
+} from "@/components/ui/tooltip"
 import { cn } from "@/lib/utils"
 import type { SessionGroup } from "@/types/generated/bindings"
 import {
@@ -105,15 +120,35 @@ export function GroupSidebar({
 
   return (
     <div className="border-border bg-card flex min-h-0 w-44 shrink-0 flex-col gap-1 rounded-lg border p-2">
-      <div className="text-muted-foreground px-2 py-1 text-xs font-medium">
-        {track === "local"
-          ? t("sessions.group.localTitle")
-          : t("sessions.group.syncedTitle")}
+      {/* Title row with the create entry point — the + sits beside the track
+        title (not under the list) so it stays visible and the group list keeps
+        the full sidebar height. */}
+      <div className="flex items-center justify-between pr-0.5 pl-1.5">
+        <span className="text-muted-foreground py-0.5 text-xs font-medium">
+          {track === "local"
+            ? t("sessions.group.localTitle")
+            : t("sessions.group.syncedTitle")}
+        </span>
+        <Tooltip>
+          <TooltipTrigger
+            render={
+              <Button
+                variant="ghost"
+                size="icon-xs"
+                aria-label={t("sessions.group.create")}
+                onClick={onCreate}
+                disabled={pendingGroup !== null}
+              />
+            }
+          >
+            <Plus />
+          </TooltipTrigger>
+          <TooltipContent>{t("sessions.group.create")}</TooltipContent>
+        </Tooltip>
       </div>
-      {/* min-h-0: without it the ScrollArea grows with its content, pushing
-        the "+ New group" button (below the scroll region) out of the viewport
-        once the group list gets long. Mirrors the right Card's
-        `flex min-h-0 flex-1` pattern. */}
+      {/* min-h-0: without it the ScrollArea grows with its content, stretching
+        the whole sidebar once the group list gets long. Mirrors the right
+        Card's `flex min-h-0 flex-1` pattern. */}
       <ScrollArea className="min-h-0 flex-1">
         <div className="flex flex-col gap-0.5 pr-1">
           <SidebarItem
@@ -153,16 +188,6 @@ export function GroupSidebar({
           />
         </div>
       </ScrollArea>
-      <Button
-        variant="outline"
-        size="sm"
-        className="mt-1 justify-start"
-        onClick={onCreate}
-        disabled={pendingGroup !== null}
-      >
-        <Plus />
-        {t("sessions.group.create")}
-      </Button>
     </div>
   )
 }
@@ -219,6 +244,10 @@ function GroupRow({
   const [renaming, setRenaming] = useState(false)
   const [draft, setDraft] = useState(g.name)
   const [popoverOpen, setPopoverOpen] = useState(false)
+  // Deleting goes through a confirmation dialog (unlike rename, the action is
+  // destructive — sessions would silently move to Ungrouped otherwise). The
+  // dialog closes before the mutation runs, matching how the popover acts.
+  const [deleteConfirmOpen, setDeleteConfirmOpen] = useState(false)
   // The whole row is the drag handle (no separate grip icon — the sidebar is
   // 176px wide); the sortable plugin applies the drag/shift transforms to the
   // ref'd element automatically. Busy rows are disabled: a rename/delete in
@@ -243,8 +272,13 @@ function GroupRow({
     }
   }
 
-  async function confirmDelete() {
+  function confirmDelete() {
     setPopoverOpen(false)
+    setDeleteConfirmOpen(true)
+  }
+
+  async function executeDelete() {
+    setDeleteConfirmOpen(false)
     await onDelete(g)
   }
 
@@ -338,6 +372,33 @@ function GroupRow({
           </PopoverContent>
         </Popover>
       </div>
+      {/* Confirmation before delete. base-ui's AlertDialog won't dismiss on
+        ESC / backdrop click — the user has to pick Cancel or Delete. Sessions
+        inside the group survive (they move to Ungrouped), so the description
+        says so instead of threatening data loss. */}
+      <AlertDialog open={deleteConfirmOpen} onOpenChange={setDeleteConfirmOpen}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>
+              {t("sessions.group.deleteConfirmTitle")}
+            </AlertDialogTitle>
+            <AlertDialogDescription>
+              {t("sessions.group.deleteConfirmDesc", { name: g.name })}
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={busy}>
+              {t("common.cancel")}
+            </AlertDialogCancel>
+            <AlertDialogAction
+              variant="destructive"
+              onClick={() => void executeDelete()}
+            >
+              {t("sessions.group.deleteConfirmAction")}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   )
 }
