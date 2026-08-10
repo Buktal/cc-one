@@ -1355,7 +1355,10 @@ mod tests {
         // Main session: empty agent_type, regular title chain (first user msg).
         write_lines(
             &proj.join("main.jsonl"),
-            &[user_line("u3", "hello world"), assistant_line("u4", "msg_C", 30)],
+            &[
+                user_line("u3", "hello world"),
+                assistant_line("u4", "msg_C", 30),
+            ],
         );
         let p = ClaudeCodeSourceParser::with_dir(dir.path().to_path_buf());
         let outcome = p.parse(&p.discover().unwrap()).unwrap();

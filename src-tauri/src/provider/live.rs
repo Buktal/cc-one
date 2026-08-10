@@ -200,9 +200,7 @@ pub fn write_live(app: App, provider: &Provider) -> AppResult<()> {
                 &provider.settings_config,
             )
         }
-        App::Gemini => {
-            crate::provider::live_gemini::write_gemini_live(&provider.settings_config)
-        }
+        App::Gemini => crate::provider::live_gemini::write_gemini_live(&provider.settings_config),
     }
 }
 

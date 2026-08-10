@@ -476,6 +476,7 @@ impl ConfigStore {
 ///   claude 池；map 里已有 claude 键时以 map 为准，旧键是 stale 的）；
 /// - 全局片段 `common_config_snippet` / `common_config_snippet_enabled` →
 ///   `common_config_snippets["claude"]`（已有 claude 键则不覆盖）。
+///
 /// 迁移即剥离旧字段（旧字段 `take()` / 后续写盘不再序列化）。返回「数据是否
 /// 变化、需要重写 config.json」——幂等：新格式（没有旧字段）返回 `false`。
 fn migrate_legacy_fields(data: &mut ConfigData) -> bool {
@@ -746,8 +747,10 @@ mod tests {
     /// 新旧字段并存（手改/回滚残留）→ 新字段（map）为准，旧键是 stale 的。
     #[test]
     fn migrate_keeps_existing_per_app_values_over_legacy() {
-        let mut c = ConfigData::default();
-        c.active_provider_id = Some("stale".into());
+        let mut c = ConfigData {
+            active_provider_id: Some("stale".into()),
+            ..Default::default()
+        };
         c.active_providers
             .insert("claude".to_string(), "current".into());
         assert!(migrate_legacy_fields(&mut c));

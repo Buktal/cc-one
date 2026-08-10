@@ -43,7 +43,7 @@
 use crate::config::Paths;
 use crate::db::Store;
 use crate::error::{AppError, AppResult};
-use crate::model::{App, Provider, SECRET_ENV_KEYS};
+use crate::model::{Provider, SECRET_ENV_KEYS};
 
 /// The providers.json schema version this binary reads (sessions-snapshot
 /// style `v` gate). Files with a HIGHER `v` are skipped whole on read — this
@@ -283,7 +283,7 @@ mod tests {
     use super::*;
     use crate::config::Paths;
     use crate::db::testutil::mem;
-    use crate::model::ProviderCategory;
+    use crate::model::{App, ProviderCategory};
     use std::path::PathBuf;
 
     fn provider(id: &str, name: &str, settings_config: &str, updated_at: &str) -> Provider {

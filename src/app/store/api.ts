@@ -458,7 +458,13 @@ export const vaultApi = createApi({
       { app: App; snippet: CommonConfigSnippet }
     >({
       queryFn: async ({ app, snippet }) =>
-        run(commands.setCommonConfigSnippetCmd(app, snippet.content, snippet.enabled)),
+        run(
+          commands.setCommonConfigSnippetCmd(
+            app,
+            snippet.content,
+            snippet.enabled,
+          ),
+        ),
       invalidatesTags: ["Providers"],
     }),
     /** 导出全部供应商为 JSON 文档（`includeKeys=false` 剔除 API key）到用户

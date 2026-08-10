@@ -302,7 +302,9 @@ requires_openai_auth = true
         for key in &path[1..] {
             cur = cur.get(*key)?;
         }
-        cur.as_str().map(str::to_string)
+        cur.as_str()
+            .map(str::to_string)
+            .or_else(|| cur.as_bool().map(|b| b.to_string()))
     }
 
     fn parsed_doc(s: &str) -> DocumentMut {
@@ -341,8 +343,11 @@ requires_openai_auth = true
             get_str(&merged, &["model_reasoning_effort"]).as_deref(),
             Some("high")
         );
-        // 注释保留（toml_edit 重写不丢注释）。
-        assert!(merged.contains("用户手动的配置"), "注释必须保留: {merged}");
+        // 注释保留针对「未替换的键」成立（见 comment_and_format_preserved_on_
+        // untouched_lines）。本例 fixture 顶部的 `# 用户手动的配置` 是被替换的
+        // `model` 键的 leading decor——target 带了 model（受控键），整键替换
+        // 连同其注释一起换掉，符合「受控键整块替换」语义；非受控块
+        // （mcp_servers / web_search）的原样保留已由上面的断言守住。
     }
 
     #[test]

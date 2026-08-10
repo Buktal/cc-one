@@ -127,17 +127,25 @@ export function ProvidersView() {
     setSheetOpen(true)
   }
   async function onDelete(p: Provider) {
-    await runWithToast(remove, { app: "claude", id: p.id }, {
-      success: { key: "providers.toast.deleted", vars: { name: p.name } },
-      failed: { key: "providers.toast.deleteFailed" },
-    })
+    await runWithToast(
+      remove,
+      { app: "claude", id: p.id },
+      {
+        success: { key: "providers.toast.deleted", vars: { name: p.name } },
+        failed: { key: "providers.toast.deleteFailed" },
+      },
+    )
   }
 
   async function doSwitch(p: Provider) {
-    await runWithToast(switchProvider, { app: "claude", id: p.id }, {
-      success: { key: "providers.toast.switched", vars: { name: p.name } },
-      failed: { key: "providers.toast.switchFailed" },
-    })
+    await runWithToast(
+      switchProvider,
+      { app: "claude", id: p.id },
+      {
+        success: { key: "providers.toast.switched", vars: { name: p.name } },
+        failed: { key: "providers.toast.switchFailed" },
+      },
+    )
   }
 
   /** 切换入口：缺必填项 → 先弹确认；齐全 → 直接切。 */

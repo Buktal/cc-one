@@ -26,7 +26,7 @@ use std::path::{Path, PathBuf};
 
 use crate::error::{AppError, AppResult};
 use crate::provider::live::{
-    parse_live_or_empty, parse_target_or_empty, read_live_settings, atomic_write_file,
+    atomic_write_file, parse_live_or_empty, parse_target_or_empty, read_live_settings,
     LIVE_INTERNAL_KEYS,
 };
 
@@ -506,7 +506,7 @@ mod tests {
         let env_path = tmp.path().join(".env");
         let settings_path = tmp.path().join("settings.json");
         fs::write(&env_path, "GEMINI_MODEL=old-model\nKEEP_ME=1\n").unwrap();
-        fs::write(&settings_path, &existing_settings("oauth")).unwrap();
+        fs::write(&settings_path, existing_settings("oauth")).unwrap();
 
         write_gemini_live_at(
             &env_path,
@@ -557,7 +557,7 @@ mod tests {
         let env_path = tmp.path().join(".env");
         let settings_path = tmp.path().join("settings.json");
         fs::write(&env_path, "GEMINI_API_KEY=sk-old\n").unwrap();
-        fs::write(&settings_path, &existing_settings("gemini-api-key")).unwrap();
+        fs::write(&settings_path, existing_settings("gemini-api-key")).unwrap();
 
         write_gemini_live_at(&env_path, &settings_path, r#"{"env":{}}"#).unwrap();
 

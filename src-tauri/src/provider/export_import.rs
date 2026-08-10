@@ -23,7 +23,7 @@ use specta::Type;
 
 use crate::db::Store;
 use crate::error::{AppError, AppResult};
-use crate::model::{App, Provider};
+use crate::model::Provider;
 
 /// 当前导出文档版本。导入只认这个版本——未来格式演进时，旧版 app 读到新文档
 /// 会明确报错而不是静默错解。版本号**不因加 app 字段而升**：老文档（行无 app）
@@ -188,7 +188,7 @@ pub fn apply_import(
 mod tests {
     use super::*;
     use crate::db::testutil::mem;
-    use crate::model::{ProviderCategory, SECRET_ENV_KEYS};
+    use crate::model::{App, ProviderCategory, SECRET_ENV_KEYS};
 
     /// 构造一份带 env 密钥的 settingsConfig 文本（含非密钥 env 键和顶层字段，
     /// 模拟真实快照）。
@@ -542,8 +542,9 @@ mod tests {
             },
         ];
         let text = export_document(&ps, true, "ts").unwrap();
-        assert!(text.contains(r#""app":"claude""#), "claude 行带 app");
-        assert!(text.contains(r#""app":"codex""#), "codex 行带 app");
+        // to_string_pretty 在冒号后留空格，故匹配 "\"app\": \"claude\""。
+        assert!(text.contains(r#""app": "claude""#), "claude 行带 app");
+        assert!(text.contains(r#""app": "codex""#), "codex 行带 app");
         let got = parse_export_document(&text).unwrap();
         assert_eq!(got.len(), 2);
 

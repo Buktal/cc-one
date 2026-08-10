@@ -19,7 +19,13 @@ describe("sessionAgentKind", () => {
   })
 
   it("classifies a non-empty tag as a subagent with its type", () => {
-    expect(sessionAgentKind("Explore")).toEqual({ kind: "subagent", type: "Explore" })
-    expect(sessionAgentKind("agent")).toEqual({ kind: "subagent", type: "agent" })
+    expect(sessionAgentKind("Explore")).toEqual({
+      kind: "subagent",
+      type: "Explore",
+    })
+    expect(sessionAgentKind("agent")).toEqual({
+      kind: "subagent",
+      type: "agent",
+    })
   })
 })
