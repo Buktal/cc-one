@@ -696,6 +696,8 @@ export type SessionRow = {
 	project_dir: string,
 	/**  Display title: `custom_title` when set, else `title_orig`. */
 	title: string,
+	/**  `""` = main session; non-empty = subagent type tag (e.g. `Explore`). */
+	agent_type: string,
 	favorited: boolean,
 	local_group_id: string,
 	synced_group_id: string,

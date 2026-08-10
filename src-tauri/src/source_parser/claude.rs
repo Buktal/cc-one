@@ -63,6 +63,19 @@ impl ClaudeCodeSourceParser {
             .and_then(|s| s.to_str())
             .unwrap_or("unknown")
             .to_string();
+        // Subagent sidechain sessions (agent-*.jsonl) carry a sidecar
+        // `<stem>.meta.json` with the agent type + task description; both
+        // become session metadata (type tag + title source). A missing sidecar
+        // (deleted / non-Claude file) degrades to the generic "agent" tag.
+        let is_agent = session_id.starts_with("agent-");
+        let agent_meta = if is_agent {
+            file.parent()
+                .map(|dir| dir.join(format!("{session_id}.meta.json")))
+                .and_then(|p| std::fs::read_to_string(p).ok())
+                .and_then(|s| serde_json::from_str::<AgentMeta>(&s).ok())
+        } else {
+            None
+        };
         let mut events_by_mid: std::collections::HashMap<String, RawUsage> =
             std::collections::HashMap::new();
         let mut turn_durations = Vec::new();
@@ -192,22 +205,46 @@ impl ClaudeCodeSourceParser {
 
         let sessions = if saw_any_event {
             let project_dir = pick_project_dir(&cwd_order, &cwd_counts).unwrap_or_default();
-            // Title priority: manual name (custom-title) > Claude summary >
-            // first real user message > project dir basename. Every level is
-            // latest-seen (re-scanned each collect), so a rename or a late
-            // summary refreshes the title.
-            let title_orig = custom_title
-                .as_deref()
-                .filter(|s| !s.is_empty())
-                .or_else(|| (!summary.is_empty()).then_some(summary.as_str()))
-                .or_else(|| first_user_text.as_deref().filter(|s| !s.is_empty()))
-                .or_else(|| {
-                    Path::new(&project_dir)
-                        .file_name()
-                        .and_then(|n| n.to_str())
-                        .filter(|s| !s.is_empty())
-                });
-            let title_orig = truncate(title_orig.unwrap_or(""), TITLE_MAX);
+            // Subagent sessions title from the task description (the only
+            // meaningful name Claude Code gives them — no custom-title/summary
+            // events are written for subagents). Main sessions keep the
+            // custom-title > summary > first-user-message chain.
+            let title_orig = if is_agent {
+                agent_meta
+                    .as_ref()
+                    .and_then(|m| m.description.as_deref())
+                    .map(str::trim)
+                    .filter(|s| !s.is_empty())
+                    .map(|s| truncate(s, TITLE_MAX))
+                    .unwrap_or_default()
+            } else {
+                let title = custom_title
+                    .as_deref()
+                    .filter(|s| !s.is_empty())
+                    .or_else(|| (!summary.is_empty()).then_some(summary.as_str()))
+                    .or_else(|| first_user_text.as_deref().filter(|s| !s.is_empty()))
+                    .or_else(|| {
+                        Path::new(&project_dir)
+                            .file_name()
+                            .and_then(|n| n.to_str())
+                            .filter(|s| !s.is_empty())
+                    });
+                truncate(title.unwrap_or(""), TITLE_MAX)
+            };
+            // Type tag: `""` for main sessions; the `.meta.json` agent type
+            // (e.g. `Explore`) for subagents, `"agent"` when the sidecar is
+            // missing. Drives the list's type column.
+            let agent_type = if is_agent {
+                agent_meta
+                    .as_ref()
+                    .and_then(|m| m.agent_type.as_deref())
+                    .map(str::trim)
+                    .filter(|s| !s.is_empty())
+                    .unwrap_or("agent")
+                    .to_string()
+            } else {
+                String::new()
+            };
             vec![RawSession {
                 id: session_id,
                 source: "claude_code".to_string(),
@@ -215,6 +252,7 @@ impl ClaudeCodeSourceParser {
                 title_orig,
                 started_at,
                 last_active_at,
+                agent_type,
             }]
         } else {
             Vec::new()
@@ -261,18 +299,12 @@ impl SourceParser for ClaudeCodeSourceParser {
             if path.extension().and_then(|e| e.to_str()) != Some("jsonl") {
                 continue;
             }
-            // Skip Claude Code subagent/sidechain sessions (agent-*.jsonl) —
-            // these are Task-tool child sessions, not user conversations.
-            // Including them floods the list with duplicate-titled noise (one
-            // real project dir had 49 agent- files vs 5 real sessions). CC-
-            // Switch's is_agent_session filter does the same.
-            if path
-                .file_stem()
-                .and_then(|s| s.to_str())
-                .is_some_and(|s| s.starts_with("agent-"))
-            {
-                continue;
-            }
+            // `agent-*.jsonl` (subagent/sidechain sessions) ARE included: they
+            // are real token consumers and show up as subagent sessions with
+            // their `.meta.json` task description as title. Without that
+            // meta-driven naming they'd flood the list as duplicate-titled
+            // noise — the reason they were once skipped (a real project dir
+            // had 49 agent- files vs 5 real sessions).
             out.push(path.to_path_buf());
         }
         Ok(out)
@@ -300,6 +332,20 @@ impl SourceParser for ClaudeCodeSourceParser {
             Self::fold_file(file, text, start_line)
         })
     }
+}
+
+/// Subagent sidecar metadata (`<session_id>.meta.json`), written by Claude Code
+/// for every Task subagent: the agent type (e.g. `Explore`) and the task
+/// description the user provided. The description becomes the subagent
+/// session's title; the type becomes its `agent_type` tag (both are the only
+/// naming Claude Code gives subagent sessions — they carry no custom-title or
+/// summary events).
+#[derive(serde::Deserialize)]
+struct AgentMeta {
+    #[serde(rename = "agentType", default)]
+    agent_type: Option<String>,
+    #[serde(default)]
+    description: Option<String>,
 }
 
 // ---- Lenient session-log deserialization ----
@@ -782,6 +828,13 @@ mod tests {
         )
     }
 
+    /// One user event line (plain-text content) for title-chain tests.
+    fn user_line(uuid: &str, text: &str) -> String {
+        format!(
+            r#"{{"type":"user","timestamp":"2026-07-21T15:55:00.000Z","uuid":"{uuid}","message":{{"role":"user","content":"{text}"}}}}"#
+        )
+    }
+
     #[test]
     fn incremental_empty_progress_parses_all_lines() {
         let dir = tempfile::tempdir().unwrap();
@@ -1121,12 +1174,12 @@ mod tests {
         let file = dir.path().join("s.jsonl");
         // An assistant event with usage but no summary and no user message →
         // only cwd is available for the title.
-        let line = r#"{"type":"assistant","timestamp":"2026-08-01T10:00:00Z","uuid":"a1","cwd":"/home/me/O_VaultOne","message":{"id":"m1","model":"glm-5.2","role":"assistant","usage":{"input_tokens":1,"output_tokens":1}}}"#;
+        let line = r#"{"type":"assistant","timestamp":"2026-08-01T10:00:00Z","uuid":"a1","cwd":"/home/me/O_cc one","message":{"id":"m1","model":"glm-5.2","role":"assistant","usage":{"input_tokens":1,"output_tokens":1}}}"#;
         write_lines(&file, &[line]);
         let p = ClaudeCodeSourceParser::with_dir(dir.path().to_path_buf());
         let result = p.parse(&p.discover().unwrap()).unwrap();
-        assert_eq!(result.sessions[0].title_orig, "O_VaultOne");
-        assert_eq!(result.sessions[0].project_dir, "/home/me/O_VaultOne");
+        assert_eq!(result.sessions[0].title_orig, "O_cc one");
+        assert_eq!(result.sessions[0].project_dir, "/home/me/O_cc one");
     }
 
     // ---- project_dir mode picking ----
@@ -1180,14 +1233,14 @@ mod tests {
     fn session_project_dir_uses_mode_not_first_cwd() {
         let dir = tempfile::tempdir().unwrap();
         let file = dir.path().join("s.jsonl");
-        let sub = r#"{"type":"system","timestamp":"2026-08-01T09:00:00Z","uuid":"s1","cwd":"D:\\Project\\O_VaultOne\\src-tauri"}"#;
-        let root1 = r#"{"type":"user","timestamp":"2026-08-01T10:00:00Z","uuid":"u1","cwd":"D:\\Project\\O_VaultOne","message":{"role":"user","content":"hi"}}"#;
-        let root2 = r#"{"type":"assistant","timestamp":"2026-08-01T10:01:00Z","uuid":"a1","cwd":"D:\\Project\\O_VaultOne","message":{"id":"m1","model":"glm-5.2","role":"assistant","usage":{"input_tokens":1,"output_tokens":1}}}"#;
+        let sub = r#"{"type":"system","timestamp":"2026-08-01T09:00:00Z","uuid":"s1","cwd":"D:\\Project\\O_cc one\\src-tauri"}"#;
+        let root1 = r#"{"type":"user","timestamp":"2026-08-01T10:00:00Z","uuid":"u1","cwd":"D:\\Project\\O_cc one","message":{"role":"user","content":"hi"}}"#;
+        let root2 = r#"{"type":"assistant","timestamp":"2026-08-01T10:01:00Z","uuid":"a1","cwd":"D:\\Project\\O_cc one","message":{"id":"m1","model":"glm-5.2","role":"assistant","usage":{"input_tokens":1,"output_tokens":1}}}"#;
         write_lines(&file, &[sub, root1, root2]);
         let p = ClaudeCodeSourceParser::with_dir(dir.path().to_path_buf());
         let result = p.parse(&p.discover().unwrap()).unwrap();
         assert_eq!(
-            result.sessions[0].project_dir, "D:\\Project\\O_VaultOne",
+            result.sessions[0].project_dir, "D:\\Project\\O_cc one",
             "mode cwd (2× root) beats first cwd (1× src-tauri)"
         );
     }
@@ -1222,10 +1275,11 @@ mod tests {
         );
     }
 
-    /// Agent sub-session files are excluded from the seen set too — their
-    /// stale rows get reconciled away on the first pass, mirroring discover.
+    /// Agent sub-session files are part of the seen set too — they are real
+    /// sessions now (subagent sessions with `.meta.json` naming), so their
+    /// stale rows must NOT be reconciled away.
     #[test]
-    fn session_ids_seen_excludes_agent_files() {
+    fn session_ids_seen_includes_agent_files() {
         let dir = tempfile::tempdir().unwrap();
         let proj = dir.path().join("proj");
         fs::create_dir_all(&proj).unwrap();
@@ -1239,20 +1293,20 @@ mod tests {
         );
         let p = ClaudeCodeSourceParser::with_dir(dir.path().to_path_buf());
         let files = p.discover().unwrap();
-        assert_eq!(files.len(), 1, "discover already skips agent files");
+        assert_eq!(files.len(), 2, "discover includes agent files");
         assert_eq!(
             p.session_ids_seen(&files),
-            vec!["249e8e6b".to_string()],
-            "seen set matches discover — no agent ids"
+            vec!["249e8e6b".to_string(), "agent-a10c476b".to_string()],
+            "seen set matches discover — agent ids included"
         );
     }
 
-    /// `agent-*.jsonl` are Claude Code subagent/sidechain sessions, not user
-    /// conversations — discover must skip them or the list floods with
-    /// duplicate-titled noise (a real project dir had 49 of them vs 5 real
-    /// sessions). Mirrors CC-Switch's is_agent_session filter.
+    /// `agent-*.jsonl` are Claude Code subagent/sidechain sessions — discover
+    /// includes them (they consume real tokens and get a `.meta.json`-driven
+    /// title), so the list shows them as subagent sessions instead of dropping
+    /// their usage entirely.
     #[test]
-    fn discover_skips_agent_subagent_sessions() {
+    fn discover_includes_agent_subagent_sessions() {
         let dir = tempfile::tempdir().unwrap();
         let proj = dir.path().join("proj");
         fs::create_dir_all(&proj).unwrap();
@@ -1271,11 +1325,58 @@ mod tests {
         );
         let p = ClaudeCodeSourceParser::with_dir(dir.path().to_path_buf());
         let files = p.discover().unwrap();
-        assert_eq!(
-            files.len(),
-            1,
-            "agent- subagent files skipped, real session kept"
+        assert_eq!(files.len(), 3, "agent- subagent files included");
+    }
+
+    /// A subagent file + its `.meta.json` fold into one session carrying the
+    /// agent type tag and the task description as title; a subagent without
+    /// the sidecar degrades to the generic `"agent"` tag. Main sessions keep
+    /// `agent_type == ""` and their regular title chain.
+    #[test]
+    fn fold_subagent_session_from_meta_json() {
+        let dir = tempfile::tempdir().unwrap();
+        let proj = dir.path().join("proj");
+        fs::create_dir_all(&proj).unwrap();
+        // Subagent with sidecar meta: type + description.
+        write_lines(
+            &proj.join("agent-aaa.jsonl"),
+            &[assistant_line("u1", "msg_A", 10)],
         );
-        assert_eq!(files[0].file_stem().unwrap().to_string_lossy(), "249e8e6b");
+        fs::write(
+            proj.join("agent-aaa.meta.json"),
+            r#"{"agentType": "Explore", "description": "核实 cc-switch 供应商"}"#,
+        )
+        .unwrap();
+        // Subagent without sidecar: generic "agent" tag, no title.
+        write_lines(
+            &proj.join("agent-bbb.jsonl"),
+            &[assistant_line("u2", "msg_B", 20)],
+        );
+        // Main session: empty agent_type, regular title chain (first user msg).
+        write_lines(
+            &proj.join("main.jsonl"),
+            &[user_line("u3", "hello world"), assistant_line("u4", "msg_C", 30)],
+        );
+        let p = ClaudeCodeSourceParser::with_dir(dir.path().to_path_buf());
+        let outcome = p.parse(&p.discover().unwrap()).unwrap();
+
+        let by_id = |id: &str| {
+            outcome
+                .sessions
+                .iter()
+                .find(|s| s.id == id)
+                .unwrap_or_else(|| panic!("session {id} missing"))
+        };
+        let sub = by_id("agent-aaa");
+        assert_eq!(sub.agent_type, "Explore");
+        assert_eq!(sub.title_orig, "核实 cc-switch 供应商");
+        let bare = by_id("agent-bbb");
+        assert_eq!(bare.agent_type, "agent");
+        assert_eq!(bare.title_orig, "");
+        let main = by_id("main");
+        assert_eq!(main.agent_type, "");
+        assert_eq!(main.title_orig, "hello world");
+        // Subagent usage is parsed like any other session's.
+        assert!(outcome.events.iter().any(|u| u.session_id == "agent-aaa"));
     }
 }

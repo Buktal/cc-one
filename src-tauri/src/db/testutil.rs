@@ -78,6 +78,7 @@ pub fn seed_session_source(store: &Store, id: &str, device: &str, source: &str, 
                 title_orig: "Title".into(),
                 started_at: "2026-08-01T00:00:00.000Z".into(),
                 last_active_at: last_active.into(),
+                agent_type: String::new(),
             },
         )
         .unwrap();
@@ -99,6 +100,7 @@ pub fn sys_session(id: &str, last_active_at: &str) -> SessionSystemData {
         title_orig: "orig-title".into(),
         started_at: "2026-08-01T00:00:00.000Z".into(),
         last_active_at: last_active_at.into(),
+        agent_type: String::new(),
     }
 }
 

@@ -100,7 +100,7 @@ impl super::Store {
         let row = conn
             .query_row(
                 "SELECT id, source, project_dir, title_orig, started_at, last_active_at,
-                        favorited, synced_group_id
+                        agent_type, favorited, synced_group_id
                  FROM sessions WHERE id = ?1 AND device_id = ?2",
                 params![session_id, device_id],
                 |r| {
@@ -112,8 +112,9 @@ impl super::Store {
                         title_orig: r.get(3)?,
                         started_at: r.get(4)?,
                         last_active_at: r.get(5)?,
-                        favorited: r.get::<_, i64>(6)? != 0,
-                        synced_group_id: r.get(7)?,
+                        agent_type: r.get(6)?,
+                        favorited: r.get::<_, i64>(7)? != 0,
+                        synced_group_id: r.get(8)?,
                     })
                 },
             )
@@ -181,7 +182,7 @@ impl super::Store {
     ) -> AppResult<()> {
         let mut conn = self.conn.lock().expect("db mutex poisoned");
         let tx = conn.transaction()?;
-        // Project the snapshot meta into the system-data carrier (the 6 fields
+        // Project the snapshot meta into the system-data carrier (the 7 fields
         // a snapshot shares with a freshly collected session); the
         // favorites-track fields ride the builder args + RefreshSystemAndFavorites.
         upsert_session_row(
@@ -194,6 +195,7 @@ impl super::Store {
                 title_orig: meta.title_orig.clone(),
                 started_at: meta.started_at.clone(),
                 last_active_at: meta.last_active_at.clone(),
+                agent_type: meta.agent_type.clone(),
             },
             meta.favorited,
             &meta.synced_group_id,
@@ -362,7 +364,7 @@ impl super::Store {
             "SELECT s.id, s.device_id, s.source, s.project_dir,
                     COALESCE(NULLIF(s.custom_title,''), s.title_orig) AS title,
                     s.favorited, s.local_group_id, s.synced_group_id,
-                    s.started_at, s.last_active_at,
+                    s.started_at, s.last_active_at, s.agent_type,
                     COALESCE(agg.request_count, 0),
                     COALESCE(agg.total_tokens, 0),
                     COALESCE(agg.total_cost_usd, 0.0)
@@ -390,9 +392,10 @@ impl super::Store {
                 synced_group_id: r.get(7)?,
                 started_at: r.get(8)?,
                 last_active_at: r.get(9)?,
-                request_count: r.get::<_, i64>(10)? as u32,
-                total_tokens: r.get::<_, i64>(11)? as u32,
-                total_cost_usd: r.get(12)?,
+                agent_type: r.get(10)?,
+                request_count: r.get::<_, i64>(11)? as u32,
+                total_tokens: r.get::<_, i64>(12)? as u32,
+                total_cost_usd: r.get(13)?,
             })
         })?;
         rows.collect::<rusqlite::Result<Vec<_>>>()
@@ -704,6 +707,7 @@ mod tests {
             title_orig: "orig-title".into(),
             started_at: "2026-08-01T00:00:00.000Z".into(),
             last_active_at: "2026-08-02T09:00:00.000Z".into(),
+            agent_type: "Explore".into(),
             favorited: true,
             synced_group_id: "sg-peer".into(),
         };
@@ -717,6 +721,10 @@ mod tests {
         assert_eq!(
             m.last_active_at, "2026-08-02T09:00:00.000Z",
             "system refreshed from peer"
+        );
+        assert_eq!(
+            m.agent_type, "Explore",
+            "agent_type refreshed from peer snapshot (pull must not zero it)"
         );
         assert!(m.favorited, "favorited overwritten by peer");
         assert_eq!(

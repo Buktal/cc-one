@@ -161,6 +161,7 @@ pub(super) const SESSIONS_COLS_DDL: &str = "\
     title_orig TEXT NOT NULL DEFAULT '', \
     started_at TEXT NOT NULL DEFAULT '', \
     last_active_at TEXT NOT NULL DEFAULT '', \
+    agent_type TEXT NOT NULL DEFAULT '', \
     custom_title TEXT NOT NULL DEFAULT '', \
     favorited INTEGER NOT NULL DEFAULT 0, \
     synced_group_id TEXT NOT NULL DEFAULT '', \

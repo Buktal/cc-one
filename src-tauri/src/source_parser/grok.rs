@@ -332,6 +332,7 @@ fn raw_session_from_summary(file: &Path, text: &str) -> RawSession {
         title_orig: String::new(),
         started_at: String::new(),
         last_active_at: String::new(),
+        agent_type: String::new(),
     };
     if let Ok(v) = serde_json::from_str::<serde_json::Value>(text) {
         // id: info.id wins when non-empty; otherwise the directory name stays.
@@ -497,6 +498,7 @@ fn parse_grok_chat_history(file: &Path, text: &str, start_line: i64) -> FilePars
             title_orig: String::new(),
             started_at: String::new(),
             last_active_at: String::new(),
+            agent_type: String::new(),
         }]
     };
     FileParseOutcome {

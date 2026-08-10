@@ -169,7 +169,7 @@ fn reconcile_session_data(
     }
     if !ghosts.is_empty() {
         eprintln!(
-            "[vaultone] reconciled {device_id}/{source}: removed {} ghost session(s)",
+            "[cc-one] reconciled {device_id}/{source}: removed {} ghost session(s)",
             ghosts.len()
         );
     }
@@ -365,6 +365,7 @@ mod tests {
             title_orig: "orig-title".into(),
             started_at: "2026-08-01T00:00:00.000Z".into(),
             last_active_at: last_active_at.into(),
+            agent_type: String::new(),
         }
     }
 

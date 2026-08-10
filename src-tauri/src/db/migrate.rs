@@ -83,6 +83,32 @@ pub(super) fn migrate_schema(conn: &Connection) -> AppResult<()> {
         }
     }
 
+    // `sessions.agent_type` (added after the initial schema) — the subagent
+    // type tag ("" = main session). Same probe-ALTER pattern; the table may not
+    // exist on stores older than the sessions feature, so gate on sqlite_master.
+    {
+        let has_table: i64 = conn.query_row(
+            "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='sessions'",
+            [],
+            |r| r.get(0),
+        )?;
+        if has_table > 0 {
+            let mut have_session: std::collections::HashSet<String> =
+                std::collections::HashSet::new();
+            let mut stmt = conn.prepare("PRAGMA table_info(sessions)")?;
+            let names = stmt.query_map([], |r| r.get::<_, String>(1))?;
+            for n in names {
+                have_session.insert(n?);
+            }
+            if !have_session.contains("agent_type") {
+                conn.execute(
+                    "ALTER TABLE sessions ADD COLUMN agent_type TEXT NOT NULL DEFAULT ''",
+                    [],
+                )?;
+            }
+        }
+    }
+
     // uuid 单列 PRIMARY KEY → (uuid, device_id) 复合主键。旧库的 usage_records /
     // turn_durations 以 uuid 为单列主键,把"同 uuid、不同设备"的记录折叠成一条
     // (后导入者被丢)——同一份 ~/.claude/projects 被两个 device_id 扫描,或
@@ -359,7 +385,7 @@ mod tests {
 
     /// Regression companion: a legacy DB ALREADY on the composite (uuid,
     /// device_id) PK but predating session_id — the realistic upgrade state for
-    /// anyone on a recent VaultOne before this column shipped. Only the ALTER
+    /// anyone on a recent cc one before this column shipped. Only the ALTER
     /// runs (no PK rebuild); the index then finds the column present.
     #[test]
     fn alter_adds_session_id_on_already_composite_pk() {

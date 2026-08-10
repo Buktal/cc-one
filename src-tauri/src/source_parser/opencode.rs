@@ -317,6 +317,7 @@ fn opencode_raw_session(row: &OpenCodeSessionRow) -> RawSession {
         title_orig: derive_title(&row.title, &row.directory),
         started_at: epoch_millis_to_iso(row.time_created_ms),
         last_active_at: epoch_millis_to_iso(row.time_updated_ms),
+        agent_type: String::new(),
     }
 }
 
@@ -554,7 +555,7 @@ fn query_assistant_messages(
 
 /// Parse a `message.data` JSON value into token fields. Returns `None` for an
 /// all-zero message. OpenCode's self-reported `cost` is deliberately ignored —
-/// VaultOne recomputes cost from its own pricing so the four-bucket split stays
+/// cc one recomputes cost from its own pricing so the four-bucket split stays
 /// consistent across parsers.
 fn parse_opencode_message_data(value: &serde_json::Value) -> Option<OpenCodeMessageData> {
     let tokens = value.get("tokens")?;

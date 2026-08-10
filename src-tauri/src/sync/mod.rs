@@ -106,7 +106,7 @@ mod tests {
             std::fs::read_to_string(dest.join("README"))
                 .unwrap()
                 .trim_end(),
-            "vaultone sync seed"
+            "cc-one sync seed"
         );
         drop(repo);
 
@@ -164,7 +164,7 @@ mod tests {
 
         // Non-empty `local`, no `.git` ⇒ init_with_remote (unborn HEAD).
         let repo = open_or_clone(&url, &local, "").unwrap();
-        commit_all(&repo, "first sync", "DevA", "a@devices.vaultone").unwrap();
+        commit_all(&repo, "first sync", "DevA", "a@devices.cc-one").unwrap();
         push(&repo, "").unwrap();
 
         // The first push creates our pinned default branch `main`, not master.
@@ -218,7 +218,7 @@ mod tests {
         let own = local.join("data/localdev");
         std::fs::create_dir_all(&own).unwrap();
         std::fs::write(own.join("usage-2026-07-22.jsonl"), "{\"uuid\":\"x\"}\n").unwrap();
-        commit_all(&repo, "collect", "Dev", "d@devices.vaultone").unwrap();
+        commit_all(&repo, "collect", "Dev", "d@devices.cc-one").unwrap();
         push(&repo, "").unwrap();
         drop(repo);
 
@@ -237,7 +237,7 @@ mod tests {
 
         // A new collect after rebind commits + pushes cleanly.
         std::fs::write(own.join("usage-2026-07-23.jsonl"), "{\"uuid\":\"y\"}\n").unwrap();
-        commit_all(&repo2, "collect 2", "Dev", "d@devices.vaultone").unwrap();
+        commit_all(&repo2, "collect 2", "Dev", "d@devices.cc-one").unwrap();
         push(&repo2, "").unwrap();
 
         // A fresh device sees both days.
@@ -260,7 +260,7 @@ mod tests {
         let a_data = dir_a.join("data/dev_a");
         std::fs::create_dir_all(&a_data).unwrap();
         std::fs::write(a_data.join("usage-2026-07-16.jsonl"), "{\"uuid\":\"u1\"}\n").unwrap();
-        commit_all(&repo_a, "device A usage", "DevA", "a@devices.vaultone").unwrap();
+        commit_all(&repo_a, "device A usage", "DevA", "a@devices.cc-one").unwrap();
         push(&repo_a, "").unwrap();
 
         // Device B clones and immediately sees A's artifact.
@@ -270,7 +270,7 @@ mod tests {
 
         // A pushes a second day; B pulls and sees it (fast-forward).
         std::fs::write(a_data.join("usage-2026-07-17.jsonl"), "{\"uuid\":\"u2\"}\n").unwrap();
-        commit_all(&repo_a, "device A day 2", "DevA", "a@devices.vaultone").unwrap();
+        commit_all(&repo_a, "device A day 2", "DevA", "a@devices.cc-one").unwrap();
         push(&repo_a, "").unwrap();
         pull(&repo_b, "").unwrap();
         assert!(dir_b.join("data/dev_a/usage-2026-07-17.jsonl").exists());
@@ -323,7 +323,7 @@ mod tests {
         let book = crate::pricing::seed_book();
         let rec = crate::collect::ingest::recordify(&raw_usage("import-1"), "aabbccddeeff", &book);
         crate::collect::artifact::append_jsonl(&paths_a, "aabbccddeeff", &[rec]).unwrap();
-        commit_all(&repo_a, "A usage", "DevA", "a@devices.vaultone").unwrap();
+        commit_all(&repo_a, "A usage", "DevA", "a@devices.cc-one").unwrap();
         push(&repo_a, "").unwrap();
 
         // Device B: pull_and_import into a fresh in-memory store.
@@ -363,7 +363,7 @@ mod tests {
             .join("data/aaaaaaaaaaaa/usage-2026-07-30.jsonl");
         std::fs::create_dir_all(a_file.parent().unwrap()).unwrap();
         std::fs::write(&a_file, "a-1\n").unwrap();
-        commit_all(&repo_a, "A1", "A", "a@devices.vaultone").unwrap();
+        commit_all(&repo_a, "A1", "A", "a@devices.cc-one").unwrap();
         push(&repo_a, "").unwrap();
 
         // Peer B pushes under its OWN data dir (remote = B1 on A1).
@@ -374,13 +374,13 @@ mod tests {
             .join("data/bbbbbbbbbbbb/usage-2026-07-30.jsonl");
         std::fs::create_dir_all(b_file.parent().unwrap()).unwrap();
         std::fs::write(&b_file, "b-1\n").unwrap();
-        commit_all(&repo_b, "B1", "B", "b@devices.vaultone").unwrap();
+        commit_all(&repo_b, "B1", "B", "b@devices.cc-one").unwrap();
         push(&repo_b, "").unwrap();
         drop(repo_b);
 
         // A commits a second local-only change WITHOUT pushing ⇒ diverge.
         std::fs::write(&a_file, "a-1\na-2\n").unwrap();
-        commit_all(&repo_a, "A2", "A", "a@devices.vaultone").unwrap();
+        commit_all(&repo_a, "A2", "A", "a@devices.cc-one").unwrap();
 
         // pull surfaces the diverge (does NOT rebase/push itself); rebase_and_push
         // self-heals — rebases A2 onto B1 and pushes — as an explicit step.
@@ -389,7 +389,7 @@ mod tests {
             PullOutcome::Diverged(u) => u,
             _ => panic!("expected PullOutcome::Diverged after A's local-only commit"),
         };
-        rebase_and_push(&repo_a, &upstream, "", "A", "a@devices.vaultone").unwrap();
+        rebase_and_push(&repo_a, &upstream, "", "A", "a@devices.cc-one").unwrap();
 
         // A fresh clone sees BOTH devices' data — A's local-only a-2 change
         // landed on top of B1 without clobbering B (a soft/reset-only fix would
@@ -439,7 +439,7 @@ mod tests {
         let a_file = paths_a.repo.join(rel_a);
         std::fs::create_dir_all(a_file.parent().unwrap()).unwrap();
         std::fs::write(&a_file, "a-1\n").unwrap();
-        commit_all(&repo_a, "A1", "A", "a@devices.vaultone").unwrap();
+        commit_all(&repo_a, "A1", "A", "a@devices.cc-one").unwrap();
         push(&repo_a, "").unwrap();
         drop(repo_a);
 
@@ -460,12 +460,12 @@ mod tests {
         let a_file_b = paths_b.repo.join(rel_a);
         std::fs::create_dir_all(a_file_b.parent().unwrap()).unwrap();
         std::fs::write(&a_file_b, "a-1\n").unwrap();
-        commit_all(&repo_b, "B dup of A1", "B", "b@devices.vaultone").unwrap();
+        commit_all(&repo_b, "B dup of A1", "B", "b@devices.cc-one").unwrap();
         // B_unique: B's own data, not yet on the remote.
         let b_file = paths_b.repo.join(rel_b);
         std::fs::create_dir_all(b_file.parent().unwrap()).unwrap();
         std::fs::write(&b_file, "b-1\n").unwrap();
-        commit_all(&repo_b, "B unique", "B", "b@devices.vaultone").unwrap();
+        commit_all(&repo_b, "B unique", "B", "b@devices.cc-one").unwrap();
 
         // pull surfaces the diverge (does NOT rebase/push itself); rebase_and_push
         // self-heals — drops B_dup (patch == A1, already upstream), rebases
@@ -475,7 +475,7 @@ mod tests {
             PullOutcome::Diverged(u) => u,
             _ => panic!("expected PullOutcome::Diverged after B's local-only commits"),
         };
-        rebase_and_push(&repo_b, &upstream, "", "B", "b@devices.vaultone").unwrap();
+        rebase_and_push(&repo_b, &upstream, "", "B", "b@devices.cc-one").unwrap();
 
         // A fresh clone sees A's file (from A1) AND B's unique file; B_dup was
         // skipped rather than turning the rebase into a conflict.
@@ -533,7 +533,7 @@ mod tests {
             .join("usage-2026-07-30.jsonl");
         std::fs::create_dir_all(b_file.parent().unwrap()).unwrap();
         std::fs::write(&b_file, "{\"uuid\":\"b-1\"}\n").unwrap();
-        commit_all(&repo_b, "B new data", "B", "b@devices.vaultone").unwrap();
+        commit_all(&repo_b, "B new data", "B", "b@devices.cc-one").unwrap();
         push(&repo_b, "").unwrap();
 
         // A pulls (imports B; force-checkout rewrites the worktree — A's row is
@@ -581,7 +581,7 @@ mod tests {
         let cfg = synced_cfg(&url, "tok");
         // Clone ⇒ clean worktree ⇒ nothing to push.
         let _repo = open_or_clone(&url, &paths.repo, "").unwrap();
-        let pushed = commit_and_push(&paths, &cfg, "vaultone: usage sync").unwrap();
+        let pushed = commit_and_push(&paths, &cfg, "cc-one: usage sync").unwrap();
         assert!(!pushed, "clean worktree ⇒ no commit/push");
     }
 
@@ -605,7 +605,7 @@ mod tests {
             .join("usage-2026-07-13.jsonl");
         std::fs::create_dir_all(f1.parent().unwrap()).unwrap();
         std::fs::write(&f1, "{\"uuid\":\"a-1\"}\n").unwrap();
-        assert!(commit_and_push(&paths, &cfg, "vaultone: usage sync").unwrap());
+        assert!(commit_and_push(&paths, &cfg, "cc-one: usage sync").unwrap());
 
         // Simulate the failed-push residue: a second commit that the remote
         // never got — worktree clean, local branch ahead.
@@ -616,8 +616,8 @@ mod tests {
         commit_all(
             &repo,
             "usage sync (push failed)",
-            "VaultOne",
-            "a@devices.vaultone",
+            "cc one",
+            "a@devices.cc-one",
         )
         .unwrap();
         assert!(
@@ -630,7 +630,7 @@ mod tests {
         );
 
         // Retry: push must happen despite the clean worktree.
-        assert!(commit_and_push(&paths, &cfg, "vaultone: usage sync").unwrap());
+        assert!(commit_and_push(&paths, &cfg, "cc-one: usage sync").unwrap());
         assert!(
             !is_ahead_of_origin(&repo).unwrap(),
             "the stranded commit shipped"
@@ -673,8 +673,8 @@ mod tests {
         commit_all(
             &repo,
             "usage sync (push failed)",
-            "VaultOne",
-            "a@devices.vaultone",
+            "cc one",
+            "a@devices.cc-one",
         )
         .unwrap();
         assert!(!has_changes(&repo).unwrap());
@@ -723,7 +723,7 @@ mod tests {
             cfg.device_id = dev.to_string();
             cfg
         }
-        fn sys(id: &str) -> SessionSystemData {
+        fn sys(id: &str, agent_type: &str) -> SessionSystemData {
             SessionSystemData {
                 id: id.into(),
                 source: "claude_code".into(),
@@ -731,6 +731,7 @@ mod tests {
                 title_orig: format!("Title {id}"),
                 started_at: "2026-08-01T00:00:00.000Z".into(),
                 last_active_at: "2026-08-02T00:00:00.000Z".into(),
+                agent_type: agent_type.into(),
             }
         }
         fn msg(uuid: &str, sid: &str) -> SessionMessage {
@@ -757,8 +758,13 @@ mod tests {
         let cfg_a = dev_cfg(&url, dev_a);
         let _repo_a = open_or_clone(&url, &paths_a.repo, "").unwrap();
         let store_a = crate::db::Store::open(std::path::Path::new(":memory:")).unwrap();
-        crate::collect::ingest::ingest_sessions(&store_a, dev_a, &[sys("sx")], &[msg("u1", "sx")])
-            .unwrap();
+        crate::collect::ingest::ingest_sessions(
+            &store_a,
+            dev_a,
+            &[sys("sx", "Explore")],
+            &[msg("u1", "sx")],
+        )
+        .unwrap();
         store_a.set_session_favorited(dev_a, "sx", true).unwrap();
         assert!(
             push_usage(&store_a, &paths_a, &cfg_a).unwrap(),
@@ -784,6 +790,10 @@ mod tests {
         assert_eq!(b_sx.device_id, dev_a);
         assert!(b_sx.favorited, "favorited rode the snapshot meta line");
         assert_eq!(b_sx.title, "Title sx");
+        assert_eq!(
+            b_sx.agent_type, "Explore",
+            "agent_type rode the snapshot meta line (pull must not zero it)"
+        );
         assert_eq!(
             store_b.query_session_messages(dev_a, "sx").unwrap().len(),
             1,
@@ -838,6 +848,7 @@ mod tests {
                 title_orig: id.into(),
                 started_at: "2026-08-01T00:00:00.000Z".into(),
                 last_active_at: "2026-08-02T00:00:00.000Z".into(),
+                agent_type: String::new(),
             }
         }
         fn msg(uuid: &str, sid: &str) -> SessionMessage {
@@ -911,7 +922,7 @@ mod tests {
         crate::collect::artifact::append_jsonl(&paths_a, "aabbccddeeff", &[rec]).unwrap();
         let store_a = crate::db::Store::open(std::path::Path::new(":memory:")).unwrap();
         let imported_a = pull_and_import(&store_a, &paths_a, &cfg_a).unwrap();
-        let pushed_a = commit_and_push(&paths_a, &cfg_a, "vaultone: usage sync").unwrap();
+        let pushed_a = commit_and_push(&paths_a, &cfg_a, "cc-one: usage sync").unwrap();
         assert!(pushed_a, "A had a local change to push");
         assert_eq!(imported_a, 1, "A imports its own artifact into its store");
 
@@ -920,7 +931,7 @@ mod tests {
         let cfg_b = synced_cfg(&url, "tok");
         let store_b = crate::db::Store::open(std::path::Path::new(":memory:")).unwrap();
         let imported_b = pull_and_import(&store_b, &paths_b, &cfg_b).unwrap();
-        let pushed_b = commit_and_push(&paths_b, &cfg_b, "vaultone: usage sync").unwrap();
+        let pushed_b = commit_and_push(&paths_b, &cfg_b, "cc-one: usage sync").unwrap();
         assert_eq!(imported_b, 1, "B imported A's record");
         assert!(!pushed_b, "B has no local change beyond what it pulled");
         let stats = store_b

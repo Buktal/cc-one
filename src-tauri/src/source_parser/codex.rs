@@ -522,6 +522,7 @@ fn fold_codex_file(file: &Path, text: &str, start_line: i64) -> FileParseOutcome
             title_orig,
             started_at,
             last_active_at,
+            agent_type: String::new(),
         }]
     } else {
         Vec::new()
@@ -631,7 +632,7 @@ fn is_uuid_format(s: &str) -> bool {
 
 // ---- Transcript message extraction ----
 //
-// Codex `response_item` events carry the transcript. Mapping to VaultOne's four
+// Codex `response_item` events carry the transcript. Mapping to cc one's four
 // roles: `message` with role user/assistant → User/Assistant (developer is
 // injected instructions, dropped); `function_call` → Tool with the tool name.
 // `function_call_output` is dropped — the function_call line already records
@@ -1092,7 +1093,7 @@ mod tests {
     /// CC-Switch's `test_subagent_replay_only_establishes_token_baseline`:
     /// the replayed history (lines before `thread_settings_applied`) only sets
     /// the cumulative baseline; the child's own usage is the post-boundary delta.
-    /// CC-Switch stores input=100 (cache-inclusive); VaultOne normalizes to
+    /// CC-Switch stores input=100 (cache-inclusive); cc one normalizes to
     /// fresh at parse ⇒ input = 100 − 50 = 50 (the documented Codex divergence).
     #[test]
     fn codex_subagent_replay_emits_only_child_usage_with_fresh_input() {
@@ -1589,7 +1590,7 @@ mod tests {
         write_jsonl(
             &file,
             &[
-                codex_session_meta_cwd("s1", "/home/me/O_VaultOne"),
+                codex_session_meta_cwd("s1", "/home/me/O_cc one"),
                 codex_response_message(
                     "m_a1",
                     "assistant",
@@ -1600,8 +1601,8 @@ mod tests {
         );
         let p = CodexSourceParser::with_dir(dir.path().to_path_buf());
         let result = p.parse(&p.discover().unwrap()).unwrap();
-        assert_eq!(result.sessions[0].title_orig, "O_VaultOne");
-        assert_eq!(result.sessions[0].project_dir, "/home/me/O_VaultOne");
+        assert_eq!(result.sessions[0].title_orig, "O_cc one");
+        assert_eq!(result.sessions[0].project_dir, "/home/me/O_cc one");
     }
 
     /// Title skips `# AGENTS.md` preamble and `<environment_context>` injection,

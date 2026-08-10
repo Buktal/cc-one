@@ -36,6 +36,7 @@ function row(
     source: "claude_code",
     project_dir: "",
     title: "",
+    agent_type: "",
     favorited: false,
     local_group_id: "",
     synced_group_id: "",

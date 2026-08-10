@@ -22,3 +22,21 @@ const SESSION_SOURCE_LABELS: Record<string, string> = {
 export function sessionSourceLabel(source: string): string {
   return SESSION_SOURCE_LABELS[source] ?? (source || "—")
 }
+
+// ---- Session type (main vs subagent) ----
+//
+// `agent_type` on a session row: `""` = a main (user) session; non-empty = a
+// subagent session holding the agent type from its `.meta.json` (e.g.
+// "Explore", or the generic "agent" fallback). The backend stores the raw tag;
+// this helper classifies it into the two kinds the UI names, so the
+// main/subagent split lives in one place and the row template only localizes
+// the labels.
+
+export type SessionAgentKind =
+  | { kind: "main" }
+  | { kind: "subagent"; type: string }
+
+/** Classify a session row's `agent_type` tag into a displayable kind. */
+export function sessionAgentKind(agentType: string): SessionAgentKind {
+  return agentType ? { kind: "subagent", type: agentType } : { kind: "main" }
+}

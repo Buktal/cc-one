@@ -47,7 +47,7 @@ import { formatCost, formatInt, formatTokens } from "@/lib/format"
 import { cn } from "@/lib/utils"
 import type { SessionRow } from "@/types/generated/bindings"
 import type { SessionTab } from "../derive"
-import { sessionSourceLabel } from "../source-labels"
+import { sessionAgentKind, sessionSourceLabel } from "../source-labels"
 import { useSessionsBrowser } from "../use-sessions-browser"
 import { GroupCreateDialog } from "./group-create-dialog"
 import { GroupSidebar } from "./group-sidebar"
@@ -224,7 +224,7 @@ function SessionsTable({
           ~0 and its header text overflows into the Project column. The floor
           keeps the title readable and lets the outer overflow-auto scroll
           horizontally instead of squeezing columns into overlap. */}
-      <Table className="table-fixed min-w-[48rem]">
+      <Table className="table-fixed min-w-[55rem]">
         <TableHeader>
           <TableRow>
             <TableHead className="w-10" />
@@ -235,6 +235,7 @@ function SessionsTable({
             <TableHead className="max-w-[24rem]">
               {t("sessions.col.title")}
             </TableHead>
+            <TableHead className="w-28">{t("sessions.col.type")}</TableHead>
             {showDeviceColumn ? (
               <TableHead className="w-28">{t("sessions.col.device")}</TableHead>
             ) : null}
@@ -318,6 +319,20 @@ function SessionsTable({
                       {s.title || t("sessions.untitled")}
                     </TooltipContent>
                   </Tooltip>
+                </TableCell>
+                <TableCell>
+                  {(() => {
+                    const kind = sessionAgentKind(s.agent_type)
+                    return kind.kind === "main" ? (
+                      <span className="text-muted-foreground text-xs">
+                        {t("sessions.type.main")}
+                      </span>
+                    ) : (
+                      <Badge variant="outline" className="font-normal">
+                        {t("sessions.type.subagent", { type: kind.type })}
+                      </Badge>
+                    )
+                  })()}
                 </TableCell>
                 {showDeviceColumn ? (
                   <TableCell>

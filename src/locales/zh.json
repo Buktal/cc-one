@@ -1,5 +1,5 @@
 {
-  "closeDialog.description": "VaultOne 可以最小化到托盘继续在后台采集。要最小化还是退出？",
+  "closeDialog.description": "cc one 可以最小化到托盘继续在后台采集。要最小化还是退出？",
   "closeDialog.minimizeToTray": "最小化到托盘",
   "closeDialog.remember": "不再提示（记住本次选择）",
   "closeDialog.title": "关闭窗口",
@@ -228,6 +228,7 @@
   "sessions.col.requests": "请求数",
   "sessions.col.title": "标题",
   "sessions.col.tokens": "Token",
+  "sessions.col.type": "类型",
   "sessions.collect.collect": "采集",
   "sessions.collect.collecting": "采集中…",
   "sessions.detail.copyMessage": "复制消息",
@@ -276,6 +277,8 @@
   "sessions.searchPlaceholder": "搜索会话…",
   "sessions.tab.favorites": "收藏",
   "sessions.tab.local": "本地",
+  "sessions.type.main": "主会话",
+  "sessions.type.subagent": "子代理({type})",
   "sessions.title": "会话管理",
   "sessions.toast.failed": "操作失败",
   "sessions.toast.favorited": "已收藏",

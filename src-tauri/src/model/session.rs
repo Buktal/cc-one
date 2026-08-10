@@ -29,12 +29,18 @@ pub struct SessionSystemData {
     pub source: String,
     /// Working directory the session ran in (Claude `cwd`).
     pub project_dir: String,
-    /// Best-effort original title (Claude `summary` / first user message).
+    /// Best-effort original title (Claude `summary` / first user message;
+    /// subagent sessions use the task `description` from their `.meta.json`).
     pub title_orig: String,
     /// ISO8601 of the first event observed in the source log.
     pub started_at: String,
     /// ISO8601 of the most recent event observed. Drives session-list ordering.
     pub last_active_at: String,
+    /// Agent type tag: `""` = a main (user) session; non-empty = a subagent
+    /// session, holding the agent type from its `.meta.json` (e.g. `Explore`).
+    /// Unknown types fall back to `"agent"`. Drives the type column in the
+    /// session list ("main" vs "subagent(Explore)").
+    pub agent_type: String,
 }
 
 /// Parser-output alias for a parsed session (pre-device). Identical to
@@ -132,6 +138,11 @@ pub struct SessionSnapshotMeta {
     pub title_orig: String,
     pub started_at: String,
     pub last_active_at: String,
+    /// Subagent type tag (`""` = main session), same semantics as the sessions
+    /// row's `agent_type`. `serde(default)` so snapshots written before this
+    /// field existed still parse (they project as main sessions).
+    #[serde(default)]
+    pub agent_type: String,
     pub favorited: bool,
     pub synced_group_id: String,
 }
@@ -161,6 +172,8 @@ pub struct SessionRow {
     pub project_dir: String,
     /// Display title: `custom_title` when set, else `title_orig`.
     pub title: String,
+    /// `""` = main session; non-empty = subagent type tag (e.g. `Explore`).
+    pub agent_type: String,
     pub favorited: bool,
     pub local_group_id: String,
     pub synced_group_id: String,

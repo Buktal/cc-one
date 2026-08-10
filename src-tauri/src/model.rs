@@ -1,4 +1,4 @@
-//! Core domain model for the rebuilt VaultOne.
+//! Core domain model for the rebuilt cc one.
 //!
 //! Two grains (re-derivation 2026-07-21):
 //!   - [`UsageRecord`]: one model API call (per-call). The unit a parser
@@ -214,6 +214,7 @@ mod tests {
             title_orig: "Hello".into(),
             started_at: "2026-08-01T10:00:00Z".into(),
             last_active_at: "2026-08-01T11:00:00Z".into(),
+            agent_type: String::new(),
         };
         let s: SessionSystemData =
             serde_json::from_str(&serde_json::to_string(&sys).unwrap()).unwrap();

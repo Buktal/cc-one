@@ -195,7 +195,7 @@ impl super::Store {
 //
 // `Store::upsert_session` (collect / re-extract) and
 // `Store::import_session_snapshot` (pull) both write one row of the SAME
-// `sessions` table with an identical 11-column INSERT. They differ ONLY in
+// `sessions` table with an identical 12-column INSERT. They differ ONLY in
 // which columns an existing row gets refreshed on conflict — so that
 // difference lives in one typed place (`SessionUpsertPolicy`) instead of two
 // `ON CONFLICT` clauses kept in sync only by comments.
@@ -204,11 +204,11 @@ impl super::Store {
 /// sessions-table UPSERT callers differ ONLY here, so this enum is the single
 /// typed home of that difference.
 pub(super) enum SessionUpsertPolicy {
-    /// Collect / re-extract: refresh the 5 system-data columns only. Never
+    /// Collect / re-extract: refresh the 6 system-data columns only. Never
     /// touches user-data columns — the "re-extract must not overwrite user
     /// edits" invariant.
     RefreshSystemOnly,
-    /// Pull / import: refresh the 5 system columns AND `favorited` /
+    /// Pull / import: refresh the 6 system columns AND `favorited` /
     /// `synced_group_id` — a peer's snapshot is authoritative for its own
     /// row's favorites-track fields. `custom_title` / `local_group_id` stay
     /// device-local either way (never carried by a snapshot).
@@ -217,7 +217,7 @@ pub(super) enum SessionUpsertPolicy {
 
 impl SessionUpsertPolicy {
     /// The `ON CONFLICT(id, device_id) DO UPDATE SET` clause this policy
-    /// drives. Every policy refreshes the 5 shared system-data columns; pull
+    /// drives. Every policy refreshes the 6 shared system-data columns; pull
     /// additionally takes the two favorites-track columns. The device-local
     /// columns (`custom_title`, `local_group_id`) never appear here.
     fn conflict_set(&self) -> String {
@@ -225,7 +225,8 @@ impl SessionUpsertPolicy {
         // declared once (single source of truth).
         const SYSTEM: &str = "source=excluded.source, project_dir=excluded.project_dir, \
                               title_orig=excluded.title_orig, started_at=excluded.started_at, \
-                              last_active_at=excluded.last_active_at";
+                              last_active_at=excluded.last_active_at, \
+                              agent_type=excluded.agent_type";
         match self {
             SessionUpsertPolicy::RefreshSystemOnly => SYSTEM.to_string(),
             SessionUpsertPolicy::RefreshSystemAndFavorites => format!(
@@ -237,7 +238,7 @@ impl SessionUpsertPolicy {
 
 /// UPSERT one `sessions` row keyed by `(sys.id, device_id)` — the shared core
 /// of [`Store::upsert_session`] (collect) and [`Store::import_session_snapshot`]
-/// (pull). The INSERT lists all 11 columns (single source); on conflict,
+/// (pull). The INSERT lists all 12 columns (single source); on conflict,
 /// `policy` picks which columns refresh. `custom_title` and `local_group_id`
 /// seed as empty on INSERT for every caller (neither is carried: `custom_title`
 /// is a local edit, `local_group_id` never enters git). `favorited` /
@@ -256,8 +257,8 @@ pub(super) fn upsert_session_row(
         &format!(
             "INSERT INTO sessions
              (id, device_id, source, project_dir, title_orig, started_at, last_active_at,
-              custom_title, favorited, synced_group_id, local_group_id)
-             VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11)
+              agent_type, custom_title, favorited, synced_group_id, local_group_id)
+             VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12)
              ON CONFLICT(id, device_id) DO UPDATE SET {}",
             policy.conflict_set()
         ),
@@ -269,6 +270,7 @@ pub(super) fn upsert_session_row(
             sys.title_orig,
             sys.started_at,
             sys.last_active_at,
+            sys.agent_type,
             "", // custom_title — device-local; neither caller carries it
             favorited as i64,
             synced_group_id,
@@ -285,7 +287,7 @@ mod tests {
     use crate::model::SessionMessageRole;
 
     /// `upsert_session` (collect) uses `RefreshSystemOnly`: on conflict it
-    /// refreshes the 5 system-data columns and MUST NOT touch the user-data
+    /// refreshes the 6 system-data columns and MUST NOT touch the user-data
     /// columns — a re-extract preserves user edits. The regression test for the
     /// policy's system-only conflict set.
     #[test]
