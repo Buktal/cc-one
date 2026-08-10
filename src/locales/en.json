@@ -278,7 +278,6 @@
   "sessions.tab.favorites": "Favorites",
   "sessions.tab.local": "Local",
   "sessions.type.main": "Main",
-  "sessions.type.subagent": "Subagent({type})",
   "sessions.title": "Sessions",
   "sessions.toast.failed": "Action failed",
   "sessions.toast.favorited": "Favorited",

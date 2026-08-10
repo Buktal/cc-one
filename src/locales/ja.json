@@ -264,7 +264,6 @@
   "sessions.tab.favorites": "お気に入り",
   "sessions.tab.local": "ローカル",
   "sessions.type.main": "メインセッション",
-  "sessions.type.subagent": "サブエージェント({type})",
   "sessions.title": "セッション",
   "sessions.toast.failed": "操作に失敗しました",
   "sessions.toast.favorited": "お気に入りに追加しました",

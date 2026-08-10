@@ -219,12 +219,13 @@ function SessionsTable({
       {/* table-fixed: column widths come from the header row, so the narrow
           numeric columns (w-20/w-24) are never stretched by extra horizontal
           space — the title column (no explicit width) absorbs the remainder.
-          min-w: the fixed columns sum to 584px (incl. the header row's w-10
-          star column); below ~768px the auto title column would collapse to
-          ~0 and its header text overflows into the Project column. The floor
-          keeps the title readable and lets the outer overflow-auto scroll
-          horizontally instead of squeezing columns into overlap. */}
-      <Table className="table-fixed min-w-[55rem]">
+          min-w: the fixed columns sum to 856px (incl. the header row's w-10
+          star column, the w-40 type column and the w-28 device column);
+          below that the auto title column would collapse to ~0 and its
+          header text overflows into the type column. The floor keeps the
+          title readable and lets the outer overflow-auto scroll horizontally
+          instead of squeezing columns into overlap. */}
+      <Table className="table-fixed min-w-[58rem]">
         <TableHeader>
           <TableRow>
             <TableHead className="w-10" />
@@ -235,7 +236,7 @@ function SessionsTable({
             <TableHead className="max-w-[24rem]">
               {t("sessions.col.title")}
             </TableHead>
-            <TableHead className="w-28">{t("sessions.col.type")}</TableHead>
+            <TableHead className="w-40">{t("sessions.col.type")}</TableHead>
             {showDeviceColumn ? (
               <TableHead className="w-28">{t("sessions.col.device")}</TableHead>
             ) : null}
@@ -323,14 +324,26 @@ function SessionsTable({
                 <TableCell>
                   {(() => {
                     const kind = sessionAgentKind(s.agent_type)
-                    return kind.kind === "main" ? (
-                      <span className="text-muted-foreground text-xs">
-                        {t("sessions.type.main")}
-                      </span>
-                    ) : (
-                      <Badge variant="outline" className="font-normal">
-                        {t("sessions.type.subagent", { type: kind.type })}
-                      </Badge>
+                    // Every non-main row is a subagent, so the badge shows the
+                    // bare agent type (e.g. Explore) — no "subagent" prefix.
+                    // Long types truncate within the w-40 column instead of
+                    // overflowing into the Project column.
+                    const label =
+                      kind.kind === "main" ? t("sessions.type.main") : kind.type
+                    return (
+                      <Tooltip>
+                        <TooltipTrigger
+                          render={
+                            <Badge
+                              variant="outline"
+                              className="max-w-full overflow-hidden font-normal"
+                            >
+                              <span className="min-w-0 truncate">{label}</span>
+                            </Badge>
+                          }
+                        />
+                        <TooltipContent>{label}</TooltipContent>
+                      </Tooltip>
                     )
                   })()}
                 </TableCell>

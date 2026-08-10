@@ -278,7 +278,6 @@
   "sessions.tab.favorites": "收藏",
   "sessions.tab.local": "本地",
   "sessions.type.main": "主会话",
-  "sessions.type.subagent": "子代理({type})",
   "sessions.title": "会话管理",
   "sessions.toast.failed": "操作失败",
   "sessions.toast.favorited": "已收藏",
