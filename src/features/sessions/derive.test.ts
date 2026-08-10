@@ -19,6 +19,7 @@ import {
   selectSessions,
   sessionTabFilter,
   sortSessions,
+  tryFormatJson,
   UNGROUPED,
   withFavOverride,
   withoutFavOverride,
@@ -485,5 +486,30 @@ describe("firstLine", () => {
 
   it("empty text yields an empty string", () => {
     expect(firstLine("")).toBe("")
+  })
+})
+
+describe("tryFormatJson", () => {
+  it("pretty-prints an object with 2-space indent", () => {
+    expect(tryFormatJson('{"a":1,"b":[2,3]}')).toBe(
+      '{\n  "a": 1,\n  "b": [\n    2,\n    3\n  ]\n}',
+    )
+  })
+
+  it("pretty-prints an array", () => {
+    expect(tryFormatJson('[1,"x"]')).toBe('[\n  1,\n  "x"\n]')
+  })
+
+  it("rejects plain text", () => {
+    expect(tryFormatJson("not json at all")).toBeNull()
+  })
+
+  it("rejects malformed json", () => {
+    expect(tryFormatJson('{"a":')).toBeNull()
+  })
+
+  it("rejects scalar json (a bare string or number formats to nothing)", () => {
+    expect(tryFormatJson('"just a string"')).toBeNull()
+    expect(tryFormatJson("42")).toBeNull()
   })
 })

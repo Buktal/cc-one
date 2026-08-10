@@ -77,6 +77,7 @@ import type {
 } from "@/types/generated/bindings"
 import { firstLine } from "../derive"
 import { sessionSourceLabel } from "../source-labels"
+import { MarkdownContent, ToolContent } from "./markdown-content"
 
 dayjs.extend(relativeTime)
 
@@ -569,7 +570,7 @@ function MessageRow({
           copyText={m.content}
           flash={flash}
         >
-          <Content text={m.content} className={cn(!open && "line-clamp-1")} />
+          <Content text={m.content} open={open} />
         </BaseRow>
       )
     case "user":
@@ -583,7 +584,7 @@ function MessageRow({
           copyText={m.content}
           flash={flash}
         >
-          <Content text={m.content} className={cn(!open && "line-clamp-1")} />
+          <Content text={m.content} open={open} />
         </BaseRow>
       )
     case "tool":
@@ -599,7 +600,7 @@ function MessageRow({
           copyText={m.content}
           flash={flash}
         >
-          <Content text={m.content} className={cn(!open && "line-clamp-1")} />
+          <Content text={m.content} open={open} />
         </BaseRow>
       )
     default:
@@ -647,12 +648,7 @@ function ToolRow({
         />
         <CopyButton text={m.content} />
       </div>
-      {open ? (
-        <Content
-          text={m.content}
-          className="bg-background/60 text-muted-foreground mt-1.5 rounded p-2 font-mono"
-        />
-      ) : null}
+      {open ? <ToolContent text={m.content} /> : null}
     </div>
   )
 }
@@ -799,10 +795,16 @@ function BaseRow({
   )
 }
 
-function Content({ text, className }: { text: string; className?: string }) {
-  return (
-    <div className={cn("whitespace-pre-wrap break-words", className)}>
-      {text}
-    </div>
-  )
+/** Message body: collapsed → one plain-text line (no markdown parse needed);
+ *  expanded → the markdown renderer (raw HTML/XML escapes to text, so pasted
+ *  system-reminder blocks show verbatim, never as markup). */
+function Content({ text, open }: { text: string; open: boolean }) {
+  if (!open) {
+    return (
+      <div className="line-clamp-1 text-left break-words whitespace-pre-wrap">
+        {text}
+      </div>
+    )
+  }
+  return <MarkdownContent text={text} />
 }

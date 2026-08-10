@@ -300,6 +300,24 @@ export function applyGroupOrder(
 
 // ------------------------------------------------------------- transcript --
 
+/**
+ * Pretty-print `text` when it is a JSON document — tool rows carry the tool_use
+ * input as a JSON string, and 2-space indentation turns that one-liner into
+ * something skimmable. Only objects / arrays qualify (a bare `"abc"` or `123`
+ * is valid JSON but formatting it adds nothing). Returns null when `text` is
+ * not JSON — callers then render it as plain text.
+ */
+export function tryFormatJson(text: string): string | null {
+  let value: unknown
+  try {
+    value = JSON.parse(text)
+  } catch {
+    return null
+  }
+  if (typeof value !== "object" || value === null) return null
+  return JSON.stringify(value, null, 2)
+}
+
 /** First line of a message — the one-line label for a tool row header and the
  *  turn-nav panel row. Empty text yields "". */
 export function firstLine(text: string): string {

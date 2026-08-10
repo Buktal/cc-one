@@ -151,6 +151,23 @@
      thumb over a transparent track, darkens on hover. */
   --scrollbar-thumb: rgba(0, 0, 0, 0.18);
   --scrollbar-thumb-hover: rgba(0, 0, 0, 0.3);
+  /* Code pane (.md-codeblock) — MODE-scoped surface (mode-scoped iron rule;
+     a skin never sets these): GitHub Light pane + tokens in light mode, GitHub
+     Dark in dark mode. */
+  --md-code-bg: #f6f8fa;
+  --md-code-fg: #24292f;
+  --md-code-border: rgba(27, 31, 36, 0.12);
+  --md-code-label: #57606a;
+  --md-code-scrollbar: rgba(27, 31, 36, 0.25);
+  --md-token-comment: #6e7781;
+  --md-token-keyword: #cf222e;
+  --md-token-string: #0a3069;
+  --md-token-number: #0550ae;
+  --md-token-title: #8250df;
+  --md-token-attr: #0550ae;
+  --md-token-built-in: #953800;
+  --md-token-tag: #116329;
+  --md-token-operator: #24292f;
 }
 
 .dark {
@@ -203,6 +220,21 @@
   --row-hover-shadow: 0 4px 12px -4px rgba(0, 0, 0, 0.5);
   --scrollbar-thumb: rgba(255, 255, 255, 0.16);
   --scrollbar-thumb-hover: rgba(255, 255, 255, 0.28);
+  /* Code pane — dark mode: GitHub Dark pane + tokens. */
+  --md-code-bg: #101014;
+  --md-code-fg: #e6e6eb;
+  --md-code-border: rgba(255, 255, 255, 0.1);
+  --md-code-label: #9ca3af;
+  --md-code-scrollbar: rgba(255, 255, 255, 0.22);
+  --md-token-comment: #8b949e;
+  --md-token-keyword: #ff7b72;
+  --md-token-string: #a5d6ff;
+  --md-token-number: #79c0ff;
+  --md-token-title: #d2a8ff;
+  --md-token-attr: #79c0ff;
+  --md-token-built-in: #ffa657;
+  --md-token-tag: #7ee787;
+  --md-token-operator: #c9d1d9;
 }
 
 /* ─────────────────────────────────────────────────────────────────────────
@@ -419,4 +451,188 @@
   .msg-flash {
     animation: none;
   }
+}
+
+/*
+ * Transcript markdown body (.md-body) — typography for rendered message
+ * bubbles. All colors derive from theme variables, so light/dark (and every
+ * skin) stay consistent; headings scale down inside a bubble (a message is
+ * not a document page).
+ */
+.md-body {
+  font-size: 13px;
+  line-height: 1.65;
+}
+.md-body > :first-child {
+  margin-top: 0;
+}
+.md-body > :last-child {
+  margin-bottom: 0;
+}
+.md-body p {
+  margin: 0.5em 0;
+}
+.md-body h1,
+.md-body h2 {
+  margin: 0.9em 0 0.4em;
+  font-size: 15px;
+  font-weight: 600;
+}
+.md-body h3 {
+  margin: 0.8em 0 0.35em;
+  font-size: 14px;
+  font-weight: 600;
+}
+.md-body h4,
+.md-body h5,
+.md-body h6 {
+  margin: 0.7em 0 0.3em;
+  font-size: 13px;
+  font-weight: 600;
+}
+.md-body ul,
+.md-body ol {
+  margin: 0.5em 0;
+  padding-left: 1.4em;
+}
+.md-body li {
+  margin: 0.2em 0;
+}
+.md-body li > p {
+  margin: 0.2em 0;
+}
+.md-body blockquote {
+  margin: 0.6em 0;
+  padding-left: 0.8em;
+  border-left: 3px solid var(--border);
+  color: var(--muted-foreground);
+}
+.md-body blockquote > :first-child {
+  margin-top: 0;
+}
+.md-body blockquote > :last-child {
+  margin-bottom: 0;
+}
+.md-body hr {
+  margin: 0.9em 0;
+  border: none;
+  border-top: 1px solid var(--border);
+}
+/* display:block + overflow-x lets wide tables scroll inside the bubble
+   instead of stretching it (GitHub-style). nowrap keeps cells aligned. */
+.md-body table {
+  display: block;
+  overflow-x: auto;
+  max-width: 100%;
+  margin: 0.6em 0;
+  border-collapse: collapse;
+  font-size: 12px;
+}
+.md-body th,
+.md-body td {
+  padding: 4px 10px;
+  border: 1px solid var(--border);
+  text-align: left;
+  white-space: nowrap;
+}
+.md-body th {
+  font-weight: 600;
+  background: var(--muted);
+}
+.md-body input[type="checkbox"] {
+  margin-right: 0.35em;
+  accent-color: var(--accent-brand);
+}
+
+/*
+ * Code pane (.md-codeblock) — a MODE-scoped surface: the pane + token palette
+ * swap with light/dark (GitHub Light ↔ GitHub Dark, via the --md-* vars set in
+ * :root/.dark). The pane sits on the bubble with a hairline border; its own
+ * scrollbar thumb matches the mode so the pre's scroll stays visible.
+ */
+.md-codeblock {
+  margin: 0.6em 0;
+  overflow: hidden;
+  border-radius: 8px;
+  background: var(--md-code-bg);
+}
+.md-codeblock-header {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 6px 12px;
+  border-bottom: 1px solid var(--md-code-border);
+}
+.md-codeblock-lang {
+  font-size: 10px;
+  font-weight: 500;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--md-code-label);
+}
+.md-codeblock pre {
+  margin: 0;
+  scrollbar-width: thin;
+  scrollbar-color: var(--md-code-scrollbar) transparent;
+}
+.md-codeblock pre::-webkit-scrollbar-thumb {
+  background: var(--md-code-scrollbar);
+  background-clip: content-box;
+}
+.md-codeblock code {
+  color: var(--md-code-fg);
+}
+.md-codeblock .hljs-comment,
+.md-codeblock .hljs-quote {
+  color: var(--md-token-comment);
+  font-style: italic;
+}
+.md-codeblock .hljs-keyword,
+.md-codeblock .hljs-selector-tag,
+.md-codeblock .hljs-literal,
+.md-codeblock .hljs-doctag {
+  color: var(--md-token-keyword);
+}
+.md-codeblock .hljs-string,
+.md-codeblock .hljs-regexp,
+.md-codeblock .hljs-addition {
+  color: var(--md-token-string);
+}
+.md-codeblock .hljs-number,
+.md-codeblock .hljs-symbol,
+.md-codeblock .hljs-bullet {
+  color: var(--md-token-number);
+}
+.md-codeblock .hljs-title,
+.md-codeblock .hljs-section,
+.md-codeblock .hljs-name,
+.md-codeblock .hljs-selector-id {
+  color: var(--md-token-title);
+}
+.md-codeblock .hljs-attr,
+.md-codeblock .hljs-property,
+.md-codeblock .hljs-variable,
+.md-codeblock .hljs-template-variable,
+.md-codeblock .hljs-params,
+.md-codeblock .hljs-constant {
+  color: var(--md-token-attr);
+}
+.md-codeblock .hljs-built_in,
+.md-codeblock .hljs-meta,
+.md-codeblock .hljs-type {
+  color: var(--md-token-built-in);
+}
+.md-codeblock .hljs-tag,
+.md-codeblock .hljs-selector-class {
+  color: var(--md-token-tag);
+}
+.md-codeblock .hljs-operator,
+.md-codeblock .hljs-punctuation {
+  color: var(--md-token-operator);
+}
+.md-codeblock .hljs-emphasis {
+  font-style: italic;
+}
+.md-codeblock .hljs-strong {
+  font-weight: 600;
 }
