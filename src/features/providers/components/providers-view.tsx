@@ -69,7 +69,7 @@ import {
 
 // 顶部分段控件的三档应用——顺序即显示顺序。各应用拥有独立的供应商池、
 // 激活状态、预设清单与通用配置片段。
-const APPS: App[] = ["claude", "codex", "gemini"]
+const APPS: App[] = ["claude", "codex", "gemini", "grok"]
 
 export function ProvidersView() {
   const { t } = useTranslation()

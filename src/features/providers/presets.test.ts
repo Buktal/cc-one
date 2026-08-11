@@ -12,6 +12,7 @@ import {
   providerFromPreset,
 } from "@/features/providers/derive"
 import { GEMINI_PROVIDER_PRESETS } from "@/features/providers/gemini-presets"
+import { GROK_PROVIDER_PRESETS } from "@/features/providers/grok-presets"
 import { PROVIDER_PRESETS, presetsForApp } from "@/features/providers/presets"
 
 import type { App, ProviderCategory } from "@/types/generated/bindings"
@@ -178,6 +179,16 @@ const EXPECTED_GEMINI_NAMES = [
   "E-FlowCode",
 ]
 
+/** Grok 权威清单：官方 2 + 热门聚合 4 = 6（无国内大厂 grok 兼容端点）。 */
+const EXPECTED_GROK_NAMES = [
+  "Grok Official",
+  "xAI (Grok)",
+  "OpenRouter",
+  "TheRouter",
+  "千象 Qiniu",
+  "E-FlowCode",
+]
+
 describe("CODEX_PROVIDER_PRESETS", () => {
   it("总数 17 且名称与顺序与需求清单完全一致", () => {
     expect(CODEX_PROVIDER_PRESETS).toHaveLength(17)
@@ -325,6 +336,84 @@ describe("GEMINI_PROVIDER_PRESETS", () => {
   })
 })
 
+describe("GROK_PROVIDER_PRESETS", () => {
+  it("总数 6 且名称与顺序与需求清单完全一致", () => {
+    expect(GROK_PROVIDER_PRESETS).toHaveLength(6)
+    expect(GROK_PROVIDER_PRESETS.map((p) => p.name)).toEqual(
+      EXPECTED_GROK_NAMES,
+    )
+  })
+
+  it("名称唯一", () => {
+    const names = GROK_PROVIDER_PRESETS.map((p) => p.name)
+    expect(new Set(names).size).toBe(names.length)
+  })
+
+  it("category 分组合计为 官方 2 / 聚合 4", () => {
+    const counts: Record<ProviderCategory, number> = {
+      official: 0,
+      cloud_provider: 0,
+      cn_official: 0,
+      aggregator: 0,
+      custom: 0,
+    }
+    for (const preset of GROK_PROVIDER_PRESETS) {
+      counts[preset.category] += 1
+    }
+    expect(counts).toEqual({
+      official: 2,
+      cloud_provider: 0,
+      cn_official: 0,
+      aggregator: 4,
+      custom: 0,
+    })
+  })
+
+  it("每项 settingsConfig 是合法 JSON 对象", () => {
+    for (const preset of GROK_PROVIDER_PRESETS) {
+      const parsed: unknown = JSON.parse(preset.settingsConfig)
+      expect(
+        parsed !== null && typeof parsed === "object" && !Array.isArray(parsed),
+      ).toBe(true)
+    }
+  })
+
+  it('Grok Official 是登录态版（settingsConfig 为 "{}"）', () => {
+    const official = GROK_PROVIDER_PRESETS.find(
+      (p) => p.name === "Grok Official",
+    )
+    expect(official).toBeDefined()
+    expect(official!.settingsConfig).toBe("{}")
+  })
+
+  it("非官方预设用 [model.cc-one] 命名 profile 格式，非 codex 风格", () => {
+    // Grok 的 config.toml 是命名 profile 式（[models].default + [model.<name>]），
+    // 不是 codex 的 model_provider / model_providers。CC-Switch 的 grok 预设误用
+    // 了 codex 风格——本测试锁死正确格式，防止回退到那个 bug。
+    for (const preset of GROK_PROVIDER_PRESETS) {
+      if (preset.name === "Grok Official") continue
+      const parsed = JSON.parse(preset.settingsConfig) as { config?: string }
+      expect(parsed.config, `${preset.name} 应带 config TOML`).toBeTruthy()
+      expect(
+        parsed.config!.includes("[model.cc-one]"),
+        `${preset.name} 必须用 [model.cc-one] profile`,
+      ).toBe(true)
+      expect(
+        parsed.config!.includes("model_providers"),
+        `${preset.name} 不得用 codex 风格 model_providers`,
+      ).toBe(false)
+    }
+  })
+
+  it("每个预设都带必填元数据（websiteUrl / icon / iconColor）", () => {
+    for (const preset of GROK_PROVIDER_PRESETS) {
+      expect(preset.websiteUrl).toBeTruthy()
+      expect(preset.icon).toBeTruthy()
+      expect(preset.iconColor).toBeTruthy()
+    }
+  })
+})
+
 describe("presetsForApp", () => {
   it("claude 返回 18 个 Claude 预设数组", () => {
     expect(presetsForApp("claude")).toBe(PROVIDER_PRESETS)
@@ -341,17 +430,26 @@ describe("presetsForApp", () => {
     expect(presetsForApp("gemini")).toHaveLength(6)
   })
 
-  it("三个 app 的返回值互不相同（应用维度分派，不串池）", () => {
+  it("grok 返回 6 个 Grok 预设数组", () => {
+    expect(presetsForApp("grok")).toBe(GROK_PROVIDER_PRESETS)
+    expect(presetsForApp("grok")).toHaveLength(6)
+  })
+
+  it("四个 app 的返回值互不相同（应用维度分派，不串池）", () => {
     const claude = presetsForApp("claude")
     const codex = presetsForApp("codex")
     const gemini = presetsForApp("gemini")
+    const grok = presetsForApp("grok")
     expect(claude).not.toBe(codex)
     expect(claude).not.toBe(gemini)
+    expect(claude).not.toBe(grok)
     expect(codex).not.toBe(gemini)
+    expect(codex).not.toBe(grok)
+    expect(gemini).not.toBe(grok)
   })
 
   it("覆盖所有 App 类型（类型已约束，穷尽即可）", () => {
-    const apps: App[] = ["claude", "codex", "gemini"]
+    const apps: App[] = ["claude", "codex", "gemini", "grok"]
     for (const app of apps) {
       expect(presetsForApp(app).length).toBeGreaterThan(0)
     }

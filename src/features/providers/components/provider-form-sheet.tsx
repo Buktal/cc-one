@@ -65,6 +65,7 @@ import {
   geminiApiKey,
   geminiBaseUrl,
   geminiModel,
+  grokConfigToml,
   MODEL_ROLES,
   metaTemplateValues,
   providerApiKey,
@@ -81,6 +82,7 @@ import {
   withCodexApiKey,
   withCodexConfigToml,
   withGeminiEnv,
+  withGrokConfigToml,
   withMetaTemplateValues,
   withRoleModelInText,
   withRoleNameInText,
@@ -363,6 +365,12 @@ export function ProviderFormSheet({
   function onCodexConfigChange(value: string) {
     if (parseJsonObject(configText).ok) {
       setConfigText((prev) => withCodexConfigToml(prev, value))
+    }
+  }
+
+  function onGrokConfigChange(value: string) {
+    if (parseJsonObject(configText).ok) {
+      setConfigText((prev) => withGrokConfigToml(prev, value))
     }
   }
 
@@ -671,6 +679,20 @@ export function ProviderFormSheet({
                 />
               </Field>
             </>
+          ) : null}
+          {effectiveApp === "grok" ? (
+            <Field label={t("providers.form.grokConfig")}>
+              <Textarea
+                value={grokConfigToml(configText)}
+                onChange={(e) => onGrokConfigChange(e.target.value)}
+                rows={12}
+                spellCheck={false}
+                className="font-mono text-xs"
+              />
+              <p className="text-muted-foreground text-xs">
+                {t("providers.form.grokConfigHint")}
+              </p>
+            </Field>
           ) : null}
           {effectiveApp === "claude" ? (
             <div className="rounded-md border p-3">

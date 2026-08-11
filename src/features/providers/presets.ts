@@ -10,6 +10,7 @@
 
 import { CODEX_PROVIDER_PRESETS } from "@/features/providers/codex-presets"
 import { GEMINI_PROVIDER_PRESETS } from "@/features/providers/gemini-presets"
+import { GROK_PROVIDER_PRESETS } from "@/features/providers/grok-presets"
 import type { App, ProviderCategory } from "@/types/generated/bindings"
 
 /** 一个内置预设：字段对齐 Provider，但没有 id / sortIndex / updatedAt——
@@ -325,7 +326,8 @@ export const PROVIDER_PRESETS: ProviderPreset[] = [
 ]
 
 /** 按应用返回对应的内置预设清单：claude → 18 个、codex → 17 个、gemini →
- *  6 个。单一事实来源的入口——调用方一律走这里，不要直接读三个常量。 */
+ *  6 个、grok → 6 个。单一事实来源的入口——调用方一律走这里，不要直接读
+ *  四个常量。 */
 export function presetsForApp(app: App): ProviderPreset[] {
   switch (app) {
     case "claude":
@@ -334,5 +336,7 @@ export function presetsForApp(app: App): ProviderPreset[] {
       return CODEX_PROVIDER_PRESETS
     case "gemini":
       return GEMINI_PROVIDER_PRESETS
+    case "grok":
+      return GROK_PROVIDER_PRESETS
   }
 }
