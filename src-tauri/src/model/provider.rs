@@ -20,8 +20,13 @@ use crate::error::{AppError, AppResult};
 
 /// The app (应用) a provider pool belongs to. Each app owns an independent
 /// provider pool, per-app active state and per-app common-config snippet.
-/// Serialized snake_case ("claude" / "codex" / "gemini" / "grok") — the same
-/// spelling crosses as JSON, the sync file and the DB.
+/// Serialized snake_case ("claude" / "codex" / "gemini" / "grok" / "opencode")
+/// — the same spelling crosses as JSON, the sync file and the DB.
+///
+/// 两种 mode（[`App::is_additive_mode`]）：claude/codex/gemini/grok 是**单激活**
+/// （一个 app 一个活跃 provider，切换=替换，写盘整文件受控合并）；opencode 是
+/// **附加**（多供应商共存于 opencode.json 的 `provider.<id>` map，无唯一活跃，
+/// 增删单条）。
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, Type)]
 #[serde(rename_all = "snake_case")]
 pub enum App {
@@ -34,6 +39,11 @@ pub enum App {
     Gemini,
     /// Grok CLI.
     Grok,
+    /// OpenCode — 附加模式（additive）：多供应商共存于 opencode.json 的
+    /// `provider.<id>` map，无唯一活跃。写盘走单键 read-modify-write
+    /// （`live_opencode`），不进 `write_live`。
+    #[serde(rename = "opencode")]
+    OpenCode,
 }
 
 impl App {
@@ -45,6 +55,7 @@ impl App {
             App::Codex => "codex",
             App::Gemini => "gemini",
             App::Grok => "grok",
+            App::OpenCode => "opencode",
         }
     }
 
@@ -58,8 +69,16 @@ impl App {
             "codex" => App::Codex,
             "gemini" => App::Gemini,
             "grok" => App::Grok,
+            "opencode" => App::OpenCode,
             _ => App::Claude,
         }
+    }
+
+    /// 附加模式（additive）应用返回 true：多供应商共存于配置文件，无唯一
+    /// 活跃，写盘走单键 read-modify-write。单激活应用返回 false。所有「单激活
+    /// vs 附加」分派走这里（单一事实来源），禁止散落 `if app == App::OpenCode`。
+    pub(crate) fn is_additive_mode(self) -> bool {
+        matches!(self, App::OpenCode)
     }
 }
 
@@ -166,6 +185,12 @@ pub const SECRET_ENV_KEYS: &[&str] = &[
     "GEMINI_API_KEY",
 ];
 
+/// HTTP 认证头白名单（小写形式，匹配时大小写不敏感）：OpenCode 官方示例把
+/// bearer token 放 `options.headers.Authorization`，是独立于 `options.apiKey`
+/// 的认证路径，必须随同步投影一起剥掉。元数据头（`Helicone-*` 等可观测性
+/// 标签）不是凭据，不在此列，保留。
+pub const SECRET_HEADER_KEYS: &[&str] = &["authorization", "x-api-key", "proxy-authorization"];
+
 impl Provider {
     /// The sync-safe projection: [`SECRET_ENV_KEYS`] removed from three places —
     /// the `settingsConfig` `env` object, the `settingsConfig` `auth` object
@@ -212,6 +237,30 @@ impl Provider {
             })?;
             for key in SECRET_ENV_KEYS {
                 if auth.remove(*key).is_some() {
+                    stripped = true;
+                }
+            }
+        }
+        // OpenCode 供应商的密钥走 `options.apiKey`（与 claude 的 `env` / codex 的
+        // `auth` 是不同的 schema 路径）；OpenCode 官方示例还把 bearer token 放在
+        // `options.headers.Authorization`，是独立于 apiKey 的认证路径。剥
+        // `options.apiKey` 整个移除；`options.headers` 走认证头白名单（大小写不
+        // 敏感——HTTP header 本就大小写不敏感），元数据头（`Helicone-*` 等可观测
+        // 性标签）不是凭据，保留。`options` 非对象 → 跳过（不像 `env`/`auth` 报
+        // 错：options 不是所有 app 的必备字段，非对象 options 无密钥泄露风险，不
+        // 应阻止 claude/codex 等不带 options 的 provider 发布）。
+        if let Some(options) = obj.get_mut("options").and_then(|o| o.as_object_mut()) {
+            if options.remove("apiKey").is_some() {
+                stripped = true;
+            }
+            if let Some(headers) = options.get_mut("headers").and_then(|h| h.as_object_mut()) {
+                let to_strip: Vec<String> = headers
+                    .keys()
+                    .filter(|k| SECRET_HEADER_KEYS.contains(&k.to_ascii_lowercase().as_str()))
+                    .cloned()
+                    .collect();
+                for k in to_strip {
+                    headers.remove(&k);
                     stripped = true;
                 }
             }
@@ -347,6 +396,18 @@ mod tests {
     fn app_unknown_db_str_falls_back_to_claude() {
         assert_eq!(App::from_db_str("bogus"), App::Claude);
         assert_eq!(App::from_db_str(""), App::Claude);
+    }
+
+    /// 防回归：只有 OpenCode 是附加模式，其余四个单激活应用都不是。所有
+    /// 「单激活 vs 附加」分派都走 is_additive_mode——加新应用时这个测试守住
+    /// 它必须显式归类（漏归类会被红灯抓住）。
+    #[test]
+    fn is_additive_mode_only_true_for_opencode() {
+        assert!(App::OpenCode.is_additive_mode());
+        assert!(!App::Claude.is_additive_mode());
+        assert!(!App::Codex.is_additive_mode());
+        assert!(!App::Gemini.is_additive_mode());
+        assert!(!App::Grok.is_additive_mode());
     }
 
     /// A provider JSON document without an `app` field (pre-app-dimension
@@ -564,6 +625,64 @@ mod tests {
             p.redacted().is_err(),
             "非对象 auth 无法证明密钥缺失，必须拒绝发布"
         );
+    }
+
+    /// OpenCode 供应商的密钥在 `options.apiKey` + `options.headers` 认证头白名单：
+    /// 两者必须随同步投影剥掉，元数据头（Helicone-*）保留。
+    #[test]
+    fn redacted_strips_opencode_options_apikey_and_auth_headers() {
+        let mut p = keyed_provider();
+        p.app = App::OpenCode;
+        p.settings_config = r#"{"npm":"@ai-sdk/openai-compatible","options":{"baseURL":"https://api.deepseek.com","apiKey":"sk-opencode","headers":{"Authorization":"Bearer tok","Helicone-Auth":"meta","x-api-key":"k2"}}}"#.into();
+        let r = p.redacted().unwrap();
+        let v: serde_json::Value = serde_json::from_str(&r.settings_config).unwrap();
+        assert!(
+            v["options"].get("apiKey").is_none(),
+            "options.apiKey 必须剥"
+        );
+        assert!(
+            v["options"]["headers"].get("Authorization").is_none(),
+            "Authorization 必须剥"
+        );
+        assert!(
+            v["options"]["headers"].get("x-api-key").is_none(),
+            "x-api-key 必须剥"
+        );
+        // 元数据头（非凭据）保留。
+        assert_eq!(v["options"]["headers"]["Helicone-Auth"], "meta");
+        // 非密钥字段保留。
+        assert_eq!(v["options"]["baseURL"], "https://api.deepseek.com");
+        assert_eq!(v["npm"], "@ai-sdk/openai-compatible");
+        // 密钥值与键名都不出现在投影里。
+        assert!(!r.settings_config.contains("sk-opencode"));
+        assert!(!r.settings_config.contains("Bearer tok"));
+        // 幂等且字节稳定。
+        assert_eq!(r.settings_config, r.redacted().unwrap().settings_config);
+    }
+
+    #[test]
+    fn redacted_strips_opencode_headers_case_insensitively() {
+        // HTTP header 大小写不敏感：用户写小写 authorization / 混合大小写也剥。
+        let mut p = keyed_provider();
+        p.app = App::OpenCode;
+        p.settings_config = r#"{"options":{"apiKey":"k","headers":{"authorization":"tok","PROXY-AUTHORIZATION":"p"}}}"#.into();
+        let r = p.redacted().unwrap();
+        let v: serde_json::Value = serde_json::from_str(&r.settings_config).unwrap();
+        assert!(v["options"]["headers"].get("authorization").is_none());
+        assert!(v["options"]["headers"].get("PROXY-AUTHORIZATION").is_none());
+        assert!(!r.settings_config.contains("tok"));
+    }
+
+    #[test]
+    fn redacted_skips_non_object_options_without_error() {
+        // options 非对象（坏数据）——不像 env/auth 报错，跳过（不阻止发布）。
+        let mut p = keyed_provider();
+        p.settings_config =
+            r#"{"env":{"ANTHROPIC_BASE_URL":"https://x"},"options":"garbage"}"#.into();
+        let r = p.redacted().unwrap();
+        let v: serde_json::Value = serde_json::from_str(&r.settings_config).unwrap();
+        assert_eq!(v["options"], "garbage", "非对象 options 原样保留，不报错");
+        assert_eq!(v["env"]["ANTHROPIC_BASE_URL"], "https://x");
     }
 
     /// TEMP-APP-SHIM 语义：无 app 字段的旧同步文件 / 导出文档读为 claude

@@ -210,6 +210,12 @@ pub fn write_live(app: App, provider: &Provider) -> AppResult<()> {
             let config_path = crate::provider::live_grok::grok_config_path()?;
             crate::provider::live_grok::switch_grok_live(&config_path, &provider.settings_config)
         }
+        // OpenCode 是附加模式，不走 write_live（单激活专属）——增删/切换走
+        // set/remove_opencode_provider，由命令层按 is_additive_mode 分派。这里
+        // 返回 Err 作防御：误调时明确报错，而非走单激活路径或 panic。
+        App::OpenCode => Err(AppError::Config(
+            "opencode is additive mode; use set/remove_opencode_provider, not write_live".into(),
+        )),
     }
 }
 

@@ -53,7 +53,11 @@ use crate::model::{Provider, SECRET_ENV_KEYS};
 /// v2（2026-08-11）：加 `App::Grok`。旧二进制（无 Grok 变体）读到 `app:"grok"`
 /// 会经 `from_db_str` fallback 成 claude，故版本门让旧版本跳过 v2 文件，避免
 /// grok 供应商被错归属到 claude 池。
-pub const SYNCED_PROVIDERS_DOC_VERSION: u32 = 2;
+///
+/// v3（2026-08-11）：加 `App::OpenCode`（附加模式）+ `Provider.meta` 的
+/// `live_managed` 字段。旧二进制读到 `app:"opencode"` 会 fallback 成 claude，
+/// 且 `live_managed` 旧版本不认——版本门让旧版本跳过 v3 文件。
+pub const SYNCED_PROVIDERS_DOC_VERSION: u32 = 3;
 
 /// One device's provider-file wrapper: a stable JSON object with one
 /// `providers` array + schema version `v`. Files without `v` (pre-version
@@ -986,6 +990,32 @@ mod tests {
                 .is_empty(),
             "newer-schema file must be skipped, not mis-merged"
         );
+    }
+
+    /// v3 文件含 OpenCode provider（`app:"opencode"` + meta.liveKey/liveManaged）
+    /// → 当前二进制（v3）正常读：provider 反序列化为 `App::OpenCode`（不 fallback
+    /// Claude），meta 的 liveKey/liveManaged 原样保留。锁住 serde rename
+    /// "opencode" + 附加模式 meta 字段在同步路径的 round-trip。
+    #[test]
+    fn v3_file_with_opencode_provider_roundtrips() {
+        let tmp = tempfile::tempdir().unwrap();
+        let paths = Paths::resolve(tmp.path());
+        write_raw(
+            &paths,
+            "bbccddee0011",
+            r#"{"v":3,"providers":[{"id":"p1","name":"GLM","websiteUrl":"https://open.bigmodel.cn","category":"custom","app":"opencode","icon":"","iconColor":"","sortIndex":0,"notes":"","settingsConfig":"{\"npm\":\"@ai-sdk/openai-compatible\",\"options\":{\"baseURL\":\"https://open.bigmodel.cn\"}}","meta":"{\"liveKey\":\"glm\",\"liveManaged\":true}","updatedAt":"2026-08-11T00:00:00.000Z"}]}"#,
+        );
+        let all = read_all_peer_providers(&paths, "aabbccddeeff").unwrap();
+        assert_eq!(all.len(), 1);
+        assert_eq!(
+            all[0].app,
+            App::OpenCode,
+            "app 反序列化为 OpenCode，不 fallback Claude"
+        );
+        assert_eq!(all[0].name, "GLM");
+        let meta: serde_json::Value = serde_json::from_str(&all[0].meta).unwrap();
+        assert_eq!(meta["liveKey"], "glm");
+        assert_eq!(meta["liveManaged"], true);
     }
 
     /// 写出文件带 schema 版本号 v（与 sessions 快照同款版本门）。

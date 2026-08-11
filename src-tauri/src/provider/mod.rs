@@ -17,6 +17,7 @@ pub mod live;
 pub mod live_codex;
 pub mod live_gemini;
 pub mod live_grok;
+pub mod live_opencode;
 pub mod model_fetch;
 pub mod snippet;
 pub mod sync;

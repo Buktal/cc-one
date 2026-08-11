@@ -59,8 +59,8 @@ export const commands = {
 	queryUsageLogs: (query: LogsQuery) => typedError<UsageLogRow[], AppError>(__TAURI_INVOKE("query_usage_logs", { query })),
 	countUsageLogs: (filter: UsageFilter) => typedError<number, AppError>(__TAURI_INVOKE("count_usage_logs", { filter })),
 	queryModels: (filter: UsageFilter) => typedError<ModelStatsRow[], AppError>(__TAURI_INVOKE("query_models", { filter })),
-	queryDistinctSources: () => typedError<string[], AppError>(__TAURI_INVOKE("query_distinct_sources")),
-	queryDistinctModels: () => typedError<string[], AppError>(__TAURI_INVOKE("query_distinct_models")),
+	queryDistinctSources: (filter: UsageFilter) => typedError<string[], AppError>(__TAURI_INVOKE("query_distinct_sources", { filter })),
+	queryDistinctModels: (filter: UsageFilter) => typedError<string[], AppError>(__TAURI_INVOKE("query_distinct_models", { filter })),
 	listDevices: () => typedError<DeviceInfo[], AppError>(__TAURI_INVOKE("list_devices")),
 	listPricing: () => typedError<PricingEntry[], AppError>(__TAURI_INVOKE("list_pricing")),
 	/**  Add or update a pricing entry from the UI (user edits ⇒ `is_builtin=false`). */
@@ -286,6 +286,21 @@ export const commands = {
 	 */
 	fetchModelsCmd: (app: App, baseUrl: string, apiKey: string, modelsUrl: string | null) => typedError<string[], AppError>(__TAURI_INVOKE("fetch_models_cmd", { app, baseUrl, apiKey, modelsUrl })),
 	/**
+	 *  附加模式「添加」按钮：把 provider ensure-in-live（写进 opencode.json + 设
+	 *  liveManaged=true）。仅附加模式 app 有意义（单激活用 switch_provider_cmd）。
+	 */
+	addProviderToLiveCmd: (app: App, id: string) => typedError<Provider, AppError>(__TAURI_INVOKE("add_provider_to_live_cmd", { app, id })),
+	/**
+	 *  附加模式「移除」按钮：从 opencode.json 删 provider（设 liveManaged=false，DB
+	 *  记录保留，随时再加回来）。
+	 */
+	removeProviderFromLiveCmd: (app: App, id: string) => typedError<Provider, AppError>(__TAURI_INVOKE("remove_provider_from_live_cmd", { app, id })),
+	/**
+	 *  附加模式「从配置文件导入」按钮：把现有 opencode.json 的 `provider.*` 反向拉进
+	 *  cc one DB。返回导入/更新条数。
+	 */
+	importProvidersFromLiveCmd: (app: App) => typedError<number, AppError>(__TAURI_INVOKE("import_providers_from_live_cmd", { app })),
+	/**
 	 *  Dock the given window against the right edge of its current monitor.
 	 * 
 	 *  `client_logical_w/h` is the desired CLIENT (visible content) size in logical
@@ -345,8 +360,13 @@ export type AlignReport = {
 /**
  *  The app (应用) a provider pool belongs to. Each app owns an independent
  *  provider pool, per-app active state and per-app common-config snippet.
- *  Serialized snake_case ("claude" / "codex" / "gemini" / "grok") — the same
- *  spelling crosses as JSON, the sync file and the DB.
+ *  Serialized snake_case ("claude" / "codex" / "gemini" / "grok" / "opencode")
+ *  — the same spelling crosses as JSON, the sync file and the DB.
+ * 
+ *  两种 mode（[`App::is_additive_mode`]）：claude/codex/gemini/grok 是**单激活**
+ *  （一个 app 一个活跃 provider，切换=替换，写盘整文件受控合并）；opencode 是
+ *  **附加**（多供应商共存于 opencode.json 的 `provider.<id>` map，无唯一活跃，
+ *  增删单条）。
  */
 export type App = 
 /**  Claude Code — the original pool; existing data all belongs here. */
@@ -356,7 +376,13 @@ export type App =
 /**  Gemini CLI. */
 "gemini" | 
 /**  Grok CLI. */
-"grok";
+"grok" | 
+/**
+ *  OpenCode — 附加模式（additive）：多供应商共存于 opencode.json 的
+ *  `provider.<id>` map，无唯一活跃。写盘走单键 read-modify-write
+ *  （`live_opencode`），不进 `write_live`。
+ */
+"opencode";
 
 /**
  *  The single error type crossing the Rust→JS boundary.

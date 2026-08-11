@@ -7,6 +7,7 @@
 //! The state holds `Arc`s so blocking work can be moved onto `spawn_blocking`
 //! without borrowing the request-scoped `State` (which is not `'static`).
 
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use tauri::{Emitter, Manager, State};
@@ -18,12 +19,13 @@ use crate::error::{AppError, AppResult};
 use crate::library::{self, DeviceLibrarySummary, LibraryEntry, UploadItem};
 use crate::model::{
     App, CommonConfigSnippet, DeviceInfo, LocalGroup, LogsQuery, ModelStatsRow, PricingEntry,
-    Provider, RunMode, SessionFilter, SessionGroup, SessionGroupCounts, SessionMessage,
-    SessionQuery, SessionRow, SyncedGroup, TrendBucket, TrendPoint, UsageFilter, UsageLogRow,
-    UsageStats,
+    Provider, ProviderCategory, RunMode, SessionFilter, SessionGroup, SessionGroupCounts,
+    SessionMessage, SessionQuery, SessionRow, SyncedGroup, TrendBucket, TrendPoint, UsageFilter,
+    UsageLogRow, UsageStats,
 };
 use crate::pricing;
 use crate::provider::export_import::{ProviderImportMode, ProviderImportReport};
+use crate::provider::{live, live_opencode};
 use crate::sessions;
 use crate::sync::VerifyReport;
 
@@ -873,13 +875,33 @@ pub fn save_provider_cmd(
 
 #[tauri::command]
 #[specta::specta]
-pub fn delete_provider_cmd(
+pub async fn delete_provider_cmd(
     state: State<'_, AppState>,
     app_handle: tauri::AppHandle,
     app: App,
     id: String,
 ) -> AppResult<()> {
-    state.store.delete_provider(app, &id)?;
+    let store = state.store.clone();
+    tauri::async_runtime::spawn_blocking(move || -> AppResult<()> {
+        // 附加模式：provider 若已写进 live，先从 live 移除再删 DB，避免配置文件
+        // 残留 orphan 条目；单激活直接删 DB（其 live 由切换覆盖，无残留概念）。
+        // liveManaged=true 才需移除（已移除的 provider liveManaged=false，live 里
+        // 已没它，跳过免得无谓读写文件）。
+        if app.is_additive_mode() {
+            if let Some(provider) = store.get_provider(app, &id)? {
+                if live_opencode::meta_live_managed(&provider.meta) == Some(true) {
+                    if let Some(key) = live_opencode::meta_live_key(&provider.meta) {
+                        let path = live_opencode::opencode_config_path()?;
+                        live_opencode::remove_opencode_provider(&path, &key)?;
+                    }
+                }
+            }
+        }
+        store.delete_provider(app, &id)?;
+        Ok(())
+    })
+    .await
+    .map_err(|e| AppError::Internal(format!("delete_provider task failed: {e}")))??;
     emit_providers_changed(&app_handle);
     Ok(())
 }
@@ -919,11 +941,16 @@ pub async fn switch_provider_cmd(
         let provider = store
             .get_provider(app, &id)?
             .ok_or_else(|| AppError::Config(format!("provider not found in {app:?} pool: {id}")))?;
-        // 写盘分派（provider::live::write_live）：claude 侧先叠该应用的通用
-        // 片段（片段按 provider 归属的应用读取——claude 池读 claude 片段，
-        // 存量迁移后即原全局片段，行为不变）并拦截未物化模板变量，再受控
-        // 写盘；codex/gemini 直接写 provider 配置（其片段支持属后续批次）。
-        // 各分支写盘语义一致——只替换受控字段、非受控字段从 live 原地保留。
+        // 附加模式（OpenCode）：ensure-in-live——写进 opencode.json + 设
+        // liveManaged=true，**不取消其它 provider、不碰 active_providers**（附加
+        // 模式无唯一激活）。返回更新了 meta 的 provider。
+        if app.is_additive_mode() {
+            return ensure_opencode_in_live(&store, provider);
+        }
+        // 单激活：claude 侧先叠该应用的通用片段（片段按 provider 归属的应用读取
+        // ——claude 池读 claude 片段，存量迁移后即原全局片段，行为不变）并拦截未
+        // 物化模板变量，再受控写盘；codex/gemini/grok 直接写 provider 配置。各分支
+        // 写盘语义一致——只替换受控字段、非受控字段从 live 原地保留。
         let write_provider = if app == App::Claude {
             let cfg = config.get();
             let snippet = cfg.snippet_for(provider.app);
@@ -1061,6 +1088,248 @@ pub async fn fetch_models_cmd(
     })
     .await
     .map_err(|e| AppError::Internal(format!("fetch_models task failed: {e}")))?
+}
+
+// ---------------- 附加模式（OpenCode）写盘命令 ----------------
+
+/// 附加模式核心动作（OpenCode）：把 provider ensure-in-live——写进 opencode.json
+/// 同时设 `meta.liveManaged = true` 并落库。key 由 `live_opencode::derive_live_key`
+/// 派生（优先沿用 meta.liveKey，改名不重算；首次按 name slugify，空 → 回落 id）。
+/// **不取消其它 provider、不碰 active_providers**（附加模式无唯一激活）。返回
+/// 更新了 meta 的 provider。
+fn ensure_opencode_in_live(store: &Store, provider: Provider) -> AppResult<Provider> {
+    let path = live_opencode::opencode_config_path()?;
+    let live_text = live::read_live_settings(&path)?;
+    let key =
+        live_opencode::derive_live_key(&provider.name, &provider.id, &provider.meta, &live_text);
+    live_opencode::set_opencode_provider(&path, &key, &provider.settings_config)?;
+    let updated = Provider {
+        meta: live_opencode::with_meta_live_state(&provider.meta, &key, true)?,
+        ..provider
+    };
+    store.save_provider(updated)
+}
+
+/// 附加模式移除（OpenCode）：从 opencode.json 删 `provider.<liveKey>` + 设
+/// `meta.liveManaged = false`（保留 liveKey，便于再加回来）。无 liveKey（从未写
+/// 盘）→ 无操作，原样返回。
+fn remove_opencode_from_live(store: &Store, provider: Provider) -> AppResult<Provider> {
+    let Some(key) = live_opencode::meta_live_key(&provider.meta) else {
+        return Ok(provider);
+    };
+    let path = live_opencode::opencode_config_path()?;
+    live_opencode::remove_opencode_provider(&path, &key)?;
+    let updated = Provider {
+        meta: live_opencode::with_meta_live_state(&provider.meta, &key, false)?,
+        ..provider
+    };
+    store.save_provider(updated)
+}
+
+/// 附加模式「从配置文件导入」：把 opencode.json 的 `provider.<key>` 反向导入 DB。
+/// 读盘薄壳——核心逻辑在 [`import_opencode_from_live_text`]（可测，不碰文件系统）。
+fn import_opencode_from_live(store: &Store, app: App) -> AppResult<u32> {
+    let path = live_opencode::opencode_config_path()?;
+    let live_text = live::read_live_settings(&path)?;
+    import_opencode_from_live_text(store, app, &live_text)
+}
+
+/// import 的核心逻辑（可测）：给定 opencode.json 文本，把 `provider.<key>` 反向
+/// 导入 DB。每个 key → 一条 Provider：已存在同 liveKey → 更新 settings_config +
+/// name（保留 id/展示字段）；否则新建（空 id 交 save_provider 自动生成 hex id +
+/// sort_index + updated_at）。反复 import 按 liveKey 去重，不产生重复。返回导入/
+/// 更新条数。
+fn import_opencode_from_live_text(store: &Store, app: App, live_text: &str) -> AppResult<u32> {
+    let entries = live_opencode::provider_entries(live_text);
+    if entries.is_empty() {
+        return Ok(0);
+    }
+    // 现有 provider 按 liveKey 索引——按配置文件原 key 判「已存在」。
+    let mut by_live_key: HashMap<String, Provider> = HashMap::new();
+    for p in store.list_providers_for(app)? {
+        if let Some(k) = live_opencode::meta_live_key(&p.meta) {
+            by_live_key.insert(k, p);
+        }
+    }
+    let mut count = 0u32;
+    for (key, entry) in entries {
+        let settings_config = serde_json::to_string(&entry)?;
+        let display_name = entry
+            .get("name")
+            .and_then(|v| v.as_str())
+            .unwrap_or(&key)
+            .to_string();
+        let provider = match by_live_key.get(&key) {
+            Some(existing) => Provider {
+                name: display_name,
+                settings_config,
+                meta: live_opencode::with_meta_live_state(&existing.meta, &key, true)?,
+                ..existing.clone()
+            },
+            None => Provider {
+                id: String::new(),
+                name: display_name,
+                website_url: String::new(),
+                category: ProviderCategory::Custom,
+                app,
+                icon: String::new(),
+                icon_color: String::new(),
+                sort_index: 0,
+                notes: String::new(),
+                settings_config,
+                meta: live_opencode::with_meta_live_state("", &key, true)?,
+                updated_at: String::new(),
+            },
+        };
+        store.save_provider(provider)?;
+        count += 1;
+    }
+    Ok(count)
+}
+
+/// 附加模式「添加」按钮：把 provider ensure-in-live（写进 opencode.json + 设
+/// liveManaged=true）。仅附加模式 app 有意义（单激活用 switch_provider_cmd）。
+#[tauri::command]
+#[specta::specta]
+pub async fn add_provider_to_live_cmd(
+    state: State<'_, AppState>,
+    app_handle: tauri::AppHandle,
+    app: App,
+    id: String,
+) -> AppResult<Provider> {
+    let store = state.store.clone();
+    let provider = tauri::async_runtime::spawn_blocking(move || -> AppResult<Provider> {
+        let provider = store
+            .get_provider(app, &id)?
+            .ok_or_else(|| AppError::Config(format!("provider not found in {app:?} pool: {id}")))?;
+        ensure_opencode_in_live(&store, provider)
+    })
+    .await
+    .map_err(|e| AppError::Internal(format!("add_provider_to_live task failed: {e}")))??;
+    emit_providers_changed(&app_handle);
+    Ok(provider)
+}
+
+/// 附加模式「移除」按钮：从 opencode.json 删 provider（设 liveManaged=false，DB
+/// 记录保留，随时再加回来）。
+#[tauri::command]
+#[specta::specta]
+pub async fn remove_provider_from_live_cmd(
+    state: State<'_, AppState>,
+    app_handle: tauri::AppHandle,
+    app: App,
+    id: String,
+) -> AppResult<Provider> {
+    let store = state.store.clone();
+    let provider = tauri::async_runtime::spawn_blocking(move || -> AppResult<Provider> {
+        let provider = store
+            .get_provider(app, &id)?
+            .ok_or_else(|| AppError::Config(format!("provider not found in {app:?} pool: {id}")))?;
+        remove_opencode_from_live(&store, provider)
+    })
+    .await
+    .map_err(|e| AppError::Internal(format!("remove_provider_from_live task failed: {e}")))??;
+    emit_providers_changed(&app_handle);
+    Ok(provider)
+}
+
+/// 附加模式「从配置文件导入」按钮：把现有 opencode.json 的 `provider.*` 反向拉进
+/// cc one DB。返回导入/更新条数。
+#[tauri::command]
+#[specta::specta]
+pub async fn import_providers_from_live_cmd(
+    state: State<'_, AppState>,
+    app_handle: tauri::AppHandle,
+    app: App,
+) -> AppResult<u32> {
+    let store = state.store.clone();
+    let count = tauri::async_runtime::spawn_blocking(move || -> AppResult<u32> {
+        import_opencode_from_live(&store, app)
+    })
+    .await
+    .map_err(|e| AppError::Internal(format!("import_providers_from_live task failed: {e}")))??;
+    emit_providers_changed(&app_handle);
+    Ok(count)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::db::testutil::mem;
+
+    /// 一份带两个 provider（一个带 name、一个不带）+ 顶层用户字段的 opencode.json。
+    fn opencode_live_json() -> &'static str {
+        r#"{
+          "model": "deepseek/deepseek-chat",
+          "provider": {
+            "deepseek": {
+              "npm": "@ai-sdk/openai-compatible",
+              "name": "DeepSeek",
+              "options": { "baseURL": "https://api.deepseek.com", "apiKey": "sk-x" }
+            },
+            "kimi": {
+              "npm": "@ai-sdk/openai-compatible",
+              "options": { "baseURL": "https://api.moonshot.cn" }
+            }
+          }
+        }"#
+    }
+
+    /// 导入把 provider.<key> 反向落库：新建（空 id → 自动 hex）、liveKey=原 key、
+    /// liveManaged=true；display name 取 entry.name，无 name 则取 key。
+    #[test]
+    fn import_creates_providers_with_live_key_and_managed_flag() {
+        let s = mem();
+        let n = import_opencode_from_live_text(&s, App::OpenCode, opencode_live_json()).unwrap();
+        assert_eq!(n, 2);
+        let providers = s.list_providers_for(App::OpenCode).unwrap();
+        assert_eq!(providers.len(), 2);
+        let by_name: HashMap<String, Provider> = providers
+            .iter()
+            .map(|p| (p.name.clone(), p.clone()))
+            .collect();
+        // 带 name 的 → 用 name。
+        let ds = by_name.get("DeepSeek").expect("entry.name 作 display name");
+        assert_eq!(
+            live_opencode::meta_live_key(&ds.meta).as_deref(),
+            Some("deepseek"),
+            "liveKey = 配置文件原 key"
+        );
+        assert_eq!(live_opencode::meta_live_managed(&ds.meta), Some(true));
+        // 不带 name 的 → 用 key。
+        let kimi = by_name.get("kimi").expect("无 name → key 作 display name");
+        assert_eq!(
+            live_opencode::meta_live_key(&kimi.meta).as_deref(),
+            Some("kimi")
+        );
+        // settingsConfig 是 entry 子树（npm/options）。
+        let sc: serde_json::Value = serde_json::from_str(&ds.settings_config).unwrap();
+        assert_eq!(sc["npm"], "@ai-sdk/openai-compatible");
+        assert_eq!(sc["options"]["baseURL"], "https://api.deepseek.com");
+    }
+
+    /// 反复 import 同一文件 → 按 liveKey 匹配更新，不产生重复。
+    #[test]
+    fn import_updates_existing_same_live_key_no_duplicate() {
+        let s = mem();
+        import_opencode_from_live_text(&s, App::OpenCode, opencode_live_json()).unwrap();
+        let n = import_opencode_from_live_text(&s, App::OpenCode, opencode_live_json()).unwrap();
+        assert_eq!(n, 2, "第二次仍处理 2 条（按 liveKey 更新）");
+        assert_eq!(
+            s.list_providers_for(App::OpenCode).unwrap().len(),
+            2,
+            "不产生重复"
+        );
+    }
+
+    /// 无 provider 段 → 0 条（顶层用户字段 model 等被忽略，不报错）。
+    #[test]
+    fn import_empty_providers_section_is_zero() {
+        let s = mem();
+        let n = import_opencode_from_live_text(&s, App::OpenCode, r#"{"model":"x"}"#).unwrap();
+        assert_eq!(n, 0);
+        assert!(s.list_providers_for(App::OpenCode).unwrap().is_empty());
+    }
 }
 
 // ---------------- Library ----------------
