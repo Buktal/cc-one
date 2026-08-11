@@ -246,27 +246,17 @@ export function ProviderFormSheet({
     toast.success(t("providers.toast.applyAllSuccess"))
   }
 
-  /** 拉当前供应商的模型列表：端点与 key 缺任一 → 对应提示；失败按后端
-   *  错误串分桶提示（认证失败 / 端点未开放 / 超时 / 格式不支持 / 兜底）。 */
-  async function onFetchModels() {
-    if (!endpoint.trim()) {
-      toast.error(t("providers.toast.fetchModels.endpointRequired"))
-      return
-    }
-    if (!apiKey.trim()) {
-      toast.error(t("providers.toast.fetchModels.keyRequired"))
-      return
-    }
-    const result = await fetchModels({
-      // 当前表单只编辑 claude 池的供应商——应用分段切换（后续批次）会把
-      // 这个参数接上 tab。
-      app: "claude",
-      baseUrl: endpoint.trim(),
-      apiKey: apiKey.trim(),
-      // 端点等于某预设默认值时，带上该预设声明的 modelsUrl 覆写（如火山
-      // /api/compatible 拼不出正确候选，必须精确指路）。
-      modelsUrl: presetModelsUrl(endpoint, PROVIDER_PRESETS),
-    })
+  /** 调 fetchModels mutation 并处理结果（错误分桶 toast、成功填充
+   *  fetchedModels）——Claude / Gemini 两条路径同一套错误标签契约，共用这一
+   *  份错误渲染，避免分叉漂移。调用方负责各自的前置校验（端点 / key 是否
+   *  必填）与参数构造。 */
+  async function runFetchModels(args: {
+    app: App
+    baseUrl: string
+    apiKey: string
+    modelsUrl: string | null
+  }): Promise<void> {
+    const result = await fetchModels(args)
     if (result.error) {
       // RTK unions SerializedError in for internal failures; the repo seam
       // `toStructuredError` reduces either shape to its raw message string.
@@ -291,11 +281,56 @@ export function ProviderFormSheet({
     }
   }
 
-  /** 下拉选中一个模型 → 回填五个角色（与「一键设置」同一写入引擎）。 */
+  /** 拉当前 Claude 供应商的模型列表：端点与 key 缺任一 → 对应提示；失败按
+   *  后端错误串分桶提示（认证失败 / 端点未开放 / 超时 / 格式不支持 / 兜底）。 */
+  async function onFetchModels() {
+    if (!endpoint.trim()) {
+      toast.error(t("providers.toast.fetchModels.endpointRequired"))
+      return
+    }
+    if (!apiKey.trim()) {
+      toast.error(t("providers.toast.fetchModels.keyRequired"))
+      return
+    }
+    await runFetchModels({
+      app: "claude",
+      baseUrl: endpoint.trim(),
+      apiKey: apiKey.trim(),
+      // 端点等于某预设默认值时，带上该预设声明的 modelsUrl 覆写（如火山
+      // /api/compatible 拼不出正确候选，必须精确指路）。
+      modelsUrl: presetModelsUrl(endpoint, PROVIDER_PRESETS),
+    })
+  }
+
+  /** 拉 Gemini 模型列表：key 缺失 → 提示；端点可空（后端 gemini_models_url
+   *  处理空→默认 generativelanguage 端点）。失败分桶与 Claude 同一标签契约。 */
+  async function onFetchGeminiModels() {
+    const key = geminiApiKey(configText).trim()
+    if (!key) {
+      toast.error(t("providers.toast.fetchModels.keyRequired"))
+      return
+    }
+    await runFetchModels({
+      app: "gemini",
+      baseUrl: geminiBaseUrl(configText).trim(),
+      apiKey: key,
+      // Gemini 端点形状固定（GET /v1beta/models），不走 modelsUrl 覆写。
+      modelsUrl: null,
+    })
+  }
+
+  /** Claude 下拉选中一个模型 → 回填五个角色（与「一键设置」同一写入引擎）。 */
   function onPickModel(model: string) {
     if (!parseJsonObject(configText).ok) return
     setConfigText((prev) => withAllRolesInText(prev, model))
     toast.success(t("providers.toast.applyAllSuccess"))
+  }
+
+  /** Gemini 下拉选中一个模型 → 写入 GEMINI_MODEL（Gemini 只有一个模型字段）。 */
+  function onPickGeminiModel(model: string) {
+    if (!parseJsonObject(configText).ok) return
+    setConfigText((prev) => withGeminiEnv(prev, { GEMINI_MODEL: model }))
+    toast.success(t("providers.toast.fetchModels.modelSet"))
   }
 
   function onAuthFieldChange(to: AuthField) {
@@ -343,6 +378,9 @@ export function ProviderFormSheet({
   }
 
   function onGeminiBaseUrlChange(value: string) {
+    // 端点变了，旧端点拉到的模型列表不再可靠，清空下拉（与 Claude 的
+    // onEndpointChange 同一处理）。
+    setFetchedModels([])
     if (parseJsonObject(configText).ok) {
       setConfigText((prev) =>
         withGeminiEnv(prev, { GOOGLE_GEMINI_BASE_URL: value }),
@@ -567,13 +605,62 @@ export function ProviderFormSheet({
                   spellCheck={false}
                 />
               </Field>
-              <Field label={t("providers.form.geminiModel")}>
+              <div className="flex flex-col gap-1.5">
+                <div className="flex items-center justify-between">
+                  <Label className="text-muted-foreground text-xs">
+                    {t("providers.form.geminiModel")}
+                  </Label>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={onFetchGeminiModels}
+                    disabled={fetching}
+                  >
+                    <RefreshCw
+                      className={cn("size-3.5", fetching && "animate-spin")}
+                    />
+                    {fetching
+                      ? t("providers.form.fetchModels.fetching")
+                      : t("providers.form.fetchModels.fetch")}
+                  </Button>
+                </div>
                 <Input
                   value={geminiModel(configText)}
                   onChange={(e) => onGeminiModelChange(e.target.value)}
                   spellCheck={false}
                 />
-              </Field>
+                {fetchedModels.length > 0 ? (
+                  <Select
+                    onValueChange={(model) => {
+                      if (typeof model === "string") onPickGeminiModel(model)
+                    }}
+                  >
+                    <SelectTrigger
+                      className="font-mono text-xs"
+                      aria-label={t(
+                        "providers.form.fetchModels.geminiPlaceholder",
+                      )}
+                    >
+                      <SelectValue
+                        placeholder={t(
+                          "providers.form.fetchModels.geminiPlaceholder",
+                        )}
+                      />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {fetchedModels.map((model) => (
+                        <SelectItem
+                          key={model}
+                          value={model}
+                          className="font-mono text-xs"
+                        >
+                          {model}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                ) : null}
+              </div>
               <Field label={t("providers.form.geminiBaseUrl")}>
                 <Input
                   value={geminiBaseUrl(configText)}

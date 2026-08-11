@@ -1,11 +1,13 @@
-//! 模型列表获取（OpenAI 兼容 `GET /v1/models`）。
+//! 模型列表获取：OpenAI 兼容路径（`GET /v1/models`，Claude / Codex）与
+//! Google 原生路径（`GET /v1beta/models`，Gemini）。
 //!
 //! WebView 里 fetch 会撞 CORS，所以请求必须由后端发（ureq，与
-//! `pricing::fetch_litellm` 同一 HTTP 栈）。候选 URL 构造
+//! `pricing::fetch_litellm` 同一 HTTP 栈）。OpenAI 兼容路径的候选 URL 构造
 //! （[`candidate_models_urls`]）是纯函数：modelsUrl 覆写 → baseURL 拼
 //! `/v1/models` → 版本段识别（`/v1` 结尾拼 `/models`）→ 兼容子路径剥离 →
 //! 去重保序最多 3 条——全部可单测，不碰网络。请求按候选顺序尝试，首个成功
-//! 即返回。
+//! 即返回。Gemini 端点形状固定（[`gemini_models_url`] 构造单一 URL，无需
+//! 候选遍历），认证用 `x-goog-api-key` 头而非 `Authorization: Bearer`。
 //!
 //! 错误串带稳定前缀标签，前端按标签分桶成 toast 提示（分桶函数
 //! `bucketFetchModelsError` 与标签契约一一对应）：
@@ -254,6 +256,122 @@ fn is_timeout(e: &ureq::Error) -> bool {
     std::error::Error::source(t)
         .and_then(|src| src.downcast_ref::<std::io::Error>())
         .is_some_and(|ioe| ioe.kind() == std::io::ErrorKind::TimedOut)
+}
+
+// ---- Gemini 原生路径（`GET /v1beta/models`）-------------------------------
+//
+// Google Generative Language API 的模型列表端点形状固定（不像 OpenAI 兼容
+// 路径需候选遍历）：单一 `/v1beta/models`，认证用 `x-goog-api-key` 头。响应
+// 形状 `{"models":[{"name":"models/<id>","supportedGenerationMethods":[...]}]}`，
+// 只保留支持 `generateContent` 的模型（排除 embedding 等），去 `models/` 前缀。
+// 错误标签与 OpenAI 路径完全一致——前端 `bucketFetchModelsError` 不用改。
+
+/// Gemini 默认端点：base 为空时用它（Google Generative Language API 根）。
+const GEMINI_DEFAULT_BASE: &str = "https://generativelanguage.googleapis.com";
+
+/// 构造 Gemini 模型列表端点 URL（纯函数，不碰网络）。base 非空（trim + 去尾部
+/// 斜杠）→ `{base}/v1beta/models`；空 → [`GEMINI_DEFAULT_BASE`] 拼 `/v1beta/models`。
+/// Gemini 端点形状固定，单一 URL 即可（不像 OpenAI 兼容路径需候选遍历）。
+pub fn gemini_models_url(base_url: &str) -> String {
+    let base = base_url.trim().trim_end_matches('/');
+    if base.is_empty() {
+        format!("{GEMINI_DEFAULT_BASE}/v1beta/models")
+    } else {
+        format!("{base}/v1beta/models")
+    }
+}
+
+/// 解析 Google 原生 `/v1beta/models` 响应体（纯函数）。响应形状：
+/// `{"models":[{"name":"models/gemini-2.0-flash-001","supportedGenerationMethods":
+/// ["generateContent","countTokens"]}, ...]}`。提取每项的 `name`，去掉
+/// `models/` 前缀；**只保留 `supportedGenerationMethods` 含 `"generateContent"`**
+/// 的项（排除 embedding 等非生成模型），按出现顺序去重。整体非对象 / 无
+/// `models` 数组 / `models` 非数组 → `BAD_FORMAT`（与 OpenAI 路径同一标签）。
+/// 单项缺 `name` 也算 BAD_FORMAT——name 是每项的必备字段。
+pub fn parse_gemini_models_response(body: &str) -> AppResult<Vec<String>> {
+    #[derive(serde::Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    struct ModelsResponse {
+        models: Vec<ModelEntry>,
+    }
+    #[derive(serde::Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    struct ModelEntry {
+        name: String,
+        #[serde(default)]
+        supported_generation_methods: Vec<String>,
+    }
+    let parsed: ModelsResponse =
+        serde_json::from_str(body).map_err(|e| fetch_err(TAG_FORMAT, format!("{e}")))?;
+    let mut seen = std::collections::HashSet::new();
+    let mut models: Vec<String> = Vec::new();
+    for entry in parsed.models {
+        let supports_generate = entry
+            .supported_generation_methods
+            .iter()
+            .any(|m| m == "generateContent");
+        if !supports_generate {
+            continue;
+        }
+        // name 形如 "models/gemini-2.0-flash-001"，去前缀得到裸 id；无前缀（响应
+        // 形状偏差但可解析）则原样保留。
+        let id = entry.name.strip_prefix("models/").unwrap_or(&entry.name);
+        if !id.is_empty() && seen.insert(id.to_string()) {
+            models.push(id.to_string());
+        }
+    }
+    Ok(models)
+}
+
+/// 获取 Gemini 供应商的可用模型列表（模型 id，按出现顺序去重）。构造单一
+/// 端点 URL → 发 `GET` 请求（ureq，同一 HTTP 栈 + 同一 10s 超时），带
+/// `x-goog-api-key` 头 → 按状态码分桶错误 → 2xx 走
+/// [`parse_gemini_models_response`]。错误标签与 [`fetch_models`] 完全一致。
+pub fn fetch_gemini_models(base_url: &str, api_key: &str) -> AppResult<Vec<String>> {
+    fetch_gemini_models_with_timeout(base_url, api_key, FETCH_TIMEOUT)
+}
+
+/// `fetch_gemini_models` 的可测内层：超时作为参数注入，让超时用例不必真等 10 秒。
+fn fetch_gemini_models_with_timeout(
+    base_url: &str,
+    api_key: &str,
+    timeout: Duration,
+) -> AppResult<Vec<String>> {
+    if api_key.trim().is_empty() {
+        return Err(fetch_err(TAG_AUTH, "api key is empty"));
+    }
+    let url = gemini_models_url(base_url);
+    let trimmed_key = api_key.trim();
+    let request = ureq::get(&url)
+        .timeout(timeout)
+        .set("x-goog-api-key", trimmed_key)
+        .set(
+            "User-Agent",
+            &format!("cc one/{}", env!("CARGO_PKG_VERSION")),
+        );
+    match request.call() {
+        Ok(response) => {
+            let body = response.into_string().unwrap_or_default();
+            parse_gemini_models_response(&body)
+        }
+        Err(ureq::Error::Status(status, response)) => {
+            let body = truncate_body(&response.into_string().unwrap_or_default());
+            // Gemini 端点单一无候选遍历：404/405 直接 ENDPOINT_CLOSED（不像 OpenAI
+            // 路径会试下一个候选）。其余状态码分桶与 fetch_models 一致。
+            match status {
+                401 | 403 => Err(fetch_err(TAG_AUTH, format!("HTTP {status}: {body}"))),
+                404 | 405 => Err(fetch_err(TAG_ENDPOINT, format!("HTTP {status}: {body}"))),
+                _ => Err(fetch_err(TAG_NETWORK, format!("HTTP {status}: {body}"))),
+            }
+        }
+        Err(e) => {
+            if is_timeout(&e) {
+                Err(fetch_err(TAG_TIMEOUT, e))
+            } else {
+                Err(fetch_err(TAG_NETWORK, e))
+            }
+        }
+    }
 }
 
 #[cfg(test)]
@@ -640,5 +758,184 @@ mod tests {
         assert_eq!(out.chars().count(), ERROR_BODY_MAX_CHARS + 1);
         assert!(out.ends_with('…'));
         assert_eq!(truncate_body("short"), "short");
+    }
+
+    // ---------------- Gemini 原生路径（gemini_models_url / parse / fetch）---
+
+    #[test]
+    fn gemini_url_empty_base_uses_default() {
+        assert_eq!(
+            gemini_models_url(""),
+            "https://generativelanguage.googleapis.com/v1beta/models"
+        );
+        assert_eq!(
+            gemini_models_url("   "),
+            "https://generativelanguage.googleapis.com/v1beta/models"
+        );
+    }
+
+    #[test]
+    fn gemini_url_plain_base_appends_v1beta_models() {
+        assert_eq!(
+            gemini_models_url("https://generativelanguage.googleapis.com"),
+            "https://generativelanguage.googleapis.com/v1beta/models"
+        );
+    }
+
+    #[test]
+    fn gemini_url_trims_trailing_slash_and_whitespace() {
+        assert_eq!(
+            gemini_models_url("https://proxy.example.com/  "),
+            "https://proxy.example.com/v1beta/models"
+        );
+        assert_eq!(
+            gemini_models_url("https://proxy.example.com/"),
+            "https://proxy.example.com/v1beta/models"
+        );
+    }
+
+    /// Gemini 响应：两个 generateContent 模型 + 一个 embedding（应被排除）+
+    /// 一个重复（应被去重），故意 generateContent 在数组不同位置。
+    const GEMINI_MODELS_JSON: &str = r#"{"models":[
+        {"name":"models/gemini-2.0-flash-001","supportedGenerationMethods":["generateContent","countTokens"]},
+        {"name":"models/text-embedding-004","supportedGenerationMethods":["embedContent"]},
+        {"name":"models/gemini-1.5-pro","supportedGenerationMethods":["countTokens","generateContent"]},
+        {"name":"models/gemini-2.0-flash-001","supportedGenerationMethods":["generateContent"]}
+        ]}"#;
+
+    #[test]
+    fn gemini_parse_extracts_strips_prefix_filters_and_dedups() {
+        let models = parse_gemini_models_response(GEMINI_MODELS_JSON).unwrap();
+        // embedding 被排除，重复被去重，前缀被剥离，顺序按出现保留。
+        assert_eq!(models, vec!["gemini-2.0-flash-001", "gemini-1.5-pro"]);
+    }
+
+    #[test]
+    fn gemini_parse_entry_without_methods_field_is_filtered() {
+        // supportedGenerationMethods 缺失 = 不含 generateContent → 排除。
+        let body = r#"{"models":[{"name":"models/gemini-flash"}]}"#;
+        let models = parse_gemini_models_response(body).unwrap();
+        assert!(models.is_empty());
+    }
+
+    #[test]
+    fn gemini_parse_name_without_models_prefix_is_kept_verbatim() {
+        let body = r#"{"models":[{"name":"custom-model","supportedGenerationMethods":["generateContent"]}]}"#;
+        let models = parse_gemini_models_response(body).unwrap();
+        assert_eq!(models, vec!["custom-model"]);
+    }
+
+    #[test]
+    fn gemini_parse_empty_models_array_is_ok_empty() {
+        let body = r#"{"models":[]}"#;
+        let models = parse_gemini_models_response(body).unwrap();
+        assert!(models.is_empty());
+    }
+
+    #[test]
+    fn gemini_parse_missing_models_array_is_bad_format() {
+        let msg = fetch_err_msg(parse_gemini_models_response(r#"{"foo":"bar"}"#));
+        assert!(msg.starts_with("BAD_FORMAT: "), "got: {msg}");
+    }
+
+    #[test]
+    fn gemini_parse_models_not_array_is_bad_format() {
+        let msg = fetch_err_msg(parse_gemini_models_response(r#"{"models":"nope"}"#));
+        assert!(msg.starts_with("BAD_FORMAT: "), "got: {msg}");
+    }
+
+    #[test]
+    fn gemini_parse_non_object_body_is_bad_format() {
+        let msg = fetch_err_msg(parse_gemini_models_response(r#"not json at all"#));
+        assert!(msg.starts_with("BAD_FORMAT: "), "got: {msg}");
+    }
+
+    #[test]
+    fn gemini_parse_entry_without_name_is_bad_format() {
+        // name 是每项必备字段，缺它 = 响应形状不对。
+        let body = r#"{"models":[{"supportedGenerationMethods":["generateContent"]}]}"#;
+        let msg = fetch_err_msg(parse_gemini_models_response(body));
+        assert!(msg.starts_with("BAD_FORMAT: "), "got: {msg}");
+    }
+
+    #[test]
+    fn gemini_fetch_success_returns_filtered_models() {
+        let server = TestServer::start(&[("/v1beta/models", 200, GEMINI_MODELS_JSON)]);
+        let models = fetch_gemini_models(&server.endpoint(""), "AIza-test").unwrap();
+        assert_eq!(models, vec!["gemini-2.0-flash-001", "gemini-1.5-pro"]);
+    }
+
+    #[test]
+    fn gemini_fetch_uses_custom_base_url() {
+        // 自定义 base /proxy → 完整路径 /proxy/v1beta/models（验证 base 真被拼进
+        // URL，而非走默认端点）。TestServer 按完整路径路由。
+        let server = TestServer::start(&[("/proxy/v1beta/models", 200, GEMINI_MODELS_JSON)]);
+        let models = fetch_gemini_models(&server.endpoint("/proxy"), "AIza-test").unwrap();
+        assert_eq!(models, vec!["gemini-2.0-flash-001", "gemini-1.5-pro"]);
+    }
+
+    #[test]
+    fn gemini_fetch_401_maps_to_auth_tag() {
+        let server = TestServer::start(&[("/v1beta/models", 401, "{\"error\":\"invalid key\"}")]);
+        let msg = fetch_err_msg(fetch_gemini_models(&server.endpoint(""), "AIza-test"));
+        assert!(msg.starts_with("AUTH_FAILED: HTTP 401: "), "got: {msg}");
+        assert!(msg.contains("invalid key"), "got: {msg}");
+    }
+
+    #[test]
+    fn gemini_fetch_403_maps_to_auth_tag() {
+        let server = TestServer::start(&[("/v1beta/models", 403, "forbidden")]);
+        let msg = fetch_err_msg(fetch_gemini_models(&server.endpoint(""), "AIza-test"));
+        assert!(msg.starts_with("AUTH_FAILED: HTTP 403: "), "got: {msg}");
+    }
+
+    #[test]
+    fn gemini_fetch_404_maps_to_endpoint_tag() {
+        // Gemini 端点单一：404 直接 ENDPOINT_CLOSED（无候选遍历）。
+        let server = TestServer::start(&[("/v1beta/models", 404, "nope")]);
+        let msg = fetch_err_msg(fetch_gemini_models(&server.endpoint(""), "AIza-test"));
+        assert!(msg.starts_with("ENDPOINT_CLOSED: HTTP 404: "), "got: {msg}");
+    }
+
+    #[test]
+    fn gemini_fetch_500_maps_to_network_tag() {
+        let server = TestServer::start(&[("/v1beta/models", 500, "boom")]);
+        let msg = fetch_err_msg(fetch_gemini_models(&server.endpoint(""), "AIza-test"));
+        assert!(msg.starts_with("NETWORK: HTTP 500: "), "got: {msg}");
+    }
+
+    #[test]
+    fn gemini_fetch_garbage_body_maps_to_format_tag() {
+        let server = TestServer::start(&[("/v1beta/models", 200, "<html>captive portal</html>")]);
+        let msg = fetch_err_msg(fetch_gemini_models(&server.endpoint(""), "AIza-test"));
+        assert!(msg.starts_with("BAD_FORMAT: "), "got: {msg}");
+    }
+
+    #[test]
+    fn gemini_fetch_missing_api_key_maps_to_auth_tag() {
+        let msg = fetch_err_msg(fetch_gemini_models(
+            "https://generativelanguage.googleapis.com",
+            "",
+        ));
+        assert!(msg.starts_with("AUTH_FAILED: "), "got: {msg}");
+    }
+
+    #[test]
+    fn gemini_fetch_timeout_maps_to_timeout_tag() {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind timeout server");
+        let url = format!("http://{}", listener.local_addr().expect("local addr"));
+        thread::spawn(move || {
+            if let Ok((mut stream, _)) = listener.accept() {
+                let mut buf = [0u8; 4096];
+                let _ = stream.read(&mut buf);
+                thread::sleep(Duration::from_secs(30));
+            }
+        });
+        let msg = fetch_err_msg(fetch_gemini_models_with_timeout(
+            &url,
+            "AIza-test",
+            Duration::from_millis(200),
+        ));
+        assert!(msg.starts_with("TIMEOUT: "), "got: {msg}");
     }
 }
