@@ -54,9 +54,7 @@ const NAV: Array<{
   { id: "logs", key: "nav.logs", icon: List },
   { id: "pricing", key: "nav.pricing", icon: Tags },
   { id: "library", key: "nav.library", icon: Library },
-  // 供应商管理整体处于 beta：写盘/同步等核心链路已合入但未经过大规模真实
-  // 环境验证，标记出来提醒用户谨慎切换。
-  { id: "providers", key: "nav.providers", icon: Server, beta: true },
+  { id: "providers", key: "nav.providers", icon: Server },
   { id: "settings", key: "nav.settings", icon: Settings },
 ]
 
