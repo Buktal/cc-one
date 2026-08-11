@@ -4,23 +4,26 @@
 
 import { describe, expect, it } from "vitest"
 
-import type { SessionGroup, SessionRow } from "@/types/generated/bindings"
+import type {
+  SessionGroup,
+  SessionMessage,
+  SessionRow,
+} from "@/types/generated/bindings"
 import {
   ALL_GROUPS,
   applyGroupOrder,
   canCreateSyncedGroup,
   effectiveFavorite,
   favKey,
-  filterSessionsByQuery,
   firstLine,
-  groupSessionsByGroup,
+  modelsUsed,
   nextFavValue,
   reorderGroupIds,
-  selectSessions,
+  sessionSpan,
   sessionTabFilter,
-  sortSessions,
   tryFormatJson,
   UNGROUPED,
+  ungroupedCount,
   withFavOverride,
   withoutFavOverride,
 } from "./derive"
@@ -49,12 +52,6 @@ function row(
   }
 }
 
-function group(
-  overrides: Partial<SessionGroup> & Pick<SessionGroup, "id" | "kind">,
-): SessionGroup {
-  return { name: overrides.id, device_id: "", ...overrides }
-}
-
 // ---------------------------------------------------------------- filters ----
 
 describe("sessionTabFilter", () => {
@@ -68,6 +65,7 @@ describe("sessionTabFilter", () => {
       from_ts: null,
       to_ts: null,
       model: null,
+      search: null,
     })
   })
 
@@ -81,6 +79,7 @@ describe("sessionTabFilter", () => {
       from_ts: null,
       to_ts: null,
       model: null,
+      search: null,
     })
   })
 
@@ -107,6 +106,7 @@ describe("sessionTabFilter", () => {
       from_ts: null,
       to_ts: null,
       model: null,
+      search: null,
     })
     expect(
       sessionTabFilter("favorites", "dev-self", { source: "codex_cli" }),
@@ -119,6 +119,7 @@ describe("sessionTabFilter", () => {
       from_ts: null,
       to_ts: null,
       model: null,
+      search: null,
     })
   })
 
@@ -166,201 +167,115 @@ describe("sessionTabFilter", () => {
       sessionTabFilter("local", "dev-self", { model: "" }).model,
     ).toBeNull()
   })
-})
 
-// ----------------------------------------------------------------- sort -----
-
-describe("sortSessions", () => {
-  const cases: Array<{ name: string; rows: SessionRow[]; want: string[] }> = [
-    {
-      name: "descending by last_active_at",
-      rows: [
-        row({ id: "old", last_active_at: "2026-08-01T00:00:00Z" }),
-        row({ id: "new", last_active_at: "2026-08-04T00:00:00Z" }),
-        row({ id: "mid", last_active_at: "2026-08-02T00:00:00Z" }),
-      ],
-      want: ["new", "mid", "old"],
-    },
-    {
-      name: "missing timestamps sink to the end",
-      rows: [
-        row({ id: "notime", last_active_at: "" }),
-        row({ id: "has", last_active_at: "2026-08-02T00:00:00Z" }),
-      ],
-      want: ["has", "notime"],
-    },
-    {
-      name: "empty input",
-      rows: [],
-      want: [],
-    },
-  ]
-  for (const c of cases) {
-    it(c.name, () => {
-      expect(sortSessions(c.rows).map((r) => r.id)).toEqual(c.want)
-    })
-  }
-
-  it("does not mutate the input array", () => {
-    const rows = [
-      row({ id: "a", last_active_at: "2026-08-01T00:00:00Z" }),
-      row({ id: "b", last_active_at: "2026-08-04T00:00:00Z" }),
-    ]
-    const snapshot = rows.map((r) => r.id)
-    sortSessions(rows)
-    expect(rows.map((r) => r.id)).toEqual(snapshot)
-  })
-})
-
-// --------------------------------------------------------------- search -----
-
-describe("filterSessionsByQuery", () => {
-  const rows = [
-    row({ id: "1", title: "Refactor parser", project_dir: "/a/b" }),
-    row({ id: "2", title: "Hello", project_dir: "/projects/parser" }),
-    row({ id: "3", title: "Unrelated", project_dir: "/x/y" }),
-  ]
-
-  const cases: Array<{ name: string; q: string; want: string[] }> = [
-    { name: "matches title substring", q: "refactor", want: ["1"] },
-    { name: "matches project substring", q: "parser", want: ["1", "2"] },
-    { name: "case-insensitive", q: "HELLO", want: ["2"] },
-    { name: "no match returns empty", q: "zzz", want: [] },
-    { name: "empty query returns all unchanged", q: "", want: ["1", "2", "3"] },
-    {
-      name: "whitespace-only query returns all",
-      q: "   ",
-      want: ["1", "2", "3"],
-    },
-  ]
-  for (const c of cases) {
-    it(c.name, () => {
-      expect(filterSessionsByQuery(rows, c.q).map((r) => r.id)).toEqual(c.want)
-    })
-  }
-})
-
-// -------------------------------------------------------------- groups ------
-
-describe("groupSessionsByGroup", () => {
-  const groups: SessionGroup[] = [
-    group({ id: "lg1", kind: "local", name: "Local A" }),
-    group({ id: "lg2", kind: "local", name: "Local B" }),
-    group({ id: "sg1", kind: "synced", name: "Synced A" }),
-  ]
-
-  it("local track buckets by local_group_id and collects ungrouped", () => {
-    const rows = [
-      row({ id: "a", local_group_id: "lg1" }),
-      row({ id: "b", local_group_id: "lg2" }),
-      row({ id: "c", local_group_id: "" }),
-      row({ id: "d", local_group_id: "lg1" }),
-    ]
-    const res = groupSessionsByGroup(rows, groups, "local")
-    expect(res.groups.map((g) => g.group.id)).toEqual(["lg1", "lg2"])
-    expect(res.groups[0].sessions.map((s) => s.id)).toEqual(["a", "d"])
-    expect(res.groups[1].sessions.map((s) => s.id)).toEqual(["b"])
-    expect(res.ungrouped.map((s) => s.id)).toEqual(["c"])
-  })
-
-  it("synced track buckets by synced_group_id (independent of local)", () => {
-    const rows = [
-      row({ id: "a", local_group_id: "lg1", synced_group_id: "sg1" }),
-      row({ id: "b", synced_group_id: "" }),
-    ]
-    const res = groupSessionsByGroup(rows, groups, "synced")
-    expect(res.groups.map((g) => g.group.id)).toEqual(["sg1"])
-    expect(res.groups[0].sessions.map((s) => s.id)).toEqual(["a"])
-    expect(res.ungrouped.map((s) => s.id)).toEqual(["b"])
-  })
-
-  it("a stale group id (group since deleted) falls into ungrouped, not dropped", () => {
-    const rows = [row({ id: "a", local_group_id: "ghost" })]
-    const res = groupSessionsByGroup(rows, groups, "local")
-    expect(res.groups).toEqual([])
-    expect(res.ungrouped.map((s) => s.id)).toEqual(["a"])
-  })
-
-  it("same session can sit in different groups across the two tracks", () => {
-    const r = row({
-      id: "x",
-      local_group_id: "lg1",
-      synced_group_id: "sg1",
-    })
-    const local = groupSessionsByGroup([r], groups, "local")
-    const synced = groupSessionsByGroup([r], groups, "synced")
-    expect(local.groups[0].group.id).toBe("lg1")
-    expect(synced.groups[0].group.id).toBe("sg1")
-  })
-
-  it("empty groups are omitted from the result (sidebar shows them separately)", () => {
-    const rows = [row({ id: "a", local_group_id: "lg1" })]
-    const res = groupSessionsByGroup(rows, groups, "local")
-    expect(res.groups.map((g) => g.group.id)).toEqual(["lg1"])
-    // lg2 exists but has no sessions → not in result
-  })
-
-  it("preserves input order within each bucket (caller pre-sorts)", () => {
-    // Pre-sorted descending by time.
-    const rows = [
-      row({
-        id: "new",
-        local_group_id: "lg1",
-        last_active_at: "2026-08-04T00:00:00Z",
-      }),
-      row({
-        id: "old",
-        local_group_id: "lg1",
-        last_active_at: "2026-08-01T00:00:00Z",
-      }),
-    ]
-    const res = groupSessionsByGroup(rows, groups, "local")
-    expect(res.groups[0].sessions.map((s) => s.id)).toEqual(["new", "old"])
-  })
-
-  it("empty input yields empty groups and ungrouped", () => {
-    const res = groupSessionsByGroup([], groups, "local")
-    expect(res.groups).toEqual([])
-    expect(res.ungrouped).toEqual([])
-  })
-})
-
-// -------------------------------------------------------- sidebar select ----
-
-describe("selectSessions", () => {
-  const groups: SessionGroup[] = [
-    group({ id: "lg1", kind: "local", name: "Local A" }),
-    group({ id: "lg2", kind: "local", name: "Local B" }),
-  ]
-  const rows = [
-    row({ id: "a", local_group_id: "lg1" }),
-    row({ id: "b", local_group_id: "lg2" }),
-    row({ id: "c", local_group_id: "" }),
-  ]
-  const grouped = groupSessionsByGroup(rows, groups, "local")
-  // allRows is the caller's sorted+filtered flat list.
-  const allRows = rows
-
-  it("ALL_GROUPS returns the full flat list (caller's sorted+filtered view)", () => {
+  it("search flows into the backend filter (paged search is backend-side)", () => {
     expect(
-      selectSessions(allRows, grouped, ALL_GROUPS).map((r) => r.id),
-    ).toEqual(["a", "b", "c"])
-  })
-
-  it("UNGROUPED returns only the ungrouped bucket", () => {
+      sessionTabFilter("local", "dev-self", { search: "hello" }).search,
+    ).toBe("hello")
     expect(
-      selectSessions(allRows, grouped, UNGROUPED).map((r) => r.id),
-    ).toEqual(["c"])
+      sessionTabFilter("favorites", "dev-self", { search: "hello" }).search,
+    ).toBe("hello")
+    // Empty / null search = no constraint.
+    expect(
+      sessionTabFilter("local", "dev-self", { search: "" }).search,
+    ).toBeNull()
+    expect(sessionTabFilter("local", "dev-self").search).toBeNull()
   })
 
-  it("a real group id returns that group's bucket", () => {
-    expect(selectSessions(allRows, grouped, "lg1").map((r) => r.id)).toEqual([
-      "a",
-    ])
+  it("groupId narrows the track's group column (null = all)", () => {
+    // Local tab → local_group_id; a real id narrows to that group.
+    expect(
+      sessionTabFilter("local", "dev-self", {}, "lg1").local_group_id,
+    ).toBe("lg1")
+    // Favorites tab → synced_group_id (track-scoped, disjoint spaces).
+    expect(
+      sessionTabFilter("favorites", "dev-self", {}, "sg1").synced_group_id,
+    ).toBe("sg1")
+    // The other track's column stays null.
+    expect(
+      sessionTabFilter("favorites", "dev-self", {}, "sg1").local_group_id,
+    ).toBeNull()
   })
 
-  it("an unknown group id returns empty (defensive)", () => {
-    expect(selectSessions(allRows, grouped, "nope")).toEqual([])
+  it("UNGROUPED maps to an empty group id (matches ungrouped rows)", () => {
+    expect(
+      sessionTabFilter("local", "dev-self", {}, UNGROUPED).local_group_id,
+    ).toBe("")
+    expect(
+      sessionTabFilter("favorites", "dev-self", {}, UNGROUPED).synced_group_id,
+    ).toBe("")
+  })
+
+  it("ALL_GROUPS and null groupId both mean no group constraint", () => {
+    expect(
+      sessionTabFilter("local", "dev-self", {}, ALL_GROUPS).local_group_id,
+    ).toBeNull()
+    expect(sessionTabFilter("local", "dev-self").local_group_id).toBeNull()
+  })
+})
+
+// --------------------------------------------------------------- counts ----
+
+describe("ungroupedCount", () => {
+  it("total minus known-group buckets", () => {
+    expect(
+      ungroupedCount(
+        {
+          total: 10,
+          groups: [
+            { group_id: "lg1", count: 4 },
+            { group_id: "lg2", count: 3 },
+            { group_id: "", count: 3 },
+          ],
+        },
+        new Set(["lg1", "lg2"]),
+      ),
+    ).toBe(3)
+  })
+
+  it("a stale group id (group since deleted) counts as ungrouped", () => {
+    expect(
+      ungroupedCount(
+        {
+          total: 7,
+          groups: [
+            { group_id: "lg1", count: 4 },
+            { group_id: "ghost", count: 2 },
+            { group_id: "", count: 1 },
+          ],
+        },
+        new Set(["lg1"]),
+      ),
+    ).toBe(3)
+  })
+
+  it("a bucket id outside this track's groups counts as ungrouped", () => {
+    // The synced-track bucket list contains only synced ids; a local-track
+    // id would never appear, but the count stays correct if it did.
+    expect(
+      ungroupedCount(
+        { total: 5, groups: [{ group_id: "sg1", count: 5 }] },
+        new Set(["lg1"]),
+      ),
+    ).toBe(5)
+  })
+
+  it("no groups known → everything is ungrouped", () => {
+    expect(
+      ungroupedCount(
+        { total: 3, groups: [{ group_id: "", count: 3 }] },
+        new Set(),
+      ),
+    ).toBe(3)
+  })
+
+  it("all grouped → zero ungrouped", () => {
+    expect(
+      ungroupedCount(
+        { total: 5, groups: [{ group_id: "lg1", count: 5 }] },
+        new Set(["lg1"]),
+      ),
+    ).toBe(0)
   })
 })
 
@@ -471,6 +386,81 @@ describe("applyGroupOrder", () => {
     // "c" was deleted mid-flight — it still renders, at the end.
     const out = applyGroupOrder(groups(["a", "b", "c"]), ["b", "a"])
     expect(out.map((g) => g.id)).toEqual(["b", "a", "c"])
+  })
+})
+
+// --------------------------------------------------------------- detail -----
+
+describe("sessionSpan", () => {
+  const cases: Array<{
+    name: string
+    ms: number | null | undefined
+    want: unknown
+  }> = [
+    {
+      name: "under a minute rounds down to 0 minutes",
+      ms: 59_999,
+      want: { days: 0, hours: 0, minutes: 0 },
+    },
+    {
+      name: "a few minutes",
+      ms: 5 * 60_000 + 30_000,
+      want: { days: 0, hours: 0, minutes: 5 },
+    },
+    {
+      name: "hours and minutes",
+      ms: 2 * 3_600_000 + 5 * 60_000,
+      want: { days: 0, hours: 2, minutes: 5 },
+    },
+    {
+      name: "days and hours",
+      ms: 3 * 86_400_000 + 7 * 3_600_000,
+      want: { days: 3, hours: 7, minutes: 0 },
+    },
+    { name: "null is null (no duration)", ms: null, want: null },
+    { name: "zero is null", ms: 0, want: null },
+    { name: "negative is null (times crossed)", ms: -1000, want: null },
+    { name: "NaN is null", ms: NaN, want: null },
+  ]
+  for (const c of cases) {
+    it(c.name, () => {
+      expect(sessionSpan(c.ms)).toEqual(c.want)
+    })
+  }
+})
+
+describe("modelsUsed", () => {
+  const msg = (overrides: Partial<SessionMessage>): SessionMessage => ({
+    uuid: "u",
+    session_id: "s",
+    role: "assistant",
+    ts: "",
+    content: "",
+    ...overrides,
+  })
+
+  it("collects distinct models in first-use order", () => {
+    const models = modelsUsed([
+      msg({ uuid: "a", model: "claude-fable-5" }),
+      msg({ uuid: "b", role: "user", model: null }),
+      msg({ uuid: "c", model: "claude-sonnet-5" }),
+      msg({ uuid: "d", model: "claude-fable-5" }),
+    ])
+    expect(models).toEqual(["claude-fable-5", "claude-sonnet-5"])
+  })
+
+  it("ignores empty / whitespace models and nulls", () => {
+    expect(
+      modelsUsed([
+        msg({ uuid: "a", model: null }),
+        msg({ uuid: "b", model: "  " }),
+        msg({ uuid: "c", model: "glm-5.2" }),
+      ]),
+    ).toEqual(["glm-5.2"])
+  })
+
+  it("empty transcript yields an empty list", () => {
+    expect(modelsUsed([])).toEqual([])
   })
 })
 

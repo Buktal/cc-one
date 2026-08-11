@@ -209,6 +209,43 @@ pub struct SessionFilter {
     /// (EXISTS semantics — a session spanning several models matches any of
     /// them). The model lives on `usage_records`, not on the session row.
     pub model: Option<String>,
+    /// Substring search over the display title (custom title when set, else the
+    /// original) and the project path — case-insensitive, literal (LIKE
+    /// metacharacters are escaped). `None`/empty = no constraint. Lives
+    /// backend-side because paged results make client-side filtering
+    /// inconsistent (it would only search the loaded page).
+    pub search: Option<String>,
+}
+
+/// Paged session-list query — mirrors `LogsQuery` (filter + limit + offset) so
+/// the sessions table paginates like the request log instead of loading every
+/// row into the UI. `offset` is an absolute row offset into the filtered,
+/// time-desc ordered set.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, specta::Type)]
+pub struct SessionQuery {
+    pub filter: Option<SessionFilter>,
+    pub limit: u32,
+    pub offset: u32,
+}
+
+/// One sidebar group bucket's session count under the current filter — the
+/// `group_id` is the track's group column value (empty string = ungrouped; a
+/// stale id whose group was deleted counts toward ungrouped, resolved
+/// client-side against the known group list).
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, specta::Type)]
+pub struct SessionGroupCount {
+    pub group_id: String,
+    pub count: u32,
+}
+
+/// Sidebar counts for one grouping track under a filter: the total (drives the
+/// "All" row + the paginator) plus per-bucket counts. Independent of paging —
+/// it describes the whole filtered set, so the sidebar numbers stay correct
+/// while the table shows one page.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, specta::Type)]
+pub struct SessionGroupCounts {
+    pub total: u32,
+    pub groups: Vec<SessionGroupCount>,
 }
 
 /// One group entry for the frontend, unified across the two tracks. Order is

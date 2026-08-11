@@ -48,7 +48,7 @@ import { cn } from "@/lib/utils"
 import type { SessionRow } from "@/types/generated/bindings"
 import type { SessionTab } from "../derive"
 import { sessionAgentKind, sessionSourceLabel } from "../source-labels"
-import { useSessionsBrowser } from "../use-sessions-browser"
+import { SESSIONS_PAGE_SIZE, useSessionsBrowser } from "../use-sessions-browser"
 import { GroupCreateDialog } from "./group-create-dialog"
 import { GroupSidebar } from "./group-sidebar"
 import { SessionDetailSheet } from "./session-detail-sheet"
@@ -116,7 +116,8 @@ export function SessionsView() {
       <div className="flex min-h-0 flex-1 gap-3">
         <GroupSidebar
           trackGroups={b.trackGroups}
-          grouped={b.grouped}
+          groupCounts={b.groupCounts}
+          ungroupedCount={b.ungroupedCount}
           totalCount={b.totalCount}
           selectedGroupId={b.selectedGroupId}
           onSelect={b.setSelectedGroupId}
@@ -156,6 +157,39 @@ export function SessionsView() {
                 deviceLabel={b.deviceLabel}
               />
             </QueryState>
+
+            {/* Paged footer — mirrors the request-log table's paginator: page
+              info on the left, prev/next on the right. Disabled states agree
+              with the page query's size (SESSIONS_PAGE_SIZE, single source). */}
+            <div className="text-muted-foreground mt-3 flex shrink-0 items-center justify-between text-xs">
+              <span>
+                {t("sessions.pageInfo", {
+                  page: b.page,
+                  totalPages: b.totalPages,
+                  total: formatInt(b.totalCount),
+                })}
+              </span>
+              <div className="flex gap-2">
+                <Button
+                  variant="outline"
+                  size="sm"
+                  disabled={b.offset === 0}
+                  onClick={() =>
+                    b.setOffset(Math.max(0, b.offset - SESSIONS_PAGE_SIZE))
+                  }
+                >
+                  {t("sessions.prevPage")}
+                </Button>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  disabled={b.offset + SESSIONS_PAGE_SIZE >= b.totalCount}
+                  onClick={() => b.setOffset(b.offset + SESSIONS_PAGE_SIZE)}
+                >
+                  {t("sessions.nextPage")}
+                </Button>
+              </div>
+            </div>
           </CardContent>
         </Card>
       </div>

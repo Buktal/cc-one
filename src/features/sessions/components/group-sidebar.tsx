@@ -53,7 +53,6 @@ import { cn } from "@/lib/utils"
 import type { SessionGroup } from "@/types/generated/bindings"
 import {
   ALL_GROUPS,
-  type GroupedSessions,
   type GroupTrack,
   reorderGroupIds,
   UNGROUPED,
@@ -61,7 +60,8 @@ import {
 
 export function GroupSidebar({
   trackGroups,
-  grouped,
+  groupCounts,
+  ungroupedCount,
   totalCount,
   selectedGroupId,
   onSelect,
@@ -74,7 +74,10 @@ export function GroupSidebar({
   track,
 }: {
   trackGroups: SessionGroup[]
-  grouped: GroupedSessions
+  /** Per-bucket session counts under the current filter (backend aggregation). */
+  groupCounts: Map<string, number>
+  /** Derived ungrouped count — total minus the known-group buckets. */
+  ungroupedCount: number
   totalCount: number
   selectedGroupId: string
   onSelect: (id: string) => void
@@ -87,10 +90,7 @@ export function GroupSidebar({
   track: GroupTrack
 }) {
   const { t } = useTranslation()
-  const countById = new Map(
-    grouped.groups.map((x) => [x.group.id, x.sessions.length]),
-  )
-  const ungroupedCount = grouped.ungrouped.length
+  const countById = groupCounts
   // Whole-row drag handle: 6px of movement before a press becomes a drag —
   // clicks keep selecting the row / opening its popover; moves reorder.
   // preventActivation is disabled so a press on the row's inner <button> can

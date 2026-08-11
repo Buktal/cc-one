@@ -19,7 +19,9 @@ import type {
   RunMode,
   SessionFilter,
   SessionGroup,
+  SessionGroupCounts,
   SessionMessage_Serialize,
+  SessionQuery,
   SessionRow,
   SyncedGroup,
   TrendBucket,
@@ -97,6 +99,7 @@ export function sessionFilterId(f: SessionFilter): string {
     f.from_ts,
     f.to_ts,
     f.model,
+    f.search,
   ].join("|")
 }
 
@@ -301,12 +304,30 @@ export const vaultApi = createApi({
     }),
 
     // ---- sessions ----
-    // Session list (one slice per tab; grouping is a client-side concern via
-    // groupSessionsByGroup, so the filter never narrows on group_id). Cached per
-    // filter so the two tabs (this-device / all-favorited) live side by side.
-    listSessions: b.query<SessionRow[], SessionFilter | null>({
-      queryFn: async (filter) => run(commands.querySessionsCmd(filter)),
-      providesTags: (_r, _e, filter) => [
+    // Paged session list (mirrors `logs`: one query per filter+page, tagged by
+    // filter only so a sessions_changed invalidate refetches every live page).
+    // The filter carries the tab scope AND the sidebar selection (group id) —
+    // group filtering moved backend-side so a group with many sessions pages
+    // like the All view instead of loading all its rows.
+    listSessions: b.query<SessionRow[], SessionQuery>({
+      queryFn: async (query) => run(commands.querySessionsCmd(query)),
+      providesTags: (_r, _e, query) => [
+        {
+          type: "Sessions",
+          id: query.filter ? sessionFilterId(query.filter) : "all",
+        },
+      ],
+    }),
+    /** Sidebar + paginator counts for one grouping track: total (All row +
+     *  page count) and per-bucket counts (group rows). Paging-independent —
+     *  same filter as the page query, no limit/offset. */
+    sessionCounts: b.query<
+      SessionGroupCounts,
+      { filter: SessionFilter | null; track: string }
+    >({
+      queryFn: async ({ filter, track }) =>
+        run(commands.countSessionsCmd(filter, track)),
+      providesTags: (_r, _e, { filter }) => [
         { type: "Sessions", id: filter ? sessionFilterId(filter) : "all" },
       ],
     }),
@@ -573,6 +594,7 @@ export const {
   useSetLightweightExpandMutation,
   useSetSkinMutation,
   useListSessionsQuery,
+  useSessionCountsQuery,
   useSessionTranscriptQuery,
   useSetSessionFavoritedMutation,
   useSetSessionCustomTitleMutation,

@@ -151,7 +151,13 @@ export const commands = {
 	 *  forget-device dialog to show what would be migrated or deleted.
 	 */
 	libraryDeviceSummary: (deviceId: string) => typedError<DeviceLibrarySummary, AppError>(__TAURI_INVOKE("library_device_summary", { deviceId })),
-	querySessionsCmd: (filter: {
+	querySessionsCmd: (query: SessionQuery) => typedError<SessionRow[], AppError>(__TAURI_INVOKE("query_sessions_cmd", { query })),
+	/**
+	 *  Sidebar + paginator counts for one grouping track under a filter — the
+	 *  "All" row total, the group-row buckets, and (derived client-side) the
+	 *  ungrouped count. Paging-independent: describes the whole filtered set.
+	 */
+	countSessionsCmd: (filter: {
 	/**  Scope to one device (`None` = all devices). */
 	device_scope: string | null,
 	/**  Scope to one source, e.g. `claude_code`. */
@@ -172,7 +178,15 @@ export const commands = {
 	 *  them). The model lives on `usage_records`, not on the session row.
 	 */
 	model: string | null,
-} | null) => typedError<SessionRow[], AppError>(__TAURI_INVOKE("query_sessions_cmd", { filter })),
+	/**
+	 *  Substring search over the display title (custom title when set, else the
+	 *  original) and the project path — case-insensitive, literal (LIKE
+	 *  metacharacters are escaped). `None`/empty = no constraint. Lives
+	 *  backend-side because paged results make client-side filtering
+	 *  inconsistent (it would only search the loaded page).
+	 */
+	search: string | null,
+} | null, track: string) => typedError<SessionGroupCounts, AppError>(__TAURI_INVOKE("count_sessions_cmd", { filter, track })),
 	getSessionTranscriptCmd: (id: string, deviceId: string) => typedError<SessionMessage_Serialize[], AppError>(__TAURI_INVOKE("get_session_transcript_cmd", { id, deviceId })),
 	setSessionFavoritedCmd: (id: string, deviceId: string, favorited: boolean) => typedError<null, AppError>(__TAURI_INVOKE("set_session_favorited_cmd", { id, deviceId, favorited })),
 	setSessionCustomTitleCmd: (id: string, deviceId: string, title: string | null) => typedError<null, AppError>(__TAURI_INVOKE("set_session_custom_title_cmd", { id, deviceId, title })),
@@ -646,6 +660,14 @@ export type SessionFilter = {
 	 *  them). The model lives on `usage_records`, not on the session row.
 	 */
 	model: string | null,
+	/**
+	 *  Substring search over the display title (custom title when set, else the
+	 *  original) and the project path — case-insensitive, literal (LIKE
+	 *  metacharacters are escaped). `None`/empty = no constraint. Lives
+	 *  backend-side because paged results make client-side filtering
+	 *  inconsistent (it would only search the loaded page).
+	 */
+	search: string | null,
 };
 
 /**
@@ -660,6 +682,28 @@ export type SessionGroup = {
 	kind: string,
 	/**  Owning device id. Only meaningful for `kind == "synced"`; empty for local. */
 	device_id: string,
+};
+
+/**
+ *  One sidebar group bucket's session count under the current filter — the
+ *  `group_id` is the track's group column value (empty string = ungrouped; a
+ *  stale id whose group was deleted counts toward ungrouped, resolved
+ *  client-side against the known group list).
+ */
+export type SessionGroupCount = {
+	group_id: string,
+	count: number,
+};
+
+/**
+ *  Sidebar counts for one grouping track under a filter: the total (drives the
+ *  "All" row + the paginator) plus per-bucket counts. Independent of paging —
+ *  it describes the whole filtered set, so the sidebar numbers stay correct
+ *  while the table shows one page.
+ */
+export type SessionGroupCounts = {
+	total: number,
+	groups: SessionGroupCount[],
 };
 
 /**
@@ -729,6 +773,18 @@ export type SessionMessage_Serialize = {
 	 *  >32 KB tool_results are filtered/truncated at collect time.
 	 */
 	content: string,
+};
+
+/**
+ *  Paged session-list query — mirrors `LogsQuery` (filter + limit + offset) so
+ *  the sessions table paginates like the request log instead of loading every
+ *  row into the UI. `offset` is an absolute row offset into the filtered,
+ *  time-desc ordered set.
+ */
+export type SessionQuery = {
+	filter: SessionFilter | null,
+	limit: number,
+	offset: number,
 };
 
 /**

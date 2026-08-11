@@ -16,8 +16,10 @@ import {
 import { paginate } from "@/lib/pagination"
 
 /** Client-side page size — the full list is already loaded; rendering all of
- * it at once jank-scrolls once it grows past a few hundred entries. */
-export const PAGE_SIZE = 50
+ * it at once jank-scrolls once it grows past a few hundred entries. 20 matches
+ * the request-log / sessions / library tables so every paged view uses the
+ * same density. */
+export const PAGE_SIZE = 20
 
 /**
  * Pricing table controller. Owns the data query, the search/sort/pagination

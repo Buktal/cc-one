@@ -18,8 +18,9 @@ use crate::error::{AppError, AppResult};
 use crate::library::{self, DeviceLibrarySummary, LibraryEntry, UploadItem};
 use crate::model::{
     App, CommonConfigSnippet, DeviceInfo, LocalGroup, LogsQuery, ModelStatsRow, PricingEntry,
-    Provider, RunMode, SessionFilter, SessionGroup, SessionMessage, SessionRow, SyncedGroup,
-    TrendBucket, TrendPoint, UsageFilter, UsageLogRow, UsageStats,
+    Provider, RunMode, SessionFilter, SessionGroup, SessionGroupCounts, SessionMessage,
+    SessionQuery, SessionRow, SyncedGroup, TrendBucket, TrendPoint, UsageFilter, UsageLogRow,
+    UsageStats,
 };
 use crate::pricing;
 use crate::provider::export_import::{ProviderImportMode, ProviderImportReport};
@@ -590,9 +591,23 @@ fn emit_sessions_changed(app_handle: &tauri::AppHandle) {
 #[specta::specta]
 pub fn query_sessions_cmd(
     state: State<'_, AppState>,
-    filter: Option<SessionFilter>,
+    query: SessionQuery,
 ) -> AppResult<Vec<SessionRow>> {
-    state.store.query_sessions(filter.as_ref())
+    // Paged — the UI renders one page instead of loading every session.
+    state.store.query_sessions_page(&query)
+}
+
+/// Sidebar + paginator counts for one grouping track under a filter — the
+/// "All" row total, the group-row buckets, and (derived client-side) the
+/// ungrouped count. Paging-independent: describes the whole filtered set.
+#[tauri::command]
+#[specta::specta]
+pub fn count_sessions_cmd(
+    state: State<'_, AppState>,
+    filter: Option<SessionFilter>,
+    track: String,
+) -> AppResult<SessionGroupCounts> {
+    state.store.count_sessions(filter.as_ref(), &track)
 }
 
 #[tauri::command]

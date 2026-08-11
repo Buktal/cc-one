@@ -357,49 +357,80 @@ impl super::Store {
     /// per-session request_count / total_tokens / total_cost_usd (the usage
     /// table is the single source of token truth). Title = `custom_title` when
     /// set, else `title_orig`. `filter` is optional; `None` lists every session.
+    /// Unpaged — retained for test-only callers (the collector/sync tests);
+    /// production reads go through [`Store::query_sessions_page`] so the UI
+    /// only materializes one page.
+    #[cfg(test)]
     pub fn query_sessions(&self, filter: Option<&SessionFilter>) -> AppResult<Vec<SessionRow>> {
         let conn = self.conn.lock().expect("db mutex poisoned");
         let (clause, params_vec) = build_session_where(filter);
+        let sql = sessions_select_sql(&clause);
+        let mut stmt = conn.prepare(&sql)?;
+        let rows = stmt.query_map(params_from_iter(params_vec.iter()), session_row)?;
+        rows.collect::<rusqlite::Result<Vec<_>>>()
+            .map_err(AppError::from)
+    }
+
+    /// One page of the session list for the UI — same rows as
+    /// [`Store::query_sessions`] but `LIMIT ? OFFSET ?` applied so a large
+    /// session table renders a page instead of loading everything (mirrors the
+    /// request-log table's paging). The ORDER BY adds `device_id`/`id`
+    /// tiebreakers so pages never duplicate or skip rows across page turns.
+    pub fn query_sessions_page(&self, query: &SessionQuery) -> AppResult<Vec<SessionRow>> {
+        let conn = self.conn.lock().expect("db mutex poisoned");
+        let (clause, mut params_vec) = build_session_where(query.filter.as_ref());
+        let sql = format!("{} LIMIT ? OFFSET ?", sessions_select_sql(&clause));
+        params_vec.push(SqlValue::Integer(query.limit as i64));
+        params_vec.push(SqlValue::Integer(query.offset as i64));
+        let mut stmt = conn.prepare(&sql)?;
+        let rows = stmt.query_map(params_from_iter(params_vec.iter()), session_row)?;
+        rows.collect::<rusqlite::Result<Vec<_>>>()
+            .map_err(AppError::from)
+    }
+
+    /// Sidebar + paginator counts for one grouping track under a filter: the
+    /// total session count (drives the paginator and the sidebar's "All" row)
+    /// plus per-bucket counts (the group rows). The track selects the group
+    /// column (`local` → `local_group_id`, `synced` → `synced_group_id`);
+    /// every distinct column value becomes a bucket, including the empty
+    /// string (ungrouped) and stale ids whose group was deleted — the client
+    /// resolves those against its known group list. Paging-independent: it
+    /// describes the whole filtered set.
+    pub fn count_sessions(
+        &self,
+        filter: Option<&SessionFilter>,
+        track: &str,
+    ) -> AppResult<SessionGroupCounts> {
+        let col = match track {
+            "local" => "local_group_id",
+            "synced" => "synced_group_id",
+            other => return Err(AppError::Internal(format!("unknown group track: {other}"))),
+        };
+        let conn = self.conn.lock().expect("db mutex poisoned");
+        let (clause, params_vec) = build_session_where(filter);
+        let total: i64 = conn.query_row(
+            &format!("SELECT COUNT(*) FROM sessions s {clause}"),
+            params_from_iter(params_vec.iter()),
+            |r| r.get(0),
+        )?;
         let sql = format!(
-            "SELECT s.id, s.device_id, s.source, s.project_dir,
-                    COALESCE(NULLIF(s.custom_title,''), s.title_orig) AS title,
-                    s.favorited, s.local_group_id, s.synced_group_id,
-                    s.started_at, s.last_active_at, s.agent_type,
-                    COALESCE(agg.request_count, 0),
-                    COALESCE(agg.total_tokens, 0),
-                    COALESCE(agg.total_cost_usd, 0.0)
-             FROM sessions s
-             LEFT JOIN (
-                SELECT session_id, device_id,
-                       COUNT(*) AS request_count,
-                       COALESCE(SUM(input_tokens+output_tokens+cache_creation_tokens+cache_read_tokens),0) AS total_tokens,
-                       COALESCE(SUM(CAST(total_cost_usd AS REAL)),0) AS total_cost_usd
-                FROM usage_records GROUP BY session_id, device_id
-             ) agg ON agg.session_id = s.id AND agg.device_id = s.device_id
-             {clause}
-             ORDER BY s.last_active_at DESC"
+            "SELECT s.{col} AS gid, COUNT(*) AS n \
+             FROM sessions s {clause} GROUP BY s.{col}"
         );
         let mut stmt = conn.prepare(&sql)?;
         let rows = stmt.query_map(params_from_iter(params_vec.iter()), |r| {
-            Ok(SessionRow {
-                id: r.get(0)?,
-                device_id: r.get(1)?,
-                source: r.get(2)?,
-                project_dir: r.get(3)?,
-                title: r.get(4)?,
-                favorited: r.get::<_, i64>(5)? != 0,
-                local_group_id: r.get(6)?,
-                synced_group_id: r.get(7)?,
-                started_at: r.get(8)?,
-                last_active_at: r.get(9)?,
-                agent_type: r.get(10)?,
-                request_count: r.get::<_, i64>(11)? as u32,
-                total_tokens: r.get::<_, i64>(12)? as u32,
-                total_cost_usd: r.get(13)?,
+            Ok(SessionGroupCount {
+                group_id: r.get(0)?,
+                count: r.get::<_, i64>(1)? as u32,
             })
         })?;
-        rows.collect::<rusqlite::Result<Vec<_>>>()
-            .map_err(AppError::from)
+        let groups = rows
+            .collect::<rusqlite::Result<Vec<_>>>()
+            .map_err(AppError::from)?;
+        Ok(SessionGroupCounts {
+            total: total as u32,
+            groups,
+        })
     }
 
     /// Per-session usage aggregate (request_count, total_tokens, total_cost) for
@@ -525,12 +556,97 @@ fn build_session_where(filter: Option<&SessionFilter>) -> (String, Vec<SqlValue>
             params.push(SqlValue::Text(m.clone()));
         }
     }
+    if let Some(q) = &f.search {
+        let q = q.trim();
+        if !q.is_empty() {
+            // Substring search over the DISPLAY title (custom title wins, same
+            // COALESCE as the SELECT) and the project path. Like the client-
+            // side filter it replaces, the match is case-insensitive and
+            // literal — the pattern escapes LIKE wildcards so `%`/`_` in the
+            // query never act as metacharacters.
+            let pattern = like_pattern(q);
+            conds.push(
+                "(COALESCE(NULLIF(s.custom_title,''), s.title_orig) LIKE ? ESCAPE '\\' \
+                 OR s.project_dir LIKE ? ESCAPE '\\')"
+                    .into(),
+            );
+            params.push(SqlValue::Text(pattern.clone()));
+            params.push(SqlValue::Text(pattern));
+        }
+    }
     let clause = if conds.is_empty() {
         String::new()
     } else {
         format!("WHERE {}", conds.join(" AND "))
     };
     (clause, params)
+}
+
+/// Wrap a user search query in `%…%` with LIKE metacharacters (`%`, `_`, `\`)
+/// escaped — the SQL mirror of the old client-side substring filter, so a
+/// literal `%` or `_` in the query matches itself instead of acting as a
+/// wildcard. The ESCAPE char is `\` (SQLite's default), quoted with `ESCAPE
+/// '\'` in the SQL above.
+fn like_pattern(q: &str) -> String {
+    let mut out = String::with_capacity(q.len() + 2);
+    out.push('%');
+    for c in q.chars() {
+        if c == '%' || c == '_' || c == '\\' {
+            out.push('\\');
+        }
+        out.push(c);
+    }
+    out.push('%');
+    out
+}
+
+/// The shared session-list SELECT (rows + live usage aggregate + optional
+/// WHERE), ending in a stable time-desc ORDER BY. `device_id`/`id`
+/// tiebreakers make the ordering total, so offset paging never duplicates or
+/// skips a row across page turns. Callers append `LIMIT ? OFFSET ?` when
+/// paging (or leave the clause empty for the full unpaged read).
+fn sessions_select_sql(clause: &str) -> String {
+    format!(
+        "SELECT s.id, s.device_id, s.source, s.project_dir,
+                COALESCE(NULLIF(s.custom_title,''), s.title_orig) AS title,
+                s.favorited, s.local_group_id, s.synced_group_id,
+                s.started_at, s.last_active_at, s.agent_type,
+                COALESCE(agg.request_count, 0),
+                COALESCE(agg.total_tokens, 0),
+                COALESCE(agg.total_cost_usd, 0.0)
+         FROM sessions s
+         LEFT JOIN (
+            SELECT session_id, device_id,
+                   COUNT(*) AS request_count,
+                   COALESCE(SUM(input_tokens+output_tokens+cache_creation_tokens+cache_read_tokens),0) AS total_tokens,
+                   COALESCE(SUM(CAST(total_cost_usd AS REAL)),0) AS total_cost_usd
+            FROM usage_records GROUP BY session_id, device_id
+         ) agg ON agg.session_id = s.id AND agg.device_id = s.device_id
+         {clause}
+         ORDER BY s.last_active_at DESC, s.device_id, s.id"
+    )
+}
+
+/// Decode a `sessions` row in the shared SELECT's column order (13 columns —
+/// the positional mapping lives in one place for both the paged and unpaged
+/// reads).
+fn session_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<SessionRow> {
+    Ok(SessionRow {
+        id: r.get(0)?,
+        device_id: r.get(1)?,
+        source: r.get(2)?,
+        project_dir: r.get(3)?,
+        title: r.get(4)?,
+        favorited: r.get::<_, i64>(5)? != 0,
+        local_group_id: r.get(6)?,
+        synced_group_id: r.get(7)?,
+        started_at: r.get(8)?,
+        last_active_at: r.get(9)?,
+        agent_type: r.get(10)?,
+        request_count: r.get::<_, i64>(11)? as u32,
+        total_tokens: r.get::<_, i64>(12)? as u32,
+        total_cost_usd: r.get(13)?,
+    })
 }
 
 #[cfg(test)]

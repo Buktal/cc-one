@@ -608,4 +608,234 @@ mod tests {
             .is_empty());
         assert_eq!(s.query_sessions(None).unwrap().len(), 1);
     }
+
+    // ---------------------------------------------------------- paging ------
+
+    /// Paged reads return consecutive time-desc slices with no overlap or gap
+    /// (the ORDER BY tiebreakers make the ordering total) and the page sizes
+    /// agree with the count query's total under the same filter.
+    #[test]
+    fn query_sessions_page_is_consecutive_and_agrees_with_count() {
+        let s = mem();
+        seed_session(&s, "d", "dev", "2026-08-04T10:00:00.000Z");
+        seed_session(&s, "a", "dev", "2026-08-01T10:00:00.000Z");
+        seed_session(&s, "c", "dev", "2026-08-03T10:00:00.000Z");
+        seed_session(&s, "e", "dev", "2026-08-05T10:00:00.000Z");
+        seed_session(&s, "b", "dev", "2026-08-02T10:00:00.000Z");
+
+        let page1 = s
+            .query_sessions_page(&SessionQuery {
+                filter: None,
+                limit: 2,
+                offset: 0,
+            })
+            .unwrap();
+        let page2 = s
+            .query_sessions_page(&SessionQuery {
+                filter: None,
+                limit: 2,
+                offset: 2,
+            })
+            .unwrap();
+        let page3 = s
+            .query_sessions_page(&SessionQuery {
+                filter: None,
+                limit: 2,
+                offset: 4,
+            })
+            .unwrap();
+        let ids =
+            |rows: Vec<SessionRow>| -> Vec<String> { rows.into_iter().map(|r| r.id).collect() };
+        assert_eq!(ids(page1), ["e", "d"], "page 1 = newest two");
+        assert_eq!(ids(page2), ["c", "b"], "page 2 = next two");
+        assert_eq!(ids(page3), ["a"], "page 3 = the tail");
+        // Offsets past the end return an empty page, never an error.
+        let past = s
+            .query_sessions_page(&SessionQuery {
+                filter: None,
+                limit: 2,
+                offset: 99,
+            })
+            .unwrap();
+        assert!(past.is_empty());
+
+        let counts = s.count_sessions(None, "local").unwrap();
+        assert_eq!(counts.total, 5, "count total matches the paged set");
+        let all = s.query_sessions(None).unwrap();
+        assert_eq!(all.len(), 5, "unpaged read still returns everything");
+    }
+
+    /// Search is backend-side (LIKE) so a paged result searches the whole set,
+    /// not just the loaded page. Matches the display title (custom title wins)
+    /// and the project path, case-insensitively.
+    #[test]
+    fn query_sessions_page_search_matches_title_project_and_custom_title() {
+        let s = mem();
+        s.upsert_session(
+            "dev",
+            &SessionSystemData {
+                id: "s1".into(),
+                source: "claude_code".into(),
+                project_dir: "/home/u/parser".into(),
+                title_orig: "Refactor tokenizer".into(),
+                ..sys_session("s1", "2026-08-01T10:00:00.000Z")
+            },
+        )
+        .unwrap();
+        s.upsert_session(
+            "dev",
+            &SessionSystemData {
+                id: "s2".into(),
+                project_dir: "/home/u/www".into(),
+                title_orig: "Unrelated".into(),
+                ..sys_session("s2", "2026-08-02T10:00:00.000Z")
+            },
+        )
+        .unwrap();
+
+        let ids = |q: &str| -> Vec<String> {
+            let filter = SessionFilter {
+                search: Some(q.into()),
+                ..Default::default()
+            };
+            s.query_sessions_page(&SessionQuery {
+                filter: Some(filter),
+                limit: 50,
+                offset: 0,
+            })
+            .unwrap()
+            .into_iter()
+            .map(|r| r.id)
+            .collect()
+        };
+        assert_eq!(ids("refactor"), ["s1"], "title_orig matches");
+        assert_eq!(ids("parser"), ["s1"], "project_dir matches");
+        assert!(ids("HELLO").is_empty(), "no match for unrelated text");
+        // Custom title replaces the display title — search then sees it, not
+        // the title_orig behind it (same COALESCE as the SELECT).
+        s.set_session_custom_title("dev", "s1", Some("Casework"))
+            .unwrap();
+        assert_eq!(
+            ids("casework"),
+            ["s1"],
+            "custom title becomes the searchable display title"
+        );
+        assert!(
+            ids("refactor").is_empty(),
+            "title_orig behind a custom title is not searched"
+        );
+        assert!(ids("zzz").is_empty(), "no match");
+        // Search composes with the tab filter (device scope).
+        let scoped = SessionFilter {
+            device_scope: Some("other-dev".into()),
+            search: Some("refactor".into()),
+            ..Default::default()
+        };
+        assert!(s
+            .query_sessions_page(&SessionQuery {
+                filter: Some(scoped),
+                limit: 50,
+                offset: 0,
+            })
+            .unwrap()
+            .is_empty());
+    }
+
+    /// LIKE wildcards in the search query are escaped — a literal `%` or `_`
+    /// matches itself, mirroring the old client-side substring filter.
+    #[test]
+    fn query_sessions_page_search_escapes_like_wildcards() {
+        let s = mem();
+        s.upsert_session(
+            "dev",
+            &SessionSystemData {
+                id: "pct".into(),
+                title_orig: "100% done".into(),
+                ..sys_session("pct", "2026-08-01T10:00:00.000Z")
+            },
+        )
+        .unwrap();
+        s.upsert_session(
+            "dev",
+            &SessionSystemData {
+                id: "plain".into(),
+                title_orig: "One hundred".into(),
+                ..sys_session("plain", "2026-08-02T10:00:00.000Z")
+            },
+        )
+        .unwrap();
+        let ids = |q: &str| -> Vec<String> {
+            let filter = SessionFilter {
+                search: Some(q.into()),
+                ..Default::default()
+            };
+            s.query_sessions_page(&SessionQuery {
+                filter: Some(filter),
+                limit: 50,
+                offset: 0,
+            })
+            .unwrap()
+            .into_iter()
+            .map(|r| r.id)
+            .collect()
+        };
+        assert_eq!(ids("%"), ["pct"], "a lone % matches the literal % row only");
+        assert_eq!(ids("00%"), ["pct"], "% is not a wildcard in the query");
+        assert_eq!(
+            ids("One hundred"),
+            ["plain"],
+            "plain query unaffected by escaping"
+        );
+    }
+
+    /// Sidebar counts: total under the filter + one bucket per distinct group
+    /// column value (empty string = ungrouped), per track.
+    #[test]
+    fn count_sessions_totals_and_group_buckets_per_track() {
+        let s = mem();
+        for (id, last) in [
+            ("a", "2026-08-01T10:00:00.000Z"),
+            ("b", "2026-08-02T10:00:00.000Z"),
+            ("c", "2026-08-03T10:00:00.000Z"),
+            ("d", "2026-08-04T10:00:00.000Z"),
+        ] {
+            seed_session(&s, id, "dev", last);
+        }
+        s.set_session_local_group("dev", "a", Some("lg1")).unwrap();
+        s.set_session_local_group("dev", "b", Some("lg1")).unwrap();
+        s.set_session_local_group("dev", "c", Some("lg2")).unwrap();
+        s.set_session_synced_group("dev", "a", Some("sg1")).unwrap();
+
+        let local = s.count_sessions(None, "local").unwrap();
+        assert_eq!(local.total, 4, "total ignores the track");
+        let buckets: std::collections::BTreeMap<String, u32> = local
+            .groups
+            .iter()
+            .map(|g| (g.group_id.clone(), g.count))
+            .collect();
+        assert_eq!(buckets["lg1"], 2, "two sessions in lg1");
+        assert_eq!(buckets["lg2"], 1, "one session in lg2");
+        assert_eq!(buckets[""], 1, "the ungrouped bucket is the empty id");
+
+        let synced = s.count_sessions(None, "synced").unwrap();
+        let synced_buckets: std::collections::BTreeMap<String, u32> = synced
+            .groups
+            .iter()
+            .map(|g| (g.group_id.clone(), g.count))
+            .collect();
+        assert_eq!(synced_buckets["sg1"], 1);
+        assert_eq!(synced_buckets[""], 3);
+
+        // Filtered counts narrow with the filter (source scope).
+        let src_filter = SessionFilter {
+            source: Some("codex_cli".into()),
+            ..Default::default()
+        };
+        let empty = s.count_sessions(Some(&src_filter), "local").unwrap();
+        assert_eq!(empty.total, 0);
+        assert!(empty.groups.is_empty());
+
+        // Unknown track is a hard error, not a silent wrong-column read.
+        assert!(s.count_sessions(None, "bogus").is_err());
+    }
 }

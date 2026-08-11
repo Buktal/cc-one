@@ -68,14 +68,14 @@ import {
   TooltipContent,
   TooltipTrigger,
 } from "@/components/ui/tooltip"
-import { formatCost, formatInt, formatTokens } from "@/lib/format"
+import { formatCost, formatInt, formatTime, formatTokens } from "@/lib/format"
 import { cn } from "@/lib/utils"
 import type {
   SessionGroup,
   SessionMessage,
   SessionRow,
 } from "@/types/generated/bindings"
-import { firstLine } from "../derive"
+import { firstLine, modelsUsed, sessionSpan } from "../derive"
 import { sessionSourceLabel } from "../source-labels"
 import { MarkdownContent, ToolContent } from "./markdown-content"
 
@@ -129,7 +129,6 @@ export interface SessionDetailSheetProps {
 }
 
 export function SessionDetailSheet(props: SessionDetailSheetProps) {
-  const { t } = useTranslation()
   const {
     session: s,
     favorited,
@@ -186,105 +185,26 @@ export function SessionDetailSheet(props: SessionDetailSheetProps) {
           }}
           className="flex w-[60vw] min-w-[32rem] flex-col gap-0 overflow-hidden p-0 sm:max-w-none"
         >
-          {/* Header: title + meta + actions */}
-          <SheetHeader className="border-border gap-2 border-b p-4 pr-10">
-            {/* Rename trigger: only the title text + pencil icon are clickable
-              (w-fit), not the rest of the row. The pencil makes the affordance
-              visible; the whole button is a native <button> so it stays
-              keyboard-accessible. */}
-            {editTitle ? (
-              <div className="flex items-center gap-1">
-                <Input
-                  value={titleDraft}
-                  onChange={(e) => onTitleDraft(e.target.value)}
-                  onKeyDown={(e) => {
-                    if (e.key === "Enter") onCommitTitle()
-                    if (e.key === "Escape") onCancelTitle()
-                  }}
-                  className="h-7"
-                  autoFocus
-                />
-                <Button variant="ghost" size="sm" onClick={onCommitTitle}>
-                  {t("common.save")}
-                </Button>
-                <Button variant="ghost" size="icon-sm" onClick={onCancelTitle}>
-                  {t("common.cancel")}
-                </Button>
-              </div>
-            ) : (
-              <SheetTitle className="text-base">
-                <button
-                  type="button"
-                  onClick={onStartTitle}
-                  title={t("sessions.detail.renameHint")}
-                  className="hover:text-accent-brand-strong group flex w-fit max-w-full cursor-pointer items-center gap-1.5 rounded-sm outline-none focus-visible:ring-2 focus-visible:ring-ring/40"
-                >
-                  <span className="max-w-[24rem] truncate">
-                    {s.title || t("sessions.untitled")}
-                  </span>
-                  <Pencil className="text-muted-foreground size-3.5 shrink-0 opacity-60 transition-opacity group-hover:opacity-100" />
-                </button>
-              </SheetTitle>
-            )}
-            <div className="text-muted-foreground flex flex-wrap items-center gap-x-3 gap-y-1 text-xs">
-              <Badge variant="secondary">{sessionSourceLabel(s.source)}</Badge>
-              <span className="truncate" title={s.project_dir}>
-                {s.project_dir || "—"}
-              </span>
-              <span>{deviceLabel(s.device_id)}</span>
-              <span title={dayjs(s.last_active_at).format("YYYY-MM-DD HH:mm")}>
-                {s.last_active_at ? dayjs(s.last_active_at).fromNow() : "—"}
-              </span>
-            </div>
-            <div className="text-muted-foreground flex items-center gap-3 text-xs tabular-nums">
-              <span>
-                {formatInt(s.request_count)} {t("sessions.col.requests")}
-              </span>
-              <span>{formatTokens(s.total_tokens)} tok</span>
-              <span>{formatCost(s.total_cost_usd)}</span>
-            </div>
-            <div className="flex items-center gap-2 pt-1">
-              <Button
-                variant={favorited ? "default" : "outline"}
-                size="sm"
-                className="h-7"
-                onClick={onToggleFavorite}
-              >
-                <Star className={cn("size-4", favorited && "fill-current")} />
-                {favorited
-                  ? t("sessions.row.unfavorite")
-                  : t("sessions.row.favorite")}
-              </Button>
-              <Select
-                value={currentGroupId || NO_GROUP}
-                onValueChange={(v) =>
-                  onSetGroup(v === NO_GROUP ? null : (v ?? null))
-                }
-              >
-                <SelectTrigger className="h-8 w-48" size="sm">
-                  <SelectValue>
-                    {(val: string) => {
-                      if (val === NO_GROUP) return t("sessions.detail.noGroup")
-                      return (
-                        trackGroups.find((g) => g.id === val)?.name ??
-                        t("sessions.detail.noGroup")
-                      )
-                    }}
-                  </SelectValue>
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value={NO_GROUP}>
-                    {t("sessions.detail.noGroup")}
-                  </SelectItem>
-                  {trackGroups.map((g) => (
-                    <SelectItem key={g.id} value={g.id}>
-                      {g.name}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </div>
-          </SheetHeader>
+          {/* Header: 会话档案 — 识别行（标题 + 操作）在上，信息流
+            （身份 → 时间 → 统计 → 模型）一行在下。两行式，流式布局无
+            等宽列的死区。 */}
+          <SessionHeader
+            session={s}
+            favorited={favorited}
+            editTitle={editTitle}
+            titleDraft={titleDraft}
+            onTitleDraft={onTitleDraft}
+            onStartTitle={onStartTitle}
+            onCancelTitle={onCancelTitle}
+            onCommitTitle={onCommitTitle}
+            onToggleFavorite={onToggleFavorite}
+            trackGroups={trackGroups}
+            currentGroupId={currentGroupId}
+            onSetGroup={onSetGroup}
+            transcript={transcript}
+            transcriptLoading={transcriptLoading}
+            deviceLabel={deviceLabel}
+          />
 
           {/* Body: transcript timeline */}
           <TranscriptBody
@@ -306,6 +226,275 @@ export function SessionDetailSheet(props: SessionDetailSheetProps) {
         jumpTo={turnNav.jumpTo}
       />
     </>
+  )
+}
+
+/**
+ * The detail header — a two-row "dossier" layout. Row 1 is identity + actions:
+ * the renameable title on the left, favorite / group actions pinned right.
+ * Row 2 is a single inline flow of facts (id · device · project · timing ·
+ * usage · models), each label muted and the value following it on the same
+ * line. Flow items wrap instead of stretching into equal-width columns, so a
+ * short value never leaves dead space beside it — the definition grid's
+ * table feel is gone and the header is one row tall. The session id leads in
+ * a monospace slot with a copy button — it's the resume handle, same for
+ * every source app.
+ */
+function SessionHeader({
+  session: s,
+  favorited,
+  editTitle,
+  titleDraft,
+  onTitleDraft,
+  onStartTitle,
+  onCancelTitle,
+  onCommitTitle,
+  onToggleFavorite,
+  trackGroups,
+  currentGroupId,
+  onSetGroup,
+  transcript,
+  transcriptLoading,
+  deviceLabel,
+}: {
+  session: SessionRow
+  favorited: boolean
+  editTitle: boolean
+  titleDraft: string
+  onTitleDraft: (v: string) => void
+  onStartTitle: () => void
+  onCancelTitle: () => void
+  onCommitTitle: () => void
+  onToggleFavorite: () => void
+  trackGroups: SessionGroup[]
+  currentGroupId: string
+  onSetGroup: (groupId: string | null) => void
+  transcript: SessionMessage[]
+  transcriptLoading: boolean
+  deviceLabel: (id: string) => string
+}) {
+  const { t } = useTranslation()
+  // 开始时间：sessions 表的 started_at 缺失时（旧会话常在采集时没提取到
+  // 起始时间），用对话第一条消息的时间兜底 —— transcript 按 (ts, uuid)
+  // 升序，第一条就是事实上的会话起点。加载中 transcript 为空，兜底自然
+  // 回落到 started_at；加载完成后重算。
+  const effectiveStarted = s.started_at || transcript[0]?.ts || null
+  // 会话时长 = 最近活跃 − 开始（sessionSpan 把不可用的输入归一为 null）。
+  const span = sessionSpan(
+    effectiveStarted && s.last_active_at
+      ? dayjs(s.last_active_at).diff(dayjs(effectiveStarted))
+      : null,
+  )
+  const spanLabel = span
+    ? span.days > 0
+      ? t("sessions.span.daysHours", { d: span.days, h: span.hours })
+      : span.hours > 0
+        ? span.minutes > 0
+          ? t("sessions.span.hoursMinutes", { h: span.hours, m: span.minutes })
+          : t("sessions.span.hours", { h: span.hours })
+        : t("sessions.span.minutes", { m: span.minutes })
+    : "—"
+  const models = modelsUsed(transcript)
+
+  return (
+    <SheetHeader className="border-border flex flex-col gap-3 border-b p-4 pr-10">
+      {/* Row 1 — identity + actions on one line */}
+      <div className="flex items-start justify-between gap-3">
+        <div className="min-w-0 flex-1">
+          {/* Rename trigger: only the title text + pencil icon are clickable
+            (w-fit), not the rest of the row. The pencil makes the affordance
+            visible; the whole button is a native <button> so it stays
+            keyboard-accessible. */}
+          {editTitle ? (
+            <div className="flex items-center gap-1">
+              <Input
+                value={titleDraft}
+                onChange={(e) => onTitleDraft(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") onCommitTitle()
+                  if (e.key === "Escape") onCancelTitle()
+                }}
+                className="h-7"
+                autoFocus
+              />
+              <Button variant="ghost" size="sm" onClick={onCommitTitle}>
+                {t("common.save")}
+              </Button>
+              <Button variant="ghost" size="icon-sm" onClick={onCancelTitle}>
+                {t("common.cancel")}
+              </Button>
+            </div>
+          ) : (
+            <SheetTitle className="text-base">
+              <button
+                type="button"
+                onClick={onStartTitle}
+                title={t("sessions.detail.renameHint")}
+                className="hover:text-accent-brand-strong group flex w-fit max-w-full cursor-pointer items-center gap-1.5 rounded-sm outline-none focus-visible:ring-2 focus-visible:ring-ring/40"
+              >
+                <span className="max-w-[24rem] truncate">
+                  {s.title || t("sessions.untitled")}
+                </span>
+                <Pencil className="text-muted-foreground size-3.5 shrink-0 opacity-60 transition-opacity group-hover:opacity-100" />
+              </button>
+            </SheetTitle>
+          )}
+        </div>
+        <div className="flex shrink-0 items-center gap-2">
+          <Badge variant="secondary">{sessionSourceLabel(s.source)}</Badge>
+          <Button
+            variant={favorited ? "default" : "outline"}
+            size="sm"
+            className="h-7"
+            onClick={onToggleFavorite}
+          >
+            <Star className={cn("size-4", favorited && "fill-current")} />
+            {favorited
+              ? t("sessions.row.unfavorite")
+              : t("sessions.row.favorite")}
+          </Button>
+          <Select
+            value={currentGroupId || NO_GROUP}
+            onValueChange={(v) =>
+              onSetGroup(v === NO_GROUP ? null : (v ?? null))
+            }
+          >
+            <SelectTrigger className="h-8 w-44" size="sm">
+              <SelectValue>
+                {(val: string) => {
+                  if (val === NO_GROUP) return t("sessions.detail.noGroup")
+                  return (
+                    trackGroups.find((g) => g.id === val)?.name ??
+                    t("sessions.detail.noGroup")
+                  )
+                }}
+              </SelectValue>
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value={NO_GROUP}>
+                {t("sessions.detail.noGroup")}
+              </SelectItem>
+              {trackGroups.map((g) => (
+                <SelectItem key={g.id} value={g.id}>
+                  {g.name}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </div>
+      </div>
+
+      {/* Row 2 — 信息流：身份 → 时间 → 统计 → 模型 一行内联排布，窄窗口
+        自然换行。与旧版 4 列等宽网格相比没有列与列之间的死区 —— 内容按
+        阅读顺序流动，整块只有一行高。项间靠间距分隔（gap-x-5），不用
+        符号 —— 复合格内部才是斜杠（请求/消息、Token/成本）。 */}
+      <div className="flex flex-wrap items-center gap-x-5 gap-y-1.5">
+        <FlowItem label={t("sessions.detail.sessionId")}>
+          <span className="inline-flex min-w-0 items-center gap-1">
+            <code className="font-mono">{s.id}</code>
+            <CopyIdButton id={s.id} />
+          </span>
+        </FlowItem>
+        <FlowItem label={t("sessions.detail.device")}>
+          {deviceLabel(s.device_id)}
+        </FlowItem>
+        <FlowItem label={t("sessions.detail.project")}>
+          <span className="max-w-56 truncate" title={s.project_dir}>
+            {s.project_dir || "—"}
+          </span>
+        </FlowItem>
+        <FlowItem label={t("sessions.detail.startedAt")}>
+          <span className="tabular-nums" title={s.started_at || undefined}>
+            {formatTime(effectiveStarted)}
+          </span>
+        </FlowItem>
+        <FlowItem label={t("sessions.detail.duration")}>
+          <span className="tabular-nums">{spanLabel}</span>
+        </FlowItem>
+        <FlowItem label={t("sessions.detail.lastActive")}>
+          <span
+            title={
+              s.last_active_at
+                ? dayjs(s.last_active_at).format("YYYY-MM-DD HH:mm")
+                : undefined
+            }
+          >
+            {s.last_active_at ? dayjs(s.last_active_at).fromNow() : "—"}
+          </span>
+        </FlowItem>
+        <FlowItem label={t("sessions.detail.requests")}>
+          <span className="tabular-nums">{formatInt(s.request_count)}</span>
+        </FlowItem>
+        <FlowItem label={t("sessions.detail.messages")}>
+          <span className="tabular-nums">
+            {transcriptLoading ? "—" : formatInt(transcript.length)}
+          </span>
+        </FlowItem>
+        <FlowItem label={t("sessions.detail.tokens")}>
+          <span className="tabular-nums">{formatTokens(s.total_tokens)}</span>
+        </FlowItem>
+        <FlowItem label={t("sessions.detail.cost")}>
+          <span className="tabular-nums">{formatCost(s.total_cost_usd)}</span>
+        </FlowItem>
+        <FlowItem label={t("sessions.detail.models")}>
+          {models.length === 0 ? (
+            "—"
+          ) : (
+            <span className="flex flex-wrap gap-1.5" title={models.join(" · ")}>
+              {models.map((m) => (
+                <Badge
+                  key={m}
+                  variant="outline"
+                  className="font-mono text-[10px] font-normal"
+                >
+                  {m}
+                </Badge>
+              ))}
+            </span>
+          )}
+        </FlowItem>
+      </div>
+    </SheetHeader>
+  )
+}
+
+/** One inline flow item: a muted micro-label followed by the value on the
+ *  same line. Items flow left-to-right and wrap — no equal-width columns, so
+ *  short values don't leave dead space (unlike the old definition grid). */
+function FlowItem({ label, children }: { label: string; children: ReactNode }) {
+  return (
+    <span className="flex min-w-0 items-center gap-1.5">
+      <span className="text-muted-foreground/70 shrink-0 text-[10px] leading-none">
+        {label}
+      </span>
+      <span className="text-foreground min-w-0 text-xs">{children}</span>
+    </span>
+  )
+}
+
+/** Copy the session id to the clipboard — a persistent affordance (unlike the
+ *  hover-only message copy), because the id is the resume handle. */
+function CopyIdButton({ id }: { id: string }) {
+  const { t } = useTranslation()
+  const [copied, setCopied] = useState(false)
+  return (
+    <Button
+      variant="ghost"
+      size="icon-xs"
+      aria-label={t("sessions.detail.copySessionId")}
+      title={t("sessions.detail.copySessionId")}
+      onClick={() => {
+        void navigator.clipboard
+          ?.writeText(id)
+          .then(() => {
+            setCopied(true)
+            window.setTimeout(() => setCopied(false), 1500)
+          })
+          .catch(() => {})
+      }}
+    >
+      {copied ? <Check className="size-3.5" /> : <Copy className="size-3.5" />}
+    </Button>
   )
 }
 

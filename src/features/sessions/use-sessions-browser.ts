@@ -26,6 +26,7 @@ import {
   useRenameSyncedGroupMutation,
   useReorderLocalGroupsMutation,
   useReorderSyncedGroupsMutation,
+  useSessionCountsQuery,
   useSessionTranscriptQuery,
   useSetSessionCustomTitleMutation,
   useSetSessionFavoritedMutation,
@@ -34,8 +35,10 @@ import {
 } from "@/app/store/api"
 import { useAppDispatch } from "@/app/store/hooks"
 import { setView } from "@/app/store/slices/viewSlice"
+import { useDebouncedValue } from "@/hooks/use-debounced-value"
 import { useMutateWithToast } from "@/hooks/use-toast-mutation"
 import { effectiveDays, type Preset, presetDays } from "@/lib/date-range"
+import { paginate } from "@/lib/pagination"
 import { usePersistedState } from "@/lib/persistence"
 import type { SessionGroup, SessionRow } from "@/types/generated/bindings"
 import {
@@ -44,14 +47,11 @@ import {
   canCreateSyncedGroup,
   effectiveFavorite,
   favKey,
-  filterSessionsByQuery,
   type GroupTrack,
-  groupSessionsByGroup,
   nextFavValue,
   type SessionTab,
-  selectSessions,
   sessionTabFilter,
-  sortSessions,
+  ungroupedCount,
   withFavOverride,
   withoutFavOverride,
 } from "./derive"
@@ -59,11 +59,19 @@ import {
 /** Persisted-tab key — the chosen tab (local / favorites) survives restarts. */
 const TAB_KEY = "cc-one:sessions-tab"
 
+/** Rows per page — matches the request-log table so both data views page at
+ *  the same density. Exported for the view's paginator (the disabled state
+ *  must agree with the query's page size — one source of truth). */
+export const SESSIONS_PAGE_SIZE = 20
+
 export function useSessionsBrowser() {
   const { t } = useTranslation()
   const dispatch = useAppDispatch()
   const [tab, setTab] = usePersistedState<SessionTab>(TAB_KEY, "local")
   const [search, setSearch] = useState("")
+  // Search is backend-side (the page query filters the whole set, not just
+  // the loaded page), so keystrokes debounce before they hit the db.
+  const debouncedSearch = useDebouncedValue(search, 300)
   const [source, setSource] = useState("")
   const [model, setModel] = useState("")
   // Time-range filter (mirrors the logs ControlBar): a dynamic preset (today /
@@ -76,6 +84,11 @@ export function useSessionsBrowser() {
   const [deviceScope, setDeviceScope] = useState("")
   // Tick counter for the cross-midnight rollover interval (see below).
   const [, setTick] = useState(0)
+  // Page offset into the filtered set (absolute row offset, like the request
+  // log). Reset to page 1 whenever any filter dimension changes — otherwise a
+  // narrower filter (search / range / source / model / device / group switch)
+  // can land on an empty page.
+  const [offset, setOffset] = useState(0)
   const [selectedGroupId, setSelectedGroupId] = useState<string>(ALL_GROUPS)
   const [favOverrides, setFavOverrides] = useState<Record<string, boolean>>({})
   const [pendingGroup, setPendingGroup] = useState<string | null>(null)
@@ -105,6 +118,24 @@ export function useSessionsBrowser() {
   useEffect(() => {
     setSelectedGroupId(ALL_GROUPS)
   }, [tab])
+
+  // Reset the page when a filter dimension changes (the query key changes
+  // with them). The filter object itself is freshly built every render, so
+  // depend on the scalar dimensions — including the debounced search.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: intentional — reset page on filter change; the body needs no dimension values
+  useEffect(() => {
+    setOffset(0)
+  }, [
+    tab,
+    debouncedSearch,
+    source,
+    model,
+    rangePreset,
+    fromDay,
+    toDay,
+    deviceScope,
+    selectedGroupId,
+  ])
 
   const { data: appInfo } = useAppInfoQuery()
   const selfDeviceId = appInfo?.device_id ?? ""
@@ -152,24 +183,38 @@ export function useSessionsBrowser() {
     return () => clearInterval(id)
   }, [])
 
-  // Sessions for the active tab, narrowed by the toolbar filters (time / source
-  // / device). All narrowing is backend-side (single source of truth) — the
-  // substring search box below is a separate client-side concern. Skipped until
-  // selfDeviceId resolves so the local tab never queries with an empty
-  // device_scope.
-  const sessionsQuery = useListSessionsQuery(
-    sessionTabFilter(tab, selfDeviceId, {
+  // One backend filter for both reads: the tab scope + toolbar filters (time /
+  // source / model / device) + the debounced search + the sidebar group
+  // selection. All narrowing is backend-side (single source of truth) — the
+  // page query returns exactly the selected bucket's current page, so a large
+  // group pages like the All view instead of loading every row.
+  const filter = sessionTabFilter(
+    tab,
+    selfDeviceId,
+    {
       source: source || null,
       fromTs,
       toTs,
       deviceScope: deviceScope || null,
       model: model || null,
-    }),
-    {
-      skip: !selfDeviceId,
+      search: debouncedSearch || null,
     },
+    selectedGroupId,
   )
-  const sessions = sessionsQuery.data ?? []
+  // Paged session list (mirrors the request-log table). Skipped until
+  // selfDeviceId resolves so the local tab never queries with an empty
+  // device_scope.
+  const sessionsQuery = useListSessionsQuery(
+    { filter, limit: SESSIONS_PAGE_SIZE, offset },
+    { skip: !selfDeviceId },
+  )
+  // Paging-independent counts under the same filter: the total (All row +
+  // paginator) and the per-bucket sidebar numbers.
+  const countsQuery = useSessionCountsQuery(
+    { filter, track: effectiveTrack },
+    { skip: !selfDeviceId },
+  )
+  const counts = countsQuery.data ?? { total: 0, groups: [] }
   const groupsQuery = useListGroupsQuery()
   const groups = groupsQuery.data ?? []
   const { data: devices = [] } = useDevicesQuery()
@@ -223,28 +268,44 @@ export function useSessionsBrowser() {
       ),
     [groups, effectiveTrack, groupOrderOverride],
   )
-  const sorted = useMemo(() => sortSessions(sessions), [sessions])
-  const filtered = useMemo(
-    () => filterSessionsByQuery(sorted, search),
-    [sorted, search],
+  // Sidebar counts from the backend aggregation: the per-bucket map (group
+  // rows) and the derived ungrouped count (total minus known buckets — stale
+  // ids count as ungrouped, the rule the old client-side grouping applied).
+  const groupCounts = useMemo(() => {
+    const m = new Map<string, number>()
+    for (const g of counts.groups) m.set(g.group_id, g.count)
+    return m
+  }, [counts])
+  const knownGroupIds = useMemo(
+    () => new Set(trackGroups.map((g) => g.id)),
+    [trackGroups],
   )
-  const grouped = useMemo(
-    () => groupSessionsByGroup(filtered, groups, effectiveTrack),
-    [filtered, groups, effectiveTrack],
+  const ungroupedN = useMemo(
+    () => ungroupedCount(counts, knownGroupIds),
+    [counts, knownGroupIds],
   )
-  const visibleSessions = useMemo(
-    () => selectSessions(filtered, grouped, selectedGroupId),
-    [filtered, grouped, selectedGroupId],
+  // The visible list is the backend's current page — already narrowed by the
+  // tab/toolbar/search AND the sidebar group selection, time-desc ordered.
+  const visibleSessions = sessionsQuery.data ?? []
+
+  // Page stats for the footer control (clamped so a shrunken result set can't
+  // leave the paginator pointing past the end).
+  const { totalPages, page } = paginate(
+    counts.total,
+    offset,
+    SESSIONS_PAGE_SIZE,
   )
 
   // sessions lookup by composite key — O(1) resolve for the derived preview.
   // Reuses the favKey shape ("device_id/id") so favorite + preview agree on
-  // identity (a session is uniquely (device_id, id)).
+  // identity (a session is uniquely (device_id, id)). Only the current page
+  // is in memory; a preview whose row left the slice falls back to the
+  // last-known row below so the sheet stays open across page turns.
   const sessionsByKey = useMemo(() => {
     const m = new Map<string, SessionRow>()
-    for (const s of sessions) m.set(favKey(s), s)
+    for (const s of visibleSessions) m.set(favKey(s), s)
     return m
-  }, [sessions])
+  }, [visibleSessions])
 
   // Derived preview: resolve the open key against the live sessions array
   // every render. After a favorite toggle's refetch this picks up the fresh
@@ -499,13 +560,18 @@ export function useSessionsBrowser() {
     setDeviceScope,
     deviceOptions,
     // data
-    sessions,
     isLoading: sessionsQuery.isLoading,
     error: sessionsQuery.error,
     trackGroups,
-    grouped,
     visibleSessions,
-    totalCount: filtered.length,
+    // paging + sidebar counts
+    totalCount: counts.total,
+    page,
+    totalPages,
+    offset,
+    setOffset,
+    groupCounts,
+    ungroupedCount: ungroupedN,
     // device labels (favorites tab)
     deviceLabel,
     showDeviceColumn,

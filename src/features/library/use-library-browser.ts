@@ -20,6 +20,7 @@ import {
   useScanLibraryQuery,
 } from "@/app/store/api"
 import { useMutateWithToast } from "@/hooks/use-toast-mutation"
+import { paginate } from "@/lib/pagination"
 import type { LibraryEntry } from "@/types/generated/bindings"
 import { buildBreadcrumb, splitEntryPath, upFromSubpath } from "./derive"
 
@@ -27,10 +28,19 @@ import { buildBreadcrumb, splitEntryPath, upFromSubpath } from "./derive"
  *  picker and the hook's scope derivation share one definition. */
 export const ALL = "__all__"
 
+/** Rows per page — the same density as the request-log and sessions tables.
+ *  Exported for the view's paginator (disabled states must agree with the
+ *  slice size — one source of truth). */
+export const LIBRARY_PAGE_SIZE = 20
+
 export function useLibraryBrowser() {
   const { t } = useTranslation()
   const [deviceScope, setDeviceScope] = useState<string>(ALL)
   const [subpath, setSubpath] = useState("")
+  // Page offset into the current directory's entry list. Reset when the
+  // navigation changes — a different directory can be shorter than the page
+  // we were on (mirrors the sessions/logs filter-reset pattern).
+  const [offset, setOffset] = useState(0)
   const [dragging, setDragging] = useState(false)
   const [pendingPaths, setPendingPaths] = useState<string[] | null>(null)
   const [preview, setPreview] = useState<LibraryEntry | null>(null)
@@ -46,6 +56,24 @@ export function useLibraryBrowser() {
     deviceScope: scope,
     subpath,
   })
+  // Reset the page when the directory changes — a shallower directory can
+  // leave a stale offset past its end (the slice would render empty).
+  // biome-ignore lint/correctness/useExhaustiveDependencies: intentional — reset page on navigation; the body needs no scope/subpath values
+  useEffect(() => {
+    setOffset(0)
+  }, [deviceScope, subpath])
+
+  // The page the table renders. A directory's entry list is a small fs scan
+  // (unlike the SQL-backed sessions/logs), so slicing client-side is the
+  // right altitude — the DOM is the thing that grows, and this caps it at one
+  // page. Paging controls match the other tables' (LIBRARY_PAGE_SIZE + the
+  // shared paginate math).
+  const visibleEntries = entries.slice(offset, offset + LIBRARY_PAGE_SIZE)
+  const { totalPages, page } = paginate(
+    entries.length,
+    offset,
+    LIBRARY_PAGE_SIZE,
+  )
   // Same source as the logs/dashboard device picker (listDevices), but NOT
   // filtered down to ≤1 — Library always lists every known device, even this
   // machine alone, so the picker is never empty.
@@ -182,7 +210,12 @@ export function useLibraryBrowser() {
 
   return {
     // scan data
-    entries,
+    entries: visibleEntries,
+    totalCount: entries.length,
+    page,
+    totalPages,
+    offset,
+    setOffset,
     isLoading,
     // device picker
     deviceOptions,

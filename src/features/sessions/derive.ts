@@ -7,6 +7,8 @@
 import type {
   SessionFilter,
   SessionGroup,
+  SessionGroupCounts,
+  SessionMessage,
   SessionRow,
 } from "@/types/generated/bindings"
 
@@ -33,21 +35,14 @@ export type GroupTrack = "local" | "synced"
 export const ALL_GROUPS = "__all__"
 export const UNGROUPED = "__ungrouped__"
 
-/** Result of grouping a flat session list by one track. */
-export interface GroupedSessions {
-  /** One entry per group that has at least one session, in group-list order. */
-  groups: { group: SessionGroup; sessions: SessionRow[] }[]
-  /** Sessions whose track group id is empty or points to a missing group. */
-  ungrouped: SessionRow[]
-}
-
 /**
  * Extra filter dimensions the sessions toolbar exposes on top of the tab. All
  * optional — omitted/empty values mean "no constraint". Mirrors the logs view's
  * toolbar (time range · source · model · device) so the two data views filter
  * the same way. Model is EXISTS semantics (a session that used the model at
  * least once matches) — the model lives per-request on usage_records, never on
- * the session row.
+ * the session row. Search is backend-side too (paged results would otherwise
+ * only search the loaded page) — see sessionTabFilter.
  */
 export interface SessionListFilter {
   /** Source tag, e.g. "claude_code". */
@@ -63,40 +58,54 @@ export interface SessionListFilter {
   deviceScope?: string | null
   /** Session used this model at least once (EXISTS over usage_records). */
   model?: string | null
+  /** Substring search over the display title and project path (backend LIKE). */
+  search?: string | null
 }
 
 /**
  * Build the backend `SessionFilter` for a tab. Local → only this device's
  * sessions (favorited or not); Favorites → only favorited, across all devices.
- * `null` fields mean "no constraint" (see SessionFilter docs). Group fields stay
- * `null` — grouping is a client-side render concern (groupSessionsByGroup), so
- * the backend returns the whole tab slice once and the sidebar filters locally.
+ * `null` fields mean "no constraint" (see SessionFilter docs).
  *
- * `filter.source` / `filter.fromTs` / `filter.toTs` narrow the tab slice and are
- * applied backend-side (single source of truth — never re-applied client-side).
- * `filter.deviceScope` narrows the Favorites tab to one device; on the Local
- * tab it is ignored (always this device). The substring search box is a separate
- * client-side concern (filterSessionsByQuery).
+ * `filter.source` / `filter.fromTs` / `filter.toTs` / `filter.model` /
+ * `filter.search` narrow the tab slice and are applied backend-side (single
+ * source of truth — never re-applied client-side). `filter.deviceScope`
+ * narrows the Favorites tab to one device; on the Local tab it is ignored
+ * (always this device).
+ *
+ * `groupId` encodes the sidebar selection as a backend filter on the track's
+ * group column (local tab → `local_group_id`, favorites → `synced_group_id`):
+ * `null` = "All groups" (no constraint), `UNGROUPED` = empty string (matches
+ * ungrouped), any other id narrows to that group. Grouping is therefore also a
+ * backend concern — the page query returns exactly the selected bucket, so a
+ * large group pages like the All view instead of loading every row.
  */
 export function sessionTabFilter(
   tab: SessionTab,
   selfDeviceId: string,
   filter: SessionListFilter = {},
+  groupId: string | null = null,
 ): SessionFilter {
   const src = filter.source || null
   const fromTs = filter.fromTs || null
   const toTs = filter.toTs || null
   const model = filter.model || null
+  const search = filter.search || null
+  const trackGroup = (): string | null => {
+    if (groupId == null || groupId === ALL_GROUPS) return null
+    return groupId === UNGROUPED ? "" : groupId
+  }
   if (tab === "local") {
     return {
       device_scope: selfDeviceId,
       source: src,
       favorited: null,
-      local_group_id: null,
+      local_group_id: trackGroup(),
       synced_group_id: null,
       from_ts: fromTs,
       to_ts: toTs,
       model,
+      search,
     }
   }
   // Favorites tab: deviceScope narrows from "all devices" to one.
@@ -105,99 +114,75 @@ export function sessionTabFilter(
     source: src,
     favorited: true,
     local_group_id: null,
-    synced_group_id: null,
+    synced_group_id: trackGroup(),
     from_ts: fromTs,
     to_ts: toTs,
     model,
+    search,
+  }
+}
+
+// ---------------------------------------------------------------- counts ----
+
+/**
+ * The sidebar's ungrouped count from the backend's per-bucket counts: total
+ * minus the buckets belonging to known groups. Every other bucket — the empty
+ * id (ungrouped) and stale ids whose group was deleted — counts as ungrouped,
+ * the same rule the old client-side grouping applied (a stale id is treated as
+ * ungrouped, never silently dropped). Pure so the invariant is testable.
+ */
+export function ungroupedCount(
+  counts: Pick<SessionGroupCounts, "total" | "groups">,
+  knownGroupIds: ReadonlySet<string>,
+): number {
+  let known = 0
+  for (const g of counts.groups) {
+    if (knownGroupIds.has(g.group_id)) known += g.count
+  }
+  return counts.total - known
+}
+
+// -------------------------------------------------------------- detail -----
+
+/**
+ * A session's elapsed span (`last_active_at − started_at`), split into the
+ * units the detail header displays. `null` when the times are absent /
+ * unparseable / the span is not positive — the header then shows a dash
+ * instead of a bogus negative duration.
+ */
+export interface SessionSpan {
+  days: number
+  hours: number
+  minutes: number
+}
+
+export function sessionSpan(ms: number | null | undefined): SessionSpan | null {
+  const v = Number(ms ?? 0)
+  if (!Number.isFinite(v) || v <= 0) return null
+  const totalMinutes = Math.floor(v / 60_000)
+  return {
+    days: Math.floor(totalMinutes / (24 * 60)),
+    hours: Math.floor((totalMinutes % (24 * 60)) / 60),
+    minutes: totalMinutes % 60,
   }
 }
 
 /**
- * Sort sessions by `last_active_at` descending (most recent first). Missing or
- * unparseable timestamps sort last. Returns a new array — input is not mutated.
+ * Distinct model names used in a transcript, in first-use order (assistant
+ * messages carry the model; user/tool/system rows have none). Empty input ⇒
+ * empty list — the caller decides how to render "no models yet".
  */
-export function sortSessions(rows: SessionRow[]): SessionRow[] {
-  return [...rows].sort(
-    (a, b) => toMillis(b.last_active_at) - toMillis(a.last_active_at),
-  )
-}
-
-function toMillis(ts: string | null | undefined): number {
-  if (!ts) return 0
-  const n = Date.parse(ts)
-  return Number.isNaN(n) ? 0 : n
-}
-
-/**
- * Case-insensitive substring filter over title and project path. An empty or
- * whitespace-only query returns the input unchanged (no constraint) so callers
- * can pipe through unconditionally.
- */
-export function filterSessionsByQuery(
-  rows: SessionRow[],
-  q: string,
-): SessionRow[] {
-  const needle = q.trim().toLowerCase()
-  if (!needle) return rows
-  return rows.filter((r) => {
-    const title = (r.title ?? "").toLowerCase()
-    const project = (r.project_dir ?? "").toLowerCase()
-    return title.includes(needle) || project.includes(needle)
-  })
-}
-
-/**
- * Bucket sessions by one grouping track. A session whose `local_group_id`
- * (local track) or `synced_group_id` (synced track) is empty OR references a
- * group id not present in `groups` falls into `ungrouped` — a stale id left by
- * a deleted group is treated as ungrouped, never silently dropped. Input order
- * is preserved within each bucket — pass pre-sorted rows to get sorted buckets.
- * Groups with zero sessions are omitted here (empty groups still appear in the
- * sidebar, sourced from the raw group list).
- */
-export function groupSessionsByGroup(
-  rows: SessionRow[],
-  groups: SessionGroup[],
-  track: GroupTrack,
-): GroupedSessions {
-  const trackGroups = groups.filter((g) => g.kind === track)
-  const knownIds = new Set(trackGroups.map((g) => g.id))
-  const buckets = new Map<string, SessionRow[]>()
-  const ungrouped: SessionRow[] = []
-  for (const row of rows) {
-    const gid = track === "local" ? row.local_group_id : row.synced_group_id
-    if (gid && knownIds.has(gid)) {
-      const arr = buckets.get(gid)
-      if (arr) arr.push(row)
-      else buckets.set(gid, [row])
-    } else {
-      ungrouped.push(row)
+export function modelsUsed(messages: readonly SessionMessage[]): string[] {
+  const seen = new Set<string>()
+  const out: string[] = []
+  for (const m of messages) {
+    const model = m.model?.trim()
+    if (model && !seen.has(model)) {
+      seen.add(model)
+      out.push(model)
     }
   }
-  return {
-    groups: trackGroups
-      .filter((g) => buckets.has(g.id))
-      .map((g) => ({ group: g, sessions: buckets.get(g.id) ?? [] })),
-    ungrouped,
-  }
-}
-
-/**
- * Resolve the sidebar selection to the sessions to render. `ALL_GROUPS` → every
- * session in the tab (pass the full sorted+filtered list as `allRows` so the
- * flat order is preserved, not the grouped concatenation); `UNGROUPED` → only
- * the ungrouped bucket; a real group id → that bucket (empty if unknown).
- */
-export function selectSessions(
-  allRows: SessionRow[],
-  grouped: GroupedSessions,
-  selectedGroupId: string,
-): SessionRow[] {
-  if (selectedGroupId === ALL_GROUPS) return allRows
-  if (selectedGroupId === UNGROUPED) return grouped.ungrouped
-  return (
-    grouped.groups.find((g) => g.group.id === selectedGroupId)?.sessions ?? []
-  )
+  return out
 }
 
 // --------------------------------------------------------------- favorites --

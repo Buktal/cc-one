@@ -12,7 +12,7 @@ import {
   Image as ImageIcon,
   Loader2,
 } from "lucide-react"
-import { useMemo, useState } from "react"
+import { Fragment, useMemo, useState } from "react"
 import { useTranslation } from "react-i18next"
 import {
   useAppInfoQuery,
@@ -113,44 +113,48 @@ export function UploadDialog({
               <span className="size-4 shrink-0" />
               {t("library.upload.col.name")}
             </span>
-            <span>{t("library.upload.col.status")}</span>
+            <span className="justify-self-end">
+              {t("library.upload.col.status")}
+            </span>
           </div>
-          {rows.map((r, i) => {
-            const Icon = rowIcon(r.name)
-            const overwrite =
-              existingNames.has(r.name) ||
-              rows.some((other, j) => j !== i && other.name === r.name)
-            return (
-              <div
-                key={r.sourcePath}
-                className="grid grid-cols-[1fr_9rem] items-center gap-2"
-              >
-                <div className="flex items-center gap-2">
-                  <Icon className="text-muted-foreground size-4 shrink-0" />
-                  <Input
-                    value={r.name}
-                    onChange={(e) =>
-                      setRows((rs) =>
-                        rs.map((x, j) =>
-                          j === i ? { ...x, name: e.target.value } : x,
-                        ),
-                      )
-                    }
-                    className="h-7"
-                  />
-                </div>
-                {overwrite ? (
-                  <span className="text-[var(--sr-warn)] text-[11px] font-medium whitespace-nowrap">
-                    {t("library.upload.status.overwrite")}
-                  </span>
-                ) : (
-                  <span className="text-muted-foreground text-[11px] whitespace-nowrap">
-                    {t("library.upload.status.new")}
-                  </span>
-                )}
-              </div>
-            )
-          })}
+          {/* 大量文件时行区在对话框内滚动（max-h-64），列头留在滚动区外
+            不跟着滚。滚动区与列头同构（grid-cols-[1fr_9rem]）：行距由
+            gap-y 统一控制，行列与列头严格对齐。负 margin 让滚动条贴边。 */}
+          <div className="max-h-64 -mr-1 grid grid-cols-[1fr_9rem] items-center gap-x-2 gap-y-1.5 overflow-y-auto pr-1">
+            {rows.map((r, i) => {
+              const Icon = rowIcon(r.name)
+              const overwrite =
+                existingNames.has(r.name) ||
+                rows.some((other, j) => j !== i && other.name === r.name)
+              return (
+                <Fragment key={r.sourcePath}>
+                  <div className="flex items-center gap-2">
+                    <Icon className="text-muted-foreground size-4 shrink-0" />
+                    <Input
+                      value={r.name}
+                      onChange={(e) =>
+                        setRows((rs) =>
+                          rs.map((x, j) =>
+                            j === i ? { ...x, name: e.target.value } : x,
+                          ),
+                        )
+                      }
+                      className="h-7"
+                    />
+                  </div>
+                  {overwrite ? (
+                    <span className="text-[var(--sr-warn)] justify-self-end text-[11px] font-medium whitespace-nowrap">
+                      {t("library.upload.status.overwrite")}
+                    </span>
+                  ) : (
+                    <span className="text-muted-foreground justify-self-end text-[11px] whitespace-nowrap">
+                      {t("library.upload.status.new")}
+                    </span>
+                  )}
+                </Fragment>
+              )
+            })}
+          </div>
         </div>
         <DialogFooter>
           <Button variant="outline" onClick={onClose}>

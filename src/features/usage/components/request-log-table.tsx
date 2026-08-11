@@ -33,7 +33,7 @@ import type { UsageFilter } from "@/types/generated/bindings"
 import { sourceLabel } from "../source-labels"
 import { useDeviceLabelMap, useDeviceOptions } from "../use-device-options"
 
-const PAGE_SIZE = 50
+const PAGE_SIZE = 20
 
 /**
  * Right-aligned token-column header: label + a muted, language-neutral `tok`

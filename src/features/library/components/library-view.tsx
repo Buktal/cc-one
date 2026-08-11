@@ -51,9 +51,13 @@ import {
   TooltipContent,
   TooltipTrigger,
 } from "@/components/ui/tooltip"
-import { formatSize } from "@/lib/format"
+import { formatInt, formatSize } from "@/lib/format"
 import { cn } from "@/lib/utils"
-import { ALL, useLibraryBrowser } from "../use-library-browser"
+import {
+  ALL,
+  LIBRARY_PAGE_SIZE,
+  useLibraryBrowser,
+} from "../use-library-browser"
 import { PreviewSheet } from "./preview-sheet"
 import { UploadDialog } from "./upload-dialog"
 
@@ -74,6 +78,11 @@ export function LibraryView() {
   const { t } = useTranslation()
   const {
     entries,
+    totalCount,
+    page,
+    totalPages,
+    offset,
+    setOffset,
     isLoading,
     deviceOptions,
     deviceScope,
@@ -375,6 +384,39 @@ export function LibraryView() {
               </Table>
             </div>
           )}
+
+          {/* Paged footer — same control as the request-log / sessions tables
+            (page info left, prev/next right; disabled states agree with the
+            slice size via LIBRARY_PAGE_SIZE). */}
+          <div className="text-muted-foreground mt-3 flex shrink-0 items-center justify-between text-xs">
+            <span>
+              {t("library.pageInfo", {
+                page,
+                totalPages,
+                total: formatInt(totalCount),
+              })}
+            </span>
+            <div className="flex gap-2">
+              <Button
+                variant="outline"
+                size="sm"
+                disabled={offset === 0}
+                onClick={() =>
+                  setOffset(Math.max(0, offset - LIBRARY_PAGE_SIZE))
+                }
+              >
+                {t("library.prevPage")}
+              </Button>
+              <Button
+                variant="outline"
+                size="sm"
+                disabled={offset + LIBRARY_PAGE_SIZE >= totalCount}
+                onClick={() => setOffset(offset + LIBRARY_PAGE_SIZE)}
+              >
+                {t("library.nextPage")}
+              </Button>
+            </div>
+          </div>
         </CardContent>
       </Card>
 
