@@ -4,15 +4,17 @@
 // 选中预设后由表单层经 derive.providerFromPreset 整份复制成「custom 分类」的
 // 新建草稿——预设常量本身绝不被改动。
 // 单一事实来源：数量、名称、分类、端点 / 模型映射都以本文件为准。
-// 配置值与 TOML 格式照搬 CC-Switch 的 codexProviderPresets.ts，仅做应用维度
-// 的精选（官方 2 + 国内大厂 11 + 热门聚合 4 = 17）。
+// 选取标准与 Claude 侧一致：官方 + 国内大厂 + 热门聚合，共 17 个（官方 2
+// + 国内大厂 11 + 热门聚合 4）。需要本地代理注入 token 的托管 OAuth
+// （xAI 等）不收——本应用无本地代理。
 
 import type { ProviderPreset } from "@/features/providers/presets"
 
-/** 第三方供应商的 config.toml 模板：与 CC-Switch generateThirdPartyConfig 同款
- *  输出——model_provider / model / model_reasoning_effort /
- *  disable_response_storage 顶层四件套 + [model_providers.custom] 表五字段。
- *  受控合并时这些键都是后端 CODEX_CONTROLLED_FIELDS 认的受控键。 */
+/** 第三方供应商的 config.toml 模板：model_provider / model /
+ *  model_reasoning_effort / disable_response_storage 顶层四件套 +
+ *  [model_providers.custom] 表五字段。这些键都是切换写盘的受控键（整块替换
+ *  进 ~/.codex/config.toml）；用户手动的 mcp_servers / web_search 等非受控
+ *  字段写盘时原样保留。 */
 function thirdPartyConfig(
   name: string,
   baseUrl: string,
@@ -32,8 +34,9 @@ requires_openai_auth = true`
 }
 
 /** 把 Codex 写盘快照（auth + config TOML）序列化成 settingsConfig JSON 文本。
- *  登录态版（无 key 且无 config）→ `"{}"`，与 Rust parse_codex_settings 对空
- *  快照的宽容契约一致；其余情形产出 `{"auth": {...}, "config": "<toml>"}`。
+ *  登录态版（无 key 且无 config）→ `"{}"`：空快照即「无受控内容」，写盘时
+ *  不碰 auth.json、不写 config.toml，保留既有 ChatGPT 登录态；其余情形产出
+ *  `{"auth": {...}, "config": "<toml>"}`。
  *  `withKey=true` 时 auth 带 `OPENAI_API_KEY: ""` 占位（API Key 版，表单填值）；
  *  `withKey=false` 时 auth 为 `{}`（登录态版，不写 auth.json）。 */
 function codexSnapshot(toml: string, withKey = false): string {

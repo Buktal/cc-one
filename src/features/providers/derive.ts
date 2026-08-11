@@ -768,9 +768,9 @@ export function snippetMissingKeys(
 //
 // Codex settingsConfig 形状：`{"auth": {"OPENAI_API_KEY"?: ...}, "config":
 // "<TOML 文本>"}`。`auth.OPENAI_API_KEY` 为空 / 缺失 = 登录态版（不写
-// auth.json）；`config` 是 TOML 文本，写盘时按后端 CODEX_CONTROLLED_FIELDS
-// 受控合并进 ~/.codex/config.toml。纯函数：与 Rust parse_codex_settings 同
-// 契约但更宽容（坏输入不抛、归一为空），用于表单读写。
+// auth.json）；`config` 是 TOML 文本，写盘时按受控键整块合并进
+// ~/.codex/config.toml（用户手动的非受控字段原样保留）。纯函数：写盘语义
+// 的镜像，但更宽容（坏输入不抛、归一为空），用于表单读写。
 
 type CodexConfig = { auth: Record<string, string>; config: string }
 

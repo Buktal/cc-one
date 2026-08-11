@@ -5,14 +5,14 @@
 // 选中预设后由表单层经 derive.providerFromPreset 整份复制成「custom 分类」的
 // 新建草稿——预设常量本身绝不被改动。
 // 单一事实来源：数量、名称、分类、端点 / 模型映射都以本文件为准。
-// 配置值与 env 形状照搬 CC-Switch 的 geminiProviderPresets.ts，仅做应用维度
-// 的精选（官方 2 + 热门聚合 4 = 6）。
+// 选取标准：官方 + 热门聚合，共 6 个（官方 2 + 热门聚合 4）。大量长尾小
+// 聚合站不收，留给需要的人自定义。
 
 import type { ProviderPreset } from "@/features/providers/presets"
 
 /** 把 Gemini 写盘快照序列化成 settingsConfig JSON 文本：env 整块写 .env，
- *  可选 config 合并进 settings.json 的受控字段。空 env 且无 config → `"{}"`，
- *  与 Rust parse_gemini_settings 对空快照的宽容契约一致。 */
+ *  可选 config 合并进 settings.json 的受控字段。空 env 且无 config → `"{}"`
+ *  （登录态版：写空 .env + oauth 标记，保留既有 Google 登录）。 */
 function geminiSnapshot(
   env: Record<string, string>,
   config?: Record<string, unknown>,

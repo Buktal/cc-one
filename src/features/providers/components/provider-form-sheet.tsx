@@ -49,6 +49,7 @@ import {
   SheetHeader,
   SheetTitle,
 } from "@/components/ui/sheet"
+import { Textarea } from "@/components/ui/textarea"
 import type { ModelRoleId } from "@/features/providers/derive"
 import {
   type AuthField,
@@ -581,12 +582,12 @@ export function ProviderFormSheet({
                 />
               </Field>
               <Field label={t("providers.form.codexConfig")}>
-                <textarea
+                <Textarea
                   value={codexConfigToml(configText)}
                   onChange={(e) => onCodexConfigChange(e.target.value)}
                   rows={12}
                   spellCheck={false}
-                  className="font-mono text-xs w-full rounded-md border bg-background p-2"
+                  className="font-mono text-xs"
                 />
                 <p className="text-muted-foreground text-xs">
                   {t("providers.form.codexConfigHint")}
