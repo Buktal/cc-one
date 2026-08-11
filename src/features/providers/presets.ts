@@ -325,9 +325,8 @@ export const PROVIDER_PRESETS: ProviderPreset[] = [
   },
 ]
 
-/** 按应用返回对应的内置预设清单：claude → 18 个、codex → 17 个、gemini →
- *  6 个、grok → 6 个。单一事实来源的入口——调用方一律走这里，不要直接读
- *  四个常量。 */
+/** 按应用返回对应的内置预设清单。单一事实来源的入口——调用方一律走这里，
+ *  不要直接读四个常量。 */
 export function presetsForApp(app: App): ProviderPreset[] {
   switch (app) {
     case "claude":

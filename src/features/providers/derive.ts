@@ -986,8 +986,8 @@ export function grokConfigToml(text: string): string {
 }
 
 /** 把 TOML 文本写入 Grok settingsConfig 的 `config` 字段（受控合并的目标值
- *  就是这里整段 TOML）。保留同款「先 parse 再写」形态，未来增字段时天然保留
- *  兄弟键（与 codex 的 withCodexConfigToml 一致）。 */
+ *  就是这里整段 TOML）。与 codex 的 withCodexConfigToml 同一「先 parse 再
+ *  stringify」形态。 */
 export function withGrokConfigToml(text: string, toml: string): string {
   const parsed = parseGrokConfig(text)
   return JSON.stringify({ ...parsed, config: toml }, null, 2)

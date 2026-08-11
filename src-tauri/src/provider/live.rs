@@ -29,6 +29,8 @@ use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 
+use toml_edit::DocumentMut;
+
 use crate::error::{AppError, AppResult};
 use crate::model::{App, Provider};
 
@@ -291,6 +293,38 @@ pub(crate) fn parse_object(raw: &str, what: &str) -> AppResult<serde_json::Value
         return Err(AppError::Config(format!("{what} is not a JSON object")));
     }
     Ok(v)
+}
+
+/// 解析 TOML 文本为可编辑文档：空串/纯空白 → 空文档；非法 TOML → `Err`。
+/// codex / grok 的 TOML 受控合并共用（单一事实来源）——两个 live_* 模块都把
+/// live / target 的 TOML 文本喂进来解析，不各自再抄一份。
+pub(crate) fn parse_toml_or_empty(text: &str, what: &str) -> AppResult<DocumentMut> {
+    if text.trim().is_empty() {
+        return Ok(DocumentMut::new());
+    }
+    text.parse::<DocumentMut>()
+        .map_err(|e| AppError::Config(format!("{what} is not valid TOML: {e}")))
+}
+
+/// 解析供应商 settingsConfig JSON 文本为「剥过内部 meta 键的对象」：空串/
+/// 纯空白 → `None`（登录态版）；非对象 → `Err`。剥 [`LIVE_INTERNAL_KEYS`]——这些
+/// 键只供应用自己读，不是任何写盘文件（auth.json / config.toml）的合法字段。
+/// codex / grok 两个 live_* 分支共用同一条「解析 + 清洗」前缀，各自只写后段
+/// 的字段提取。
+pub(crate) fn parse_and_strip_settings(
+    settings_config: &str,
+) -> AppResult<Option<serde_json::Value>> {
+    let trimmed = settings_config.trim();
+    if trimmed.is_empty() {
+        return Ok(None);
+    }
+    let mut obj = parse_object(trimmed, "provider settingsConfig")?;
+    if let Some(o) = obj.as_object_mut() {
+        for key in LIVE_INTERNAL_KEYS {
+            o.remove(*key);
+        }
+    }
+    Ok(Some(obj))
 }
 
 #[cfg(test)]

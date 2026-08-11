@@ -14,14 +14,12 @@
 // 是各供应商块（含 `api_backend` / `context_window` 等 grok 专属字段，与 codex
 // 的 `model_providers` 形态不同）。cc one 固定写 canonical profile `cc-one`，
 // 切换时整块替换该 profile + 设 `models.default`（写盘在后端 live_grok 完成）；
-// 故预设只携带 `[model.cc-one]` 块，`models.default` 由写盘层补。CC-Switch 的
-// grok 预设误用了 codex 风格（model_provider / model_providers），与其自身
-// validator 不符——本文件用正确的命名 profile 格式，不照搬那个 bug。
+// 故预设只携带 `[model.cc-one]` 块，`models.default` 由写盘层补。
 
 import type { ProviderPreset } from "@/features/providers/presets"
 
-/** Grok profile 块默认值（对齐 CC-Switch `grok_config.rs` 常量：grok-build 的
- *  默认 api_backend 与上下文窗口）。 */
+/** Grok profile 块默认值：`api_backend` 用 `responses`（Grok CLI 的 wire
+ *  协议后端），`context_window` 用 500_000（典型上下文窗口大小）。 */
 const DEFAULT_API_BACKEND = "responses"
 const DEFAULT_CONTEXT_WINDOW = 500_000
 

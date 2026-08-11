@@ -53,24 +53,15 @@ pub fn grok_config_path() -> AppResult<PathBuf> {
 }
 
 /// 解析供应商 settingsConfig（`{"config": "<TOML>"}` JSON 对象）为写盘目标
-/// TOML 文本：剥内部 meta 字段（沿用 `LIVE_INTERNAL_KEYS` 语义），提取
-/// `config`。
+/// TOML 文本（内部 meta 字段已在公共解析层 `parse_and_strip_settings` 剥除），
+/// 提取 `config`。
 ///
 /// 边界：空串/纯空白 → 空目标（登录态版）；非对象 settingsConfig、非字符串
 /// `config` → `Err`（坏配置不能进用户 config.toml）。
 pub fn parse_grok_settings(settings_config: &str) -> AppResult<String> {
-    let trimmed = settings_config.trim();
-    if trimmed.is_empty() {
+    let Some(obj) = crate::provider::live::parse_and_strip_settings(settings_config)? else {
         return Ok(String::new());
-    }
-    let mut obj = crate::provider::live::parse_object(trimmed, "provider settingsConfig")?;
-    // 清洗内部 meta 字段：这些键只供应用自己读，不是 config.toml 的合法字段
-    // （与 claude / codex 分支同一份清单、同一套语义）。
-    if let Some(o) = obj.as_object_mut() {
-        for key in crate::provider::live::LIVE_INTERNAL_KEYS {
-            o.remove(*key);
-        }
-    }
+    };
     match obj.get("config") {
         None => Ok(String::new()),
         Some(v) => v.as_str().map(str::to_string).ok_or_else(|| {
@@ -91,8 +82,8 @@ pub fn parse_grok_settings(settings_config: &str) -> AppResult<String> {
 /// （live 解析不了就没法保留用户手动配置、target 解析不了不能进用户
 /// config.toml，都宁可失败）。
 pub fn merge_grok_config(live: &str, target: &str) -> AppResult<String> {
-    let mut doc = parse_toml_or_empty(live, "live config.toml")?;
-    let target_doc = parse_toml_or_empty(target, "provider config.toml")?;
+    let mut doc = crate::provider::live::parse_toml_or_empty(live, "live config.toml")?;
+    let target_doc = crate::provider::live::parse_toml_or_empty(target, "provider config.toml")?;
 
     // 目标的 cc-one profile 块（Option）。有 → 激活供应商；无 → 登录态版。
     let target_profile = target_doc
@@ -124,15 +115,6 @@ pub fn merge_grok_config(live: &str, target: &str) -> AppResult<String> {
         }
     }
     Ok(doc.to_string())
-}
-
-/// 解析 TOML 文本为可编辑文档：空串/纯空白 → 空文档；非法 TOML → `Err`。
-fn parse_toml_or_empty(text: &str, what: &str) -> AppResult<DocumentMut> {
-    if text.trim().is_empty() {
-        return Ok(DocumentMut::new());
-    }
-    text.parse::<DocumentMut>()
-        .map_err(|e| AppError::Config(format!("{what} is not valid TOML: {e}")))
 }
 
 /// 取 doc 里某顶层表的可变引用；不存在（或不是表）则替换为空表后返回。

@@ -24,8 +24,6 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use toml_edit::DocumentMut;
-
 use crate::error::{AppError, AppResult};
 
 /// Codex 受控键清单（与 claude 的 `CONTROLLED_FIELDS` 并列，各自是所属
@@ -75,28 +73,19 @@ pub struct CodexSnapshot {
     pub config: String,
 }
 
-/// 解析供应商 settingsConfig 为写盘载荷：剥内部 meta 字段（沿用
-/// `LIVE_INTERNAL_KEYS` 语义），提取 `auth.OPENAI_API_KEY` 与 `config`。
+/// 解析供应商 settingsConfig 为写盘载荷（内部 meta 字段已在公共解析层
+/// `parse_and_strip_settings` 剥除），提取 `auth.OPENAI_API_KEY` 与 `config`。
 ///
 /// 边界：空串/纯空白 → 空载荷（无 key 无 config）；非对象 settingsConfig、
 /// 非对象 `auth`、非字符串 `OPENAI_API_KEY`（空串除外，视为无 key）、非
 /// 字符串 `config` → `Err`（坏配置不能进用户 auth.json / config.toml）。
 pub fn parse_codex_settings(settings_config: &str) -> AppResult<CodexSnapshot> {
-    let trimmed = settings_config.trim();
-    if trimmed.is_empty() {
+    let Some(obj) = crate::provider::live::parse_and_strip_settings(settings_config)? else {
         return Ok(CodexSnapshot {
             auth_key: None,
             config: String::new(),
         });
-    }
-    let mut obj = crate::provider::live::parse_object(trimmed, "provider settingsConfig")?;
-    // 清洗内部 meta 字段：这些键只供应用自己读，不是 auth.json / config.toml
-    // 的合法字段（与 claude 分支同一份清单、同一套语义）。
-    if let Some(o) = obj.as_object_mut() {
-        for key in crate::provider::live::LIVE_INTERNAL_KEYS {
-            o.remove(*key);
-        }
-    }
+    };
     let auth_key = match obj.get("auth") {
         None => None,
         Some(auth) => {
@@ -142,23 +131,14 @@ pub fn parse_codex_settings(settings_config: &str) -> AppResult<CodexSnapshot> {
 /// → `Err`（live 解析不了就没法保留用户手动配置、target 解析不了不能进
 /// 用户 config.toml，都宁可失败）。
 pub fn merge_codex_config(live: &str, target: &str) -> AppResult<String> {
-    let mut doc = parse_toml_or_empty(live, "live config.toml")?;
-    let target_doc = parse_toml_or_empty(target, "provider config.toml")?;
+    let mut doc = crate::provider::live::parse_toml_or_empty(live, "live config.toml")?;
+    let target_doc = crate::provider::live::parse_toml_or_empty(target, "provider config.toml")?;
     for key in CODEX_CONTROLLED_FIELDS {
         if let Some(item) = target_doc.get(key) {
             doc.as_table_mut().insert(key, item.clone());
         }
     }
     Ok(doc.to_string())
-}
-
-/// 解析 TOML 文本为可编辑文档：空串/纯空白 → 空文档；非法 TOML → `Err`。
-fn parse_toml_or_empty(text: &str, what: &str) -> AppResult<DocumentMut> {
-    if text.trim().is_empty() {
-        return Ok(DocumentMut::new());
-    }
-    text.parse::<DocumentMut>()
-        .map_err(|e| AppError::Config(format!("{what} is not valid TOML: {e}")))
 }
 
 /// 构建 auth.json 受控写入载荷：现有内容（缺失 → 空对象）上替换受控键
@@ -257,6 +237,7 @@ fn rollback_auth(auth_path: &Path, existing: &Option<String>) {
 mod tests {
     use super::*;
     use std::fs;
+    use toml_edit::DocumentMut;
 
     /// 一份带用户手动配置（非受控字段）的 live config.toml：注释、自定义
     /// 间距、mcp_servers、web_search 都要原样保留。
