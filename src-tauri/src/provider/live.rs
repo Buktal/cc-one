@@ -185,6 +185,9 @@ pub(crate) fn atomic_write_file(path: &Path, content: &str) -> AppResult<()> {
 ///   `~/.codex/auth.json`（`live_codex` 模块）。
 /// - gemini：`.env` 整块替换 + `settings.json` 受控合并
 ///   （`live_gemini` 模块，含 `selectedType` 认证标记）。
+/// - grok：TOML 受控合并进 `~/.grok/config.toml`（`live_grok` 模块，
+///   单文件无 auth；cc one 固定写 `[model."cc-one"]` profile + 设
+///   `models.default`，用户其它 profile / mcp_servers 原样保留）。
 pub fn write_live(app: App, provider: &Provider) -> AppResult<()> {
     match app {
         App::Claude => {
@@ -201,6 +204,10 @@ pub fn write_live(app: App, provider: &Provider) -> AppResult<()> {
             )
         }
         App::Gemini => crate::provider::live_gemini::write_gemini_live(&provider.settings_config),
+        App::Grok => {
+            let config_path = crate::provider::live_grok::grok_config_path()?;
+            crate::provider::live_grok::switch_grok_live(&config_path, &provider.settings_config)
+        }
     }
 }
 

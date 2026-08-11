@@ -49,7 +49,11 @@ use crate::model::{Provider, SECRET_ENV_KEYS};
 /// style `v` gate). Files with a HIGHER `v` are skipped whole on read — this
 /// binary cannot attribute their app fields, so merging them by id could
 /// mis-attribute entries; their providers simply arrive after an upgrade.
-pub const SYNCED_PROVIDERS_DOC_VERSION: u32 = 1;
+///
+/// v2（2026-08-11）：加 `App::Grok`。旧二进制（无 Grok 变体）读到 `app:"grok"`
+/// 会经 `from_db_str` fallback 成 claude，故版本门让旧版本跳过 v2 文件，避免
+/// grok 供应商被错归属到 claude 池。
+pub const SYNCED_PROVIDERS_DOC_VERSION: u32 = 2;
 
 /// One device's provider-file wrapper: a stable JSON object with one
 /// `providers` array + schema version `v`. Files without `v` (pre-version

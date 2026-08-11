@@ -684,12 +684,13 @@ mod tests {
     #[test]
     fn snippet_for_defaults_per_app() {
         let c = ConfigData::default();
-        // claude 默认隐藏署名片段；codex/gemini 默认空片段（留空自填）。
+        // claude 默认隐藏署名片段；codex/gemini/grok 默认空片段（留空自填）。
         let claude = c.snippet_for(App::Claude);
         assert_eq!(claude.content, r#"{"includeCoAuthoredBy": false}"#);
         assert!(!claude.enabled);
         assert_eq!(c.snippet_for(App::Codex).content, "");
         assert_eq!(c.snippet_for(App::Gemini).content, "");
+        assert_eq!(c.snippet_for(App::Grok).content, "");
     }
 
     #[test]

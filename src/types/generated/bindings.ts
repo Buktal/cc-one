@@ -275,13 +275,13 @@ export const commands = {
 	importProvidersCmd: (sourcePath: string, mode: ProviderImportMode) => typedError<ProviderImportReport, AppError>(__TAURI_INVOKE("import_providers_cmd", { sourcePath, mode })),
 	/**
 	 *  获取供应商的可用模型列表。`app` 决定端点格式：claude / codex 走 OpenAI
-	 *  兼容 `GET /v1/models`（当前实现），gemini 的 Google 原生路径由后续批次
-	 *  实现——本票只把 app 维度接进签名，gemini 分支显式报错而不是静默走错
-	 *  端点。WebView fetch 撞 CORS，所以请求由后端发（ureq）。`models_url`
-	 *  非空时精确覆写候选列表（只试这一个）；否则对 baseURL 构造候选 URL
-	 *  （版本段识别 + 兼容子路径剥离，见 `provider::model_fetch::
-	 *  candidate_models_urls`），按序尝试首个成功。错误串带稳定前缀标签
-	 *  （AUTH_FAILED / ENDPOINT_CLOSED / TIMEOUT / BAD_FORMAT / NETWORK），
+	 *  兼容 `GET /v1/models`，gemini 走 Google 原生 `GET /v1beta/models`。WebView
+	 *  fetch 撞 CORS，所以请求由后端发（ureq）。claude / codex 路径里 `models_url`
+	 *  非空时精确覆写候选列表（只试这一个）；否则对 baseURL 构造候选 URL（版本段
+	 *  识别 + 兼容子路径剥离，见 `provider::model_fetch::candidate_models_urls`），
+	 *  按序尝试首个成功。gemini 路径端点形状固定（`gemini_models_url` 构造单一
+	 *  URL），`models_url` 不参与。错误串带稳定前缀标签（AUTH_FAILED /
+	 *  ENDPOINT_CLOSED / TIMEOUT / BAD_FORMAT / NETWORK），两条路径同一套标签，
 	 *  前端按标签分桶提示。
 	 */
 	fetchModelsCmd: (app: App, baseUrl: string, apiKey: string, modelsUrl: string | null) => typedError<string[], AppError>(__TAURI_INVOKE("fetch_models_cmd", { app, baseUrl, apiKey, modelsUrl })),
@@ -345,8 +345,8 @@ export type AlignReport = {
 /**
  *  The app (应用) a provider pool belongs to. Each app owns an independent
  *  provider pool, per-app active state and per-app common-config snippet.
- *  Serialized snake_case ("claude" / "codex" / "gemini") — the same spelling
- *  crosses as JSON, the sync file and the DB.
+ *  Serialized snake_case ("claude" / "codex" / "gemini" / "grok") — the same
+ *  spelling crosses as JSON, the sync file and the DB.
  */
 export type App = 
 /**  Claude Code — the original pool; existing data all belongs here. */
@@ -354,7 +354,9 @@ export type App =
 /**  Codex CLI. */
 "codex" | 
 /**  Gemini CLI. */
-"gemini";
+"gemini" | 
+/**  Grok CLI. */
+"grok";
 
 /**
  *  The single error type crossing the Rust→JS boundary.

@@ -20,8 +20,8 @@ use crate::error::{AppError, AppResult};
 
 /// The app (应用) a provider pool belongs to. Each app owns an independent
 /// provider pool, per-app active state and per-app common-config snippet.
-/// Serialized snake_case ("claude" / "codex" / "gemini") — the same spelling
-/// crosses as JSON, the sync file and the DB.
+/// Serialized snake_case ("claude" / "codex" / "gemini" / "grok") — the same
+/// spelling crosses as JSON, the sync file and the DB.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, Type)]
 #[serde(rename_all = "snake_case")]
 pub enum App {
@@ -32,6 +32,8 @@ pub enum App {
     Codex,
     /// Gemini CLI.
     Gemini,
+    /// Grok CLI.
+    Grok,
 }
 
 impl App {
@@ -42,6 +44,7 @@ impl App {
             App::Claude => "claude",
             App::Codex => "codex",
             App::Gemini => "gemini",
+            App::Grok => "grok",
         }
     }
 
@@ -54,6 +57,7 @@ impl App {
             "claude" => App::Claude,
             "codex" => App::Codex,
             "gemini" => App::Gemini,
+            "grok" => App::Grok,
             _ => App::Claude,
         }
     }
@@ -331,10 +335,12 @@ mod tests {
         assert_eq!(App::from_db_str(App::Claude.as_str()), App::Claude);
         assert_eq!(App::from_db_str(App::Codex.as_str()), App::Codex);
         assert_eq!(App::from_db_str(App::Gemini.as_str()), App::Gemini);
+        assert_eq!(App::from_db_str(App::Grok.as_str()), App::Grok);
         assert_eq!(App::default(), App::Claude);
         assert_eq!(App::Claude.as_str(), "claude");
         assert_eq!(App::Codex.as_str(), "codex");
         assert_eq!(App::Gemini.as_str(), "gemini");
+        assert_eq!(App::Grok.as_str(), "grok");
     }
 
     #[test]
