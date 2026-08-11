@@ -9,11 +9,11 @@ import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Input } from "@/components/ui/input"
 import {
-  PROVIDER_PRESETS,
   type ProviderPreset,
+  presetsForApp,
 } from "@/features/providers/presets"
 
-import type { ProviderCategory } from "@/types/generated/bindings"
+import type { App, ProviderCategory } from "@/types/generated/bindings"
 
 /** 分组展示顺序：官方 → 云厂商 → 国内官方 → 聚合。 */
 const CATEGORY_ORDER: ProviderCategory[] = [
@@ -24,23 +24,27 @@ const CATEGORY_ORDER: ProviderCategory[] = [
 ]
 
 export function PresetSelector({
+  app,
   onSelect,
 }: {
+  app: App
   onSelect: (preset: ProviderPreset) => void
 }) {
   const { t } = useTranslation()
   const [query, setQuery] = useState("")
 
   const groups = useMemo(() => {
+    // 预设按应用分流：claude 18 / codex 17 / gemini 6，单一事实来源走 presetsForApp。
+    const all = presetsForApp(app)
     const q = query.trim().toLowerCase()
     const matches = q
-      ? PROVIDER_PRESETS.filter((p) => p.name.toLowerCase().includes(q))
-      : PROVIDER_PRESETS
+      ? all.filter((p) => p.name.toLowerCase().includes(q))
+      : all
     return CATEGORY_ORDER.map((category) => ({
       category,
       presets: matches.filter((p) => p.category === category),
     })).filter((group) => group.presets.length > 0)
-  }, [query])
+  }, [query, app])
 
   return (
     <Card>

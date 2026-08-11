@@ -55,9 +55,10 @@ import {
 import type { ProviderPreset } from "@/features/providers/presets"
 import { useProvidersBrowser } from "@/features/providers/use-providers-browser"
 import { useMutateWithToast } from "@/hooks/use-toast-mutation"
+import { usePersistedState } from "@/lib/persistence"
 import { cn } from "@/lib/utils"
 
-import type { Provider } from "@/types/generated/bindings"
+import type { App, Provider } from "@/types/generated/bindings"
 import { CommonConfigSnippetCard } from "./common-config-snippet-card"
 import { PresetSelector } from "./preset-selector"
 import { ProviderFormSheet } from "./provider-form-sheet"
@@ -66,8 +67,14 @@ import {
   type TransferKind,
 } from "./provider-transfer-dialog"
 
+// 顶部分段控件的三档应用——顺序即显示顺序。各应用拥有独立的供应商池、
+// 激活状态、预设清单与通用配置片段。
+const APPS: App[] = ["claude", "codex", "gemini"]
+
 export function ProvidersView() {
   const { t } = useTranslation()
+  // 当前选中的应用跨重启记忆（与侧栏折叠同一套 usePersistedState 机制）。
+  const [app, setApp] = usePersistedState<App>("cc-one:providers-app", "claude")
   const {
     providers,
     isLoading,
@@ -75,9 +82,9 @@ export function ProvidersView() {
     exportProviders,
     importProviders,
     transferring,
-  } = useProvidersBrowser()
+  } = useProvidersBrowser(app)
   const { data: activeProvider, isLoading: activeLoading } =
-    useGetActiveProviderQuery("claude")
+    useGetActiveProviderQuery(app)
   const [remove] = useDeleteProviderMutation()
   const [switchProvider] = useSwitchProviderMutation()
   const runWithToast = useMutateWithToast()
@@ -129,7 +136,7 @@ export function ProvidersView() {
   async function onDelete(p: Provider) {
     await runWithToast(
       remove,
-      { app: "claude", id: p.id },
+      { app, id: p.id },
       {
         success: { key: "providers.toast.deleted", vars: { name: p.name } },
         failed: { key: "providers.toast.deleteFailed" },
@@ -140,7 +147,7 @@ export function ProvidersView() {
   async function doSwitch(p: Provider) {
     await runWithToast(
       switchProvider,
-      { app: "claude", id: p.id },
+      { app, id: p.id },
       {
         success: { key: "providers.toast.switched", vars: { name: p.name } },
         failed: { key: "providers.toast.switchFailed" },
@@ -177,7 +184,23 @@ export function ProvidersView() {
 
   return (
     <div className="flex min-h-0 flex-1 flex-col gap-4">
-      <div className="flex items-center justify-between">
+      <div className="flex items-center justify-between gap-2">
+        <fieldset
+          aria-label={t("providers.appLabel")}
+          className="m-0 inline-flex rounded-lg border p-0.5"
+        >
+          {APPS.map((a) => (
+            <Button
+              key={a}
+              size="sm"
+              variant={a === app ? "default" : "outline"}
+              onClick={() => setApp(a)}
+              className="rounded-md"
+            >
+              {t(`providers.app.${a}`)}
+            </Button>
+          ))}
+        </fieldset>
         <div className="flex gap-2">
           <Button
             variant="outline"
@@ -195,11 +218,11 @@ export function ProvidersView() {
             <Upload />
             {t("providers.transfer.import")}
           </Button>
+          <Button size="sm" onClick={openNew}>
+            <Plus />
+            {t("providers.add")}
+          </Button>
         </div>
-        <Button size="sm" onClick={openNew}>
-          <Plus />
-          {t("providers.add")}
-        </Button>
       </div>
       <Card>
         <CardHeader>
@@ -278,7 +301,7 @@ export function ProvidersView() {
           )}
         </CardContent>
       </Card>
-      <PresetSelector onSelect={openFromPreset} />
+      <PresetSelector app={app} onSelect={openFromPreset} />
       {/* 列表卡片不再 flex-1 撑满剩余高度：上方卡片组（active / presets /
           通用配置）高度不固定，内部滚动会把下面的卡片挤出视口且无法滚到。
           整页内容自然排布，由 Shell 的滚动容器统一滚动。 */}
@@ -332,13 +355,14 @@ export function ProvidersView() {
         </CardContent>
       </Card>
 
-      <CommonConfigSnippetCard />
+      <CommonConfigSnippetCard app={app} />
 
       <ProviderFormSheet
         open={sheetOpen}
         onOpenChange={setSheetOpen}
         editing={editing}
         preset={preset}
+        app={app}
         onSaved={() => setSheetOpen(false)}
       />
       <Dialog

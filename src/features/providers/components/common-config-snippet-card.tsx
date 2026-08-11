@@ -22,13 +22,13 @@ import { snippetMissingKeys } from "@/features/providers/derive"
 import { useMutateWithToast } from "@/hooks/use-toast-mutation"
 import { parseJsonObject } from "@/lib/json"
 
-import type { CommonConfigSnippet } from "@/types/generated/bindings"
+import type { App, CommonConfigSnippet } from "@/types/generated/bindings"
 
-export function CommonConfigSnippetCard() {
+export function CommonConfigSnippetCard({ app }: { app: App }) {
   const { t } = useTranslation()
-  // 当前只服务 claude 池——应用分段切换（后续批次）会把这个参数接上 tab。
-  const { data: snippet, isLoading } = useGetCommonConfigSnippetQuery("claude")
-  const { data: activeProvider } = useGetActiveProviderQuery("claude")
+  // 通用配置片段按应用独立：claude / codex / gemini 各一份。
+  const { data: snippet, isLoading } = useGetCommonConfigSnippetQuery(app)
+  const { data: activeProvider } = useGetActiveProviderQuery(app)
   const [save, { isLoading: saving }] = useSetCommonConfigSnippetMutation()
   const runWithToast = useMutateWithToast()
 
@@ -54,7 +54,7 @@ export function CommonConfigSnippetCard() {
     await runWithToast(
       save,
       {
-        app: "claude",
+        app,
         snippet: { enabled, content } satisfies CommonConfigSnippet,
       },
       {
