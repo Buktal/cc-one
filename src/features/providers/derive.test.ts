@@ -1,6 +1,9 @@
 import { describe, expect, it } from "vitest"
+import { CODEX_PROVIDER_PRESETS } from "@/features/providers/codex-presets"
 import {
   authFieldKey,
+  codexApiKey,
+  codexConfigToml,
   configApiKey,
   configAuthField,
   configEndpoint,
@@ -11,8 +14,13 @@ import {
   emptyProvider,
   extractTemplateVars,
   filterProviders,
+  geminiApiKey,
+  geminiBaseUrl,
+  geminiModel,
   hasOneM,
   metaTemplateValues,
+  parseCodexConfig,
+  parseGeminiConfig,
   providerApiKey,
   providerEndpoint,
   providerFromPreset,
@@ -28,11 +36,16 @@ import {
   withAllRolesInText,
   withBasicFields,
   withBasicFieldsInText,
+  withCodexApiKey,
+  withCodexConfigToml,
+  withGeminiConfigJson,
+  withGeminiEnv,
   withMetaTemplateValues,
   withRoleModelInText,
   withRoleNameInText,
   withRoleOneMInText,
 } from "@/features/providers/derive"
+import { GEMINI_PROVIDER_PRESETS } from "@/features/providers/gemini-presets"
 import { PROVIDER_PRESETS } from "@/features/providers/presets"
 import type { Provider } from "@/types/generated/bindings"
 
@@ -1207,5 +1220,436 @@ describe("filterProviders", () => {
 
   it("returns empty for no matches", () => {
     expect(filterProviders(all, "zzz")).toEqual([])
+  })
+})
+
+describe("emptyProvider / providerFromPreset app 参数", () => {
+  it("emptyProvider 默认 claude，settingsConfig 形状对齐", () => {
+    const p = emptyProvider()
+    expect(p.app).toBe("claude")
+    expect(p.settingsConfig).toBe('{\n  "env": {}\n}')
+  })
+
+  it("emptyProvider('codex') 的 settingsConfig 是 {}", () => {
+    const p = emptyProvider("codex")
+    expect(p.app).toBe("codex")
+    expect(p.settingsConfig).toBe("{}")
+  })
+
+  it("emptyProvider('gemini') 的 settingsConfig 是 {}", () => {
+    const p = emptyProvider("gemini")
+    expect(p.app).toBe("gemini")
+    expect(p.settingsConfig).toBe("{}")
+  })
+
+  it("providerFromPreset 默认 claude", () => {
+    const kimi = PROVIDER_PRESETS.find((p) => p.name === "Kimi")
+    const draft = providerFromPreset(kimi!)
+    expect(draft.app).toBe("claude")
+  })
+
+  it("providerFromPreset 接受 codex，复制 Codex 预设快照", () => {
+    const codexKimi = CODEX_PROVIDER_PRESETS.find((p) => p.name === "Kimi")
+    expect(codexKimi).toBeDefined()
+    const draft = providerFromPreset(codexKimi!, "codex")
+    expect(draft.app).toBe("codex")
+    expect(draft.name).toBe("Kimi")
+    expect(draft.category).toBe("custom")
+    expect(draft.settingsConfig).toBe(codexKimi!.settingsConfig)
+    expect(codexApiKey(draft.settingsConfig)).toBe("")
+    expect(codexConfigToml(draft.settingsConfig)).toContain("kimi-k2.7-code")
+  })
+
+  it("providerFromPreset 接受 gemini，复制 Gemini 预设快照", () => {
+    const orPreset = GEMINI_PROVIDER_PRESETS.find(
+      (p) => p.name === "OpenRouter",
+    )
+    expect(orPreset).toBeDefined()
+    const draft = providerFromPreset(orPreset!, "gemini")
+    expect(draft.app).toBe("gemini")
+    expect(draft.settingsConfig).toBe(orPreset!.settingsConfig)
+    expect(geminiModel(draft.settingsConfig)).toBe("gemini-3.6-flash")
+    expect(geminiBaseUrl(draft.settingsConfig)).toBe(
+      "https://openrouter.ai/api",
+    )
+  })
+
+  it("providerFromPreset 不改动预设常量", () => {
+    const before = JSON.stringify(CODEX_PROVIDER_PRESETS)
+    providerFromPreset(CODEX_PROVIDER_PRESETS[0]!, "codex")
+    expect(JSON.stringify(CODEX_PROVIDER_PRESETS)).toBe(before)
+  })
+})
+
+describe("parseCodexConfig", () => {
+  it("解析 auth 与 config（API Key 版）", () => {
+    const text = JSON.stringify({
+      auth: { OPENAI_API_KEY: "sk-1" },
+      config: 'model = "m"',
+    })
+    expect(parseCodexConfig(text)).toEqual({
+      auth: { OPENAI_API_KEY: "sk-1" },
+      config: 'model = "m"',
+    })
+  })
+
+  it("登录态版（auth 为空对象、config 空串）", () => {
+    expect(parseCodexConfig("{}")).toEqual({ auth: {}, config: "" })
+    expect(parseCodexConfig('{"auth":{}}')).toEqual({ auth: {}, config: "" })
+    expect(parseCodexConfig(JSON.stringify({ auth: {}, config: "" }))).toEqual({
+      auth: {},
+      config: "",
+    })
+  })
+
+  it('空 / 垃圾 / 非对象 → {auth:{}, config:""}', () => {
+    expect(parseCodexConfig("")).toEqual({ auth: {}, config: "" })
+    expect(parseCodexConfig("not-json")).toEqual({ auth: {}, config: "" })
+    expect(parseCodexConfig("[1,2]")).toEqual({ auth: {}, config: "" })
+    expect(parseCodexConfig('"a bare string"')).toEqual({
+      auth: {},
+      config: "",
+    })
+  })
+
+  it("非对象 auth 当 {} 处理", () => {
+    expect(
+      parseCodexConfig(JSON.stringify({ auth: "garbage", config: "x" })),
+    ).toEqual({ auth: {}, config: "x" })
+    expect(parseCodexConfig(JSON.stringify({ auth: [1, 2] }))).toEqual({
+      auth: {},
+      config: "",
+    })
+  })
+
+  it('非字符串 config 当 "" 处理', () => {
+    expect(
+      parseCodexConfig(
+        JSON.stringify({ auth: { OPENAI_API_KEY: "k" }, config: 123 }),
+      ),
+    ).toEqual({ auth: { OPENAI_API_KEY: "k" }, config: "" })
+  })
+
+  it("auth 中非字符串值被过滤", () => {
+    expect(
+      parseCodexConfig(
+        JSON.stringify({
+          auth: { OPENAI_API_KEY: "k", bad: 1, also: { x: 1 } },
+        }),
+      ),
+    ).toEqual({ auth: { OPENAI_API_KEY: "k" }, config: "" })
+  })
+})
+
+describe("codexApiKey / codexConfigToml", () => {
+  it("读 API Key 与 TOML 文本", () => {
+    const text = JSON.stringify({
+      auth: { OPENAI_API_KEY: "sk-abc" },
+      config: 'model = "m"\nmodel_provider = "custom"',
+    })
+    expect(codexApiKey(text)).toBe("sk-abc")
+    expect(codexConfigToml(text)).toBe('model = "m"\nmodel_provider = "custom"')
+  })
+
+  it("登录态版的 API Key 为空串", () => {
+    expect(codexApiKey("{}")).toBe("")
+    expect(codexApiKey('{"auth":{}}')).toBe("")
+    expect(codexApiKey('{"auth":{"OPENAI_API_KEY":""}}')).toBe("")
+  })
+
+  it("空 / 垃圾输入不抛，返回空串", () => {
+    expect(codexApiKey("")).toBe("")
+    expect(codexApiKey("not-json")).toBe("")
+    expect(codexConfigToml("")).toBe("")
+    expect(codexConfigToml("not-json")).toBe("")
+  })
+
+  it("读预设的 Codex 配置（生产路径）", () => {
+    const kimi = CODEX_PROVIDER_PRESETS.find((p) => p.name === "Kimi")!
+    // API Key 版：OPENAI_API_KEY 占位为空串（用户填值）。
+    expect(codexApiKey(kimi.settingsConfig)).toBe("")
+    // config TOML 含 Kimi 端点与模型。
+    expect(codexConfigToml(kimi.settingsConfig)).toContain(
+      "https://api.moonshot.cn/v1",
+    )
+    expect(codexConfigToml(kimi.settingsConfig)).toContain("kimi-k2.7-code")
+    // OpenAI Official 是登录态版（settingsConfig = "{}"）。
+    const official = CODEX_PROVIDER_PRESETS.find(
+      (p) => p.name === "OpenAI Official",
+    )!
+    expect(codexApiKey(official.settingsConfig)).toBe("")
+    expect(codexConfigToml(official.settingsConfig)).toBe("")
+  })
+})
+
+describe("withCodexApiKey", () => {
+  it("非空 key 写入 auth.OPENAI_API_KEY，保留 config", () => {
+    const text = JSON.stringify({
+      auth: {},
+      config: 'model = "m"',
+    })
+    const next = withCodexApiKey(text, "sk-new")
+    expect(codexApiKey(next)).toBe("sk-new")
+    expect(codexConfigToml(next)).toBe('model = "m"')
+  })
+
+  it("空 key 删除 auth.OPENAI_API_KEY，回归登录态版", () => {
+    const text = JSON.stringify({
+      auth: { OPENAI_API_KEY: "sk-old" },
+      config: 'model = "m"',
+    })
+    const next = withCodexApiKey(text, "")
+    expect(codexApiKey(next)).toBe("")
+    const parsed = JSON.parse(next) as {
+      auth: Record<string, string>
+      config: string
+    }
+    expect(parsed.auth).toEqual({})
+    expect(parsed.config).toBe('model = "m"')
+  })
+
+  it("保留 auth 其他键", () => {
+    const text = JSON.stringify({
+      auth: { OPENAI_API_KEY: "sk-old", OTHER_TOKEN: "keep" },
+      config: "x",
+    })
+    const next = withCodexApiKey(text, "sk-new")
+    const parsed = JSON.parse(next) as {
+      auth: Record<string, string>
+    }
+    expect(parsed.auth).toEqual({
+      OPENAI_API_KEY: "sk-new",
+      OTHER_TOKEN: "keep",
+    })
+  })
+
+  it("往返：写入再删除等于初始的登录态版", () => {
+    const start = JSON.stringify({ auth: {}, config: 'model = "m"' })
+    const withKey = withCodexApiKey(start, "sk-x")
+    const back = withCodexApiKey(withKey, "")
+    expect(JSON.parse(back)).toEqual(JSON.parse(start))
+  })
+
+  it("空 / 垃圾输入也能工作（按 {} 起步）", () => {
+    const next = withCodexApiKey("", "sk-x")
+    expect(codexApiKey(next)).toBe("sk-x")
+    expect(codexConfigToml(next)).toBe("")
+  })
+})
+
+describe("withCodexConfigToml", () => {
+  it("写入 config 字段，保留 auth", () => {
+    const text = JSON.stringify({
+      auth: { OPENAI_API_KEY: "sk-x" },
+      config: 'model = "old"',
+    })
+    const next = withCodexConfigToml(text, 'model = "new"')
+    expect(codexConfigToml(next)).toBe('model = "new"')
+    expect(codexApiKey(next)).toBe("sk-x")
+  })
+
+  it("空串作为 config（登录态版的合法形态）", () => {
+    const next = withCodexConfigToml('{"auth":{}}', "")
+    expect(codexConfigToml(next)).toBe("")
+    expect(codexApiKey(next)).toBe("")
+  })
+
+  it("保留 auth 的其他键", () => {
+    const text = JSON.stringify({
+      auth: { OPENAI_API_KEY: "k", OTHER: "keep" },
+      config: "x",
+    })
+    const next = withCodexConfigToml(text, "y")
+    const parsed = JSON.parse(next) as {
+      auth: Record<string, string>
+    }
+    expect(parsed.auth).toEqual({ OPENAI_API_KEY: "k", OTHER: "keep" })
+  })
+})
+
+describe("parseGeminiConfig", () => {
+  it("解析 env 与 config（config 以 JSON 文本返回）", () => {
+    const text = JSON.stringify({
+      env: { GEMINI_API_KEY: "sk", GEMINI_MODEL: "m" },
+      config: { model: "m" },
+    })
+    expect(parseGeminiConfig(text)).toEqual({
+      env: { GEMINI_API_KEY: "sk", GEMINI_MODEL: "m" },
+      config: JSON.stringify({ model: "m" }),
+    })
+  })
+
+  it("登录态版（env 为空）", () => {
+    expect(parseGeminiConfig("{}")).toEqual({ env: {}, config: "" })
+    expect(parseGeminiConfig('{"env":{}}')).toEqual({ env: {}, config: "" })
+  })
+
+  it('空 / 垃圾 / 非对象 → {env:{}, config:""}', () => {
+    expect(parseGeminiConfig("")).toEqual({ env: {}, config: "" })
+    expect(parseGeminiConfig("not-json")).toEqual({ env: {}, config: "" })
+    expect(parseGeminiConfig("[1,2]")).toEqual({ env: {}, config: "" })
+  })
+
+  it("非对象 env 当 {} 处理", () => {
+    expect(parseGeminiConfig(JSON.stringify({ env: "garbage" }))).toEqual({
+      env: {},
+      config: "",
+    })
+  })
+
+  it('非对象 config 当 "" 处理（null / 缺失同义）', () => {
+    expect(
+      parseGeminiConfig(
+        JSON.stringify({ env: { GEMINI_API_KEY: "k" }, config: 123 }),
+      ),
+    ).toEqual({ env: { GEMINI_API_KEY: "k" }, config: "" })
+    expect(
+      parseGeminiConfig(JSON.stringify({ env: {}, config: null })),
+    ).toEqual({ env: {}, config: "" })
+  })
+
+  it("env 中非字符串值被过滤", () => {
+    expect(
+      parseGeminiConfig(
+        JSON.stringify({ env: { GEMINI_API_KEY: "k", bad: 1 } }),
+      ),
+    ).toEqual({ env: { GEMINI_API_KEY: "k" }, config: "" })
+  })
+})
+
+describe("geminiApiKey / geminiModel / geminiBaseUrl", () => {
+  it("读三个 env 字段", () => {
+    const text = JSON.stringify({
+      env: {
+        GEMINI_API_KEY: "sk-x",
+        GEMINI_MODEL: "gemini-3.6-pro",
+        GOOGLE_GEMINI_BASE_URL: "https://gen.dev",
+      },
+    })
+    expect(geminiApiKey(text)).toBe("sk-x")
+    expect(geminiModel(text)).toBe("gemini-3.6-pro")
+    expect(geminiBaseUrl(text)).toBe("https://gen.dev")
+  })
+
+  it("空 / 垃圾输入不抛，返回空串", () => {
+    expect(geminiApiKey("")).toBe("")
+    expect(geminiModel("not-json")).toBe("")
+    expect(geminiBaseUrl("")).toBe("")
+  })
+
+  it("读预设的 Gemini 配置（生产路径）", () => {
+    const oauth = GEMINI_PROVIDER_PRESETS.find(
+      (p) => p.name === "Google Gemini",
+    )!
+    expect(geminiApiKey(oauth.settingsConfig)).toBe("")
+    expect(geminiModel(oauth.settingsConfig)).toBe("")
+
+    const apiKey = GEMINI_PROVIDER_PRESETS.find(
+      (p) => p.name === "Google Gemini (API Key)",
+    )!
+    expect(geminiApiKey(apiKey.settingsConfig)).toBe("")
+    expect(geminiModel(apiKey.settingsConfig)).toBe("gemini-3.6-pro")
+    expect(geminiBaseUrl(apiKey.settingsConfig)).toBe(
+      "https://generativelanguage.googleapis.com",
+    )
+
+    const eflow = GEMINI_PROVIDER_PRESETS.find((p) => p.name === "E-FlowCode")!
+    expect(geminiApiKey(eflow.settingsConfig)).toBe("")
+    expect(geminiModel(eflow.settingsConfig)).toBe("gemini-3.6-flash")
+    expect(geminiBaseUrl(eflow.settingsConfig)).toBe("https://e-flowcode.cc")
+    // E-FlowCode 的 config 是个对象，parseGeminiConfig 以 JSON 文本返回。
+    const configJson = parseGeminiConfig(eflow.settingsConfig).config
+    expect(configJson).toContain("previewFeatures")
+    expect(configJson).toContain("sessionRetention")
+  })
+})
+
+describe("withGeminiEnv", () => {
+  it("合并 patch 进 env，保留 config", () => {
+    const text = JSON.stringify({
+      env: { GEMINI_MODEL: "old" },
+      config: { general: { x: 1 } },
+    })
+    const next = withGeminiEnv(text, {
+      GEMINI_API_KEY: "sk-new",
+      GEMINI_MODEL: "new",
+    })
+    expect(geminiApiKey(next)).toBe("sk-new")
+    expect(geminiModel(next)).toBe("new")
+    // config 原样保留。
+    const parsed = JSON.parse(next) as { config?: unknown }
+    expect(parsed.config).toEqual({ general: { x: 1 } })
+  })
+
+  it("空串值删除 env 键（GEMINI_API_KEY 删除即回归登录态版）", () => {
+    const text = JSON.stringify({
+      env: { GEMINI_API_KEY: "sk", GEMINI_MODEL: "m" },
+    })
+    const next = withGeminiEnv(text, { GEMINI_API_KEY: "" })
+    expect(geminiApiKey(next)).toBe("")
+    const parsed = JSON.parse(next) as { env: Record<string, string> }
+    expect(parsed.env).toEqual({ GEMINI_MODEL: "m" })
+  })
+
+  it("往返：写入再删除等于初始", () => {
+    const start = JSON.stringify({ env: { GEMINI_MODEL: "m" } })
+    const withKey = withGeminiEnv(start, { GEMINI_API_KEY: "sk-x" })
+    const back = withGeminiEnv(withKey, { GEMINI_API_KEY: "" })
+    expect(JSON.parse(back)).toEqual(JSON.parse(start))
+  })
+
+  it("空 / 垃圾输入也能工作（按 {env:{}} 起步）", () => {
+    const next = withGeminiEnv("", { GEMINI_API_KEY: "sk-x" })
+    expect(geminiApiKey(next)).toBe("sk-x")
+  })
+})
+
+describe("withGeminiConfigJson", () => {
+  it("写入合法 JSON 到 config 字段，保留 env", () => {
+    const text = JSON.stringify({ env: { GEMINI_API_KEY: "k" } })
+    const next = withGeminiConfigJson(text, '{"general":{"x":1}}')
+    const parsed = JSON.parse(next) as {
+      env: Record<string, string>
+      config: { general: { x: number } }
+    }
+    expect(parsed.env).toEqual({ GEMINI_API_KEY: "k" })
+    expect(parsed.config).toEqual({ general: { x: 1 } })
+  })
+
+  it("空串删除 config 键", () => {
+    const text = JSON.stringify({
+      env: { GEMINI_API_KEY: "k" },
+      config: { general: { x: 1 } },
+    })
+    const next = withGeminiConfigJson(text, "")
+    const parsed = JSON.parse(next) as {
+      env: Record<string, string>
+      config?: unknown
+    }
+    expect(parsed.env).toEqual({ GEMINI_API_KEY: "k" })
+    expect(parsed.config).toBeUndefined()
+  })
+
+  it("非法 JSON 原样不动返回原 text", () => {
+    const text = JSON.stringify({ env: { GEMINI_API_KEY: "k" } })
+    expect(withGeminiConfigJson(text, "{not-json")).toBe(text)
+  })
+
+  it("非对象 JSON（数组 / null / 字符串）原样不动", () => {
+    const text = JSON.stringify({ env: {} })
+    expect(withGeminiConfigJson(text, "[1,2]")).toBe(text)
+    expect(withGeminiConfigJson(text, "null")).toBe(text)
+    expect(withGeminiConfigJson(text, '"str"')).toBe(text)
+    expect(withGeminiConfigJson(text, "123")).toBe(text)
+  })
+
+  it("替换已有 config", () => {
+    const text = JSON.stringify({
+      env: {},
+      config: { old: 1 },
+    })
+    const next = withGeminiConfigJson(text, '{"new":2}')
+    const parsed = JSON.parse(next) as { config: { new: number } }
+    expect(parsed.config).toEqual({ new: 2 })
   })
 })

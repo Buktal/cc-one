@@ -8,7 +8,9 @@
 // 排除项（OAuth 类 GitHub Copilot/Codex/xAI、gemini_native、openai_chat 格式）
 // 一个都不进清单——它们需要本地代理或 OAuth，本功能不做。
 
-import type { ProviderCategory } from "@/types/generated/bindings"
+import { CODEX_PROVIDER_PRESETS } from "@/features/providers/codex-presets"
+import { GEMINI_PROVIDER_PRESETS } from "@/features/providers/gemini-presets"
+import type { App, ProviderCategory } from "@/types/generated/bindings"
 
 /** 一个内置预设：字段对齐 Provider，但没有 id / sortIndex / updatedAt——
  *  预设不是持久化实体，落表单时才被复制成供应商草稿。 */
@@ -321,3 +323,16 @@ export const PROVIDER_PRESETS: ProviderPreset[] = [
     }),
   },
 ]
+
+/** 按应用返回对应的内置预设清单：claude → 18 个、codex → 17 个、gemini →
+ *  6 个。单一事实来源的入口——调用方一律走这里，不要直接读三个常量。 */
+export function presetsForApp(app: App): ProviderPreset[] {
+  switch (app) {
+    case "claude":
+      return PROVIDER_PRESETS
+    case "codex":
+      return CODEX_PROVIDER_PRESETS
+    case "gemini":
+      return GEMINI_PROVIDER_PRESETS
+  }
+}
