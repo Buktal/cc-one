@@ -51,6 +51,7 @@ import {
 } from "@/components/ui/sheet"
 import { Textarea } from "@/components/ui/textarea"
 import { OpenCodeFormFields } from "@/features/providers/components/opencode-form-fields"
+import { PresetPicker } from "@/features/providers/components/preset-picker"
 import type { ModelRoleId } from "@/features/providers/derive"
 import {
   type AuthField,
@@ -95,8 +96,11 @@ import {
   bucketFetchModelsError,
   presetModelsUrl,
 } from "@/features/providers/model-fetch"
-import type { ProviderPreset } from "@/features/providers/presets"
-import { PROVIDER_PRESETS } from "@/features/providers/presets"
+import {
+  PROVIDER_PRESETS,
+  type ProviderPreset,
+  presetsForApp,
+} from "@/features/providers/presets"
 import { useMutateWithToast } from "@/hooks/use-toast-mutation"
 import { toStructuredError } from "@/lib/error"
 import { parseJsonObject } from "@/lib/json"
@@ -108,7 +112,6 @@ export function ProviderFormSheet({
   open,
   onOpenChange,
   editing,
-  preset,
   app,
   onSaved,
 }: {
@@ -116,10 +119,6 @@ export function ProviderFormSheet({
   onOpenChange: (open: boolean) => void
   /** The provider being edited, or null for a new one. */
   editing: Provider | null
-  /** When set, the sheet opens pre-filled from this built-in preset. The preset
-   *  constant is never mutated — providerFromPreset copies its settingsConfig
-   *  snapshot into a fresh custom-category draft. */
-  preset: ProviderPreset | null
   /** 渲染哪一套字段：编辑已有供应商时用其自身的 app，否则取本参数，再否则
    *  claude（原有池）。 */
   app?: App
@@ -128,6 +127,13 @@ export function ProviderFormSheet({
   const { t } = useTranslation()
   // effective app：编辑态供应商的 app 优先，其次调用方传入的新建 app，最后 claude。
   const effectiveApp: App = editing?.app ?? app ?? "claude"
+  // 预设选择内聚进 Sheet（原由 ProvidersView 经 prop 注入）：新建态下用户在
+  // 左栏 PresetPicker 点选即预填，可连续切换覆盖；编辑态不挂 picker。每次
+  // 打开新建清空，避免上次会话选过的预设带到本次新建。
+  const [preset, setPreset] = useState<ProviderPreset | null>(null)
+  useEffect(() => {
+    if (open && !editing) setPreset(null)
+  }, [open, editing])
   const base =
     editing ??
     (preset
@@ -501,13 +507,22 @@ export function ProviderFormSheet({
     templateVarNames.length === 0 &&
     category !== "official" &&
     category !== "cloud_provider"
+  // 双栏左栏（预设选择器）只在新建态 + 该 app 有内置预设时挂载：编辑已有
+  // 供应商不挂；opencode 附加模式 presetsForApp 返回空也不挂。
+  const showPicker = !editing && presetsForApp(effectiveApp).length > 0
 
   return (
     <Sheet open={open} onOpenChange={onOpenChange}>
-      {/* w-[60vw]: 与会话详情弹窗同宽；表单含模型映射与 JSON 编辑器，24rem 的
-          默认上限太挤；sm:max-w-none 覆写原语的 max-w-sm 上限。 */}
-      <SheetContent className="w-[60vw] sm:max-w-none">
-        <SheetHeader>
+      {/* 宽度：双栏（新建 + 有内置预设）80vw 容下左预设栏与右表单；单栏 60vw。
+          p-0 让左栏贴边、表单与头/脚各自 px-6 自管 padding（双栏时左栏 border-r
+          分隔）。 */}
+      <SheetContent
+        className={cn(
+          "sm:max-w-none p-0",
+          showPicker ? "w-[80vw]" : "w-[60vw]",
+        )}
+      >
+        <SheetHeader className="px-6 pt-6">
           <SheetTitle>
             {editing
               ? t("providers.form.editTitle")
@@ -522,336 +537,348 @@ export function ProviderFormSheet({
           ) : null}
         </SheetHeader>
 
-        <div className="flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto pr-0.5">
-          {effectiveApp === "claude" && templateVarNames.length > 0 ? (
-            <div className="rounded-lg border bg-muted/40 p-3">
-              <p className="mb-1 text-xs font-medium">
-                {t("providers.form.templateVars")}
-              </p>
-              <p className="text-muted-foreground mb-2 text-xs">
-                {t("providers.form.templateVarsHint")}
-              </p>
-              <div className="flex flex-col gap-2">
-                {templateVarNames.map((name) => (
-                  <Field key={name} label={name}>
-                    <Input
-                      value={templateValues[name] ?? ""}
-                      onChange={(e) =>
-                        onTemplateVarChange(name, e.target.value)
-                      }
-                      spellCheck={false}
-                    />
-                  </Field>
-                ))}
-              </div>
-            </div>
+        <div className="flex min-h-0 flex-1">
+          {showPicker ? (
+            <PresetPicker app={effectiveApp} onSelect={setPreset} />
           ) : null}
-          <Field label={t("providers.form.name")}>
-            <Input
-              value={name}
-              onChange={(e) => setName(e.target.value)}
-              placeholder={t("providers.form.namePlaceholder")}
-            />
-          </Field>
-          {effectiveApp === "claude" ? (
-            <Field label={t("providers.form.endpoint")}>
+          <div className="flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto px-6">
+            {effectiveApp === "claude" && templateVarNames.length > 0 ? (
+              <div className="rounded-lg border bg-muted/40 p-3">
+                <p className="mb-1 text-xs font-medium">
+                  {t("providers.form.templateVars")}
+                </p>
+                <p className="text-muted-foreground mb-2 text-xs">
+                  {t("providers.form.templateVarsHint")}
+                </p>
+                <div className="flex flex-col gap-2">
+                  {templateVarNames.map((name) => (
+                    <Field key={name} label={name}>
+                      <Input
+                        value={templateValues[name] ?? ""}
+                        onChange={(e) =>
+                          onTemplateVarChange(name, e.target.value)
+                        }
+                        spellCheck={false}
+                      />
+                    </Field>
+                  ))}
+                </div>
+              </div>
+            ) : null}
+            <SectionHeader>{t("providers.form.section.basic")}</SectionHeader>
+            <Field label={t("providers.form.name")}>
               <Input
-                value={endpoint}
-                onChange={(e) => onEndpointChange(e.target.value)}
-                placeholder="https://api.example.com"
-                spellCheck={false}
+                value={name}
+                onChange={(e) => setName(e.target.value)}
+                placeholder={t("providers.form.namePlaceholder")}
               />
             </Field>
-          ) : null}
-          {effectiveApp === "claude" && showKeyFields ? (
-            <div className="flex items-end gap-2">
-              <Field label={t("providers.form.authField")} className="shrink-0">
-                <Select
-                  value={authField}
-                  onValueChange={(v) => {
-                    if (v) onAuthFieldChange(v as AuthField)
-                  }}
+            {effectiveApp === "claude" ? (
+              <Field label={t("providers.form.endpoint")}>
+                <Input
+                  value={endpoint}
+                  onChange={(e) => onEndpointChange(e.target.value)}
+                  placeholder="https://api.example.com"
+                  spellCheck={false}
+                />
+              </Field>
+            ) : null}
+            {effectiveApp === "claude" && showKeyFields ? (
+              <div className="flex items-end gap-2">
+                <Field
+                  label={t("providers.form.authField")}
+                  className="shrink-0"
                 >
-                  <SelectTrigger
-                    className="w-56 font-mono text-xs"
-                    aria-label={t("providers.form.authField")}
+                  <Select
+                    value={authField}
+                    onValueChange={(v) => {
+                      if (v) onAuthFieldChange(v as AuthField)
+                    }}
                   >
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="auth_token">
-                      {authFieldKey("auth_token")}
-                    </SelectItem>
-                    <SelectItem value="api_key">
-                      {authFieldKey("api_key")}
-                    </SelectItem>
-                  </SelectContent>
-                </Select>
-              </Field>
-              <Field
-                label={t("providers.form.apiKey")}
-                className="min-w-0 flex-1"
-              >
-                <Input
-                  type="password"
-                  value={apiKey}
-                  onChange={(e) => onApiKeyChange(e.target.value)}
-                  placeholder={t("providers.form.apiKeyPlaceholder")}
-                  spellCheck={false}
-                />
-              </Field>
-            </div>
-          ) : null}
-          {effectiveApp === "codex" ? (
-            <>
-              <Field label={t("providers.form.apiKey")}>
-                <Input
-                  type="password"
-                  value={codexApiKey(configText)}
-                  onChange={(e) => onCodexApiKeyChange(e.target.value)}
-                  placeholder={t("providers.form.apiKeyPlaceholder")}
-                  spellCheck={false}
-                />
-              </Field>
-              <Field label={t("providers.form.codexConfig")}>
+                    <SelectTrigger
+                      className="w-56 font-mono text-xs"
+                      aria-label={t("providers.form.authField")}
+                    >
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="auth_token">
+                        {authFieldKey("auth_token")}
+                      </SelectItem>
+                      <SelectItem value="api_key">
+                        {authFieldKey("api_key")}
+                      </SelectItem>
+                    </SelectContent>
+                  </Select>
+                </Field>
+                <Field
+                  label={t("providers.form.apiKey")}
+                  className="min-w-0 flex-1"
+                >
+                  <Input
+                    type="password"
+                    value={apiKey}
+                    onChange={(e) => onApiKeyChange(e.target.value)}
+                    placeholder={t("providers.form.apiKeyPlaceholder")}
+                    spellCheck={false}
+                  />
+                </Field>
+              </div>
+            ) : null}
+            {effectiveApp === "codex" ? (
+              <>
+                <Field label={t("providers.form.apiKey")}>
+                  <Input
+                    type="password"
+                    value={codexApiKey(configText)}
+                    onChange={(e) => onCodexApiKeyChange(e.target.value)}
+                    placeholder={t("providers.form.apiKeyPlaceholder")}
+                    spellCheck={false}
+                  />
+                </Field>
+                <Field label={t("providers.form.codexConfig")}>
+                  <Textarea
+                    value={codexConfigToml(configText)}
+                    onChange={(e) => onCodexConfigChange(e.target.value)}
+                    rows={12}
+                    spellCheck={false}
+                    className="font-mono text-xs"
+                  />
+                  <p className="text-muted-foreground text-xs">
+                    {t("providers.form.codexConfigHint")}
+                  </p>
+                </Field>
+              </>
+            ) : null}
+            {effectiveApp === "gemini" ? (
+              <>
+                <Field label={t("providers.form.apiKey")}>
+                  <Input
+                    type="password"
+                    value={geminiApiKey(configText)}
+                    onChange={(e) => onGeminiApiKeyChange(e.target.value)}
+                    placeholder={t("providers.form.apiKeyPlaceholder")}
+                    spellCheck={false}
+                  />
+                </Field>
+                <div className="flex flex-col gap-1.5">
+                  <div className="flex items-center justify-between">
+                    <Label className="text-muted-foreground text-xs">
+                      {t("providers.form.geminiModel")}
+                    </Label>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={onFetchGeminiModels}
+                      disabled={fetching}
+                    >
+                      <RefreshCw
+                        className={cn("size-3.5", fetching && "animate-spin")}
+                      />
+                      {fetching
+                        ? t("providers.form.fetchModels.fetching")
+                        : t("providers.form.fetchModels.fetch")}
+                    </Button>
+                  </div>
+                  <Input
+                    value={geminiModel(configText)}
+                    onChange={(e) => onGeminiModelChange(e.target.value)}
+                    spellCheck={false}
+                  />
+                  {fetchedModels.length > 0 ? (
+                    <Select
+                      onValueChange={(model) => {
+                        if (typeof model === "string") onPickGeminiModel(model)
+                      }}
+                    >
+                      <SelectTrigger
+                        className="font-mono text-xs"
+                        aria-label={t(
+                          "providers.form.fetchModels.geminiPlaceholder",
+                        )}
+                      >
+                        <SelectValue
+                          placeholder={t(
+                            "providers.form.fetchModels.geminiPlaceholder",
+                          )}
+                        />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {fetchedModels.map((model) => (
+                          <SelectItem
+                            key={model}
+                            value={model}
+                            className="font-mono text-xs"
+                          >
+                            {model}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  ) : null}
+                </div>
+                <Field label={t("providers.form.geminiBaseUrl")}>
+                  <Input
+                    value={geminiBaseUrl(configText)}
+                    onChange={(e) => onGeminiBaseUrlChange(e.target.value)}
+                    placeholder="https://generativelanguage.googleapis.com"
+                    spellCheck={false}
+                  />
+                </Field>
+              </>
+            ) : null}
+            {effectiveApp === "grok" ? (
+              <Field label={t("providers.form.grokConfig")}>
                 <Textarea
-                  value={codexConfigToml(configText)}
-                  onChange={(e) => onCodexConfigChange(e.target.value)}
+                  value={grokConfigToml(configText)}
+                  onChange={(e) => onGrokConfigChange(e.target.value)}
                   rows={12}
                   spellCheck={false}
                   className="font-mono text-xs"
                 />
                 <p className="text-muted-foreground text-xs">
-                  {t("providers.form.codexConfigHint")}
+                  {t("providers.form.grokConfigHint")}
                 </p>
               </Field>
-            </>
-          ) : null}
-          {effectiveApp === "gemini" ? (
-            <>
-              <Field label={t("providers.form.apiKey")}>
-                <Input
-                  type="password"
-                  value={geminiApiKey(configText)}
-                  onChange={(e) => onGeminiApiKeyChange(e.target.value)}
-                  placeholder={t("providers.form.apiKeyPlaceholder")}
-                  spellCheck={false}
-                />
-              </Field>
-              <div className="flex flex-col gap-1.5">
-                <div className="flex items-center justify-between">
-                  <Label className="text-muted-foreground text-xs">
-                    {t("providers.form.geminiModel")}
-                  </Label>
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    onClick={onFetchGeminiModels}
-                    disabled={fetching}
-                  >
-                    <RefreshCw
-                      className={cn("size-3.5", fetching && "animate-spin")}
-                    />
-                    {fetching
-                      ? t("providers.form.fetchModels.fetching")
-                      : t("providers.form.fetchModels.fetch")}
-                  </Button>
-                </div>
-                <Input
-                  value={geminiModel(configText)}
-                  onChange={(e) => onGeminiModelChange(e.target.value)}
-                  spellCheck={false}
-                />
-                {fetchedModels.length > 0 ? (
-                  <Select
-                    onValueChange={(model) => {
-                      if (typeof model === "string") onPickGeminiModel(model)
-                    }}
-                  >
-                    <SelectTrigger
-                      className="font-mono text-xs"
-                      aria-label={t(
-                        "providers.form.fetchModels.geminiPlaceholder",
-                      )}
-                    >
-                      <SelectValue
-                        placeholder={t(
-                          "providers.form.fetchModels.geminiPlaceholder",
-                        )}
-                      />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {fetchedModels.map((model) => (
-                        <SelectItem
-                          key={model}
-                          value={model}
-                          className="font-mono text-xs"
-                        >
-                          {model}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                ) : null}
-              </div>
-              <Field label={t("providers.form.geminiBaseUrl")}>
-                <Input
-                  value={geminiBaseUrl(configText)}
-                  onChange={(e) => onGeminiBaseUrlChange(e.target.value)}
-                  placeholder="https://generativelanguage.googleapis.com"
-                  spellCheck={false}
-                />
-              </Field>
-            </>
-          ) : null}
-          {effectiveApp === "grok" ? (
-            <Field label={t("providers.form.grokConfig")}>
-              <Textarea
-                value={grokConfigToml(configText)}
-                onChange={(e) => onGrokConfigChange(e.target.value)}
-                rows={12}
-                spellCheck={false}
-                className="font-mono text-xs"
+            ) : null}
+            {effectiveApp === "opencode" ? (
+              <OpenCodeFormFields
+                configText={configText}
+                onChange={setConfigText}
+                fetching={fetching}
+                fetchedModels={fetchedModels}
+                onFetchModels={onFetchOpenCodeModels}
               />
-              <p className="text-muted-foreground text-xs">
-                {t("providers.form.grokConfigHint")}
-              </p>
-            </Field>
-          ) : null}
-          {effectiveApp === "opencode" ? (
-            <OpenCodeFormFields
-              configText={configText}
-              onChange={setConfigText}
-              fetching={fetching}
-              fetchedModels={fetchedModels}
-              onFetchModels={onFetchOpenCodeModels}
-            />
-          ) : null}
-          {effectiveApp === "claude" ? (
-            <div className="rounded-md border p-3">
-              <div className="flex flex-wrap items-center justify-between gap-2">
-                <Label className="text-muted-foreground text-xs">
-                  {t("providers.form.modelMapping")}
-                </Label>
-                <div className="flex items-center gap-2">
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    onClick={onFetchModels}
-                    disabled={fetching}
-                  >
-                    <RefreshCw
-                      className={cn("size-3.5", fetching && "animate-spin")}
-                    />
-                    {fetching
-                      ? t("providers.form.fetchModels.fetching")
-                      : t("providers.form.fetchModels.fetch")}
-                  </Button>
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    onClick={onApplyAll}
-                    disabled={!canApplyAll}
-                  >
-                    <Wand2 className="size-3.5" />
-                    {t("providers.form.applyAll")}
-                  </Button>
-                </div>
-              </div>
-              <p className="mt-1.5 mb-2 text-xs text-muted-foreground">
-                {t("providers.form.modelMappingHint")}
-              </p>
-              {fetchedModels.length > 0 ? (
-                <div className="mb-2">
-                  <Select
-                    onValueChange={(model) => {
-                      if (typeof model === "string") onPickModel(model)
-                    }}
-                  >
-                    <SelectTrigger
-                      className="font-mono text-xs"
-                      aria-label={t("providers.form.fetchModels.placeholder")}
+            ) : null}
+            {effectiveApp === "claude" ? (
+              <div className="rounded-md border p-3">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <Label className="text-muted-foreground text-xs">
+                    {t("providers.form.modelMapping")}
+                  </Label>
+                  <div className="flex items-center gap-2">
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={onFetchModels}
+                      disabled={fetching}
                     >
-                      <SelectValue
-                        placeholder={t(
-                          "providers.form.fetchModels.placeholder",
-                        )}
+                      <RefreshCw
+                        className={cn("size-3.5", fetching && "animate-spin")}
                       />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {fetchedModels.map((model) => (
-                        <SelectItem
-                          key={model}
-                          value={model}
-                          className="font-mono text-xs"
-                        >
-                          {model}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                </div>
-              ) : null}
-              <div className="space-y-3">
-                {roleRows.map(({ role, fields }) => (
-                  <div key={role.id} className="space-y-1">
-                    <div className="flex items-center justify-between">
-                      <Label className="text-muted-foreground text-xs">
-                        {t(`providers.form.role.${role.id}`)}
-                      </Label>
-                      {role.supportsOneM ? (
-                        <label
-                          htmlFor={`model-role-one-m-${role.id}`}
-                          className="flex cursor-pointer items-center gap-1.5 text-xs text-muted-foreground"
-                        >
-                          <Checkbox
-                            id={`model-role-one-m-${role.id}`}
-                            checked={fields.oneM}
-                            onCheckedChange={(checked) =>
-                              onRoleOneMChange(role.id, checked)
-                            }
-                          />
-                          {t("providers.form.oneM")}
-                        </label>
-                      ) : null}
-                    </div>
-                    <div className="grid grid-cols-2 gap-2">
-                      <Field label={t("providers.form.displayName")}>
-                        <Input
-                          value={fields.name}
-                          onChange={(e) =>
-                            onRoleNameChange(role.id, e.target.value)
-                          }
-                          placeholder={stripOneM(fields.model)}
-                          spellCheck={false}
-                        />
-                      </Field>
-                      <Field label={t("providers.form.requestModel")}>
-                        <Input
-                          value={fields.model}
-                          onChange={(e) =>
-                            onRoleModelChange(role.id, e.target.value)
-                          }
-                          spellCheck={false}
-                        />
-                      </Field>
-                    </div>
+                      {fetching
+                        ? t("providers.form.fetchModels.fetching")
+                        : t("providers.form.fetchModels.fetch")}
+                    </Button>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={onApplyAll}
+                      disabled={!canApplyAll}
+                    >
+                      <Wand2 className="size-3.5" />
+                      {t("providers.form.applyAll")}
+                    </Button>
                   </div>
-                ))}
+                </div>
+                <p className="mt-1.5 mb-2 text-xs text-muted-foreground">
+                  {t("providers.form.modelMappingHint")}
+                </p>
+                {fetchedModels.length > 0 ? (
+                  <div className="mb-2">
+                    <Select
+                      onValueChange={(model) => {
+                        if (typeof model === "string") onPickModel(model)
+                      }}
+                    >
+                      <SelectTrigger
+                        className="font-mono text-xs"
+                        aria-label={t("providers.form.fetchModels.placeholder")}
+                      >
+                        <SelectValue
+                          placeholder={t(
+                            "providers.form.fetchModels.placeholder",
+                          )}
+                        />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {fetchedModels.map((model) => (
+                          <SelectItem
+                            key={model}
+                            value={model}
+                            className="font-mono text-xs"
+                          >
+                            {model}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
+                ) : null}
+                <div className="space-y-2">
+                  {roleRows.map(({ role, fields }) => (
+                    <div key={role.id} className="space-y-1">
+                      <div className="flex items-center justify-between">
+                        <Label className="text-muted-foreground text-xs">
+                          {t(`providers.form.role.${role.id}`)}
+                        </Label>
+                        {role.supportsOneM ? (
+                          <label
+                            htmlFor={`model-role-one-m-${role.id}`}
+                            className="flex cursor-pointer items-center gap-1.5 text-xs text-muted-foreground"
+                          >
+                            <Checkbox
+                              id={`model-role-one-m-${role.id}`}
+                              checked={fields.oneM}
+                              onCheckedChange={(checked) =>
+                                onRoleOneMChange(role.id, checked)
+                              }
+                            />
+                            {t("providers.form.oneM")}
+                          </label>
+                        ) : null}
+                      </div>
+                      <div className="grid grid-cols-2 gap-2">
+                        <Field label={t("providers.form.displayName")}>
+                          <Input
+                            value={fields.name}
+                            onChange={(e) =>
+                              onRoleNameChange(role.id, e.target.value)
+                            }
+                            placeholder={stripOneM(fields.model)}
+                            spellCheck={false}
+                          />
+                        </Field>
+                        <Field label={t("providers.form.requestModel")}>
+                          <Input
+                            value={fields.model}
+                            onChange={(e) =>
+                              onRoleModelChange(role.id, e.target.value)
+                            }
+                            spellCheck={false}
+                          />
+                        </Field>
+                      </div>
+                    </div>
+                  ))}
+                </div>
               </div>
-            </div>
-          ) : null}
-          <Field label={t("providers.form.settingsJson")}>
-            <JsonEditor
-              value={configText}
-              onChange={setConfigText}
-              placeholder={t("providers.form.settingsJsonPlaceholder")}
-              className="h-72"
-            />
-          </Field>
+            ) : null}
+            <SectionHeader>
+              {t("providers.form.section.advanced")}
+            </SectionHeader>
+            <Field label={t("providers.form.settingsJson")}>
+              <JsonEditor
+                value={configText}
+                onChange={setConfigText}
+                placeholder={t("providers.form.settingsJsonPlaceholder")}
+                className="h-72"
+              />
+            </Field>
+          </div>
         </div>
 
-        <SheetFooter>
+        <SheetFooter className="px-6 pb-6">
           <Button variant="outline" onClick={() => onOpenChange(false)}>
             {t("common.cancel")}
           </Button>
@@ -861,6 +888,16 @@ export function ProviderFormSheet({
         </SheetFooter>
       </SheetContent>
     </Sheet>
+  )
+}
+
+// 表单章节标题：上方 hairline + 小标题，给长表单（基本信息 / 认证 / 模型映射
+// / 高级配置）可扫读的视觉锚点。border-t 兼作段落分隔。
+function SectionHeader({ children }: { children: React.ReactNode }) {
+  return (
+    <div className="text-muted-foreground mt-3 border-border/60 border-t pt-2 text-[11px] font-semibold">
+      {children}
+    </div>
   )
 }
 

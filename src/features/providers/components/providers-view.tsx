@@ -13,14 +13,19 @@ import {
 } from "@dnd-kit/react"
 import { useSortable } from "@dnd-kit/react/sortable"
 import {
+  AlertTriangle,
   ArrowRightLeft,
+  ChevronDown,
+  Database,
   Download,
+  Info,
   Pencil,
   Plus,
   RefreshCw,
   Search,
   Trash2,
   Upload,
+  X,
 } from "lucide-react"
 import { useState } from "react"
 import { useTranslation } from "react-i18next"
@@ -44,6 +49,12 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog"
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu"
 import { Input } from "@/components/ui/input"
 import {
   Tooltip,
@@ -57,10 +68,6 @@ import {
   providerMissingRequired,
   providerModel,
 } from "@/features/providers/derive"
-import {
-  type ProviderPreset,
-  presetsForApp,
-} from "@/features/providers/presets"
 import { useProvidersBrowser } from "@/features/providers/use-providers-browser"
 import { useMutateWithToast } from "@/hooks/use-toast-mutation"
 import { usePersistedState } from "@/lib/persistence"
@@ -69,7 +76,6 @@ import { cn } from "@/lib/utils"
 import type { App, Provider } from "@/types/generated/bindings"
 import { CcSwitchImportDialog } from "./cc-switch-import-dialog"
 import { CommonConfigSnippetCard } from "./common-config-snippet-card"
-import { PresetSidePanel } from "./preset-side-panel"
 import { ProviderFormSheet } from "./provider-form-sheet"
 import {
   ProviderTransferDialog,
@@ -103,17 +109,15 @@ export function ProvidersView() {
   const runWithToast = useMutateWithToast()
 
   const [sheetOpen, setSheetOpen] = useState(false)
-  // 预设侧栏面板（新增时从左侧滑入）：openNew 时按「该 app 有内置预设」
-  // 开启；openEdit / 保存 / 取消时一并关闭。opencode 附加模式无预设 → 恒 false。
-  const [presetSheetOpen, setPresetSheetOpen] = useState(false)
   const [editing, setEditing] = useState<Provider | null>(null)
-  const [preset, setPreset] = useState<ProviderPreset | null>(null)
   const [transfer, setTransfer] = useState<TransferKind | null>(null)
   const [ccswitchOpen, setCcswitchOpen] = useState(false)
   const [query, setQuery] = useState("")
   // 切换确认对话框：切到缺必填项（端点/key/模板变量）的供应商前先问一句，
   // 用户确认后照切不误（「我已经知道它缺东西，就是要切」）。
   const [confirmSwitch, setConfirmSwitch] = useState<Provider | null>(null)
+  // opencode 解释条：切走再切回 opencode 时重新弹出（selectApp 里重置）。
+  const [bannerDismissed, setBannerDismissed] = useState(false)
 
   // Whole-row drag handle: 6px of movement before a press becomes a drag —
   // clicks keep opening the edit sheet; moves reorder. Same constraints as the
@@ -137,23 +141,11 @@ export function ProvidersView() {
 
   function openNew() {
     setEditing(null)
-    setPreset(null)
-    setSheetOpen(true)
-    // 有内置预设的 app：新增时同时弹出左侧预设面板（右侧空白表单 + 左侧预设，
-    // 点预设即预填）。opencode 无预设 → 不弹。
-    setPresetSheetOpen(presetsForApp(app).length > 0)
-  }
-  function openFromPreset(p: ProviderPreset) {
-    setEditing(null)
-    setPreset(p)
     setSheetOpen(true)
   }
   function openEdit(p: Provider) {
     setEditing(p)
-    setPreset(null)
     setSheetOpen(true)
-    // 编辑已有供应商不挂预设面板（预设只服务新建流程）。
-    setPresetSheetOpen(false)
   }
   async function onDelete(p: Provider) {
     await runWithToast(
@@ -192,6 +184,12 @@ export function ProvidersView() {
   // 「加入 / 移出 live」而非「切换」，列表无「当前使用」标记，通用配置片段
   // 无处合并 → 不显示。单激活四 app 恒 false。
   const isAdditive = app === "opencode"
+
+  /** 切换 app：重置 opencode 解释条（切走再切回重新提示）。 */
+  function selectApp(a: App) {
+    setApp(a)
+    setBannerDismissed(false)
+  }
 
   async function onAddToLive(p: Provider) {
     await runWithToast(
@@ -241,55 +239,76 @@ export function ProvidersView() {
             <Button
               key={a}
               size="sm"
-              variant={a === app ? "default" : "outline"}
-              onClick={() => setApp(a)}
-              className="rounded-md"
+              variant="ghost"
+              onClick={() => selectApp(a)}
+              className={cn(
+                "rounded-md",
+                a === app &&
+                  "bg-accent-tint text-accent-brand-strong font-medium",
+              )}
             >
               {t(`providers.app.${a}`)}
             </Button>
           ))}
         </fieldset>
         <div className="flex gap-2">
-          {isAdditive ? (
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={() => void onImportFromLive()}
+          {/* 数据迁移类操作收进菜单：导出 / 导入 / CC-Switch 导入，附加模式
+              (opencode) 多一项「从 live 导入」。主操作「新增」独立为 primary。 */}
+          <DropdownMenu>
+            <DropdownMenuTrigger
+              render={<Button variant="outline" size="sm" />}
             >
-              <RefreshCw />
-              {t("providers.live.import")}
-            </Button>
-          ) : null}
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={() => setTransfer("export")}
-          >
-            <Download />
-            {t("providers.transfer.export")}
-          </Button>
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={() => setTransfer("import")}
-          >
-            <Upload />
-            {t("providers.transfer.import")}
-          </Button>
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={() => setCcswitchOpen(true)}
-          >
-            <ArrowRightLeft />
-            {t("providers.ccswitch.button")}
-          </Button>
+              <Database />
+              {t("providers.dataMenu.label")}
+              <ChevronDown />
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end">
+              {isAdditive ? (
+                <DropdownMenuItem onClick={() => void onImportFromLive()}>
+                  <RefreshCw />
+                  {t("providers.live.import")}
+                </DropdownMenuItem>
+              ) : null}
+              <DropdownMenuItem onClick={() => setTransfer("export")}>
+                <Download />
+                {t("providers.transfer.export")}
+              </DropdownMenuItem>
+              <DropdownMenuItem onClick={() => setTransfer("import")}>
+                <Upload />
+                {t("providers.transfer.import")}
+              </DropdownMenuItem>
+              <DropdownMenuItem onClick={() => setCcswitchOpen(true)}>
+                <ArrowRightLeft />
+                {t("providers.ccswitch.button")}
+              </DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
           <Button size="sm" onClick={openNew}>
             <Plus />
             {t("providers.add")}
           </Button>
         </div>
       </div>
+
+      {isAdditive && !bannerDismissed ? (
+        // opencode 附加模式说明：多供应商共存，加入 live 即生效，无需切换。
+        // 与 AppMark 描边方块呼应，让附加模式与单激活的差异在顶栏就可预期。
+        <div className="bg-muted/40 flex items-center gap-2 rounded-lg px-3 py-2 text-xs">
+          <Info className="text-muted-foreground size-3.5 shrink-0" />
+          <span className="text-muted-foreground flex-1">
+            {t("providers.opencode.bannerBody")}
+          </span>
+          <Button
+            variant="ghost"
+            size="icon-sm"
+            className="size-6 shrink-0"
+            aria-label={t("common.close")}
+            onClick={() => setBannerDismissed(true)}
+          >
+            <X />
+          </Button>
+        </div>
+      ) : null}
       {/* 列表卡片不再 flex-1 撑满剩余高度：上方还有通用配置卡片，高度不固
           定，内部滚动会把下面的内容挤出视口且无法滚到。整页自然排布，由
           Shell 的滚动容器统一滚动。预设已退居为新增流程的左侧面板（见下）。 */}
@@ -353,26 +372,10 @@ export function ProvidersView() {
 
       <ProviderFormSheet
         open={sheetOpen}
-        onOpenChange={(open) => {
-          setSheetOpen(open)
-          if (!open) setPresetSheetOpen(false)
-        }}
+        onOpenChange={setSheetOpen}
         editing={editing}
-        preset={preset}
         app={app}
-        onSaved={() => {
-          setSheetOpen(false)
-          setPresetSheetOpen(false)
-        }}
-      />
-      {/* 预设侧栏面板：新增模式下从左侧滑入，点预设即预填右侧表单（面板保持
-          开，可连续切换预设）。仅在有内置预设的 app 显示——opencode 附加模式
-          无预设，open 恒 false。 */}
-      <PresetSidePanel
-        app={app}
-        open={presetSheetOpen && presetsForApp(app).length > 0}
-        onSelect={openFromPreset}
-        onClose={() => setPresetSheetOpen(false)}
+        onSaved={() => setSheetOpen(false)}
       />
       <Dialog
         open={confirmSwitch !== null}
@@ -450,6 +453,10 @@ function ProviderRow({
   const { ref, isDragging } = useSortable({ id: p.id, index })
   const endpoint = providerEndpoint(p)
   const model = providerModel(p)
+  // 缺必填项（端点 / key / 未物化模板变量）：提前到列表层可见，hover 列明细，
+  // 不必等点「切换 / 加入 live」才在确认框里发现。official / cloud_provider 走
+  // 默认端点或模板变量认证，不要求端点/key（见 providerMissingRequired）。
+  const missingRequired = providerMissingRequired(p)
   return (
     <div
       ref={ref}
@@ -472,6 +479,22 @@ function ProviderRow({
           />
         ) : null}
         <span className="truncate font-medium">{p.name}</span>
+        {missingRequired.length > 0 ? (
+          <Tooltip>
+            <TooltipTrigger
+              render={<span className="inline-flex shrink-0 cursor-help" />}
+            >
+              <AlertTriangle className="size-3.5 shrink-0 text-amber-500" />
+            </TooltipTrigger>
+            <TooltipContent>
+              {t("providers.row.missingRequired", {
+                missing: missingRequired
+                  .map((m) => t(`providers.switchConfirm.missing.${m}`))
+                  .join(", "),
+              })}
+            </TooltipContent>
+          </Tooltip>
+        ) : null}
       </span>
       <Badge variant="secondary">{t(`providers.category.${p.category}`)}</Badge>
       <span
@@ -515,7 +538,14 @@ function ProviderRow({
             </Button>
           )
         ) : isActive ? (
-          <Badge variant="outline" className="h-7 shrink-0 px-2 font-normal">
+          <Badge
+            variant="outline"
+            className="h-6 gap-1 shrink-0 px-2 font-normal text-[11px]"
+          >
+            <span
+              aria-hidden
+              className="bg-accent-brand size-1.5 rounded-full"
+            />
             {t("providers.active.inUse")}
           </Badge>
         ) : (
