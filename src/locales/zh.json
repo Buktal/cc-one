@@ -289,6 +289,8 @@
   "sessions.collect.collecting": "采集中…",
   "sessions.detail.collapseAll": "全部折叠",
   "sessions.detail.expandAll": "全部展开",
+  "sessions.detail.nextSession": "下一个会话",
+  "sessions.detail.prevSession": "上一个会话",
   "sessions.detail.copyMessage": "复制消息",
   "sessions.detail.noGroup": "无分组",
   "sessions.detail.refresh": "刷新",

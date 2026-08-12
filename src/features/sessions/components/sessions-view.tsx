@@ -182,36 +182,41 @@ export function SessionsView() {
 
             {/* Paged footer — mirrors the request-log table's paginator: page
               info on the left, prev/next on the right. Disabled states agree
-              with the page query's size (SESSIONS_PAGE_SIZE, single source). */}
-            <div className="text-muted-foreground mt-3 flex shrink-0 items-center justify-between text-xs">
-              <span>
-                {t("sessions.pageInfo", {
-                  page: b.page,
-                  totalPages: b.totalPages,
-                  total: formatInt(b.totalCount),
-                })}
-              </span>
-              <div className="flex gap-2">
-                <Button
-                  variant="outline"
-                  size="sm"
-                  disabled={b.offset === 0}
-                  onClick={() =>
-                    b.setOffset(Math.max(0, b.offset - SESSIONS_PAGE_SIZE))
-                  }
-                >
-                  {t("sessions.prevPage")}
-                </Button>
-                <Button
-                  variant="outline"
-                  size="sm"
-                  disabled={b.offset + SESSIONS_PAGE_SIZE >= b.totalCount}
-                  onClick={() => b.setOffset(b.offset + SESSIONS_PAGE_SIZE)}
-                >
-                  {t("sessions.nextPage")}
-                </Button>
+              with the page query's size (SESSIONS_PAGE_SIZE, single source).
+              Hidden on an empty result set (loading or zero rows): a "0 of 0
+              pages" strip under a centered empty state reads as a broken
+              layout. */}
+            {b.totalCount > 0 ? (
+              <div className="text-muted-foreground mt-3 flex shrink-0 items-center justify-between text-xs">
+                <span>
+                  {t("sessions.pageInfo", {
+                    page: b.page,
+                    totalPages: b.totalPages,
+                    total: formatInt(b.totalCount),
+                  })}
+                </span>
+                <div className="flex gap-2">
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    disabled={b.offset === 0}
+                    onClick={() =>
+                      b.setOffset(Math.max(0, b.offset - SESSIONS_PAGE_SIZE))
+                    }
+                  >
+                    {t("sessions.prevPage")}
+                  </Button>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    disabled={b.offset + SESSIONS_PAGE_SIZE >= b.totalCount}
+                    onClick={() => b.setOffset(b.offset + SESSIONS_PAGE_SIZE)}
+                  >
+                    {t("sessions.nextPage")}
+                  </Button>
+                </div>
               </div>
-            </div>
+            ) : null}
           </CardContent>
         </Card>
       </div>
@@ -239,6 +244,10 @@ export function SessionsView() {
           transcriptLoading={b.transcriptLoading}
           transcriptError={b.transcriptError}
           onRefreshTranscript={b.refetchTranscript}
+          onPrev={() => b.openNeighbor(-1)}
+          onNext={() => b.openNeighbor(1)}
+          canPrev={b.canPrev}
+          canNext={b.canNext}
           deviceLabel={(id) => b.deviceLabel.get(id) ?? id.slice(0, 8)}
         />
       ) : null}

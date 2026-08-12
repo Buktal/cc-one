@@ -20,6 +20,7 @@ import {
   firstLine,
   isAllCollapsed,
   modelsUsed,
+  neighborNav,
   nextFavValue,
   reorderGroupIds,
   sessionSpan,
@@ -468,6 +469,64 @@ describe("modelsUsed", () => {
 })
 
 // ------------------------------------------------------------- transcript --
+
+describe("neighborNav", () => {
+  const rows = (n: number, start = 0): SessionRow[] =>
+    Array.from({ length: n }, (_, i) =>
+      row({ id: `s${start + i}`, title: `s${start + i}` }),
+    )
+  // previewKey arrives in favKey form ("device_id/id") — match how the hook
+  // derives it from the preview row.
+  const key = (id: string) => favKey({ device_id: "dev-self", id })
+
+  it("rows mid-page navigate both ways", () => {
+    expect(neighborNav(rows(5), key("s2"), 0, 20, 5)).toEqual({
+      canPrev: true,
+      canNext: true,
+    })
+  })
+
+  it("first row of the first page has no prev", () => {
+    expect(neighborNav(rows(5), key("s0"), 0, 20, 5)).toEqual({
+      canPrev: false,
+      canNext: true,
+    })
+  })
+
+  it("last row of the last page has no next", () => {
+    expect(neighborNav(rows(5), key("s4"), 0, 20, 5)).toEqual({
+      canPrev: true,
+      canNext: false,
+    })
+  })
+
+  it("a page-edge row can page forward when more pages exist", () => {
+    // Last row of page 2 (rows s20-39 of 45, offset 20): next pages into page 3.
+    expect(neighborNav(rows(20, 20), key("s39"), 20, 20, 45)).toEqual({
+      canPrev: true,
+      canNext: true,
+    })
+  })
+
+  it("a page-edge row can page backward when not on the first page", () => {
+    // First row of page 2 (offset 20): prev pages back into page 1.
+    expect(neighborNav(rows(20, 20), key("s20"), 20, 20, 45)).toEqual({
+      canPrev: true,
+      canNext: true,
+    })
+  })
+
+  it("an off-page key (filter changed mid-session) disables both", () => {
+    expect(neighborNav(rows(5), key("s99"), 0, 20, 5)).toEqual({
+      canPrev: false,
+      canNext: false,
+    })
+    expect(neighborNav(rows(5), null, 0, 20, 5)).toEqual({
+      canPrev: false,
+      canNext: false,
+    })
+  })
+})
 
 describe("collapseAllMessages / expandAllMessages / isAllCollapsed", () => {
   const msgs = (...roles: SessionMessage["role"][]): SessionMessage[] =>

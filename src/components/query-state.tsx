@@ -44,12 +44,17 @@ export function QueryState({
   }
   if (isEmpty) {
     return (
-      <EmptyState
-        icon={emptyIcon}
-        title={emptyLabel ?? t("common.empty")}
-        description={emptyDescription}
-        action={emptyAction}
-      />
+      // flex-1 centers the empty state in whatever space the list body would
+      // have occupied — without it the empty block floats at the top while the
+      // paged footer (or nothing) sits below, which reads as a broken layout.
+      <div className="flex min-h-0 flex-1 items-center justify-center">
+        <EmptyState
+          icon={emptyIcon}
+          title={emptyLabel ?? t("common.empty")}
+          description={emptyDescription}
+          action={emptyAction}
+        />
+      </div>
     )
   }
   return <>{children}</>

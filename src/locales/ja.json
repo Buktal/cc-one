@@ -277,6 +277,8 @@
   "sessions.collect.collecting": "収集中…",
   "sessions.detail.collapseAll": "すべて折りたたむ",
   "sessions.detail.expandAll": "すべて展開",
+  "sessions.detail.nextSession": "次のセッション",
+  "sessions.detail.prevSession": "前のセッション",
   "sessions.detail.copyMessage": "メッセージをコピー",
   "sessions.detail.noGroup": "グループなし",
   "sessions.detail.refresh": "更新",

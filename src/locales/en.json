@@ -289,6 +289,8 @@
   "sessions.collect.collecting": "Collecting…",
   "sessions.detail.collapseAll": "Collapse all",
   "sessions.detail.expandAll": "Expand all",
+  "sessions.detail.nextSession": "Next session",
+  "sessions.detail.prevSession": "Previous session",
   "sessions.detail.copyMessage": "Copy message",
   "sessions.detail.noGroup": "No group",
   "sessions.detail.refresh": "Refresh",

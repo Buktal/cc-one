@@ -249,6 +249,29 @@ export function modelsUsed(messages: readonly SessionMessage[]): string[] {
   return out
 }
 
+/**
+ * Whether the detail sheet's prev / next navigation can move from the row at
+ * `previewKey` within the visible page: an adjacent row exists (idx ± 1), or
+ * the row sits at a page edge and another page exists to page into. A preview
+ * key not on the page (the filter / tab changed mid-session) disables both
+ * directions — navigation only walks the currently visible list.
+ */
+export function neighborNav(
+  rows: readonly SessionRow[],
+  previewKey: string | null,
+  offset: number,
+  pageSize: number,
+  totalCount: number,
+): { canPrev: boolean; canNext: boolean } {
+  if (!previewKey) return { canPrev: false, canNext: false }
+  const idx = rows.findIndex((s) => favKey(s) === previewKey)
+  if (idx === -1) return { canPrev: false, canNext: false }
+  return {
+    canPrev: idx > 0 || offset > 0,
+    canNext: idx < rows.length - 1 || offset + pageSize < totalCount,
+  }
+}
+
 // --------------------------------------------------------------- favorites --
 
 /**

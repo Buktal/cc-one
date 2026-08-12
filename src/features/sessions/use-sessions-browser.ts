@@ -48,6 +48,7 @@ import {
   effectiveFavorite,
   favKey,
   type GroupTrack,
+  neighborNav,
   nextFavValue,
   type SessionScopeSpec,
   type SessionTab,
@@ -317,6 +318,59 @@ export function useSessionsBrowser() {
     }
   }
 
+  // ---- detail sheet: prev / next session navigation ----
+  // Walks the currently visible page (±1 row). At a page edge the step pages
+  // into the adjacent page and opens its target row (next → first row of the
+  // next page, prev → last row of the previous page) once the new page's data
+  // lands — see the pendingNeighbor effect below.
+  const pendingNeighbor = useRef<{ delta: 1 | -1; fromKey: string } | null>(
+    null,
+  )
+  const neighbor = useMemo(
+    () =>
+      neighborNav(
+        visibleSessions,
+        previewKey ? favKey(previewKey) : null,
+        offset,
+        SESSIONS_PAGE_SIZE,
+        counts.total,
+      ),
+    [visibleSessions, previewKey, offset, counts.total],
+  )
+
+  function openNeighbor(delta: 1 | -1): void {
+    if (!preview) return
+    const idx = visibleSessions.findIndex((s) => favKey(s) === favKey(preview))
+    if (idx === -1) return // preview left the visible page (filter changed)
+    const target = visibleSessions[idx + delta]
+    if (target) {
+      setPreview(target)
+      return
+    }
+    // Page edge with a page beyond it: flip the page, open the target row
+    // when the new data arrives. Bounded by neighborNav's canPrev/canNext, so
+    // the button is disabled when there is nowhere to go.
+    pendingNeighbor.current = { delta, fromKey: favKey(preview) }
+    setOffset(offset + delta * SESSIONS_PAGE_SIZE)
+  }
+
+  // Consume the pending page-edge step when the new page's data lands. Guarded
+  // by fromKey: if the user switched to another row while the page loaded, the
+  // pending step is dropped instead of hijacking their selection.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: intentional — setPreview is stable (reads refs only); adding it would re-run the effect every render
+  useEffect(() => {
+    const p = pendingNeighbor.current
+    if (!p) return
+    if (!previewKey || favKey(previewKey) !== p.fromKey) return
+    const target =
+      p.delta === 1
+        ? visibleSessions[0]
+        : visibleSessions[visibleSessions.length - 1]
+    if (!target) return // new page still loading — wait for the next change
+    pendingNeighbor.current = null
+    setPreview(target)
+  }, [visibleSessions, previewKey])
+
   // id → display label for the favorites tab's source-device column. Self is
   // "This device"; a peer is its display name (or "Unnamed").
   const deviceLabel = useMemo(() => {
@@ -562,6 +616,9 @@ export function useSessionsBrowser() {
     // detail sheet
     preview,
     setPreview,
+    openNeighbor,
+    canPrev: neighbor.canPrev,
+    canNext: neighbor.canNext,
     transcript: transcriptQuery.data ?? [],
     transcriptLoading: transcriptQuery.isLoading,
     transcriptError: transcriptQuery.error,

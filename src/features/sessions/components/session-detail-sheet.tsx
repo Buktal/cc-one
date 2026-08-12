@@ -28,6 +28,7 @@ import {
   ChevronRight,
   ChevronsDownUp,
   ChevronsUpDown,
+  ChevronUp,
   Copy,
   Info,
   Loader2,
@@ -133,6 +134,12 @@ export interface SessionDetailSheetProps {
   transcriptLoading: boolean
   transcriptError: unknown
   onRefreshTranscript: () => void
+  // prev / next session navigation (walk the visible list; page-edge steps
+  // page into the adjacent page — see useSessionsBrowser.openNeighbor)
+  onPrev: () => void
+  onNext: () => void
+  canPrev: boolean
+  canNext: boolean
   // device label (for the source line)
   deviceLabel: (id: string) => string
 }
@@ -156,6 +163,10 @@ export function SessionDetailSheet(props: SessionDetailSheetProps) {
     transcriptLoading,
     transcriptError,
     onRefreshTranscript,
+    onPrev,
+    onNext,
+    canPrev,
+    canNext,
     deviceLabel,
   } = props
   const turnNav = useTurnNav(transcript)
@@ -194,16 +205,18 @@ export function SessionDetailSheet(props: SessionDetailSheetProps) {
       <Sheet open={true} onOpenChange={(o) => !o && onClose()}>
         <SheetContent
           showClose={false}
-          // Width = 60% of the window: the transcript gets the larger share
-          // while the list stays readable beside the open sheet, so the user can
-          // still tell which session is open. The inline `right` parks the sheet
-          // clear of the turn-nav panel plus its margins (see NAV_PANEL_*).
-          // `min-w` keeps narrow windows from squeezing the transcript below a
-          // readable size; `sm:max-w-none` overrides the primitive's 24rem cap.
+          // Width = min(48vw, 48rem): bubbles cap at 72ch, so the old 60vw
+          // left a wide dead band of empty space beside short messages on big
+          // monitors — 48rem (~768px) fits a 72ch bubble plus breathing room,
+          // and the narrower sheet keeps more of the list visible beside it.
+          // The inline `right` parks the sheet clear of the turn-nav panel
+          // plus its margins (see NAV_PANEL_*). `min-w` keeps narrow windows
+          // from squeezing the transcript below a readable size;
+          // `sm:max-w-none` overrides the primitive's 24rem cap.
           style={{
             right: `calc(${NAV_PANEL_RIGHT} + ${NAV_PANEL_WIDTH} + ${NAV_PANEL_GAP})`,
           }}
-          className="flex w-[60vw] min-w-[32rem] flex-col gap-0 overflow-hidden p-0 sm:max-w-none"
+          className="flex w-[min(48vw,48rem)] min-w-[32rem] flex-col gap-0 overflow-hidden p-0 sm:max-w-none"
         >
           {/* Header: 会话档案 — 识别行（标题 + 操作）在上，信息流
             （身份 → 时间 → 统计 → 模型）一行在下。两行式，流式布局无
@@ -246,6 +259,10 @@ export function SessionDetailSheet(props: SessionDetailSheetProps) {
         jumpTo={turnNav.jumpTo}
         allCollapsed={allCollapsed}
         onToggleAll={toggleAll}
+        onPrev={onPrev}
+        onNext={onNext}
+        canPrev={canPrev}
+        canNext={canNext}
       />
     </>
   )
@@ -689,6 +706,10 @@ function TurnNavPanel({
   jumpTo,
   allCollapsed,
   onToggleAll,
+  onPrev,
+  onNext,
+  canPrev,
+  canNext,
 }: {
   turns: SessionMessage[]
   activeUuid: string | null
@@ -696,6 +717,11 @@ function TurnNavPanel({
   /** Every message row is collapsed — the toggle then offers "expand all". */
   allCollapsed: boolean
   onToggleAll: () => void
+  /** Prev / next session in the visible list (page-edge steps page over). */
+  onPrev: () => void
+  onNext: () => void
+  canPrev: boolean
+  canNext: boolean
 }) {
   const { t } = useTranslation()
   // Keep the highlighted row visible when the panel scrolls internally — on a
@@ -715,10 +741,49 @@ function TurnNavPanel({
       style={{ right: NAV_PANEL_RIGHT, width: NAV_PANEL_WIDTH }}
     >
       <div className="max-h-[calc(100vh-4rem)] overflow-y-auto rounded-lg border border-border bg-popover p-1 shadow-lg">
-        {/* Bulk collapse / expand — right-aligned above the turn list. The
-          icon shows the ACTION the button performs next: collapse (chevrons
-          down) when rows are open, expand (chevrons up) when all collapsed. */}
-        <div className="mb-0.5 flex justify-end pr-0.5">
+        {/* Toolbar: prev / next session on the left (audit walks between
+          sessions), bulk collapse / expand on the right. The nav icons show
+          where each step lands; the collapse icon shows the ACTION it
+          performs next (collapse when rows are open, expand when collapsed). */}
+        <div className="mb-0.5 flex items-center justify-between gap-1 pr-0.5">
+          <div className="flex items-center gap-0.5">
+            <Tooltip>
+              <TooltipTrigger
+                render={
+                  <Button
+                    variant="ghost"
+                    size="icon-xs"
+                    disabled={!canPrev}
+                    aria-label={t("sessions.detail.prevSession")}
+                    onClick={onPrev}
+                  />
+                }
+              >
+                <ChevronUp className="size-3.5" />
+              </TooltipTrigger>
+              <TooltipContent side="left">
+                {t("sessions.detail.prevSession")}
+              </TooltipContent>
+            </Tooltip>
+            <Tooltip>
+              <TooltipTrigger
+                render={
+                  <Button
+                    variant="ghost"
+                    size="icon-xs"
+                    disabled={!canNext}
+                    aria-label={t("sessions.detail.nextSession")}
+                    onClick={onNext}
+                  />
+                }
+              >
+                <ChevronDown className="size-3.5" />
+              </TooltipTrigger>
+              <TooltipContent side="left">
+                {t("sessions.detail.nextSession")}
+              </TooltipContent>
+            </Tooltip>
+          </div>
           <Tooltip>
             <TooltipTrigger
               render={
