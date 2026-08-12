@@ -13,12 +13,11 @@ import { ChevronDown } from "lucide-react"
 import { type ReactNode, useMemo } from "react"
 import { useTranslation } from "react-i18next"
 import {
-  EMPTY_USAGE_FILTER,
   useDistinctModelsQuery,
   useDistinctSourcesQuery,
 } from "@/app/store/api"
 import { useAppDispatch, useAppSelector } from "@/app/store/hooks"
-import { patchFilter, toFilter } from "@/app/store/slices/filterSlice"
+import { ALL_TIME_FILTER, patchFilter } from "@/app/store/slices/filterSlice"
 import {
   type DateRangePreset,
   DateRangeChip as SharedDateRangeChip,
@@ -38,7 +37,6 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select"
-import { dayStr, presetDays } from "@/lib/date-range"
 import { usePersistedState } from "@/lib/persistence"
 import { cn } from "@/lib/utils"
 import { sourceLabel } from "../source-labels"
@@ -66,8 +64,9 @@ function Row({ label, children }: { label: string; children: ReactNode }) {
 }
 
 /** 日期范围 chip —— 把 Redux filterSlice 适配成受控共享组件 (ControlCard 默认
- *  右对齐, ControlBar 左对齐). 数据语义与 sessions 工具栏版一致: 选预设时立即
- *  落具体 day 边界 (presetDays), 手填日期转 custom. 共享的 JSX / 标签拼装在
+ *  右对齐, ControlBar 左对齐). 数据语义与 sessions 工具栏版一致: 动态预设
+ *  (today/7d/30d) 只存 preset、不存具体日期 (日期在 queryFn 实时派生);
+ *  手填日期转 custom 并存具体值. 共享的 JSX / 标签拼装在
  *  @/components/date-range-chip, 此处只做 slice 读写适配. */
 function DateRangeChip({ align = "end" }: { align?: "start" | "end" }) {
   const dispatch = useAppDispatch()
@@ -78,7 +77,9 @@ function DateRangeChip({ align = "end" }: { align?: "start" | "end" }) {
       fromDay={filter.from_day}
       toDay={filter.to_day}
       onPreset={(p) =>
-        dispatch(patchFilter({ range_preset: p, ...presetDays(p) }))
+        // A dynamic preset stores no concrete date — clear from_day/to_day so
+        // the cache key stays stable across a day.
+        dispatch(patchFilter({ range_preset: p, from_day: "", to_day: "" }))
       }
       onFromDay={(d) =>
         dispatch(patchFilter({ range_preset: "custom", from_day: d }))
@@ -110,12 +111,9 @@ function ModelChip({
   // Facet filter = 看板筛选去掉 model 维度本身。模型下拉只列「所选时间 / 来源
   // / 设备窗口内真正出现过的模型」, 不按 model 自身收窄 (否则选了 glm 下拉就
   // 只剩 glm); 当前已选模型并回候选, 避免切到没用过它的窗口时 chip 变成空值。
-  // dayStr() 进依赖: 跨天后「今天」预设要滚到新一天, 候选跟着重查。
-  // biome-ignore lint/correctness/useExhaustiveDependencies: dayStr() is the cross-midnight trigger — stable within a day, a new identity after midnight so a "today" preset re-queries the new day's models
-  const facetFilter = useMemo(
-    () => toFilter({ ...filter, model: "" }),
-    [filter, dayStr()],
-  )
+  // 候选跨天滚动靠采集间隔 → usage_changed → invalidate: 动态预设的
+  // filter 一天内引用稳定, 无需 dayStr() 触发器。
+  const facetFilter = useMemo(() => ({ ...filter, model: "" }), [filter])
   const { data: models = [] } = useDistinctModelsQuery(facetFilter)
   const options = useMemo(() => {
     const set = new Set(models)
@@ -167,12 +165,8 @@ function SourceChip({
   const dispatch = useAppDispatch()
   const filter = useAppSelector((s) => s.filter.filter)
   // 与 ModelChip 对称: facet 去掉 source 自身, 候选只含所选窗口内出现过的来源;
-  // 已选来源并回候选。dayStr() 进依赖以跨天滚动。
-  // biome-ignore lint/correctness/useExhaustiveDependencies: dayStr() is the cross-midnight trigger — see ModelChip
-  const facetFilter = useMemo(
-    () => toFilter({ ...filter, source: "" }),
-    [filter, dayStr()],
-  )
+  // 已选来源并回候选。跨天滚动靠采集间隔刷新, 见 ModelChip。
+  const facetFilter = useMemo(() => ({ ...filter, source: "" }), [filter])
   const { data: sources = [] } = useDistinctSourcesQuery(facetFilter)
   const options = useMemo(() => {
     const set = new Set(sources)
@@ -216,7 +210,7 @@ function SourceChip({
 export function ControlCard() {
   const { t } = useTranslation()
   const multiDevice = useDeviceOptions().length > 0
-  const { data: sources = [] } = useDistinctSourcesQuery(EMPTY_USAGE_FILTER)
+  const { data: sources = [] } = useDistinctSourcesQuery(ALL_TIME_FILTER)
   const hasSources = sources.length > 0
   // Collapse persists across restarts (debounced write, flushed on unmount).
   const [collapsed, setCollapsed] = usePersistedState<boolean>(
@@ -274,7 +268,7 @@ export function ControlCard() {
 /** 横向条版 — 日志页顶部。Filters only — the collect action lives in the
  *  sidebar now. */
 export function ControlBar() {
-  const { data: sources = [] } = useDistinctSourcesQuery(EMPTY_USAGE_FILTER)
+  const { data: sources = [] } = useDistinctSourcesQuery(ALL_TIME_FILTER)
   const hasSources = sources.length > 0
   return (
     <div className="flex flex-wrap items-center gap-2">

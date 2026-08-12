@@ -19,6 +19,7 @@ import { useMemo } from "react"
 import { useTranslation } from "react-i18next"
 import { CartesianGrid, Line, LineChart, XAxis, YAxis } from "recharts"
 import { useTrendQuery } from "@/app/store/api"
+import type { FilterState } from "@/app/store/slices/filterSlice"
 import { QueryState } from "@/components/query-state"
 import {
   Card,
@@ -35,13 +36,10 @@ import {
   ChartTooltip,
 } from "@/components/ui/chart"
 import { zeroFillTrend } from "@/features/usage/derive"
+import { dayRangeToTs, effectiveDays } from "@/lib/date-range"
 import { formatDay, formatTokens } from "@/lib/format"
 
-import type {
-  TrendBucket,
-  TrendPoint,
-  UsageFilter,
-} from "@/types/generated/bindings"
+import type { TrendBucket, TrendPoint } from "@/types/generated/bindings"
 
 type Bucket = {
   key: keyof TrendPoint
@@ -79,15 +77,17 @@ function formatHour(key: string): string {
   return `${key.slice(11, 13)}:00`
 }
 
-export function UsageTrendChart({ filter }: { filter: UsageFilter }) {
+export function UsageTrendChart({ filter }: { filter: FilterState }) {
   const { t } = useTranslation()
+  // Derive the timestamp bounds at render time: a dynamic preset
+  // re-rolls to the current day here, so the hourly check + zero-fill track
+  // the live window with no frozen value.
+  const { from_day, to_day } = effectiveDays(filter)
+  const { from_ts: fromTs, to_ts: toTs } = dayRangeToTs(from_day, to_day)
   // A single local-day range collapses per-day resolution to one bar, so zoom
   // to hourly; anything wider stays per-day. A UTC+8 "today" maps to a 24h UTC
   // window that still falls on one local day, so isSame("day") catches it.
-  const hourly =
-    !!filter.from_ts &&
-    !!filter.to_ts &&
-    dayjs(filter.from_ts).isSame(filter.to_ts, "day")
+  const hourly = !!fromTs && !!toTs && dayjs(fromTs).isSame(toTs, "day")
   const bucket: TrendBucket = hourly ? "Hour" : "Day"
   const {
     data: rawData = [],
@@ -106,9 +106,9 @@ export function UsageTrendChart({ filter }: { filter: UsageFilter }) {
   // buckets (7d/30d/all) are left as-is; an entirely empty day stays empty so
   // QueryState shows its empty state rather than a flat zero line.
   const data = useMemo(() => {
-    if (!hourly || !filter.from_ts) return rawData
-    return zeroFillTrend(rawData, dayjs(filter.from_ts), dayjs())
-  }, [hourly, rawData, filter.from_ts])
+    if (!hourly || !fromTs) return rawData
+    return zeroFillTrend(rawData, dayjs(fromTs), dayjs())
+  }, [hourly, rawData, fromTs])
 
   // ChartConfig keys MUST equal the dataKeys (input_tokens …) so the shadcn
   // legend helper resolves label + color from payload.dataKey. stroke / dot

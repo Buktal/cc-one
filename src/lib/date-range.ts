@@ -8,11 +8,11 @@
 import dayjs from "dayjs"
 
 /**
- * Persisted time-range preset. The dynamic ones (today / 7d / 30d / all) are
- * the source of truth — their day bounds are recomputed on every load, so
- * "today" stays today across a restart. Storing concrete dates instead would
- * drift to "yesterday" after midnight. "custom" keeps the user-picked
- * from_day / to_day verbatim.
+ * Time-range preset. The dynamic ones (today / 7d / 30d) are the
+ * source of truth — their day bounds are recomputed on every query, so "today"
+ * stays today even across midnight (a dynamic preset never stores a concrete
+ * date). "all" means no bounds; "custom" keeps the user-picked from_day /
+ * to_day verbatim.
  */
 export type Preset = "today" | "7d" | "30d" | "all" | "custom"
 
@@ -44,12 +44,12 @@ export function presetDays(p: Preset): Pick<DayRange, "from_day" | "to_day"> {
 }
 
 /** The EFFECTIVE day bounds for a filter: a dynamic preset (today / 7d / 30d)
- *  is recomputed on the spot, so a preset picked yesterday still means "today"
- *  when the app is left running across midnight (the stored from_day/to_day
- *  are frozen at selection time and must not be trusted). "all" / "custom"
- *  return the stored values verbatim — "all" stores empty bounds, "custom"
- *  keeps the user-picked days. Single place that answers "what days does this
- *  filter mean", shared by the query path and the date-input display. */
+ *  is recomputed on the spot (it stores no concrete date), so it always means
+ *  the current day window at query time regardless of when it was picked.
+ *  "all" / "custom" return the stored values verbatim — "all" stores empty
+ *  bounds, "custom" keeps the user-picked days. Single place that answers
+ *  "what days does this filter mean", shared by the endpoint queryFns and the
+ *  DateRangeChip display. */
 export function effectiveDays(
   f: Pick<DayRange, "range_preset" | "from_day" | "to_day">,
 ): Pick<DayRange, "from_day" | "to_day"> {
@@ -63,10 +63,19 @@ export function effectiveDays(
   return { from_day: f.from_day, to_day: f.to_day }
 }
 
-/** Type guard for a persisted preset value — anything else is legacy data
- *  (stored before presets existed) and maps to "custom". */
-export function isPreset(v: unknown): v is Preset {
-  return (
-    v === "today" || v === "7d" || v === "30d" || v === "all" || v === "custom"
-  )
+/** Local-day range → inclusive UTC ISO8601 timestamp bounds. The backend
+ *  filters on a UTC `timestamp` (not the UTC `day` bucket): a local "today" in
+ *  UTC+8 straddles two UTC days, so we widen to timestamps or the early-morning
+ *  rows (whose UTC day is still yesterday) vanish from "today". Empty day →
+ *  null (no bound). Shared by the usage (toFilter) and sessions
+ *  (buildSessionFilter) query paths so the local-day → UTC widening lives in
+ *  one place. */
+export function dayRangeToTs(
+  from_day: string,
+  to_day: string,
+): { from_ts: string | null; to_ts: string | null } {
+  return {
+    from_ts: from_day ? dayjs(from_day).startOf("day").toISOString() : null,
+    to_ts: to_day ? dayjs(to_day).endOf("day").toISOString() : null,
+  }
 }

@@ -9,7 +9,6 @@
 // renderHook is out of scope; the companion test guards that this module
 // imports cleanly in node (it pulls the tauri-specta API + RTK Query hooks).
 
-import dayjs from "dayjs"
 import { useEffect, useMemo, useRef, useState } from "react"
 import { useTranslation } from "react-i18next"
 import { toast } from "sonner"
@@ -34,18 +33,14 @@ import {
   useSetSessionLocalGroupMutation,
   useSetSessionSyncedGroupMutation,
 } from "@/app/store/api"
-import { useAppDispatch } from "@/app/store/hooks"
+import { useAppDispatch, useAppSelector } from "@/app/store/hooks"
+import { type FilterState, patchFilter } from "@/app/store/slices/filterSlice"
 import { setView } from "@/app/store/slices/viewSlice"
 import { useDebouncedValue } from "@/hooks/use-debounced-value"
 import { useMutateWithToast } from "@/hooks/use-toast-mutation"
-import { effectiveDays, type Preset, presetDays } from "@/lib/date-range"
 import { paginate } from "@/lib/pagination"
 import { usePersistedState } from "@/lib/persistence"
-import type {
-  SessionGroup,
-  SessionRow,
-  UsageFilter,
-} from "@/types/generated/bindings"
+import type { SessionGroup, SessionRow } from "@/types/generated/bindings"
 import {
   ALL_GROUPS,
   applyGroupOrder,
@@ -54,8 +49,8 @@ import {
   favKey,
   type GroupTrack,
   nextFavValue,
+  type SessionScopeSpec,
   type SessionTab,
-  sessionTabFilter,
   ungroupedCount,
   withFavOverride,
   withoutFavOverride,
@@ -77,18 +72,22 @@ export function useSessionsBrowser() {
   // Search is backend-side (the page query filters the whole set, not just
   // the loaded page), so keystrokes debounce before they hit the db.
   const debouncedSearch = useDebouncedValue(search, 300)
-  const [source, setSource] = useState("")
-  const [model, setModel] = useState("")
-  // Time-range filter (mirrors the logs ControlBar): a dynamic preset (today /
-  // 7d / 30d / all) is the source of truth — its day bounds are computed on
-  // selection. "custom" keeps the user-picked days verbatim.
-  const [rangePreset, setRangePresetState] = useState<Preset>("all")
-  const [fromDay, setFromDay] = useState("")
-  const [toDay, setToDay] = useState("")
-  // Device filter (Favorites tab only — narrows "all devices" to one).
-  const [deviceScope, setDeviceScope] = useState("")
-  // Tick counter for the cross-midnight rollover interval (see below).
-  const [, setTick] = useState(0)
+  // Common dimensions (time / model / source / device) live in the shared
+  // filterSlice — sessions shares them with the dashboard / logs.
+  // Only the sessions-only dimensions (tab / search / group) stay local here.
+  const filter = useAppSelector((s) => s.filter.filter)
+  const source = filter.source
+  const model = filter.model
+  const rangePreset = filter.range_preset
+  const fromDay = filter.from_day
+  const toDay = filter.to_day
+  const deviceScope = filter.device_scope
+  // Setters patch the shared slice so the view's contract (b.setSource / …) is
+  // unchanged — the values now flow through Redux instead of local state.
+  const setSource = (v: string) => dispatch(patchFilter({ source: v }))
+  const setModel = (v: string) => dispatch(patchFilter({ model: v }))
+  const setDeviceScope = (v: string) =>
+    dispatch(patchFilter({ device_scope: v }))
   // Page offset into the filtered set (absolute row offset, like the request
   // log). Reset to page 1 whenever any filter dimension changes — otherwise a
   // narrower filter (search / range / source / model / device / group switch)
@@ -124,100 +123,57 @@ export function useSessionsBrowser() {
     setSelectedGroupId(ALL_GROUPS)
   }, [tab])
 
-  // Reset the page when a filter dimension changes (the query key changes
-  // with them). The filter object itself is freshly built every render, so
-  // depend on the scalar dimensions — including the debounced search.
+  // Reset the page when any filter dimension changes. The common dimensions
+  // live in the shared filterSlice now, so `filter` (a stable Redux reference
+  // that only changes identity when a dimension actually changes) covers them;
+  // the sessions-only dimensions (tab / search / group) are listed alongside.
   // biome-ignore lint/correctness/useExhaustiveDependencies: intentional — reset page on filter change; the body needs no dimension values
   useEffect(() => {
     setOffset(0)
-  }, [
-    tab,
-    debouncedSearch,
-    source,
-    model,
-    rangePreset,
-    fromDay,
-    toDay,
-    deviceScope,
-    selectedGroupId,
-  ])
+  }, [filter, tab, debouncedSearch, selectedGroupId])
 
   const { data: appInfo } = useAppInfoQuery()
   const selfDeviceId = appInfo?.device_id ?? ""
   const synced = appInfo?.mode === "synced"
   const effectiveTrack: GroupTrack = tab === "local" ? "local" : "synced"
 
-  // Time-range filter: picking a dynamic preset (today/7d/30d) computes the
-  // concrete day bounds on the spot; "all" clears them. Manual date edits flip
-  // to "custom". The days (not the preset label) are the filter source of truth,
-  // matching the usage view's pattern.
-  function setRangePreset(p: Preset): void {
-    setRangePresetState(p)
-    const days = p === "all" ? { from_day: "", to_day: "" } : presetDays(p)
-    setFromDay(days.from_day)
-    setToDay(days.to_day)
+  // Time-range setters patch the shared slice. A dynamic preset stores no
+  // concrete date; manual date edits flip to "custom" with literal
+  // days.
+  function setRangePreset(p: FilterState["range_preset"]): void {
+    dispatch(patchFilter({ range_preset: p, from_day: "", to_day: "" }))
   }
   function patchFromDay(d: string): void {
-    setRangePresetState("custom")
-    setFromDay(d)
+    dispatch(patchFilter({ range_preset: "custom", from_day: d }))
   }
   function patchToDay(d: string): void {
-    setRangePresetState("custom")
-    setToDay(d)
+    dispatch(patchFilter({ range_preset: "custom", to_day: d }))
   }
-  // Local-day range → inclusive ISO8601 timestamp bounds on last_active_at.
-  // effectiveDays recomputes a dynamic preset (today/7d/30d) on every render,
-  // so a preset picked yesterday rolls to the current day — the stored days
-  // are only the frozen selection-time snapshot.
-  const effective = effectiveDays({
-    range_preset: rangePreset,
-    from_day: fromDay,
-    to_day: toDay,
-  })
-  const fromTs = effective.from_day
-    ? dayjs(effective.from_day).startOf("day").toISOString()
-    : null
-  const toTs = effective.to_day
-    ? dayjs(effective.to_day).endOf("day").toISOString()
-    : null
-  // Cross-midnight rollover: effectiveDays runs on render, but with no user
-  // input or query refetch there is no render — tick once a minute so the
-  // bounds flip to the new day without a reload.
-  useEffect(() => {
-    const id = setInterval(() => setTick((n) => n + 1), 60_000)
-    return () => clearInterval(id)
-  }, [])
+  // No timestamp derivation or cross-midnight timer here: the session endpoints
+  // take a SessionScopeSpec (no timestamp) and derive the bounds in their
+  // queryFn at query time. Midnight rollover rides the collect-
+  // interval refresh chain, same as the usage views.
 
-  // One backend filter for both reads: the tab scope + toolbar filters (time /
-  // source / model / device) + the debounced search + the sidebar group
-  // selection. All narrowing is backend-side (single source of truth) — the
-  // page query returns exactly the selected bucket's current page, so a large
-  // group pages like the All view instead of loading every row.
-  const filter = sessionTabFilter(
+  // One scope for both reads: the common dimensions (from the shared
+  // filterSlice) + the sessions-only dimensions (tab / search / group). The
+  // backend SessionFilter + timestamp bounds are derived from it in the
+  // endpoint queryFn (buildSessionFilter), so this object carries no
+  // timestamp and its cache key (sessionSpecId) stays stable across a day.
+  // selfDeviceId is part of the scope (not a filter dimension) because the
+  // Local tab narrows to it backend-side.
+  const scope: SessionScopeSpec = {
+    filter,
     tab,
     selfDeviceId,
-    {
-      source: source || null,
-      fromTs,
-      toTs,
-      deviceScope: deviceScope || null,
-      model: model || null,
-      search: debouncedSearch || null,
-    },
     selectedGroupId,
-  )
+    search: debouncedSearch || null,
+  }
   // Model-dropdown candidates mirror the usage view's facet semantics: the
   // sessions model list comes from usage_records (a session has no model column
-  // — the list query filters by EXISTS), so narrow by the sessions time / source
-  // / device window but never by model itself. fromTs/toTs already roll across
-  // midnight (effectiveDays + the 60s tick above), so this tracks the window.
-  const modelFacetFilter: UsageFilter = {
-    from_ts: fromTs,
-    to_ts: toTs,
-    model: null,
-    source: source || null,
-    device_scope: deviceScope || null,
-  }
+  // — the list query filters by EXISTS), so narrow by the time / source / device
+  // window but never by model itself. A FilterState facet (model cleared) feeds
+  // the endpoint, which derives bounds at query time.
+  const modelFacetFilter = useMemo(() => ({ ...filter, model: "" }), [filter])
   const { data: distinctModels = [] } = useDistinctModelsQuery(modelFacetFilter)
   const modelOptions = useMemo(() => {
     const set = new Set(distinctModels)
@@ -228,13 +184,13 @@ export function useSessionsBrowser() {
   // selfDeviceId resolves so the local tab never queries with an empty
   // device_scope.
   const sessionsQuery = useListSessionsQuery(
-    { filter, limit: SESSIONS_PAGE_SIZE, offset },
+    { ...scope, limit: SESSIONS_PAGE_SIZE, offset },
     { skip: !selfDeviceId },
   )
-  // Paging-independent counts under the same filter: the total (All row +
+  // Paging-independent counts under the same scope: the total (All row +
   // paginator) and the per-bucket sidebar numbers.
   const countsQuery = useSessionCountsQuery(
-    { filter, track: effectiveTrack },
+    { spec: scope, track: effectiveTrack },
     { skip: !selfDeviceId },
   )
   const counts = countsQuery.data ?? { total: 0, groups: [] }

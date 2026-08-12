@@ -1,4 +1,10 @@
 import { createApi, fakeBaseQuery } from "@reduxjs/toolkit/query/react"
+import { type FilterState, toFilter } from "@/app/store/slices/filterSlice"
+import {
+  buildSessionFilter,
+  type SessionScopeSpec,
+  sessionSpecId,
+} from "@/features/sessions/derive"
 import type {
   AlignReport,
   App,
@@ -11,24 +17,20 @@ import type {
   LibraryEntry,
   LibraryForgetAction,
   LocalGroup,
-  LogsQuery,
   ModelStatsRow,
   PricingEntry,
   Provider,
   ProviderImportMode,
   ProviderImportReport,
   RunMode,
-  SessionFilter,
   SessionGroup,
   SessionGroupCounts,
   SessionMessage_Serialize,
-  SessionQuery,
   SessionRow,
   SyncedGroup,
   TrendBucket,
   TrendPoint,
   UploadItem,
-  UsageFilter,
   UsageLogRow,
   UsageStats,
   VerifyReport,
@@ -84,23 +86,18 @@ async function run<T>(p: Promise<Envelope<T>>): Promise<RunResult<T>> {
   return { error: r.error }
 }
 
-/** Stable cache id for a filter (so each filter scope caches independently). */
-export function filterId(f: UsageFilter): string {
-  return [f.from_ts, f.to_ts, f.model, f.source, f.device_scope].join("|")
-}
-
-/** Stable cache id for a SessionFilter (mirrors `filterId` for UsageFilter). */
-export function sessionFilterId(f: SessionFilter): string {
+/** Stable cache id for a FilterState (so each filter scope caches
+ *  independently). Built from the logical dimensions only — a dynamic preset
+ *  stores no date, so the id stays stable across a day and the bounds roll via
+ *  the collect-interval refresh chain. */
+export function filterId(f: FilterState): string {
   return [
-    f.device_scope,
-    f.source,
-    f.favorited,
-    f.local_group_id,
-    f.synced_group_id,
-    f.from_ts,
-    f.to_ts,
+    f.range_preset,
+    f.from_day,
+    f.to_day,
     f.model,
-    f.search,
+    f.source,
+    f.device_scope,
   ].join("|")
 }
 
@@ -116,17 +113,6 @@ export const ZERO_STATS: UsageStats = {
   total_cost_usd: 0,
   turn_count: 0,
   avg_turn_duration_ms: 0,
-}
-
-/** Empty (unconstrained) UsageFilter — for "any data at all" probes that must
- *  not narrow by the time / model / source / device window, e.g. deciding
- *  whether the source dimension should render at all. */
-export const EMPTY_USAGE_FILTER: UsageFilter = {
-  from_ts: null,
-  to_ts: null,
-  model: null,
-  source: null,
-  device_scope: null,
 }
 
 export const vaultApi = createApi({
@@ -149,43 +135,56 @@ export const vaultApi = createApi({
       queryFn: async () => run(commands.getAppInfo()),
       providesTags: ["App"],
     }),
-    stats: b.query<UsageStats, UsageFilter>({
-      queryFn: async (filter) => run(commands.queryUsageStats(filter)),
+    stats: b.query<UsageStats, FilterState>({
+      queryFn: async (filter) =>
+        run(commands.queryUsageStats(toFilter(filter))),
       providesTags: (_r, _e, filter) => [
         { type: "Usage", id: filterId(filter) },
       ],
     }),
-    trend: b.query<TrendPoint[], { filter: UsageFilter; bucket: TrendBucket }>({
+    trend: b.query<TrendPoint[], { filter: FilterState; bucket: TrendBucket }>({
       queryFn: async ({ filter, bucket }) =>
-        run(commands.queryUsageTrend(filter, bucket)),
+        run(commands.queryUsageTrend(toFilter(filter), bucket)),
       providesTags: (_r, _e, { filter }) => [
         { type: "Usage", id: filterId(filter) },
       ],
     }),
-    logs: b.query<UsageLogRow[], LogsQuery>({
-      queryFn: async (q) => run(commands.queryUsageLogs(q)),
+    logs: b.query<
+      UsageLogRow[],
+      { filter: FilterState; limit: number; offset: number }
+    >({
+      queryFn: async (q) =>
+        run(
+          commands.queryUsageLogs({
+            filter: toFilter(q.filter),
+            limit: q.limit,
+            offset: q.offset,
+          }),
+        ),
       providesTags: (_r, _e, q) => [{ type: "Logs", id: filterId(q.filter) }],
     }),
-    count: b.query<number, UsageFilter>({
-      queryFn: async (filter) => run(commands.countUsageLogs(filter)),
+    count: b.query<number, FilterState>({
+      queryFn: async (filter) => run(commands.countUsageLogs(toFilter(filter))),
       providesTags: (_r, _e, filter) => [
         { type: "Logs", id: filterId(filter) },
       ],
     }),
-    models: b.query<ModelStatsRow[], UsageFilter>({
-      queryFn: async (filter) => run(commands.queryModels(filter)),
+    models: b.query<ModelStatsRow[], FilterState>({
+      queryFn: async (filter) => run(commands.queryModels(toFilter(filter))),
       providesTags: (_r, _e, filter) => [
         { type: "Models", id: filterId(filter) },
       ],
     }),
-    distinctSources: b.query<string[], UsageFilter>({
-      queryFn: async (filter) => run(commands.queryDistinctSources(filter)),
+    distinctSources: b.query<string[], FilterState>({
+      queryFn: async (filter) =>
+        run(commands.queryDistinctSources(toFilter(filter))),
       providesTags: (_r, _e, filter) => [
         { type: "Usage", id: filterId(filter) },
       ],
     }),
-    distinctModels: b.query<string[], UsageFilter>({
-      queryFn: async (filter) => run(commands.queryDistinctModels(filter)),
+    distinctModels: b.query<string[], FilterState>({
+      queryFn: async (filter) =>
+        run(commands.queryDistinctModels(toFilter(filter))),
       providesTags: (_r, _e, filter) => [
         { type: "Usage", id: filterId(filter) },
       ],
@@ -325,26 +324,36 @@ export const vaultApi = createApi({
     // The filter carries the tab scope AND the sidebar selection (group id) —
     // group filtering moved backend-side so a group with many sessions pages
     // like the All view instead of loading all its rows.
-    listSessions: b.query<SessionRow[], SessionQuery>({
-      queryFn: async (query) => run(commands.querySessionsCmd(query)),
-      providesTags: (_r, _e, query) => [
-        {
-          type: "Sessions",
-          id: query.filter ? sessionFilterId(query.filter) : "all",
-        },
-      ],
+    listSessions: b.query<
+      SessionRow[],
+      SessionScopeSpec & { limit: number; offset: number }
+    >({
+      queryFn: async (q) => {
+        const { limit, offset, ...scope } = q
+        return run(
+          commands.querySessionsCmd({
+            filter: buildSessionFilter(scope),
+            limit,
+            offset,
+          }),
+        )
+      },
+      providesTags: (_r, _e, q) => {
+        const { limit, offset, ...scope } = q
+        return [{ type: "Sessions", id: sessionSpecId(scope) }]
+      },
     }),
     /** Sidebar + paginator counts for one grouping track: total (All row +
      *  page count) and per-bucket counts (group rows). Paging-independent —
-     *  same filter as the page query, no limit/offset. */
+     *  same scope as the page query, no limit/offset. */
     sessionCounts: b.query<
       SessionGroupCounts,
-      { filter: SessionFilter | null; track: string }
+      { spec: SessionScopeSpec; track: string }
     >({
-      queryFn: async ({ filter, track }) =>
-        run(commands.countSessionsCmd(filter, track)),
-      providesTags: (_r, _e, { filter }) => [
-        { type: "Sessions", id: filter ? sessionFilterId(filter) : "all" },
+      queryFn: async ({ spec, track }) =>
+        run(commands.countSessionsCmd(buildSessionFilter(spec), track)),
+      providesTags: (_r, _e, { spec }) => [
+        { type: "Sessions", id: sessionSpecId(spec) },
       ],
     }),
     /** One session's transcript (favorited-only — collect writes the JSONL only

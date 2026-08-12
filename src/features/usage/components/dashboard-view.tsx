@@ -5,8 +5,8 @@
 // CommandBar 收敛进右栏 ControlCard；时间/模型/设备维度都进控制卡，中栏
 // 顶部不再空旷。device_scope 也在此统一控制 (单设备时控制卡自动隐藏)。
 
-import { useAppDispatch } from "@/app/store/hooks"
-import { patchFilter, useUsageFilter } from "@/app/store/slices/filterSlice"
+import { useAppDispatch, useAppSelector } from "@/app/store/hooks"
+import { patchFilter } from "@/app/store/slices/filterSlice"
 
 import { ControlCard } from "./control-card"
 import { KpiStrip } from "./kpi-strip"
@@ -17,16 +17,16 @@ import { UsageTrendChart } from "./usage-trend-chart"
 
 export function DashboardView() {
   const dispatch = useAppDispatch()
-  const usageFilter = useUsageFilter()
+  const filter = useAppSelector((s) => s.filter.filter)
 
   return (
     <div className="flex flex-col gap-4">
       <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_320px]">
         {/* 中栏 · 可视化 */}
         <div className="flex flex-col gap-4">
-          <UsageTrendChart filter={usageFilter} />
+          <UsageTrendChart filter={filter} />
           <ModelDistribution
-            filter={usageFilter}
+            filter={filter}
             onPickModel={(m) => dispatch(patchFilter({ model: m }))}
           />
           <RecentRequests />
@@ -34,8 +34,8 @@ export function DashboardView() {
         {/* 右栏 · 数值 */}
         <aside className="flex flex-col gap-4">
           <ControlCard />
-          <TokenHero filter={usageFilter} />
-          <KpiStrip filter={usageFilter} />
+          <TokenHero filter={filter} />
+          <KpiStrip filter={filter} />
         </aside>
       </div>
     </div>

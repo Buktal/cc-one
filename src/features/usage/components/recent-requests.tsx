@@ -6,8 +6,7 @@
 import { ArrowRight } from "lucide-react"
 import { useTranslation } from "react-i18next"
 import { useCountQuery, useLogsQuery } from "@/app/store/api"
-import { useAppDispatch } from "@/app/store/hooks"
-import { useUsageFilter } from "@/app/store/slices/filterSlice"
+import { useAppDispatch, useAppSelector } from "@/app/store/hooks"
 import { setView } from "@/app/store/slices/viewSlice"
 import {
   Card,
@@ -27,14 +26,14 @@ const LIMIT = 5
 export function RecentRequests() {
   const { t } = useTranslation()
   const dispatch = useAppDispatch()
-  const usageFilter = useUsageFilter()
+  const filter = useAppSelector((s) => s.filter.filter)
   const deviceLabel = useDeviceLabelMap()
   const { data: rows = [] } = useLogsQuery({
-    filter: usageFilter,
+    filter,
     limit: LIMIT,
     offset: 0,
   })
-  const { data: total = 0 } = useCountQuery(usageFilter)
+  const { data: total = 0 } = useCountQuery(filter)
 
   return (
     <Card interactive>

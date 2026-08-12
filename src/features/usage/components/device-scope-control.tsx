@@ -10,7 +10,7 @@
 //    自带身份 (与库的「全部设备」一致); 选中具体设备显其名。
 //  - LightweightCard expanded: compact (11px) 适配小窗。
 //
-// device_scope 在全局 filter, 故 logs / lightweight 的 todayFilter 一并跟随。
+// device_scope 在全局 filter, 故看板 / 日志 / lightweight 的设备筛选一并跟随。
 
 import { useTranslation } from "react-i18next"
 

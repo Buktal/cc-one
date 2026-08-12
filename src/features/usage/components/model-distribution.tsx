@@ -6,6 +6,7 @@
 import { useState } from "react"
 import { useTranslation } from "react-i18next"
 import { useModelsQuery } from "@/app/store/api"
+import type { FilterState } from "@/app/store/slices/filterSlice"
 import {
   Card,
   CardAction,
@@ -16,15 +17,13 @@ import {
 import { topNModels } from "@/features/usage/derive"
 import { formatCost, formatPct, formatTokens } from "@/lib/format"
 
-import type { UsageFilter } from "@/types/generated/bindings"
-
 const TOP_N = 5
 
 export function ModelDistribution({
   filter,
   onPickModel,
 }: {
-  filter: UsageFilter
+  filter: FilterState
   onPickModel: (model: string) => void
 }) {
   const { t } = useTranslation()

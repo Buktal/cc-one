@@ -24,13 +24,12 @@
 // lists its switch targets biggest-first. So the expanded title bar is
 // [全→大][缩→小], not the reverse.
 //
-// Data: tucked reads total_tokens from a useStatsQuery(todayFilter). Expanded
-// reuses <TokenHero filter={todayFilter}/> — which runs its own stats + trend
-// queries — so the snapshot is identical to the dashboard from one source.
-// Refresh is free: providers.tsx invalidates the Usage tags on every
+// Data: tucked reads total_tokens from a useStatsQuery scoped to "today +
+// device". Expanded reuses <TokenHero filter={…}/> — which runs its own stats
+// + trend queries — so the snapshot is identical to the dashboard from one
+// source. Refresh is free: providers.tsx invalidates the Usage tags on every
 // `usage_changed`, and the filter matches the dashboard's "today" preset.
 
-import dayjs from "dayjs"
 import { Airplay, AlignHorizontalJustifyEnd, ChevronDown } from "lucide-react"
 import { useEffect, useMemo, useRef } from "react"
 import { useTranslation } from "react-i18next"
@@ -44,7 +43,11 @@ import {
   ZERO_STATS,
 } from "@/app/store/api"
 import { useAppDispatch, useAppSelector } from "@/app/store/hooks"
-import { patchFilter, todayFilter } from "@/app/store/slices/filterSlice"
+import {
+  DEFAULT_FILTER,
+  type FilterState,
+  patchFilter,
+} from "@/app/store/slices/filterSlice"
 import { setMode } from "@/app/store/slices/viewSlice"
 import { formatTokens } from "@/lib/format"
 import { cn } from "@/lib/utils"
@@ -65,11 +68,10 @@ export function LightweightCard() {
   const { data: prefs } = usePreferencesQuery()
   const hoverExpand = prefs?.lightweight_expand === "hover"
 
-  // 今日 · device_scope 跟随全局 (统一控制: 大窗口选了某设备，中/小窗今日快照
-  // 也是该设备)。仍固定"今日"范围——只并入设备维度，不并 model/日期 (中/小窗恒
-  // 为今日快照)。reuses toFilter (local-day → UTC timestamp bounds) 与看板"今天"
-  // preset 同口径; local day 翻页或 device_scope 变更时重算。
-  const today = dayjs().format("YYYY-MM-DD")
+  // 今日快照 · device_scope 跟随全局 (大窗口选了某设备，中/小窗今日快照也是该
+  // 设备)。范围恒为"今日"——只并入设备维度，不并 model/自定义日期。filter =
+  // DEFAULT_FILTER ("today" 预设, 日期在 queryFn 实时派生) + device_scope
+  // 覆盖; local day 翻页或 device_scope 变更时靠 usage_changed 刷新重算。
   const deviceScope = useAppSelector((s) => s.filter.filter.device_scope)
   // 设备列表 — 仅用于 expanded 卡内设备分段的显隐 (单设备不渲染)。缓存与
   // dashboard / DeviceScopeControl 共享，无额外请求。
@@ -96,14 +98,14 @@ export function LightweightCard() {
     setTuckDrawer,
     phase,
   })
-  const todayUsageFilter = useMemo(
-    () => todayFilter(deviceScope, today),
-    [deviceScope, today],
+  const todayFilterState = useMemo<FilterState>(
+    () => ({ ...DEFAULT_FILTER, device_scope: deviceScope }),
+    [deviceScope],
   )
 
   // tucked reads total_tokens here; expanded reuses <TokenHero> which runs its
   // own queries. ZERO_STATS keeps the first paint sane before data lands.
-  const { data: stats } = useStatsQuery(todayUsageFilter)
+  const { data: stats } = useStatsQuery(todayFilterState)
   const s = stats ?? ZERO_STATS
 
   // Measure the expanded card's natural height and tell the hook, so the
@@ -287,7 +289,7 @@ export function LightweightCard() {
       {/* TokenHero 卡保留横向 p-3 呼吸 (圆角不贴窗口边); 上内边距收到 pt-2,
           收紧与上方 selector 行的间距。 */}
       <div className="px-3 pb-3 pt-2">
-        <TokenHero filter={todayUsageFilter} />
+        <TokenHero filter={todayFilterState} />
       </div>
     </div>
   )

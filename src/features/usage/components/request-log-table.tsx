@@ -12,6 +12,7 @@ import { type ReactNode, useEffect, useState } from "react"
 import { useTranslation } from "react-i18next"
 
 import { useCountQuery, useLogsQuery } from "@/app/store/api"
+import type { FilterState } from "@/app/store/slices/filterSlice"
 import { QueryState } from "@/components/query-state"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
@@ -29,7 +30,6 @@ import { formatCost, formatInt, formatTime } from "@/lib/format"
 import { paginate } from "@/lib/pagination"
 import { tokenTotal } from "@/lib/usage"
 import { cn } from "@/lib/utils"
-import type { UsageFilter } from "@/types/generated/bindings"
 import { sourceLabel } from "../source-labels"
 import { useDeviceLabelMap, useDeviceOptions } from "../use-device-options"
 
@@ -53,7 +53,7 @@ function TokHead({ children }: { children: ReactNode }) {
   )
 }
 
-export function RequestLogTable({ filter }: { filter: UsageFilter }) {
+export function RequestLogTable({ filter }: { filter: FilterState }) {
   const { t } = useTranslation()
   const deviceLabel = useDeviceLabelMap()
   const [offset, setOffset] = useState(0)

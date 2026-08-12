@@ -4,6 +4,8 @@
 // isolation (architecture.md: "关键不变量用代码表达") — the hook wires these to
 // React state + RTK Query, these own the math.
 
+import type { FilterState } from "@/app/store/slices/filterSlice"
+import { dayRangeToTs, effectiveDays } from "@/lib/date-range"
 import type {
   SessionFilter,
   SessionGroup,
@@ -120,6 +122,68 @@ export function sessionTabFilter(
     model,
     search,
   }
+}
+
+/**
+ * A sessions query scope: the common dimensions (from filterSlice) + the
+ * sessions-only dimensions (tab / group / search) + the self device id a
+ * SessionFilter needs. Carries NO timestamp — bounds are derived in
+ * buildSessionFilter at query time, so the cache key (sessionSpecId) stays
+ * stable across a day.
+ */
+export interface SessionScopeSpec {
+  /** Common dimensions shared with the dashboard / logs (time / model / source / device). */
+  filter: FilterState
+  /** Sessions-only: which tab, which sidebar group, and the search box. */
+  tab: SessionTab
+  selfDeviceId: string
+  selectedGroupId: string
+  search: string | null
+}
+
+/**
+ * Build the backend SessionFilter from a scope, deriving the timestamp bounds
+ * from the current date. Shared by the listSessions + sessionCounts
+ * queryFns so both reads see identical bounds. Bounds are a query-time concern
+ * here — never stored or displayed, so the scope (and its cache key) carries
+ * no timestamp.
+ */
+export function buildSessionFilter(spec: SessionScopeSpec): SessionFilter {
+  const { from_day, to_day } = effectiveDays(spec.filter)
+  const { from_ts: fromTs, to_ts: toTs } = dayRangeToTs(from_day, to_day)
+  return sessionTabFilter(
+    spec.tab,
+    spec.selfDeviceId,
+    {
+      source: spec.filter.source || null,
+      fromTs,
+      toTs,
+      deviceScope: spec.filter.device_scope || null,
+      model: spec.filter.model || null,
+      search: spec.search,
+    },
+    spec.selectedGroupId,
+  )
+}
+
+/**
+ * Stable cache id for a sessions scope (mirrors filterId on the usage side):
+ * built from the logical dimensions only, so a dynamic preset stays stable
+ * across a day and the bounds roll via the refresh chain.
+ */
+export function sessionSpecId(spec: SessionScopeSpec): string {
+  return [
+    spec.tab,
+    spec.selfDeviceId,
+    spec.selectedGroupId,
+    spec.search ?? "",
+    spec.filter.range_preset,
+    spec.filter.from_day,
+    spec.filter.to_day,
+    spec.filter.model,
+    spec.filter.source,
+    spec.filter.device_scope,
+  ].join("|")
 }
 
 // ---------------------------------------------------------------- counts ----

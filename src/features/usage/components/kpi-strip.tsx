@@ -6,13 +6,12 @@
 
 import { useTranslation } from "react-i18next"
 import { useStatsQuery, ZERO_STATS } from "@/app/store/api"
+import type { FilterState } from "@/app/store/slices/filterSlice"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { formatCost, formatDuration, formatInt } from "@/lib/format"
 import { cn } from "@/lib/utils"
 
-import type { UsageFilter } from "@/types/generated/bindings"
-
-export function KpiStrip({ filter }: { filter: UsageFilter }) {
+export function KpiStrip({ filter }: { filter: FilterState }) {
   const { t } = useTranslation()
   const { data: stats } = useStatsQuery(filter)
   const s = stats ?? ZERO_STATS

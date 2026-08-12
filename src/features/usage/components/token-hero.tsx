@@ -7,11 +7,10 @@
 
 import { useTranslation } from "react-i18next"
 import { useStatsQuery, useTrendQuery, ZERO_STATS } from "@/app/store/api"
+import type { FilterState } from "@/app/store/slices/filterSlice"
 import { Card, CardContent } from "@/components/ui/card"
 import { tokenSnapshot } from "@/features/usage/derive"
 import { formatInt, formatPct, formatTokens } from "@/lib/format"
-
-import type { UsageFilter } from "@/types/generated/bindings"
 
 const SEGMENTS = [
   {
@@ -36,7 +35,7 @@ const SEGMENTS = [
   },
 ] as const
 
-export function TokenHero({ filter }: { filter: UsageFilter }) {
+export function TokenHero({ filter }: { filter: FilterState }) {
   const { t } = useTranslation()
   const { data: stats } = useStatsQuery(filter)
   const { data: trend = [] } = useTrendQuery({ filter, bucket: "Day" })
