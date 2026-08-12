@@ -26,6 +26,8 @@ import {
   providerApiKey,
   providerEndpoint,
   providerFromPreset,
+  providerLiveKey,
+  providerLiveManaged,
   providerMissingRequired,
   providerModel,
   replaceTemplateVarsInText,
@@ -1049,6 +1051,34 @@ describe("metaTemplateValues / withMetaTemplateValues", () => {
   })
 })
 
+describe("providerLiveManaged / providerLiveKey", () => {
+  // 附加模式（opencode）的 live 状态：liveManaged 严格 true 判定、liveKey 严格
+  // 字符串判定——meta 里的非布尔 / 非字符串垃圾值都不算，与 parseMeta 的宽容
+  // 契约一致（坏 meta 不抛、归一为默认）。
+  const live = (meta: string) => ({ ...emptyProvider("opencode"), meta })
+
+  it("liveManaged: true only on a boolean true; everything else → false", () => {
+    expect(providerLiveManaged(live('{"liveManaged": true}'))).toBe(true)
+    expect(providerLiveManaged(live('{"liveManaged": false}'))).toBe(false)
+    expect(providerLiveManaged(live("{}"))).toBe(false)
+    expect(providerLiveManaged(live("not-json"))).toBe(false)
+    expect(providerLiveManaged(live(""))).toBe(false)
+    // 非布尔垃圾值不算（"true" 字符串、数字 1 都不是 true）。
+    expect(providerLiveManaged(live('{"liveManaged": "true"}'))).toBe(false)
+    expect(providerLiveManaged(live('{"liveManaged": 1}'))).toBe(false)
+  })
+
+  it("liveKey: the string key; non-string / missing / garbage → empty", () => {
+    expect(providerLiveKey(live('{"liveKey": "my-provider"}'))).toBe(
+      "my-provider",
+    )
+    expect(providerLiveKey(live("{}"))).toBe("")
+    expect(providerLiveKey(live('{"liveKey": 123}'))).toBe("")
+    expect(providerLiveKey(live(""))).toBe("")
+    expect(providerLiveKey(live("not-json"))).toBe("")
+  })
+})
+
 describe("Bedrock preset end to end", () => {
   const bedrock = PROVIDER_PRESETS.find((p) => p.name === "AWS Bedrock (AKSK)")!
   const values = {
@@ -1185,8 +1215,8 @@ describe("providerMissingRequired", () => {
     const cloud = p(
       JSON.stringify({
         env: {
-          // biome-ignore-all lint/suspicious/noTemplateCurlyInString: 模板变量占位符
           ANTHROPIC_BASE_URL:
+            // biome-ignore lint/suspicious/noTemplateCurlyInString: 模板变量占位符
             "https://bedrock-runtime.${AWS_REGION}.amazonaws.com",
         },
       }),

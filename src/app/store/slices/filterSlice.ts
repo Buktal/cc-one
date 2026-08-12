@@ -9,7 +9,7 @@
 
 import { createSlice, type PayloadAction } from "@reduxjs/toolkit"
 import dayjs from "dayjs"
-import { useMemo } from "react"
+import { useEffect, useMemo, useState } from "react"
 
 import { useAppSelector } from "@/app/store/hooks"
 import {
@@ -103,6 +103,18 @@ export function toFilter(s: FilterState): UsageFilter {
  */
 export function useUsageFilter(): UsageFilter {
   const filter = useAppSelector((s) => s.filter.filter)
+  // Cross-midnight rollover: `dayStr()` in the memo deps only re-evaluates on
+  // render, but an app left running overnight never re-renders on its own — so
+  // the filter stayed frozen at yesterday and the cache kept serving stale data
+  // past midnight. The 60s interval forces a render; setRolloverDay with the
+  // same string is a no-op (React bails out), so only an actual day change
+  // reaches the memo and re-queries the new day. The sessions browser uses the
+  // same day-rollover tick (use-sessions-browser.ts).
+  const [, setRolloverDay] = useState(dayStr)
+  useEffect(() => {
+    const id = setInterval(() => setRolloverDay(dayStr()), 60_000)
+    return () => clearInterval(id)
+  }, [])
   // `dayStr()` in the deps: the filter identity must flip at midnight so a
   // dynamic preset re-queries the new day's data. Dropping the memo entirely
   // would rebuild the object every render — request-log-table resets its page

@@ -20,6 +20,7 @@ import {
   useDeleteLocalGroupMutation,
   useDeleteSyncedGroupMutation,
   useDevicesQuery,
+  useDistinctModelsQuery,
   useListGroupsQuery,
   useListSessionsQuery,
   useRenameLocalGroupMutation,
@@ -40,7 +41,11 @@ import { useMutateWithToast } from "@/hooks/use-toast-mutation"
 import { effectiveDays, type Preset, presetDays } from "@/lib/date-range"
 import { paginate } from "@/lib/pagination"
 import { usePersistedState } from "@/lib/persistence"
-import type { SessionGroup, SessionRow } from "@/types/generated/bindings"
+import type {
+  SessionGroup,
+  SessionRow,
+  UsageFilter,
+} from "@/types/generated/bindings"
 import {
   ALL_GROUPS,
   applyGroupOrder,
@@ -201,6 +206,24 @@ export function useSessionsBrowser() {
     },
     selectedGroupId,
   )
+  // Model-dropdown candidates mirror the usage view's facet semantics: the
+  // sessions model list comes from usage_records (a session has no model column
+  // — the list query filters by EXISTS), so narrow by the sessions time / source
+  // / device window but never by model itself. fromTs/toTs already roll across
+  // midnight (effectiveDays + the 60s tick above), so this tracks the window.
+  const modelFacetFilter: UsageFilter = {
+    from_ts: fromTs,
+    to_ts: toTs,
+    model: null,
+    source: source || null,
+    device_scope: deviceScope || null,
+  }
+  const { data: distinctModels = [] } = useDistinctModelsQuery(modelFacetFilter)
+  const modelOptions = useMemo(() => {
+    const set = new Set(distinctModels)
+    if (model) set.add(model)
+    return [...set].sort()
+  }, [distinctModels, model])
   // Paged session list (mirrors the request-log table). Skipped until
   // selfDeviceId resolves so the local tab never queries with an empty
   // device_scope.
@@ -546,6 +569,7 @@ export function useSessionsBrowser() {
     setSource,
     model,
     setModel,
+    modelOptions,
     selectedGroupId,
     setSelectedGroupId,
     effectiveTrack,

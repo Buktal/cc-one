@@ -8,7 +8,7 @@ impl super::Store {
     /// Aggregate stats over a filter (BLUEPRINT 使用统计).
     pub fn query_stats(&self, filter: &UsageFilter) -> AppResult<UsageStats> {
         let conn = self.conn.lock().expect("db mutex poisoned");
-        let (clause, params_vec) = build_where(filter, true);
+        let (clause, params_vec) = build_where(filter, true, true);
         let sql = format!(
             "SELECT
                 COUNT(*),
@@ -44,7 +44,7 @@ impl super::Store {
         };
         s.cache_hit_rate = tokens.cache_hit_rate();
         // Per-turn aggregates (separate grain, from turn_durations).
-        let (tclause, tparams) = build_where(filter, false);
+        let (tclause, tparams) = build_where(filter, false, false);
         let tsql =
             format!("SELECT COUNT(*), COALESCE(AVG(duration_ms),0) FROM turn_durations {tclause}");
         let (turn_count, avg_dur): (i64, f64) =
@@ -59,7 +59,7 @@ impl super::Store {
     /// Per-model breakdown over a filter.
     pub fn query_models(&self, filter: &UsageFilter) -> AppResult<Vec<ModelStatsRow>> {
         let conn = self.conn.lock().expect("db mutex poisoned");
-        let (clause, params_vec) = build_where(filter, true);
+        let (clause, params_vec) = build_where(filter, true, true);
         let sql = format!(
             "SELECT model,
                 COUNT(*),
@@ -103,7 +103,7 @@ impl super::Store {
         bucket: TrendBucket,
     ) -> AppResult<Vec<TrendPoint>> {
         let conn = self.conn.lock().expect("db mutex poisoned");
-        let (clause, params_vec) = build_where(filter, true);
+        let (clause, params_vec) = build_where(filter, true, true);
         // Hour buckets read the clock in the device's local zone so a UTC+8
         // "today" trends in hours the user recognizes; the day bucket stays on
         // the stored UTC `day` for cross-device determinism.
@@ -141,8 +141,11 @@ impl super::Store {
             .map_err(AppError::from)
     }
 
-    /// Distinct sources/models present (for filter dropdowns).
-    pub fn query_distinct(&self, column: &str) -> AppResult<Vec<String>> {
+    /// Distinct sources/models for a filter dropdown, narrowed by every OTHER
+    /// dimension the user picked (time / device / the other facet) — never by
+    /// this column itself, so picking "glm" doesn't shrink the model list to
+    /// only "glm". Empty values are always excluded (legacy / unknown rows).
+    pub fn query_distinct(&self, column: &str, filter: &UsageFilter) -> AppResult<Vec<String>> {
         let conn = self.conn.lock().expect("db mutex poisoned");
         // column is a fixed whitelist below, not user input — safe to interpolate.
         let col = match column {
@@ -150,10 +153,25 @@ impl super::Store {
             "model" => "model",
             _ => return Err(AppError::Db("bad distinct column".into())),
         };
-        let sql =
-            format!("SELECT DISTINCT {col} FROM usage_records WHERE {col} != '' ORDER BY {col}");
+        // Facet semantics: the dropdown for one dimension ignores that
+        // dimension's own filter (so any value stays pickable) but applies the
+        // other facet + time + device — candidates reflect the selected window.
+        let (include_model, include_source) = match column {
+            "model" => (false, true),
+            _ => (true, false),
+        };
+        let (mut clause, params_vec) = build_where(filter, include_model, include_source);
+        // Always exclude empty values; splice onto the WHERE clause (or start one).
+        if clause.is_empty() {
+            clause = format!("WHERE {col} != ''");
+        } else {
+            clause = format!("{clause} AND {col} != ''");
+        }
+        let sql = format!("SELECT DISTINCT {col} FROM usage_records {clause} ORDER BY {col}");
         let mut stmt = conn.prepare(&sql)?;
-        let rows = stmt.query_map([], |r| r.get::<_, String>(0))?;
+        let rows = stmt.query_map(params_from_iter(params_vec.iter()), |r| {
+            r.get::<_, String>(0)
+        })?;
         rows.collect::<rusqlite::Result<Vec<_>>>()
             .map_err(AppError::from)
     }
@@ -161,7 +179,7 @@ impl super::Store {
     /// Request-log rows (BLUEPRINT 请求日志; columns).
     pub fn query_logs(&self, q: &LogsQuery) -> AppResult<Vec<UsageLogRow>> {
         let conn = self.conn.lock().expect("db mutex poisoned");
-        let (clause, params_vec) = build_where(&q.filter, true);
+        let (clause, params_vec) = build_where(&q.filter, true, true);
         let limit = q.limit.clamp(1, 1000) as i64;
         let offset = q.offset as i64;
         let sql = format!(
@@ -196,7 +214,7 @@ impl super::Store {
     /// Total row count (for paging display).
     pub fn count_logs(&self, filter: &UsageFilter) -> AppResult<u32> {
         let conn = self.conn.lock().expect("db mutex poisoned");
-        let (clause, params_vec) = build_where(filter, true);
+        let (clause, params_vec) = build_where(filter, true, true);
         let sql = format!("SELECT COUNT(*) FROM usage_records {clause}");
         let n: i64 = conn.query_row(&sql, params_from_iter(params_vec.iter()), |r| r.get(0))?;
         Ok(n as u32)
@@ -205,9 +223,16 @@ impl super::Store {
 
 /// Build a `WHERE` clause + bound params for a `UsageFilter` (timestamp range,
 /// model, source, device scope). The range filters on `timestamp` (UTC), not
-/// `day` — see `UsageFilter` for why. Returns `("WHERE ...", vec![...])` or
-/// `("", [])`.
-fn build_where(filter: &UsageFilter, include_model_source: bool) -> (String, Vec<SqlValue>) {
+/// `day` — see `UsageFilter` for why. `include_model` / `include_source` gate
+/// those two facets independently: the distinct-dropdown path queries one
+/// facet while ignoring its OWN filter (a picked value must never shrink its
+/// own candidate list) yet still narrows by the other facet + time + device.
+/// Returns `("WHERE ...", vec![...])` or `("", [])`.
+fn build_where(
+    filter: &UsageFilter,
+    include_model: bool,
+    include_source: bool,
+) -> (String, Vec<SqlValue>) {
     let mut conds: Vec<String> = Vec::new();
     let mut params: Vec<SqlValue> = Vec::new();
     if let Some(ts) = &filter.from_ts {
@@ -222,13 +247,15 @@ fn build_where(filter: &UsageFilter, include_model_source: bool) -> (String, Vec
             params.push(SqlValue::Text(ts.clone()));
         }
     }
-    if include_model_source {
+    if include_model {
         if let Some(m) = &filter.model {
             if !m.is_empty() {
                 conds.push("model = ?".into());
                 params.push(SqlValue::Text(m.clone()));
             }
         }
+    }
+    if include_source {
         if let Some(s) = &filter.source {
             if !s.is_empty() {
                 conds.push("source = ?".into());
@@ -354,5 +381,76 @@ mod tests {
         assert!((by_model("gpt-4o").cache_hit_rate - 0.5).abs() < 1e-9);
         // 纯输入、无任何缓存活动 → 0。
         assert_eq!(by_model("glm-5.2").cache_hit_rate, 0.0);
+    }
+
+    #[test]
+    fn distinct_models_narrow_by_window_and_ignore_own_filter() {
+        let s = mem();
+        s.ingest(&[
+            rec("a", "2026-07-13", "glm-5.2", "d", 10, 0, 1.0),
+            rec("b", "2026-07-14", "gpt-4o", "d", 20, 0, 2.0),
+        ])
+        .unwrap();
+
+        // Window = day B only → only gpt-4o appears (the time range narrows it).
+        let day_b = UsageFilter {
+            from_ts: Some("2026-07-14T00:00:00.000Z".into()),
+            to_ts: Some("2026-07-14T23:59:59.999Z".into()),
+            ..Default::default()
+        };
+        assert_eq!(s.query_distinct("model", &day_b).unwrap(), vec!["gpt-4o"]);
+
+        // The model facet ignores its OWN filter: with model=glm picked over
+        // the full range, BOTH models stay listed — a picked value never
+        // shrinks its own dropdown, so the other one is always still pickable.
+        let mut all_with_model = s
+            .query_distinct(
+                "model",
+                &UsageFilter {
+                    model: Some("glm-5.2".into()),
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        all_with_model.sort();
+        assert_eq!(
+            all_with_model,
+            vec!["glm-5.2".to_string(), "gpt-4o".to_string()]
+        );
+    }
+
+    #[test]
+    fn distinct_facets_narrow_by_the_other_facet() {
+        let s = mem();
+        // glm-5.2 from gemini_cli; gpt-4o from claude_code (rec's default).
+        let mut gem = rec("a", "2026-07-13", "glm-5.2", "d", 10, 0, 1.0);
+        gem.source = "gemini_cli".into();
+        let gpt = rec("b", "2026-07-13", "gpt-4o", "d", 20, 0, 2.0);
+        s.ingest(&[gem, gpt]).unwrap();
+
+        // Model dropdown narrowed by the OTHER facet (source=gemini_cli): only
+        // the gemini model (glm-5.2) is listed.
+        let by_src = UsageFilter {
+            source: Some("gemini_cli".into()),
+            ..Default::default()
+        };
+        assert_eq!(s.query_distinct("model", &by_src).unwrap(), vec!["glm-5.2"]);
+
+        // Source dropdown ignores its OWN filter: source=gemini_cli picked, yet
+        // both sources remain pickable (symmetric to the model facet above).
+        let mut srcs = s
+            .query_distinct(
+                "source",
+                &UsageFilter {
+                    source: Some("gemini_cli".into()),
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        srcs.sort();
+        assert_eq!(
+            srcs,
+            vec!["claude_code".to_string(), "gemini_cli".to_string()]
+        );
     }
 }

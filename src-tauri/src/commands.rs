@@ -326,14 +326,20 @@ pub fn query_models(
 
 #[tauri::command]
 #[specta::specta]
-pub fn query_distinct_sources(state: State<'_, AppState>) -> AppResult<Vec<String>> {
-    state.store.query_distinct("source")
+pub fn query_distinct_sources(
+    state: State<'_, AppState>,
+    filter: UsageFilter,
+) -> AppResult<Vec<String>> {
+    state.store.query_distinct("source", &filter)
 }
 
 #[tauri::command]
 #[specta::specta]
-pub fn query_distinct_models(state: State<'_, AppState>) -> AppResult<Vec<String>> {
-    state.store.query_distinct("model")
+pub fn query_distinct_models(
+    state: State<'_, AppState>,
+    filter: UsageFilter,
+) -> AppResult<Vec<String>> {
+    state.store.query_distinct("model", &filter)
 }
 
 #[tauri::command]

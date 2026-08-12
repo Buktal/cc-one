@@ -12,7 +12,6 @@ import dayjs from "dayjs"
 import relativeTime from "dayjs/plugin/relativeTime"
 import { MessagesSquare, Search, Star } from "lucide-react"
 import { useTranslation } from "react-i18next"
-import { useDistinctModelsQuery } from "@/app/store/api"
 import {
   DateRangeChip,
   type DateRangePreset,
@@ -90,7 +89,11 @@ export function SessionsView() {
           endKey="sessions.filter.end"
         />
         <SourceSelect value={b.source} onChange={b.setSource} />
-        <ModelSelect value={b.model} onChange={b.setModel} />
+        <ModelSelect
+          value={b.model}
+          onChange={b.setModel}
+          options={b.modelOptions}
+        />
         {b.deviceOptions.length > 0 && b.tab === "favorites" ? (
           <DeviceSelect
             options={b.deviceOptions}
@@ -485,17 +488,20 @@ function SourceSelect({
 const ALL_MODELS = "__all__"
 
 /** Model dropdown — EXISTS semantics (a session that used the model at least
- *  once matches). Options come from the same distinct-models query the request
- *  log uses; the backend EXISTS filter narrows the session list itself. */
+ *  once matches). Options come from the usage distinct-models query narrowed
+ *  by the toolbar's time / source / device window (facet semantics — the model
+ *  dimension never narrows its own list); the backend EXISTS filter narrows the
+ *  session list itself. */
 function ModelSelect({
   value,
   onChange,
+  options,
 }: {
   value: string
   onChange: (v: string) => void
+  options: string[]
 }) {
   const { t } = useTranslation()
-  const { data: models = [] } = useDistinctModelsQuery()
   return (
     <Select
       value={value || ALL_MODELS}
@@ -515,7 +521,7 @@ function ModelSelect({
         <SelectItem value={ALL_MODELS}>
           {t("sessions.filter.allModels")}
         </SelectItem>
-        {models.map((m) => (
+        {options.map((m) => (
           <SelectItem key={m} value={m}>
             {m}
           </SelectItem>

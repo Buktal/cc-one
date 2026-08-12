@@ -12,12 +12,24 @@ import {
   PointerSensor,
 } from "@dnd-kit/react"
 import { useSortable } from "@dnd-kit/react/sortable"
-import { Download, Pencil, Plus, Search, Trash2, Upload } from "lucide-react"
+import {
+  Download,
+  Pencil,
+  Plus,
+  RefreshCw,
+  Search,
+  Trash2,
+  Upload,
+} from "lucide-react"
 import { useState } from "react"
 import { useTranslation } from "react-i18next"
+import { toast } from "sonner"
 import {
+  useAddProviderToLiveMutation,
   useDeleteProviderMutation,
   useGetActiveProviderQuery,
+  useImportProvidersFromLiveMutation,
+  useRemoveProviderFromLiveMutation,
   useSwitchProviderMutation,
 } from "@/app/store/api"
 import { Badge } from "@/components/ui/badge"
@@ -33,26 +45,21 @@ import {
 } from "@/components/ui/dialog"
 import { Input } from "@/components/ui/input"
 import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select"
-import {
   Tooltip,
   TooltipContent,
   TooltipTrigger,
 } from "@/components/ui/tooltip"
 import {
-  configRoleHasOneM,
   filterProviders,
-  MODEL_ROLES,
   providerEndpoint,
+  providerLiveManaged,
   providerMissingRequired,
   providerModel,
 } from "@/features/providers/derive"
-import type { ProviderPreset } from "@/features/providers/presets"
+import {
+  type ProviderPreset,
+  presetsForApp,
+} from "@/features/providers/presets"
 import { useProvidersBrowser } from "@/features/providers/use-providers-browser"
 import { useMutateWithToast } from "@/hooks/use-toast-mutation"
 import { usePersistedState } from "@/lib/persistence"
@@ -60,7 +67,7 @@ import { cn } from "@/lib/utils"
 
 import type { App, Provider } from "@/types/generated/bindings"
 import { CommonConfigSnippetCard } from "./common-config-snippet-card"
-import { PresetSelector } from "./preset-selector"
+import { PresetSidePanel } from "./preset-side-panel"
 import { ProviderFormSheet } from "./provider-form-sheet"
 import {
   ProviderTransferDialog,
@@ -69,7 +76,7 @@ import {
 
 // 顶部分段控件的三档应用——顺序即显示顺序。各应用拥有独立的供应商池、
 // 激活状态、预设清单与通用配置片段。
-const APPS: App[] = ["claude", "codex", "gemini", "grok"]
+const APPS: App[] = ["claude", "codex", "gemini", "grok", "opencode"]
 
 export function ProvidersView() {
   const { t } = useTranslation()
@@ -83,13 +90,20 @@ export function ProvidersView() {
     importProviders,
     transferring,
   } = useProvidersBrowser(app)
-  const { data: activeProvider, isLoading: activeLoading } =
-    useGetActiveProviderQuery(app)
+  const { data: activeProvider } = useGetActiveProviderQuery(app)
   const [remove] = useDeleteProviderMutation()
   const [switchProvider] = useSwitchProviderMutation()
+  // opencode 附加模式：加入 / 移出 live 配置（opencode.json），以及从现有
+  // opencode.json 反向导入 DB。单激活四 app 不用这三个。
+  const [addProviderToLive] = useAddProviderToLiveMutation()
+  const [removeProviderFromLive] = useRemoveProviderFromLiveMutation()
+  const [importProvidersFromLive] = useImportProvidersFromLiveMutation()
   const runWithToast = useMutateWithToast()
 
   const [sheetOpen, setSheetOpen] = useState(false)
+  // 预设侧栏面板（新增时从左侧滑入）：openNew 时按「该 app 有内置预设」
+  // 开启；openEdit / 保存 / 取消时一并关闭。opencode 附加模式无预设 → 恒 false。
+  const [presetSheetOpen, setPresetSheetOpen] = useState(false)
   const [editing, setEditing] = useState<Provider | null>(null)
   const [preset, setPreset] = useState<ProviderPreset | null>(null)
   const [transfer, setTransfer] = useState<TransferKind | null>(null)
@@ -122,6 +136,9 @@ export function ProvidersView() {
     setEditing(null)
     setPreset(null)
     setSheetOpen(true)
+    // 有内置预设的 app：新增时同时弹出左侧预设面板（右侧空白表单 + 左侧预设，
+    // 点预设即预填）。opencode 无预设 → 不弹。
+    setPresetSheetOpen(presetsForApp(app).length > 0)
   }
   function openFromPreset(p: ProviderPreset) {
     setEditing(null)
@@ -132,6 +149,8 @@ export function ProvidersView() {
     setEditing(p)
     setPreset(null)
     setSheetOpen(true)
+    // 编辑已有供应商不挂预设面板（预设只服务新建流程）。
+    setPresetSheetOpen(false)
   }
   async function onDelete(p: Provider) {
     await runWithToast(
@@ -166,28 +185,54 @@ export function ProvidersView() {
     return confirmSwitch ? providerMissingRequired(confirmSwitch) : []
   }
 
+  // opencode 是附加模式（多供应商共存于 opencode.json，无唯一激活）：行交互走
+  // 「加入 / 移出 live」而非「切换」，列表无「当前使用」标记，通用配置片段
+  // 无处合并 → 不显示。单激活四 app 恒 false。
+  const isAdditive = app === "opencode"
+
+  async function onAddToLive(p: Provider) {
+    await runWithToast(
+      addProviderToLive,
+      { app, id: p.id },
+      {
+        success: { key: "providers.toast.addedToLive", vars: { name: p.name } },
+        failed: { key: "providers.toast.addToLiveFailed" },
+      },
+    )
+  }
+  async function onRemoveFromLive(p: Provider) {
+    await runWithToast(
+      removeProviderFromLive,
+      { app, id: p.id },
+      {
+        success: {
+          key: "providers.toast.removedFromLive",
+          vars: { name: p.name },
+        },
+        failed: { key: "providers.toast.removeFromLiveFailed" },
+      },
+    )
+  }
+  async function onImportFromLive() {
+    // 返回导入条数，手动 toast 带上 count（runWithToast 的 vars 不支持返回值）。
+    const result = await importProvidersFromLive(app)
+    if (result.error) {
+      toast.error(t("providers.toast.importFromLiveFailed"))
+    } else {
+      toast.success(
+        t("providers.toast.importedFromLive", { count: result.data }),
+      )
+    }
+  }
+
   const visibleProviders = filterProviders(providers, query)
-  const activeEndpoint = activeProvider ? providerEndpoint(activeProvider) : ""
-  const activeModel = activeProvider ? providerModel(activeProvider) : ""
-  // 激活供应商哪些模型角色声明了 1M 上下文（角色名 i18n 化，如 "Sonnet"）。
-  // 只有带 1M 标记的角色才显示，角色行从快照派生（configRoleFields）。
-  const activeOneMRoles = activeProvider
-    ? MODEL_ROLES.filter(
-        (role) =>
-          role.supportsOneM &&
-          configRoleHasOneM(activeProvider.settingsConfig, role.id),
-      ).map((role) => t(`providers.form.role.${role.id}`))
-    : []
-  // 光卡「切换」下拉：列出除激活供应商外的所有供应商（搜索过滤后的可见
-  // 列表可能为空，因此用全量列表）。
-  const switchable = providers.filter((p) => p.id !== activeProvider?.id)
 
   return (
     <div className="flex min-h-0 flex-1 flex-col gap-4">
       <div className="flex items-center justify-between gap-2">
         <fieldset
           aria-label={t("providers.appLabel")}
-          className="m-0 inline-flex rounded-lg border p-0.5"
+          className="m-0 inline-flex gap-1 rounded-lg border p-0.5"
         >
           {APPS.map((a) => (
             <Button
@@ -202,6 +247,16 @@ export function ProvidersView() {
           ))}
         </fieldset>
         <div className="flex gap-2">
+          {isAdditive ? (
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => void onImportFromLive()}
+            >
+              <RefreshCw />
+              {t("providers.live.import")}
+            </Button>
+          ) : null}
           <Button
             variant="outline"
             size="sm"
@@ -224,87 +279,9 @@ export function ProvidersView() {
           </Button>
         </div>
       </div>
-      <Card>
-        <CardHeader>
-          <CardTitle className="text-sm">
-            {t("providers.active.title")}
-          </CardTitle>
-        </CardHeader>
-        <CardContent className="py-3">
-          {activeLoading ? (
-            <div className="text-muted-foreground text-sm">
-              {t("common.loading")}
-            </div>
-          ) : activeProvider ? (
-            <div className="flex flex-wrap items-center gap-x-4 gap-y-1">
-              <span className="flex items-center gap-2">
-                {activeProvider.iconColor ? (
-                  <span
-                    aria-hidden
-                    className="size-2 shrink-0 rounded-full"
-                    style={{ backgroundColor: activeProvider.iconColor }}
-                  />
-                ) : null}
-                <span className="font-medium">{activeProvider.name}</span>
-              </span>
-              <span
-                className="text-muted-foreground font-mono text-xs truncate"
-                title={activeEndpoint}
-              >
-                {activeEndpoint || "—"}
-              </span>
-              <span className="text-muted-foreground text-xs truncate">
-                {activeModel || "—"}
-              </span>
-              {activeOneMRoles.length > 0 ? (
-                <span className="text-muted-foreground text-xs">
-                  {activeOneMRoles.join(" · ")} 1M
-                </span>
-              ) : null}
-              <div className="ml-auto flex items-center gap-1.5">
-                <Button
-                  variant="outline"
-                  size="sm"
-                  onClick={() => openEdit(activeProvider)}
-                >
-                  <Pencil />
-                  {t("common.edit")}
-                </Button>
-                <Select
-                  value={null}
-                  onValueChange={(id) => {
-                    const target = providers.find((p) => p.id === id)
-                    if (target) onSwitch(target)
-                  }}
-                  disabled={switchable.length === 0}
-                >
-                  <SelectTrigger
-                    className="w-auto gap-1.5 font-normal"
-                    aria-label={t("providers.active.switchTo")}
-                  >
-                    <SelectValue placeholder={t("providers.active.switchTo")} />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {switchable.map((p) => (
-                      <SelectItem key={p.id} value={p.id}>
-                        {p.name}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </div>
-            </div>
-          ) : (
-            <div className="text-muted-foreground text-sm">
-              {t("providers.active.none")}
-            </div>
-          )}
-        </CardContent>
-      </Card>
-      <PresetSelector app={app} onSelect={openFromPreset} />
-      {/* 列表卡片不再 flex-1 撑满剩余高度：上方卡片组（active / presets /
-          通用配置）高度不固定，内部滚动会把下面的卡片挤出视口且无法滚到。
-          整页内容自然排布，由 Shell 的滚动容器统一滚动。 */}
+      {/* 列表卡片不再 flex-1 撑满剩余高度：上方还有通用配置卡片，高度不固
+          定，内部滚动会把下面的内容挤出视口且无法滚到。整页自然排布，由
+          Shell 的滚动容器统一滚动。预设已退居为新增流程的左侧面板（见下）。 */}
       <Card>
         <CardHeader className="flex flex-row items-center justify-between gap-2">
           <CardTitle>{t("providers.title")}</CardTitle>
@@ -343,10 +320,14 @@ export function ProvidersView() {
                     key={p.id}
                     provider={p}
                     index={i}
+                    additive={isAdditive}
                     isActive={activeProvider?.id === p.id}
+                    liveManaged={providerLiveManaged(p)}
                     onEdit={() => openEdit(p)}
                     onDelete={() => void onDelete(p)}
                     onSwitch={() => onSwitch(p)}
+                    onAddToLive={() => void onAddToLive(p)}
+                    onRemoveFromLive={() => void onRemoveFromLive(p)}
                   />
                 ))}
               </DragDropProvider>
@@ -355,15 +336,32 @@ export function ProvidersView() {
         </CardContent>
       </Card>
 
-      <CommonConfigSnippetCard app={app} />
+      {/* 通用配置片段：切换写盘时合并进受控字段。附加模式（opencode）多供应商
+          共存、无「切换」概念，片段无处合并 → 不显示。 */}
+      {isAdditive ? null : <CommonConfigSnippetCard app={app} />}
 
       <ProviderFormSheet
         open={sheetOpen}
-        onOpenChange={setSheetOpen}
+        onOpenChange={(open) => {
+          setSheetOpen(open)
+          if (!open) setPresetSheetOpen(false)
+        }}
         editing={editing}
         preset={preset}
         app={app}
-        onSaved={() => setSheetOpen(false)}
+        onSaved={() => {
+          setSheetOpen(false)
+          setPresetSheetOpen(false)
+        }}
+      />
+      {/* 预设侧栏面板：新增模式下从左侧滑入，点预设即预填右侧表单（面板保持
+          开，可连续切换预设）。仅在有内置预设的 app 显示——opencode 附加模式
+          无预设，open 恒 false。 */}
+      <PresetSidePanel
+        app={app}
+        open={presetSheetOpen && presetsForApp(app).length > 0}
+        onSelect={openFromPreset}
+        onClose={() => setPresetSheetOpen(false)}
       />
       <Dialog
         open={confirmSwitch !== null}
@@ -411,17 +409,27 @@ export function ProvidersView() {
 function ProviderRow({
   provider: p,
   index,
+  additive,
   isActive,
+  liveManaged,
   onEdit,
   onDelete,
   onSwitch,
+  onAddToLive,
+  onRemoveFromLive,
 }: {
   provider: Provider
   index: number
+  /** 附加模式（opencode）：走「加入/移出 live」而非「切换/使用中」。 */
+  additive: boolean
   isActive: boolean
+  /** 附加模式：该供应商是否已写进 opencode.json（meta.liveManaged）。 */
+  liveManaged: boolean
   onEdit: () => void
   onDelete: () => void
   onSwitch: () => void
+  onAddToLive: () => void
+  onRemoveFromLive: () => void
 }) {
   const { t } = useTranslation()
   const { ref, isDragging } = useSortable({ id: p.id, index })
@@ -431,7 +439,12 @@ function ProviderRow({
     <div
       ref={ref}
       className={cn(
-        "hover:bg-muted grid grid-cols-[minmax(10rem,1.2fr)_auto_1.4fr_1fr_auto] items-center gap-3 rounded-lg px-4 py-2 transition-colors",
+        "grid grid-cols-[minmax(10rem,1.2fr)_auto_1.4fr_1fr_auto] items-center gap-3 rounded-lg px-4 py-2 transition-colors",
+        // 当前使用：品牌色背景 + 左侧色条，作为列表的视觉锚点（取代旧的独立
+        // 「当前使用」卡片）。不置顶——保留用户拖拽自定义的顺序。
+        isActive
+          ? "bg-accent-tint/60 shadow-[inset_2px_0_0_var(--accent-brand)]"
+          : "hover:bg-muted",
         isDragging && "bg-muted opacity-70 shadow-sm",
       )}
     >
@@ -456,7 +469,37 @@ function ProviderRow({
         {model || "—"}
       </span>
       <div className="flex justify-end gap-1">
-        {isActive ? (
+        {additive ? (
+          // 附加模式（opencode）：按 liveManaged 显示「加入」或「已加入 + 移出」，
+          // 不走单激活的「切换 / 使用中」。
+          liveManaged ? (
+            <>
+              <Badge
+                variant="outline"
+                className="h-7 shrink-0 px-2 font-normal"
+              >
+                {t("providers.live.added")}
+              </Badge>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={onRemoveFromLive}
+                className="shrink-0"
+              >
+                {t("providers.live.remove")}
+              </Button>
+            </>
+          ) : (
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={onAddToLive}
+              className="shrink-0"
+            >
+              {t("providers.live.add")}
+            </Button>
+          )
+        ) : isActive ? (
           <Badge variant="outline" className="h-7 shrink-0 px-2 font-normal">
             {t("providers.active.inUse")}
           </Badge>

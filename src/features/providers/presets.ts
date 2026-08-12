@@ -337,5 +337,8 @@ export function presetsForApp(app: App): ProviderPreset[] {
       return GEMINI_PROVIDER_PRESETS
     case "grok":
       return GROK_PROVIDER_PRESETS
+    case "opencode":
+      // OpenCode 是附加模式 (多供应商共存于 opencode.json), 不走单激活预设。
+      return []
   }
 }

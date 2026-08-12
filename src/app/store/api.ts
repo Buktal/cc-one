@@ -117,6 +117,17 @@ export const ZERO_STATS: UsageStats = {
   avg_turn_duration_ms: 0,
 }
 
+/** Empty (unconstrained) UsageFilter — for "any data at all" probes that must
+ *  not narrow by the time / model / source / device window, e.g. deciding
+ *  whether the source dimension should render at all. */
+export const EMPTY_USAGE_FILTER: UsageFilter = {
+  from_ts: null,
+  to_ts: null,
+  model: null,
+  source: null,
+  device_scope: null,
+}
+
 export const vaultApi = createApi({
   reducerPath: "vaultApi",
   baseQuery: fakeBaseQuery<AppError>(),
@@ -166,13 +177,17 @@ export const vaultApi = createApi({
         { type: "Models", id: filterId(filter) },
       ],
     }),
-    distinctSources: b.query<string[], void>({
-      queryFn: async () => run(commands.queryDistinctSources()),
-      providesTags: ["Usage"],
+    distinctSources: b.query<string[], UsageFilter>({
+      queryFn: async (filter) => run(commands.queryDistinctSources(filter)),
+      providesTags: (_r, _e, filter) => [
+        { type: "Usage", id: filterId(filter) },
+      ],
     }),
-    distinctModels: b.query<string[], void>({
-      queryFn: async () => run(commands.queryDistinctModels()),
-      providesTags: ["Usage"],
+    distinctModels: b.query<string[], UsageFilter>({
+      queryFn: async (filter) => run(commands.queryDistinctModels(filter)),
+      providesTags: (_r, _e, filter) => [
+        { type: "Usage", id: filterId(filter) },
+      ],
     }),
     devices: b.query<DeviceInfo[], void>({
       queryFn: async () => run(commands.listDevices()),
@@ -468,6 +483,26 @@ export const vaultApi = createApi({
       queryFn: async ({ app, id }) => run(commands.switchProviderCmd(app, id)),
       invalidatesTags: ["Providers"],
     }),
+    /** 附加模式（opencode）：把供应商写进 opencode.json 的 `provider.<key>`
+     *  （与 switch 的 opencode 分支等价——多供应商共存、不取消其它、不记激活）。 */
+    addProviderToLive: b.mutation<Provider, { app: App; id: string }>({
+      queryFn: async ({ app, id }) =>
+        run(commands.addProviderToLiveCmd(app, id)),
+      invalidatesTags: ["Providers"],
+    }),
+    /** 附加模式（opencode）：从 opencode.json 删 `provider.<key>`（DB 记录保留，
+     *  liveManaged=false，随时再加回来）。 */
+    removeProviderFromLive: b.mutation<Provider, { app: App; id: string }>({
+      queryFn: async ({ app, id }) =>
+        run(commands.removeProviderFromLiveCmd(app, id)),
+      invalidatesTags: ["Providers"],
+    }),
+    /** 附加模式（opencode）：把现有 opencode.json 的 `provider.*` 反向导入 DB。
+     *  返回导入/更新条数。 */
+    importProvidersFromLive: b.mutation<number, App>({
+      queryFn: async (app) => run(commands.importProvidersFromLiveCmd(app)),
+      invalidatesTags: ["Providers"],
+    }),
     /** 某应用的通用配置片段（claude/codex/gemini 各一份）。 */
     getCommonConfigSnippet: b.query<CommonConfigSnippet, App>({
       queryFn: async (app) => run(commands.getCommonConfigSnippetCmd(app)),
@@ -617,6 +652,9 @@ export const {
   useDeleteProviderMutation,
   useReorderProvidersMutation,
   useSwitchProviderMutation,
+  useAddProviderToLiveMutation,
+  useRemoveProviderFromLiveMutation,
+  useImportProvidersFromLiveMutation,
   useGetCommonConfigSnippetQuery,
   useSetCommonConfigSnippetMutation,
   useExportProvidersMutation,

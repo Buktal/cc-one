@@ -49,12 +49,13 @@ const NAV: Array<{
   beta?: boolean
 }> = [
   { id: "dashboard", key: "nav.dashboard", icon: Gauge },
-  // 会话管理处于 beta：跨设备同步等核心链路已合入但未经过大规模真实环境验证。
-  { id: "sessions", key: "nav.sessions", icon: MessagesSquare, beta: true },
+  { id: "sessions", key: "nav.sessions", icon: MessagesSquare },
   { id: "logs", key: "nav.logs", icon: List },
   { id: "pricing", key: "nav.pricing", icon: Tags },
   { id: "library", key: "nav.library", icon: Library },
-  { id: "providers", key: "nav.providers", icon: Server },
+  // 应用与供应商处于 beta：codex / gemini / grok / opencode 多应用接入与
+  // opencode 附加模式刚上线，真实环境验证尚不充分。
+  { id: "providers", key: "nav.providers", icon: Server, beta: true },
   { id: "settings", key: "nav.settings", icon: Settings },
 ]
 

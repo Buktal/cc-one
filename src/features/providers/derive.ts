@@ -635,9 +635,19 @@ export function restoreTemplatePlaceholders(
 // records the template-variable values so the sheet can pre-fill the inputs
 // and restore placeholders when re-editing.
 
-/** App-side provider metadata — the only consumer today is the template
- *  variable record. */
-type ProviderMeta = { templateValues?: Record<string, string> }
+/** App-side provider metadata. `templateValues` backs the preset template-
+ *  variable inputs; `liveManaged` / `liveKey` back the additive-mode (opencode)
+ *  "in live config" state — set by the add / remove / import commands. */
+type ProviderMeta = {
+  templateValues?: Record<string, string>
+  /** 附加模式写盘标记：true = 已写进 opencode.json 的 `provider.<liveKey>`。
+   *  add_provider_to_live / switch(opencode 分支) 置 true，
+   *  remove_provider_from_live 置 false。单激活 app 永不写此字段。 */
+  liveManaged?: boolean
+  /** 附加模式下该供应商在 opencode.json 的 `provider.<key>` 键名。add / import
+   *  时由后端派生（slugify 名称 / 沿用历史 / 回落 id）。 */
+  liveKey?: string
+}
 
 /** Parse a provider's meta JSON text; garbage or empty → `{}` so a corrupt
  *  meta never throws the sheet open. A non-object `templateValues` is dropped
@@ -689,6 +699,19 @@ export function withMetaTemplateValues(
   if (Object.keys(filled).length === 0) delete meta.templateValues
   else meta.templateValues = filled
   return JSON.stringify(meta, null, 2)
+}
+
+/** 附加模式（opencode）：该供应商是否已写进 live 配置（opencode.json 的
+ *  `provider.<liveKey>`）。严格 true 判定——meta 里非布尔的垃圾值不算。 */
+export function providerLiveManaged(provider: Provider): boolean {
+  return parseMeta(provider.meta).liveManaged === true
+}
+
+/** 附加模式（opencode）：该供应商在 live 配置里的键名（`provider.<key>`）。
+ *  空 = 尚未写盘或 meta 缺失；非字符串的垃圾值归一为空。 */
+export function providerLiveKey(provider: Provider): string {
+  const key = parseMeta(provider.meta).liveKey
+  return typeof key === "string" ? key : ""
 }
 
 // ---- 通用配置片段（snippet）----

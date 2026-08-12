@@ -10,14 +10,15 @@
 // —— 采到任意来源就显示, 与设备维度同理.
 
 import { ChevronDown } from "lucide-react"
-import type { ReactNode } from "react"
+import { type ReactNode, useMemo } from "react"
 import { useTranslation } from "react-i18next"
 import {
+  EMPTY_USAGE_FILTER,
   useDistinctModelsQuery,
   useDistinctSourcesQuery,
 } from "@/app/store/api"
 import { useAppDispatch, useAppSelector } from "@/app/store/hooks"
-import { patchFilter } from "@/app/store/slices/filterSlice"
+import { patchFilter, toFilter } from "@/app/store/slices/filterSlice"
 import {
   type DateRangePreset,
   DateRangeChip as SharedDateRangeChip,
@@ -37,7 +38,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select"
-import { presetDays } from "@/lib/date-range"
+import { dayStr, presetDays } from "@/lib/date-range"
 import { usePersistedState } from "@/lib/persistence"
 import { cn } from "@/lib/utils"
 import { sourceLabel } from "../source-labels"
@@ -106,7 +107,21 @@ function ModelChip({
   const { t } = useTranslation()
   const dispatch = useAppDispatch()
   const filter = useAppSelector((s) => s.filter.filter)
-  const { data: models = [] } = useDistinctModelsQuery()
+  // Facet filter = 看板筛选去掉 model 维度本身。模型下拉只列「所选时间 / 来源
+  // / 设备窗口内真正出现过的模型」, 不按 model 自身收窄 (否则选了 glm 下拉就
+  // 只剩 glm); 当前已选模型并回候选, 避免切到没用过它的窗口时 chip 变成空值。
+  // dayStr() 进依赖: 跨天后「今天」预设要滚到新一天, 候选跟着重查。
+  // biome-ignore lint/correctness/useExhaustiveDependencies: dayStr() is the cross-midnight trigger — stable within a day, a new identity after midnight so a "today" preset re-queries the new day's models
+  const facetFilter = useMemo(
+    () => toFilter({ ...filter, model: "" }),
+    [filter, dayStr()],
+  )
+  const { data: models = [] } = useDistinctModelsQuery(facetFilter)
+  const options = useMemo(() => {
+    const set = new Set(models)
+    if (filter.model) set.add(filter.model)
+    return [...set].sort()
+  }, [models, filter.model])
   const allLabel = bar ? t("usage.control.allModel") : t("usage.control.all")
   return (
     <Select
@@ -129,7 +144,7 @@ function ModelChip({
       </SelectTrigger>
       <SelectContent alignItemWithTrigger={false} align={align}>
         <SelectItem value={ALL}>{allLabel}</SelectItem>
-        {models.map((m) => (
+        {options.map((m) => (
           <SelectItem key={m} value={m}>
             {m}
           </SelectItem>
@@ -151,7 +166,19 @@ function SourceChip({
   const { t } = useTranslation()
   const dispatch = useAppDispatch()
   const filter = useAppSelector((s) => s.filter.filter)
-  const { data: sources = [] } = useDistinctSourcesQuery()
+  // 与 ModelChip 对称: facet 去掉 source 自身, 候选只含所选窗口内出现过的来源;
+  // 已选来源并回候选。dayStr() 进依赖以跨天滚动。
+  // biome-ignore lint/correctness/useExhaustiveDependencies: dayStr() is the cross-midnight trigger — see ModelChip
+  const facetFilter = useMemo(
+    () => toFilter({ ...filter, source: "" }),
+    [filter, dayStr()],
+  )
+  const { data: sources = [] } = useDistinctSourcesQuery(facetFilter)
+  const options = useMemo(() => {
+    const set = new Set(sources)
+    if (filter.source) set.add(filter.source)
+    return [...set].sort()
+  }, [sources, filter.source])
   const allLabel = bar ? t("usage.control.allSource") : t("usage.control.all")
   return (
     <Select
@@ -174,7 +201,7 @@ function SourceChip({
       </SelectTrigger>
       <SelectContent alignItemWithTrigger={false} align={align}>
         <SelectItem value={ALL}>{allLabel}</SelectItem>
-        {sources.map((s) => (
+        {options.map((s) => (
           <SelectItem key={s} value={s}>
             {sourceLabel(s)}
           </SelectItem>
@@ -189,7 +216,7 @@ function SourceChip({
 export function ControlCard() {
   const { t } = useTranslation()
   const multiDevice = useDeviceOptions().length > 0
-  const { data: sources = [] } = useDistinctSourcesQuery()
+  const { data: sources = [] } = useDistinctSourcesQuery(EMPTY_USAGE_FILTER)
   const hasSources = sources.length > 0
   // Collapse persists across restarts (debounced write, flushed on unmount).
   const [collapsed, setCollapsed] = usePersistedState<boolean>(
@@ -247,7 +274,7 @@ export function ControlCard() {
 /** 横向条版 — 日志页顶部。Filters only — the collect action lives in the
  *  sidebar now. */
 export function ControlBar() {
-  const { data: sources = [] } = useDistinctSourcesQuery()
+  const { data: sources = [] } = useDistinctSourcesQuery(EMPTY_USAGE_FILTER)
   const hasSources = sources.length > 0
   return (
     <div className="flex flex-wrap items-center gap-2">

@@ -40,7 +40,10 @@ export interface JsonEditorProps {
 const cmChrome = EditorView.theme({
   "&": {
     height: "100%",
-    minHeight: "10rem",
+    // 最小高度小于外层容器常见的固定高度（如 h-40 = 160px），让 .cm-editor
+    // 的 height:100% 能随 flex-1 的 container 收缩，给底部的格式化按钮留出
+    // 位置——否则编辑区被 minHeight 撑满，按钮溢出盖到下方内容上。
+    minHeight: "6rem",
     fontSize: "13px",
     border: "1px solid hsl(var(--border))",
     borderRadius: "calc(var(--radius) - 2px)",
@@ -258,7 +261,7 @@ export function JsonEditor({
     <div className={cn("flex flex-col gap-1.5", className)}>
       <div
         ref={containerRef}
-        className="min-h-40 min-w-0 flex-1 overflow-hidden"
+        className="min-h-24 min-w-0 flex-1 overflow-hidden"
       />
       <div className="flex items-center gap-2">
         <Button
