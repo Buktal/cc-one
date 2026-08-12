@@ -95,6 +95,7 @@ import {
 } from "../derive"
 import { highlight } from "../highlight"
 import { sessionSourceLabel } from "../source-labels"
+import { initialTurnNav, reduceTurnNav, turnAnchors } from "../turn-nav"
 import { MarkdownContent, ToolContent } from "./markdown-content"
 
 dayjs.extend(relativeTime)
@@ -666,83 +667,53 @@ function TranscriptBody({
  */
 function useTurnNav(messages: SessionMessage[]) {
   const virtuosoRef = useRef<VirtuosoHandle>(null)
-  // Each user turn plus its index in the message array. rangeChanged and
-  // scrollToIndex speak in message indices, so the mapping must be kept.
-  const turns = useMemo(
-    () =>
-      messages.flatMap((m, index) =>
-        m.role === "user" ? [{ index, message: m }] : [],
-      ),
-    [messages],
-  )
-  const [activeUuid, setActiveUuid] = useState<string | null>(null)
+  // User-turn anchors (index + uuid) — the coordinate rangeChanged and
+  // scrollToIndex speak in, and the coordinate the routing reducer reasons
+  // over. turnAnchors is the canonical, tested builder (architecture.md:
+  // "测试必须跑生产路径"), so production calls it directly.
+  const anchors = useMemo(() => turnAnchors(messages), [messages])
+  // Routing state lives in the pure reducer (../turn-nav); the hook only adds
+  // the scroll + flash side-effects on top. Reset when the transcript changes
+  // — switching sessions reuses this component instance, and a stale pin from
+  // the previous session (index-based) would otherwise linger.
+  const [navState, setNavState] = useState(initialTurnNav)
+  // biome-ignore lint/correctness/useExhaustiveDependencies: intentional — drop a stale index-based pin when the transcript swaps sessions; the body needs no messages value
+  useEffect(() => setNavState(initialTurnNav), [messages])
   // The bubble a turn-nav click most recently landed on, until FLASH_MS passes
   // (then it drops so the ring doesn't linger). Re-jumping resets the timer.
   const [flashUuid, setFlashUuid] = useState<string | null>(null)
   const flashTimer = useRef<number | undefined>(undefined)
   useEffect(() => () => window.clearTimeout(flashTimer.current), [])
 
-  // A jump parks the target TURN_OFFSET below the viewport top, so the
-  // jump's own rangeChanged reports the PREVIOUS turn's content at the
-  // viewport top — it would overwrite the active pin with the turn before
-  // the target (the "click twice to stick" bug: the second click scrolls
-  // nowhere, no rangeChanged, and the pin survives). So the next
-  // rangeChanged after a jump is skipped, and the timeout clears the skip
-  // when the jump produces no scroll at all (target already in view).
-  const skipNextRange = useRef(false)
-  const skipTimer = useRef<number | undefined>(undefined)
-  useEffect(() => () => window.clearTimeout(skipTimer.current), [])
-
-  // Virtuoso reports the first visible message index; the active turn is the
-  // last user turn at or above it — the turn whose content starts where the
-  // viewport starts. setState returns the same value when nothing changed, so
-  // Virtuoso reporting on every scroll frame does not re-render.
+  // Virtuoso reports the first visible message index; the reducer turns that
+  // into the active turn (the last user turn at or above it) unless a jump pin
+  // is holding — see turn-nav.ts for why a pin beats the old "skip the next
+  // rangeChanged" approach.
   const onRangeChanged = useCallback(
     ({ startIndex }: { startIndex: number }) => {
-      if (skipNextRange.current) {
-        skipNextRange.current = false
-        window.clearTimeout(skipTimer.current)
-        return
-      }
-      let active: string | null = null
-      for (const t of turns) {
-        if (t.index <= startIndex) active = t.message.uuid
-        else break
-      }
-      setActiveUuid((prev) => (prev === active ? prev : active))
+      setNavState((prev) =>
+        reduceTurnNav(prev, { type: "range", startIndex }, anchors),
+      )
     },
-    [turns],
+    [anchors],
   )
 
   const jumpTo = useCallback(
     (uuid: string, index?: number) => {
       // Turn rows carry their own index; search hits pass theirs explicitly
-      // (they may be assistant / tool rows, which are not in `turns`).
+      // (they may be assistant / tool rows, which are not user turns).
       if (index === undefined) {
-        const turn = turns.find((t) => t.message.uuid === uuid)
-        if (!turn) return
-        index = turn.index
+        const anchor = anchors.find((a) => a.uuid === uuid)
+        if (!anchor) return
+        index = anchor.index
       }
-      // Pin the active turn to the jump target's OWNER turn: jumpTo parks the
-      // target TURN_OFFSET below the viewport top, so the startIndex-based
-      // scroll tracking would point one turn earlier until the user scrolls.
-      // The owner is the last user turn at or above the target row — the turn
-      // itself for a turn click, the enclosing turn for a search hit.
-      let owner: string | null = null
-      for (const t of turns) {
-        if (t.index <= index) owner = t.message.uuid
-        else break
-      }
-      setActiveUuid(owner)
-      // Skip the jump's own rangeChanged — it reports the stale (previous
-      // turn) range and would un-pin the owner we just set (see the flag's
-      // comment above). The timeout clears the skip if the jump lands on an
-      // already-visible row and no rangeChanged fires at all.
-      skipNextRange.current = true
-      window.clearTimeout(skipTimer.current)
-      skipTimer.current = window.setTimeout(() => {
-        skipNextRange.current = false
-      }, 500)
+      // The reducer pins the jump's owner turn (the enclosing user turn) and
+      // holds it through the scroll burst that follows. The pin replaces the
+      // old skip flag, which only absorbed a single rangeChanged and let the
+      // burst's later events retreat the highlight to the previous turn.
+      setNavState((prev) =>
+        reduceTurnNav(prev, { type: "jump", targetIndex: index }, anchors),
+      )
       // Ring the target bubble for a beat so the eye lands with the jump.
       setFlashUuid(uuid)
       window.clearTimeout(flashTimer.current)
@@ -760,12 +731,12 @@ function useTurnNav(messages: SessionMessage[]) {
         behavior: "auto",
       })
     },
-    [turns],
+    [anchors],
   )
 
   return {
-    turns: turns.map((t) => t.message),
-    activeUuid,
+    turns: anchors.map((a) => messages[a.index]),
+    activeUuid: navState.activeUuid,
     flashUuid,
     jumpTo,
     virtuosoRef,
