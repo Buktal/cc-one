@@ -21,6 +21,7 @@ import { CloseRequestedDialog } from "./close-requested-dialog"
 import { vaultApi } from "./store/api"
 import { setMode } from "./store/slices/viewSlice"
 import { store } from "./store/store"
+import { INVALIDATE_STORE } from "./store/tags"
 
 /** Reflects the persisted color skin onto <html data-skin> (multi-skin
  *  theming). Must live inside the Redux <Provider> — it reads prefs. */
@@ -42,25 +43,15 @@ function TrayThemeSync() {
 }
 
 export function AppProviders({ children }: { children: ReactNode }) {
-  // Event-driven refresh: Rust emits `usage_changed` after writing the
-  // Local Store (collect / sync); invalidate the derived caches so views
-  // re-query. `Sessions` is included because collect also updates session
-  // metadata (a `/rename` in Claude Code lands as a JSONL `custom-title`
-  // line) — without it, those titles would only surface on an unrelated
-  // refetch. `Devices` is included so a peer first seen via usage rows (or a
-  // renamed device) refreshes the picker without waiting for a manual sync.
-  // The consolidated `vaultApi` owns every endpoint.
+  // Event-driven refresh: Rust emits `usage_changed` after any whole-Store
+  // write (collect / sync). Invalidate the aggregate `Store` tag so every
+  // Store-derived read (usage / logs / models / devices / sessions / synced
+  // providers) refetches — see src/app/store/tags.ts for the single source of
+  // truth. One tag replaces a per-domain list that had drifted (the collect /
+  // sync mutations once forgot Sessions).
   useEffect(() => {
     const off = listen("usage_changed", () => {
-      store.dispatch(
-        vaultApi.util.invalidateTags([
-          "Usage",
-          "Logs",
-          "Models",
-          "Devices",
-          "Sessions",
-        ]),
-      )
+      store.dispatch(vaultApi.util.invalidateTags(INVALIDATE_STORE))
     })
     return () => {
       off.then((unlisten) => unlisten())

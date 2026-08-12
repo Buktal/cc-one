@@ -43,6 +43,7 @@ import {
   type Preferences_Serialize,
   type Skin_Deserialize,
 } from "@/types/generated/bindings"
+import { INVALIDATE_STORE, storeRead } from "./tags"
 
 /**
  * RTK Query data layer over the typed Tauri command contract.
@@ -128,6 +129,7 @@ export const vaultApi = createApi({
     "Sessions",
     "Providers",
     "App",
+    "Store",
   ],
   endpoints: (b) => ({
     // ---- reads ----
@@ -138,16 +140,14 @@ export const vaultApi = createApi({
     stats: b.query<UsageStats, FilterState>({
       queryFn: async (filter) =>
         run(commands.queryUsageStats(toFilter(filter))),
-      providesTags: (_r, _e, filter) => [
-        { type: "Usage", id: filterId(filter) },
-      ],
+      providesTags: (_r, _e, filter) =>
+        storeRead({ type: "Usage", id: filterId(filter) }),
     }),
     trend: b.query<TrendPoint[], { filter: FilterState; bucket: TrendBucket }>({
       queryFn: async ({ filter, bucket }) =>
         run(commands.queryUsageTrend(toFilter(filter), bucket)),
-      providesTags: (_r, _e, { filter }) => [
-        { type: "Usage", id: filterId(filter) },
-      ],
+      providesTags: (_r, _e, { filter }) =>
+        storeRead({ type: "Usage", id: filterId(filter) }),
     }),
     logs: b.query<
       UsageLogRow[],
@@ -161,37 +161,34 @@ export const vaultApi = createApi({
             offset: q.offset,
           }),
         ),
-      providesTags: (_r, _e, q) => [{ type: "Logs", id: filterId(q.filter) }],
+      providesTags: (_r, _e, q) =>
+        storeRead({ type: "Logs", id: filterId(q.filter) }),
     }),
     count: b.query<number, FilterState>({
       queryFn: async (filter) => run(commands.countUsageLogs(toFilter(filter))),
-      providesTags: (_r, _e, filter) => [
-        { type: "Logs", id: filterId(filter) },
-      ],
+      providesTags: (_r, _e, filter) =>
+        storeRead({ type: "Logs", id: filterId(filter) }),
     }),
     models: b.query<ModelStatsRow[], FilterState>({
       queryFn: async (filter) => run(commands.queryModels(toFilter(filter))),
-      providesTags: (_r, _e, filter) => [
-        { type: "Models", id: filterId(filter) },
-      ],
+      providesTags: (_r, _e, filter) =>
+        storeRead({ type: "Models", id: filterId(filter) }),
     }),
     distinctSources: b.query<string[], FilterState>({
       queryFn: async (filter) =>
         run(commands.queryDistinctSources(toFilter(filter))),
-      providesTags: (_r, _e, filter) => [
-        { type: "Usage", id: filterId(filter) },
-      ],
+      providesTags: (_r, _e, filter) =>
+        storeRead({ type: "Usage", id: filterId(filter) }),
     }),
     distinctModels: b.query<string[], FilterState>({
       queryFn: async (filter) =>
         run(commands.queryDistinctModels(toFilter(filter))),
-      providesTags: (_r, _e, filter) => [
-        { type: "Usage", id: filterId(filter) },
-      ],
+      providesTags: (_r, _e, filter) =>
+        storeRead({ type: "Usage", id: filterId(filter) }),
     }),
     devices: b.query<DeviceInfo[], void>({
       queryFn: async () => run(commands.listDevices()),
-      providesTags: ["Devices"],
+      providesTags: storeRead("Devices"),
     }),
     pricing: b.query<PricingEntry[], void>({
       queryFn: async () => run(commands.listPricing()),
@@ -201,11 +198,11 @@ export const vaultApi = createApi({
     // ---- mutations ----
     collect: b.mutation<AlignReport, void>({
       queryFn: async () => run(commands.collectNow()),
-      invalidatesTags: ["Usage", "Logs", "Models", "Devices"],
+      invalidatesTags: INVALIDATE_STORE,
     }),
     sync: b.mutation<AlignReport, void>({
       queryFn: async () => run(commands.syncNow()),
-      invalidatesTags: ["Usage", "Logs", "Models", "Devices"],
+      invalidatesTags: INVALIDATE_STORE,
     }),
     rebill: b.mutation<number, void>({
       queryFn: async () => run(commands.rebillZeroCost()),
@@ -282,7 +279,7 @@ export const vaultApi = createApi({
     setSyncRepo: b.mutation<RunMode, { repoUrl: string; githubToken: string }>({
       queryFn: async ({ repoUrl, githubToken }) =>
         run(commands.setSyncRepo(repoUrl, githubToken)),
-      invalidatesTags: ["App"],
+      invalidatesTags: ["App", ...INVALIDATE_STORE],
     }),
     verifySyncRepo: b.mutation<
       VerifyReport,
@@ -315,7 +312,7 @@ export const vaultApi = createApi({
       queryFn: async ({ deviceId, libraryAction }) =>
         run(commands.forgetDevice(deviceId, libraryAction)),
       // "Library" too: migrate/delete rewrites the library listing.
-      invalidatesTags: ["Devices", "Usage", "Logs", "Models", "Library"],
+      invalidatesTags: [...INVALIDATE_STORE, "Library"],
     }),
 
     // ---- sessions ----
@@ -340,7 +337,7 @@ export const vaultApi = createApi({
       },
       providesTags: (_r, _e, q) => {
         const { limit, offset, ...scope } = q
-        return [{ type: "Sessions", id: sessionSpecId(scope) }]
+        return storeRead({ type: "Sessions", id: sessionSpecId(scope) })
       },
     }),
     /** Sidebar + paginator counts for one grouping track: total (All row +
@@ -352,9 +349,8 @@ export const vaultApi = createApi({
     >({
       queryFn: async ({ spec, track }) =>
         run(commands.countSessionsCmd(buildSessionFilter(spec), track)),
-      providesTags: (_r, _e, { spec }) => [
-        { type: "Sessions", id: sessionSpecId(spec) },
-      ],
+      providesTags: (_r, _e, { spec }) =>
+        storeRead({ type: "Sessions", id: sessionSpecId(spec) }),
     }),
     /** One session's transcript (favorited-only — collect writes the JSONL only
      *  for favorited sessions). Cached per session. */
@@ -364,9 +360,8 @@ export const vaultApi = createApi({
     >({
       queryFn: async ({ id, deviceId }) =>
         run(commands.getSessionTranscriptCmd(id, deviceId)),
-      providesTags: (_r, _e, { id, deviceId }) => [
-        { type: "Sessions", id: `transcript:${deviceId}:${id}` },
-      ],
+      providesTags: (_r, _e, { id, deviceId }) =>
+        storeRead({ type: "Sessions", id: `transcript:${deviceId}:${id}` }),
     }),
     // Session user-data writes — every backend write emits `sessions_changed`,
     // which providers.tsx maps to a whole-`Sessions` tag invalidate (refetching
@@ -409,15 +404,15 @@ export const vaultApi = createApi({
     // CRUD (which invalidates `Sessions`) refreshes the sidebar in place.
     listGroups: b.query<SessionGroup[], void>({
       queryFn: async () => run(commands.listGroupsCmd()),
-      providesTags: ["Sessions"],
+      providesTags: storeRead("Sessions"),
     }),
     listLocalGroups: b.query<LocalGroup[], void>({
       queryFn: async () => run(commands.listLocalGroupsCmd()),
-      providesTags: ["Sessions"],
+      providesTags: storeRead("Sessions"),
     }),
     listSyncedGroups: b.query<SyncedGroup[], void>({
       queryFn: async () => run(commands.listSyncedGroupsCmd()),
-      providesTags: ["Sessions"],
+      providesTags: storeRead("Sessions"),
     }),
     createLocalGroup: b.mutation<LocalGroup, string>({
       queryFn: async (name) => run(commands.createLocalGroupCmd(name)),
@@ -467,12 +462,12 @@ export const vaultApi = createApi({
     // go through the api anyway.
     listProviders: b.query<Provider[], App>({
       queryFn: async (app) => run(commands.listProvidersCmd(app)),
-      providesTags: ["Providers"],
+      providesTags: storeRead("Providers"),
     }),
     /** 当前激活的完整 provider（「当前使用」光卡，按应用）；未激活/已删除 → null。 */
     getActiveProvider: b.query<Provider | null, App>({
       queryFn: async (app) => run(commands.getActiveProviderCmd(app)),
-      providesTags: ["Providers"],
+      providesTags: storeRead("Providers"),
     }),
     saveProvider: b.mutation<Provider, Provider>({
       queryFn: async (provider) => run(commands.saveProviderCmd(provider)),
@@ -516,7 +511,7 @@ export const vaultApi = createApi({
     /** 某应用的通用配置片段（claude/codex/gemini 各一份）。 */
     getCommonConfigSnippet: b.query<CommonConfigSnippet, App>({
       queryFn: async (app) => run(commands.getCommonConfigSnippetCmd(app)),
-      providesTags: ["Providers"],
+      providesTags: storeRead("Providers"),
     }),
     /** 保存某应用的通用配置片段（后端校验 JSON 合法性）。 */
     setCommonConfigSnippet: b.mutation<
