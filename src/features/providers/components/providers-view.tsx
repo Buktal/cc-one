@@ -248,10 +248,14 @@ export function ProvidersView() {
 
   return (
     <div className="flex min-h-0 flex-1 flex-col gap-4">
-      <div className="flex items-center justify-between gap-2">
+      {/* Top bar: app chips wrap inside the fieldset; the action group
+        (数据菜单 + 新增) pins right via ml-auto and drops to its own
+        right-aligned line on narrow containers, so buttons never scatter
+        between the chips. */}
+      <div className="flex flex-wrap items-center gap-2">
         <fieldset
           aria-label={t("providers.appLabel")}
-          className="m-0 inline-flex gap-1 rounded-lg border p-0.5"
+          className="m-0 flex flex-wrap gap-1 rounded-lg border p-0.5"
         >
           {APPS.map((a) => (
             <Button
@@ -269,7 +273,7 @@ export function ProvidersView() {
             </Button>
           ))}
         </fieldset>
-        <div className="flex gap-2">
+        <div className="ml-auto flex gap-2">
           {/* 数据迁移类操作收进菜单：导出 / 导入 / CC-Switch 导入，附加模式
               (opencode) 多一项「从 live 导入」。主操作「新增」独立为 primary。 */}
           <DropdownMenu>

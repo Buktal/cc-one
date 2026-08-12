@@ -363,10 +363,10 @@ function GroupRow({
           </PopoverContent>
         </Popover>
       </div>
-      {/* Confirmation before delete. base-ui's AlertDialog won't dismiss on
-        ESC / backdrop click — the user has to pick Cancel or Delete. Sessions
-        inside the group survive (they move to Ungrouped), so the description
-        says so instead of threatening data loss. */}
+      {/* Confirmation before delete. Clicking the backdrop (or ESC) cancels
+        and closes the dialog; only a deliberate click on 删除 runs the
+        mutation. Sessions inside the group survive (they move to Ungrouped),
+        so the description says so instead of threatening data loss. */}
       <ConfirmDialog
         open={deleteConfirmOpen}
         onOpenChange={setDeleteConfirmOpen}

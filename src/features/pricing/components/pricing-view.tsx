@@ -123,67 +123,74 @@ export function PricingView() {
 
   return (
     <div className="flex min-h-0 flex-1 flex-col gap-4">
-      <div className="flex flex-wrap items-center gap-2">
-        <div className="relative">
-          <Search className="text-muted-foreground absolute top-1/2 left-2 size-3.5 -translate-y-1/2" />
-          <Input
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
-            placeholder={t("pricing.searchPlaceholder")}
-            className="h-8 w-44 pl-7"
-            aria-label={t("pricing.searchAria")}
-          />
+      {/* Toolbar in a fixed element order: search + fetch + import/export
+        form one group that wraps as a unit; the primary action (新增) pins
+        right via ml-auto and drops to its own right-aligned line on narrow
+        containers — the old spacer div was a no-op once the row wrapped. */}
+      <div className="@container flex flex-wrap items-center gap-2">
+        <div className="flex shrink-0 flex-wrap items-center gap-2">
+          <div className="relative">
+            <Search className="text-muted-foreground absolute top-1/2 left-2 size-3.5 -translate-y-1/2" />
+            <Input
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              placeholder={t("pricing.searchPlaceholder")}
+              className="h-8 w-44 pl-7"
+              aria-label={t("pricing.searchAria")}
+            />
+          </div>
+          {/* 拉取 LiteLLM 是种子数据的来源——主动作带文字，导入/导出留在 icon
+            组里保持密度。 */}
+          <Button
+            variant="outline"
+            size="sm"
+            disabled={fetching}
+            onClick={onFetchLitellm}
+          >
+            <CloudDownload />
+            {t("pricing.fetchLitellm")}
+          </Button>
+          <div className="flex items-center gap-1">
+            <Tooltip>
+              <TooltipTrigger
+                render={
+                  <Button
+                    variant="outline"
+                    size="icon-sm"
+                    disabled={reloading}
+                    onClick={onReloadFile}
+                    aria-label={t("pricing.importFile")}
+                  />
+                }
+              >
+                <FileUp />
+              </TooltipTrigger>
+              <TooltipContent>{t("pricing.importFile")}</TooltipContent>
+            </Tooltip>
+            <Tooltip>
+              <TooltipTrigger
+                render={
+                  <Button
+                    variant="outline"
+                    size="icon-sm"
+                    disabled={savingFile}
+                    onClick={onSaveFile}
+                    aria-label={t("pricing.exportFile")}
+                  />
+                }
+              >
+                <FileDown />
+              </TooltipTrigger>
+              <TooltipContent>{t("pricing.exportFile")}</TooltipContent>
+            </Tooltip>
+          </div>
         </div>
-        {/* 拉取 LiteLLM 是种子数据的来源——主动作带文字，导入/导出留在 icon
-          组里保持密度。 */}
-        <Button
-          variant="outline"
-          size="sm"
-          disabled={fetching}
-          onClick={onFetchLitellm}
-        >
-          <CloudDownload />
-          {t("pricing.fetchLitellm")}
-        </Button>
-        <div className="flex items-center gap-1">
-          <Tooltip>
-            <TooltipTrigger
-              render={
-                <Button
-                  variant="outline"
-                  size="icon-sm"
-                  disabled={reloading}
-                  onClick={onReloadFile}
-                  aria-label={t("pricing.importFile")}
-                />
-              }
-            >
-              <FileUp />
-            </TooltipTrigger>
-            <TooltipContent>{t("pricing.importFile")}</TooltipContent>
-          </Tooltip>
-          <Tooltip>
-            <TooltipTrigger
-              render={
-                <Button
-                  variant="outline"
-                  size="icon-sm"
-                  disabled={savingFile}
-                  onClick={onSaveFile}
-                  aria-label={t("pricing.exportFile")}
-                />
-              }
-            >
-              <FileDown />
-            </TooltipTrigger>
-            <TooltipContent>{t("pricing.exportFile")}</TooltipContent>
-          </Tooltip>
+        <div className="ml-auto">
+          <Button size="sm" onClick={openNew}>
+            <Plus />
+            {t("pricing.add")}
+          </Button>
         </div>
-        <div className="ml-auto" />
-        <Button size="sm" onClick={openNew}>
-          <Plus />
-          {t("pricing.add")}
-        </Button>
       </div>
       <Card className="min-h-0 flex-1">
         <CardHeader>

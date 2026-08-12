@@ -526,7 +526,12 @@ export function Shell({ children }: { children: React.ReactNode }) {
               {NAV_GROUPS.map((group, index) => (
                 <div
                   key={group.heading}
-                  className={index > 0 ? "mt-3" : undefined}
+                  // Expanded: the heading's own pt-3 already separates the
+                  // group from the one above — a second mt-3 doubled the gap
+                  // (成本定价 → 管理 read as far apart). Collapsed: no heading
+                  // text exists, so the mt-3 is the only separator between
+                  // the two icon stacks.
+                  className={cn(index > 0 && (collapsed ? "mt-3" : ""))}
                 >
                   {collapsed ? null : (
                     <div
@@ -566,8 +571,11 @@ export function Shell({ children }: { children: React.ReactNode }) {
                 (items slide right up to the collect deck), so a rule separates
                 navigation from the control deck — same rhythm as the logo and
                 device rules. Collapsed keeps no rule: the icon column already
-                has one below the collect icon, two would sandwich it. */}
-            {collapsed ? null : <Separator />}
+                has one below the collect icon, two would sandwich it.
+                mx-3 w-auto: the rule sits inside the deck's 12px padding, so
+                its edges match the collect/footer rule below (which lives
+                inside the p-3 block) instead of bleeding to the frame. */}
+            {collapsed ? null : <Separator className="mx-3 w-auto" />}
 
             <div className="shrink-0 p-3">
               {collapsed ? (

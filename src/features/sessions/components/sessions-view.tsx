@@ -66,32 +66,55 @@ export function SessionsView() {
 
   return (
     <div className="flex min-h-0 flex-1 flex-col gap-3">
-      {/* Control row — two-line responsive: tabs + date + search stay on the
-        first line (search pinned right via ml-auto); the source / model /
-        device chips drop to a full-width second line on narrow windows
-        (w-full) and return inline on wide ones (xl:w-auto), so wrapping never
-        scatters the chips between the tabs and the search box. */}
-      <div className="flex flex-wrap items-center gap-2">
-        <Tabs value={b.tab} onValueChange={(v) => b.setTab(v as SessionTab)}>
-          <TabsList>
-            <TabsTrigger value="local">{t("sessions.tab.local")}</TabsTrigger>
-            <TabsTrigger value="favorites">
-              {t("sessions.tab.favorites")}
-            </TabsTrigger>
-          </TabsList>
-        </Tabs>
-        <DateRangeChip
-          preset={b.rangePreset}
-          fromDay={b.fromDay}
-          toDay={b.toDay}
-          onPreset={b.setRangePreset}
-          onFromDay={b.setFromDay}
-          onToDay={b.setToDay}
-          presets={RANGE_PRESETS}
-          allTimeKey="sessions.filter.allTime"
-          dateRangeKey="sessions.filter.dateRange"
-        />
-        <div className="flex w-full flex-wrap items-center gap-2 xl:w-auto">
+      {/* Control row — at most two lines, with a fixed visual order on every
+        width. The min window (840px → ~600px content) fits 主筛选(≈210px) +
+        search(224px) on line 1 and the three chips (≈480px) on line 2, so
+        the flex order flips instead of letting wrap scatter anything:
+        - narrow: order = 主筛选(1) → search(3, right-pinned) → chips(4,
+          full-width line 2) — two lines, search stays beside the tabs;
+        - wide (@60rem): order = 主筛选(1) → chips(3) → search(4) — one line,
+          chips sit before the right-pinned search.
+        The fold measures the toolbar's own width (@container), not the
+        window, so the sidebar's collapsed state can't shift it. */}
+      <div className="@container flex flex-wrap items-center gap-2">
+        <div className="order-1 flex shrink-0 items-center gap-2">
+          <Tabs value={b.tab} onValueChange={(v) => b.setTab(v as SessionTab)}>
+            <TabsList>
+              <TabsTrigger value="local">{t("sessions.tab.local")}</TabsTrigger>
+              <TabsTrigger value="favorites">
+                {t("sessions.tab.favorites")}
+              </TabsTrigger>
+            </TabsList>
+          </Tabs>
+          <DateRangeChip
+            preset={b.rangePreset}
+            fromDay={b.fromDay}
+            toDay={b.toDay}
+            onPreset={b.setRangePreset}
+            onFromDay={b.setFromDay}
+            onToDay={b.setToDay}
+            presets={RANGE_PRESETS}
+            allTimeKey="sessions.filter.allTime"
+            dateRangeKey="sessions.filter.dateRange"
+          />
+        </div>
+        {/* Search rides line 1 beside the tabs on narrow containers (order 3)
+          and moves to the row end on wide ones (order 4). */}
+        <div className="order-3 ml-auto flex shrink-0 items-center gap-2 @[60rem]:order-4">
+          <div className="relative w-56">
+            <Search className="text-muted-foreground absolute top-1/2 left-2 size-3.5 -translate-y-1/2" />
+            <Input
+              value={b.search}
+              onChange={(e) => b.setSearch(e.target.value)}
+              placeholder={t("sessions.searchPlaceholder")}
+              className="h-8 pl-7"
+              aria-label={t("sessions.searchPlaceholder")}
+            />
+          </div>
+        </div>
+        {/* Secondary filters: full-width line 2 on narrow containers
+          (w-full), inline before the search on wide ones. */}
+        <div className="order-4 flex w-full min-w-0 flex-wrap items-center gap-2 @[60rem]:order-3 @[60rem]:w-auto">
           <SourceSelect value={b.source} onChange={b.setSource} />
           <ModelSelect
             value={b.model}
@@ -105,18 +128,6 @@ export function SessionsView() {
               onChange={b.setDeviceScope}
             />
           ) : null}
-        </div>
-        <div className="ml-auto flex items-center gap-2">
-          <div className="relative w-56">
-            <Search className="text-muted-foreground absolute top-1/2 left-2 size-3.5 -translate-y-1/2" />
-            <Input
-              value={b.search}
-              onChange={(e) => b.setSearch(e.target.value)}
-              placeholder={t("sessions.searchPlaceholder")}
-              className="h-8 pl-7"
-              aria-label={t("sessions.searchPlaceholder")}
-            />
-          </div>
         </div>
       </div>
 
@@ -515,8 +526,10 @@ function SourceSelect({
       value={value || ALL_SOURCES}
       onValueChange={(v) => onChange(v === ALL_SOURCES ? "" : (v ?? ""))}
     >
+      {/* w-30: 「全部应用」4 字 + padding 约 102px；具体应用名 (Claude Code
+        等) 更长时由 SelectValue 的 line-clamp-1 截断。 */}
       <SelectTrigger
-        className="h-8 w-40"
+        className="h-8 w-30"
         aria-label={t("sessions.filter.source")}
       >
         <SelectValue className="min-w-0">
@@ -611,8 +624,10 @@ function DeviceSelect({
       value={value || ALL_DEVICES}
       onValueChange={(v) => onChange(v === ALL_DEVICES ? "" : (v ?? ""))}
     >
+      {/* w-30: 「全部设备」4 字 + padding 约 102px；长设备名由 line-clamp-1
+        截断。与来源下拉同宽，行内对齐。 */}
       <SelectTrigger
-        className="h-8 w-40"
+        className="h-8 w-30"
         aria-label={t("sessions.filter.device")}
       >
         <SelectValue className="min-w-0">

@@ -113,7 +113,11 @@ export function LibraryView() {
 
   return (
     <div className="flex min-h-0 flex-1 flex-col gap-4">
-      <div className="flex flex-wrap items-center gap-2">
+      {/* Toolbar in a fixed element order: navigation (up / device picker /
+        breadcrumb) on the left, search + add pinned right as one group —
+        on a narrow container the group drops to its own right-aligned line
+        instead of scattering between the breadcrumb crumbs. */}
+      <div className="@container flex flex-wrap items-center gap-2">
         {!atRoot ? (
           <Tooltip>
             <TooltipTrigger
@@ -137,8 +141,10 @@ export function LibraryView() {
             value={deviceScope}
             onValueChange={(v) => setDeviceScope(v ?? ALL)}
           >
+            {/* w-30: 「全部设备」4 字 + padding 约 102px；长设备名由
+              SelectValue 的 line-clamp-1 截断。与其它模块的设备下拉同宽。 */}
             <SelectTrigger
-              className="border-border bg-card hover:bg-muted/60 h-8 w-40 rounded-md"
+              className="border-border bg-card hover:bg-muted/60 h-8 w-30 rounded-md"
               aria-label={t("library.scope.all")}
             >
               <SelectValue className="min-w-0">
@@ -162,9 +168,9 @@ export function LibraryView() {
         ) : null}
 
         {!atRoot ? (
-          /* Breadcrumb shares the back-button row — flex-1 pushes the Add
-             button to the right; each crumb truncates so a deep path can't
-             overflow the row. */
+          /* Breadcrumb shares the back-button row — flex-1 pushes the
+             right-hand group to the row end; each crumb truncates so a deep
+             path can't overflow the row. */
           <div className="text-muted-foreground flex min-w-0 flex-1 items-center gap-1 text-xs">
             {breadcrumb.map((c, i) => (
               <span key={c.key} className="flex min-w-0 items-center gap-1">
@@ -179,28 +185,28 @@ export function LibraryView() {
               </span>
             ))}
           </div>
-        ) : (
-          <div className="ml-auto" />
-        )}
+        ) : null}
 
-        {/* Search filters the current directory client-side — the scan returns
-            a whole directory, so no backend round-trip. Same shape as the
-            sessions toolbar search. */}
-        <div className="relative w-56">
-          <Search className="text-muted-foreground absolute top-1/2 left-2 size-3.5 -translate-y-1/2" />
-          <Input
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
-            placeholder={t("library.searchPlaceholder")}
-            aria-label={t("library.searchAria")}
-            className="h-8 pl-7"
-          />
+        <div className="ml-auto flex shrink-0 items-center gap-2">
+          {/* Search filters the current directory client-side — the scan
+              returns a whole directory, so no backend round-trip. Same shape
+              as the sessions toolbar search. */}
+          <div className="relative w-56">
+            <Search className="text-muted-foreground absolute top-1/2 left-2 size-3.5 -translate-y-1/2" />
+            <Input
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              placeholder={t("library.searchPlaceholder")}
+              aria-label={t("library.searchAria")}
+              className="h-8 pl-7"
+            />
+          </div>
+
+          <Button size="sm" onClick={onAddFiles}>
+            <FilePlus />
+            {t("library.add")}
+          </Button>
         </div>
-
-        <Button size="sm" onClick={onAddFiles}>
-          <FilePlus />
-          {t("library.add")}
-        </Button>
       </div>
 
       <Card
@@ -273,7 +279,14 @@ export function LibraryView() {
                                editor must not widen the column (a fixed-width
                                input would shift every row sideways while
                                renaming). Confirm/cancel float inside the input
-                               so they take no layout width. */
+                               so they take no layout width.
+                               Blur = commit: clicking away saves instead of
+                               leaving a stray editor open. The two inner
+                               buttons preventDefault on mousedown so the blur
+                               never fires for them — the confirm button would
+                               otherwise double-submit (blur commit + click
+                               commit) and the cancel button would commit
+                               before canceling. */
                             <div className="relative w-full">
                               <Input
                                 value={renameVal}
@@ -283,6 +296,7 @@ export function LibraryView() {
                                   if (ev.key === "Enter") commitRename(e)
                                   if (ev.key === "Escape") cancelRename()
                                 }}
+                                onBlur={() => commitRename(e)}
                                 autoFocus
                               />
                               <div className="absolute top-1/2 right-1 flex -translate-y-1/2 gap-0.5">
@@ -290,6 +304,7 @@ export function LibraryView() {
                                   variant="ghost"
                                   size="icon-sm"
                                   disabled={busy}
+                                  onMouseDown={(ev) => ev.preventDefault()}
                                   onClick={() => commitRename(e)}
                                 >
                                   {busy ? (
@@ -301,6 +316,7 @@ export function LibraryView() {
                                 <Button
                                   variant="ghost"
                                   size="icon-sm"
+                                  onMouseDown={(ev) => ev.preventDefault()}
                                   onClick={cancelRename}
                                 >
                                   <X />

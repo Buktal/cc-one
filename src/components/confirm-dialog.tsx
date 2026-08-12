@@ -1,9 +1,10 @@
 // Shared destructive-action confirmation dialog. Four delete surfaces (pricing
 // rows, library entries, providers, session groups) show the same pattern: a
 // title, an optional description, Cancel, and a destructive confirm button.
-// Wraps the base-ui AlertDialog primitive — like a Dialog, but it does not
-// dismiss on ESC / backdrop click, so the user must explicitly pick Cancel or
-// the destructive action.
+// Wraps the base-ui AlertDialog primitive — clicking the backdrop is treated
+// as cancel (onBackdropClick → onOpenChange(false)); ESC already closes by
+// default, and the buttons always remain explicit. Deleting still requires a
+// deliberate click on the destructive button — backdrop and ESC only cancel.
 //
 // Two wiring styles, choose by whether the caller already has a per-row busy
 // state:
@@ -52,7 +53,7 @@ export function ConfirmDialog({
   const { t } = useTranslation()
   return (
     <AlertDialog open={open} onOpenChange={onOpenChange}>
-      <AlertDialogContent>
+      <AlertDialogContent onBackdropClick={() => onOpenChange(false)}>
         <AlertDialogHeader>
           <AlertDialogTitle>{title}</AlertDialogTitle>
           {description ? (

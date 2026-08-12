@@ -181,9 +181,10 @@ function SourceChip({
     >
       <SelectTrigger
         className={cn(
-          "border-border bg-card hover:bg-muted/60 h-8 w-36 rounded-md",
-          // 来源值固定短 (Claude Code / Gemini CLI) → 横排 (bar) w-40。
-          bar && "w-40",
+          "border-border bg-card hover:bg-muted/60 h-8 w-30 rounded-md",
+          // 「全部应用」4 字 + padding 约 102px → w-30 (120px) 足够，与
+          // sessions 的来源/设备下拉同宽；长名称由 line-clamp-1 截断。
+          bar && "w-30",
         )}
         aria-label={t("usage.control.source")}
       >
@@ -264,16 +265,24 @@ export function ControlCard() {
 }
 
 /** 横向条版 — 日志页顶部。Filters only — the collect action lives in the
- *  sidebar now. */
+ *  sidebar now. Two groups in a fixed order: the date range anchors the first
+ *  line; the model / source / device chips take their own line on narrow
+ *  containers (w-full) and return inline on wide ones (@60rem:w-auto). Fold
+ *  measures the bar's own width (@container), so the sidebar's collapsed
+ *  state can't shift it. */
 export function ControlBar() {
   const { data: sources = [] } = useDistinctSourcesQuery(ALL_TIME_FILTER)
   const hasSources = sources.length > 0
   return (
-    <div className="flex flex-wrap items-center gap-2">
-      <DateRangeChip align="start" />
-      {hasSources ? <SourceChip bar /> : null}
-      <ModelChip bar />
-      <DeviceScopeControl bar />
+    <div className="@container flex flex-wrap items-center gap-2">
+      <div className="flex shrink-0 items-center gap-2">
+        <DateRangeChip align="start" />
+      </div>
+      <div className="flex w-full min-w-0 flex-wrap items-center gap-2 @[60rem]:w-auto">
+        {hasSources ? <SourceChip bar /> : null}
+        <ModelChip bar />
+        <DeviceScopeControl bar />
+      </div>
     </div>
   )
 }

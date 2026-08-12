@@ -61,9 +61,11 @@ export function DeviceScopeControl({
     >
       <SelectTrigger
         className={cn(
-          "border-border bg-card hover:bg-muted/60 h-8 w-36 rounded-md",
-          // 横排 (bar) 容「全部设备」给 w-40; 纵卡 / 小窗 (compact) 不变。
-          bar && !compact && "w-40",
+          "border-border bg-card hover:bg-muted/60 h-8 w-30 rounded-md",
+          // 「全部设备」4 字 + padding 约 102px → w-30 (120px) 足够（与来源
+          // 下拉同宽）；长设备名由 line-clamp-1 截断。compact 小窗字号更小
+          // 更没问题。
+          bar && !compact && "w-30",
           compact && "text-[11px]",
         )}
         aria-label={t("usage.deviceScope.label")}

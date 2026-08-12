@@ -1,10 +1,11 @@
 // AlertDialog primitive (base-ui + render composition) — the destructive-
-// action confirmation. Unlike a plain Dialog, base-ui's AlertDialog does not
-// dismiss on ESC / backdrop click by default, so the user must explicitly
-// pick Cancel or the action button. Composes Portal + Backdrop + Popup into a
-// single <AlertDialogContent>, mirroring dialog.tsx; the action button is a
-// plain Button (it does not auto-close — callers close + run the mutation in
-// its onClick).
+// action confirmation. base-ui's AlertDialog always disables pointer
+// dismissal (backdrop click never closes it), while ESC does close by
+// default; <AlertDialogContent onBackdropClick> opts back in to backdrop
+// clicks when a caller wants "click outside = cancel". Composes Portal +
+// Backdrop + Popup into a single <AlertDialogContent>, mirroring dialog.tsx;
+// the action button is a plain Button (it does not auto-close — callers
+// close + run the mutation in its onClick).
 
 import { AlertDialog as AlertDialogPrimitive } from "@base-ui/react/alert-dialog"
 import type * as React from "react"
@@ -36,11 +37,16 @@ function AlertDialogOverlay({
 function AlertDialogContent({
   className,
   children,
+  onBackdropClick,
   ...props
-}: AlertDialogPrimitive.Popup.Props) {
+}: AlertDialogPrimitive.Popup.Props & {
+  /** Backdrop-click callback — base-ui's AlertDialog never dismisses on an
+   *  outside press, so callers opt in explicitly ("click outside = cancel"). */
+  onBackdropClick?: () => void
+}) {
   return (
     <AlertDialogPortal>
-      <AlertDialogOverlay />
+      <AlertDialogOverlay onClick={onBackdropClick} />
       <AlertDialogPrimitive.Popup
         data-slot="alert-dialog-content"
         className={cn(
