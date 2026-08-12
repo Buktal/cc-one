@@ -396,6 +396,47 @@ export function firstLine(text: string): string {
   return text.split("\n")[0]
 }
 
+// ------------------------------------------------------------ search -----
+
+/** A transcript-search hit: the matching message plus a short context window
+ *  around its first hit, for the result-list row. */
+export interface TranscriptMatch {
+  message: SessionMessage
+  snippet: string
+}
+
+/** Search every message body for `query` (case-insensitive substring). The
+ *  transcript is fully loaded in the detail sheet, so this is a local scan —
+ *  no backend round-trip. Hits come back in transcript order, each with a
+ *  snippet that keeps the first hit in view. Empty / whitespace query → no
+ *  hits. */
+export function transcriptMatches(
+  messages: readonly SessionMessage[],
+  query: string,
+): TranscriptMatch[] {
+  const q = query.trim().toLowerCase()
+  if (!q) return []
+  const out: TranscriptMatch[] = []
+  for (const m of messages) {
+    const idx = m.content.toLowerCase().indexOf(q)
+    if (idx === -1) continue
+    out.push({ message: m, snippet: snippetAround(m.content, idx, q.length) })
+  }
+  return out
+}
+
+/** A compact window around a hit: RADIUS chars either side, ellipsized at the
+ *  edges. The hit itself stays intact inside the window so the renderer can
+ *  highlight it. */
+function snippetAround(text: string, start: number, len: number): string {
+  const RADIUS = 28
+  const from = Math.max(0, start - RADIUS)
+  const to = Math.min(text.length, start + len + RADIUS)
+  return `${from > 0 ? "…" : ""}${text.slice(from, to)}${
+    to < text.length ? "…" : ""
+  }`
+}
+
 /**
  * The collapsed-row sets for the bulk collapse / expand toggle. Row open-state
  * is a Set<uuid> whose membership means the OPPOSITE of the row's default:

@@ -25,6 +25,7 @@ import {
   reorderGroupIds,
   sessionSpan,
   sessionTabFilter,
+  transcriptMatches,
   tryFormatJson,
   UNGROUPED,
   ungroupedCount,
@@ -609,5 +610,73 @@ describe("tryFormatJson", () => {
   it("rejects scalar json (a bare string or number formats to nothing)", () => {
     expect(tryFormatJson('"just a string"')).toBeNull()
     expect(tryFormatJson("42")).toBeNull()
+  })
+})
+
+describe("transcriptMatches", () => {
+  let seq = 0
+  const msg = (
+    content: string,
+    ts = "2026-08-12T10:00:00Z",
+  ): SessionMessage => {
+    seq += 1
+    return {
+      uuid: `u${seq}`,
+      role: "assistant",
+      content,
+      ts,
+      session_id: "s",
+    } as SessionMessage
+  }
+
+  it("empty / whitespace query → no hits", () => {
+    expect(transcriptMatches([msg("hello world")], "")).toEqual([])
+    expect(transcriptMatches([msg("hello world")], "   ")).toEqual([])
+  })
+
+  it("no match → no hits", () => {
+    expect(transcriptMatches([msg("hello world")], "nope")).toEqual([])
+  })
+
+  it("matches are case-insensitive and keep transcript order", () => {
+    const ms = [
+      msg("Fix the BUG here"),
+      msg("another one"),
+      msg("no bug at all"),
+    ]
+    expect(transcriptMatches(ms, "bug").map((h) => h.message)).toEqual([
+      ms[0],
+      ms[2],
+    ])
+  })
+
+  it("snippet keeps the hit intact for the renderer to highlight", () => {
+    const [hit] = transcriptMatches(
+      [msg("prefix 1234567890 bug 1234567890 suffix")],
+      "bug",
+    )
+    expect(hit.snippet).toContain("bug")
+  })
+
+  it("snippet ellipsizes both edges when the hit sits mid-text", () => {
+    const text = `${"x".repeat(100)} needle ${"y".repeat(100)}`
+    const [hit] = transcriptMatches([msg(text)], "needle")
+    expect(hit.snippet.startsWith("…")).toBe(true)
+    expect(hit.snippet.endsWith("…")).toBe(true)
+    // RADIUS (28) both sides + the 6-char hit + 2 ellipses.
+    expect(hit.snippet).toHaveLength(28 + 6 + 28 + 2)
+  })
+
+  it("snippet at the start of the text has no leading ellipsis", () => {
+    const text = `needle ${"y".repeat(100)}`
+    const [hit] = transcriptMatches([msg(text)], "needle")
+    expect(hit.snippet.startsWith("needle")).toBe(true)
+    expect(hit.snippet.endsWith("…")).toBe(true)
+  })
+
+  it("snippet at the end of the text has no trailing ellipsis", () => {
+    const text = `${"x".repeat(100)} needle`
+    const [hit] = transcriptMatches([msg(text)], "needle")
+    expect(hit.snippet.endsWith("needle")).toBe(true)
   })
 })

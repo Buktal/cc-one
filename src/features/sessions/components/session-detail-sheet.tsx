@@ -1,19 +1,23 @@
 // Session detail — two panels that mount and unmount as one unit: the big
 // detail sheet (header + transcript timeline) parked right-56, and the small
-// turn-nav panel at the far right listing each user message for quick jumps.
+// turn-nav panel at the far right — a numbered turn index with an in-session
+// search mode — for quick jumps.
 //
-// Header carries the title (inline-renameable), source / project / timing /
-// usage stats, the favorite star, and the move-to-group picker. The transcript
-// is a three-voice timeline: assistant bubbles sit left, user bubbles right
-// (mirrored, corner-cut toward the edge), tool / system rows span full width in
-// the middle as the "workbench". Messages collapse on click, expanded by
-// default; tool rows collapse to their name, collapsed by default.
+// The detail reads as a work dossier, not a chat log. Header: title
+// (inline-renameable) + actions on row 1, identity (device · project · id ·
+// start) on row 2, and the usage stats (requests · messages · tokens · cost ·
+// duration · active · models) on row 3 — the numbers an auditor scans for are
+// lifted above the labels. The transcript is a three-voice timeline: assistant
+// bubbles sit left, user bubbles right (mirrored, corner-cut toward the edge),
+// tool / system rows span full width in the middle as the "workbench".
+// Messages collapse on click, expanded by default; tool rows collapse to their
+// name, collapsed by default.
 //
 // Pure rendering — all state + queries live in useSessionsBrowser. The only
 // local state here is transient UI interaction that does not belong in the
 // hook: the per-message collapse map (lifted out of the rows because the
 // virtualized list unmounts off-screen rows and would lose per-row state) and
-// the turn-nav bookkeeping (useTurnNav). The transcript is virtualized
+// the turn-nav bookkeeping (useTurnNav). The timeline is virtualized
 // (react-virtuoso): only the rows near the viewport are in the DOM, so a
 // multi-thousand-message session stays fast no matter how long it grows.
 // Virtuoso measures each row's height dynamically, so collapsing a bubble
@@ -33,9 +37,11 @@ import {
   Info,
   Loader2,
   Pencil,
+  Search,
   Star,
   User as UserIcon,
   Wrench,
+  X,
 } from "lucide-react"
 import {
   type ReactNode,
@@ -85,7 +91,9 @@ import {
   isAllCollapsed,
   modelsUsed,
   sessionSpan,
+  transcriptMatches,
 } from "../derive"
+import { highlight } from "../highlight"
 import { sessionSourceLabel } from "../source-labels"
 import { MarkdownContent, ToolContent } from "./markdown-content"
 
@@ -224,6 +232,7 @@ export function SessionDetailSheet(props: SessionDetailSheetProps) {
           <SessionHeader
             session={s}
             favorited={favorited}
+            onClose={onClose}
             editTitle={editTitle}
             titleDraft={titleDraft}
             onTitleDraft={onTitleDraft}
@@ -254,6 +263,7 @@ export function SessionDetailSheet(props: SessionDetailSheetProps) {
         </SheetContent>
       </Sheet>
       <TurnNavPanel
+        messages={transcript}
         turns={turnNav.turns}
         activeUuid={turnNav.activeUuid}
         jumpTo={turnNav.jumpTo}
@@ -269,19 +279,22 @@ export function SessionDetailSheet(props: SessionDetailSheetProps) {
 }
 
 /**
- * The detail header — a two-row "dossier" layout. Row 1 is identity + actions:
- * the renameable title on the left, favorite / group actions pinned right.
- * Row 2 is a single inline flow of facts (id · device · project · timing ·
- * usage · models), each label muted and the value following it on the same
- * line. Flow items wrap instead of stretching into equal-width columns, so a
- * short value never leaves dead space beside it — the definition grid's
- * table feel is gone and the header is one row tall. The session id leads in
- * a monospace slot with a copy button — it's the resume handle, same for
- * every source app.
+ * The detail header — a three-row "dossier" layout. Row 1 is title + actions:
+ * the renameable title on the left, favorite / group / close pinned right.
+ * Row 2 is identity — device · project · id · start, where the session ran
+ * and when. Row 3 is the usage stats — requests · messages · tokens · cost ·
+ * duration · active · models — the numbers an auditor scans for, half-bolded
+ * with tokens / cost lifted in the brand color (same emphasis as the session
+ * table). Rows 2-3 are inline flows: labels muted, value following on the
+ * same line, wrapping instead of stretching into equal-width columns, so a
+ * short value never leaves dead space beside it. The session id leads in a
+ * monospace slot with a copy button — it's the resume handle, same for every
+ * source app.
  */
 function SessionHeader({
   session: s,
   favorited,
+  onClose,
   editTitle,
   titleDraft,
   onTitleDraft,
@@ -298,6 +311,7 @@ function SessionHeader({
 }: {
   session: SessionRow
   favorited: boolean
+  onClose: () => void
   editTitle: boolean
   titleDraft: string
   onTitleDraft: (v: string) => void
@@ -336,8 +350,8 @@ function SessionHeader({
   const models = modelsUsed(transcript)
 
   return (
-    <SheetHeader className="border-border flex flex-col gap-3 border-b p-4 pr-10">
-      {/* Row 1 — identity + actions on one line */}
+    <SheetHeader className="border-border flex flex-col gap-3 border-b p-4">
+      {/* Row 1 — title + actions on one line */}
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0 flex-1">
           {/* Rename trigger: only the title text + pencil icon are clickable
@@ -420,20 +434,25 @@ function SessionHeader({
               ))}
             </SelectContent>
           </Select>
+          {/* Explicit close — the sheet's own close button is disabled
+            (showClose={false}), and an auditor opens and closes sessions in
+            bursts; Esc / backdrop alone is too hidden. */}
+          <Button
+            variant="ghost"
+            size="icon-sm"
+            aria-label={t("common.close")}
+            title={t("common.close")}
+            onClick={onClose}
+            className="text-muted-foreground"
+          >
+            <X className="size-4" />
+          </Button>
         </div>
       </div>
 
-      {/* Row 2 — 信息流：身份 → 时间 → 统计 → 模型 一行内联排布，窄窗口
-        自然换行。与旧版 4 列等宽网格相比没有列与列之间的死区 —— 内容按
-        阅读顺序流动，整块只有一行高。项间靠间距分隔（gap-x-5），不用
-        符号 —— 复合格内部才是斜杠（请求/消息、Token/成本）。 */}
+      {/* Row 2 — 身份：在哪跑的（设备 · 项目 · ID · 开始）。窄窗口自然
+        换行；项间靠间距分隔（gap-x-5），不用符号。 */}
       <div className="flex flex-wrap items-center gap-x-5 gap-y-1.5">
-        <FlowItem label={t("sessions.detail.sessionId")}>
-          <span className="inline-flex min-w-0 items-center gap-1">
-            <code className="font-mono">{s.id}</code>
-            <CopyIdButton id={s.id} />
-          </span>
-        </FlowItem>
         <FlowItem label={t("sessions.detail.device")}>
           {deviceLabel(s.device_id)}
         </FlowItem>
@@ -442,9 +461,42 @@ function SessionHeader({
             {s.project_dir || "—"}
           </span>
         </FlowItem>
+        <FlowItem label={t("sessions.detail.sessionId")}>
+          <span className="inline-flex min-w-0 items-center gap-1">
+            <code className="font-mono">{s.id}</code>
+            <CopyIdButton id={s.id} />
+          </span>
+        </FlowItem>
         <FlowItem label={t("sessions.detail.startedAt")}>
           <span className="tabular-nums" title={s.started_at || undefined}>
             {formatTime(effectiveStarted)}
+          </span>
+        </FlowItem>
+      </div>
+
+      {/* Row 3 — 统计：花了多少、多久。审计者扫视的第一目标是数字，所以
+        值统一 tabular-nums + 半粗；Token 与成本是「钱」的度量，额外提为
+        品牌色（与列表页同一强调规则）。模型徽章跟在统计尾部 —— 用什么
+        跑的与花了多少同属「成本」语境。 */}
+      <div className="flex flex-wrap items-center gap-x-5 gap-y-1.5">
+        <FlowItem label={t("sessions.detail.requests")}>
+          <span className="font-medium tabular-nums">
+            {formatInt(s.request_count)}
+          </span>
+        </FlowItem>
+        <FlowItem label={t("sessions.detail.messages")}>
+          <span className="font-medium tabular-nums">
+            {transcriptLoading ? "—" : formatInt(transcript.length)}
+          </span>
+        </FlowItem>
+        <FlowItem label={t("sessions.detail.tokens")}>
+          <span className="font-medium tabular-nums">
+            {formatTokens(s.total_tokens)}
+          </span>
+        </FlowItem>
+        <FlowItem label={t("sessions.detail.cost")}>
+          <span className="text-accent-brand-strong font-medium tabular-nums">
+            {formatCost(s.total_cost_usd)}
           </span>
         </FlowItem>
         <FlowItem label={t("sessions.detail.duration")}>
@@ -460,20 +512,6 @@ function SessionHeader({
           >
             {s.last_active_at ? dayjs(s.last_active_at).fromNow() : "—"}
           </span>
-        </FlowItem>
-        <FlowItem label={t("sessions.detail.requests")}>
-          <span className="tabular-nums">{formatInt(s.request_count)}</span>
-        </FlowItem>
-        <FlowItem label={t("sessions.detail.messages")}>
-          <span className="tabular-nums">
-            {transcriptLoading ? "—" : formatInt(transcript.length)}
-          </span>
-        </FlowItem>
-        <FlowItem label={t("sessions.detail.tokens")}>
-          <span className="tabular-nums">{formatTokens(s.total_tokens)}</span>
-        </FlowItem>
-        <FlowItem label={t("sessions.detail.cost")}>
-          <span className="tabular-nums">{formatCost(s.total_cost_usd)}</span>
         </FlowItem>
         <FlowItem label={t("sessions.detail.models")}>
           {models.length === 0 ? (
@@ -621,12 +659,14 @@ function TranscriptBody({
  * a user turn sits is whatever Virtuoso reports through rangeChanged (the
  * first message index in view), and jumping hands the index straight to
  * scrollToIndex — no DOM measurement, so it stays correct no matter how many
- * rows are virtualized away. Transient interaction, deliberately local to the
- * detail view (not in useSessionsBrowser).
+ * rows are virtualized away. jumpTo accepts an explicit message index so the
+ * in-session search can land on assistant / tool rows that are not turns.
+ * Transient interaction, deliberately local to the detail view (not in
+ * useSessionsBrowser).
  */
 function useTurnNav(messages: SessionMessage[]) {
   const virtuosoRef = useRef<VirtuosoHandle>(null)
-  // Each user turn plus its index in the full message array. rangeChanged and
+  // Each user turn plus its index in the message array. rangeChanged and
   // scrollToIndex speak in message indices, so the mapping must be kept.
   const turns = useMemo(
     () =>
@@ -642,12 +682,28 @@ function useTurnNav(messages: SessionMessage[]) {
   const flashTimer = useRef<number | undefined>(undefined)
   useEffect(() => () => window.clearTimeout(flashTimer.current), [])
 
+  // A jump parks the target TURN_OFFSET below the viewport top, so the
+  // jump's own rangeChanged reports the PREVIOUS turn's content at the
+  // viewport top — it would overwrite the active pin with the turn before
+  // the target (the "click twice to stick" bug: the second click scrolls
+  // nowhere, no rangeChanged, and the pin survives). So the next
+  // rangeChanged after a jump is skipped, and the timeout clears the skip
+  // when the jump produces no scroll at all (target already in view).
+  const skipNextRange = useRef(false)
+  const skipTimer = useRef<number | undefined>(undefined)
+  useEffect(() => () => window.clearTimeout(skipTimer.current), [])
+
   // Virtuoso reports the first visible message index; the active turn is the
-  // last user turn at or above it — i.e. the message the user is reading near
-  // the top. setState returns the same value when nothing changed, so Virtuoso
-  // reporting on every scroll frame does not re-render.
+  // last user turn at or above it — the turn whose content starts where the
+  // viewport starts. setState returns the same value when nothing changed, so
+  // Virtuoso reporting on every scroll frame does not re-render.
   const onRangeChanged = useCallback(
     ({ startIndex }: { startIndex: number }) => {
+      if (skipNextRange.current) {
+        skipNextRange.current = false
+        window.clearTimeout(skipTimer.current)
+        return
+      }
       let active: string | null = null
       for (const t of turns) {
         if (t.index <= startIndex) active = t.message.uuid
@@ -659,9 +715,34 @@ function useTurnNav(messages: SessionMessage[]) {
   )
 
   const jumpTo = useCallback(
-    (uuid: string) => {
-      const turn = turns.find((t) => t.message.uuid === uuid)
-      if (!turn) return
+    (uuid: string, index?: number) => {
+      // Turn rows carry their own index; search hits pass theirs explicitly
+      // (they may be assistant / tool rows, which are not in `turns`).
+      if (index === undefined) {
+        const turn = turns.find((t) => t.message.uuid === uuid)
+        if (!turn) return
+        index = turn.index
+      }
+      // Pin the active turn to the jump target's OWNER turn: jumpTo parks the
+      // target TURN_OFFSET below the viewport top, so the startIndex-based
+      // scroll tracking would point one turn earlier until the user scrolls.
+      // The owner is the last user turn at or above the target row — the turn
+      // itself for a turn click, the enclosing turn for a search hit.
+      let owner: string | null = null
+      for (const t of turns) {
+        if (t.index <= index) owner = t.message.uuid
+        else break
+      }
+      setActiveUuid(owner)
+      // Skip the jump's own rangeChanged — it reports the stale (previous
+      // turn) range and would un-pin the owner we just set (see the flag's
+      // comment above). The timeout clears the skip if the jump lands on an
+      // already-visible row and no rangeChanged fires at all.
+      skipNextRange.current = true
+      window.clearTimeout(skipTimer.current)
+      skipTimer.current = window.setTimeout(() => {
+        skipNextRange.current = false
+      }, 500)
       // Ring the target bubble for a beat so the eye lands with the jump.
       setFlashUuid(uuid)
       window.clearTimeout(flashTimer.current)
@@ -673,7 +754,7 @@ function useTurnNav(messages: SessionMessage[]) {
       // scroll visibly over-shoots to an estimate and glides back, so the
       // ring flash carries the feedback instead.
       virtuosoRef.current?.scrollToIndex({
-        index: turn.index,
+        index,
         align: "start",
         offset: -TURN_OFFSET,
         behavior: "auto",
@@ -693,14 +774,20 @@ function useTurnNav(messages: SessionMessage[]) {
 }
 
 /**
- * The small nav panel beside the detail sheet: one row per user turn, the row
- * label is the turn's first line (truncated to the panel's ~16-char width),
- * clicking jumps the transcript to it, the row for the turn currently being
- * read stays highlighted, and hovering reads the full message. Height follows
- * the message count (capped at the window, then it scrolls). Mounts with the
- * sheet and slides in from the same side, so the two move as one unit.
+ * The small nav panel beside the detail sheet — a numbered turn index, like a
+ * dossier's table of contents: one row per user turn, prefixed with an
+ * equi-width ordinal, the row label the turn's first line (truncated to the
+ * panel's ~16-char width). Clicking jumps the transcript to it; the row for
+ * the turn being read stays highlighted; hovering reads the full message. A
+ * search toggle swaps the panel into in-session search mode:
+ * a query scans every message body (not just turns), and each hit row shows
+ * its time + a highlighted snippet, clicking lands on the message itself.
+ * Height follows the content (capped at the window, then it scrolls). Mounts
+ * with the sheet and slides in from the same side, so the two move as one
+ * unit.
  */
 function TurnNavPanel({
+  messages,
   turns,
   activeUuid,
   jumpTo,
@@ -711,9 +798,14 @@ function TurnNavPanel({
   canPrev,
   canNext,
 }: {
+  /** Full transcript — in-session search scans it, and its uuid → index map
+   *  is the jump coordinate. */
+  messages: SessionMessage[]
   turns: SessionMessage[]
   activeUuid: string | null
-  jumpTo: (uuid: string) => void
+  /** Jump to a message. Turn rows may omit the index (it lives in `turns`);
+   *  search hits always pass theirs — assistant / tool rows are not turns. */
+  jumpTo: (uuid: string, index?: number) => void
   /** Every message row is collapsed — the toggle then offers "expand all". */
   allCollapsed: boolean
   onToggleAll: () => void
@@ -724,6 +816,34 @@ function TurnNavPanel({
   canNext: boolean
 }) {
   const { t } = useTranslation()
+  // Panel has two modes: the numbered turn index (default) and in-session
+  // search (toolbar toggle). Search hits jump to any row kind — assistant and
+  // tool rows included — which is why the panel takes the full transcript.
+  const [searching, setSearching] = useState(false)
+  const [query, setQuery] = useState("")
+  // The search hit most recently jumped to — kept highlighted until the query
+  // changes, so the eye has an anchor while reading the transcript.
+  const [lastJumped, setLastJumped] = useState<string | null>(null)
+  // uuid → message index: the coordinate scrollToIndex speaks. Built once per
+  // transcript; search hits look up through it.
+  const rowIndex = useMemo(() => {
+    const map = new Map<string, number>()
+    for (const [i, m] of messages.entries()) map.set(m.uuid, i)
+    return map
+  }, [messages])
+  const matches = useMemo(
+    () => transcriptMatches(messages, query),
+    [messages, query],
+  )
+  const jump = useCallback(
+    (uuid: string) => {
+      const index = rowIndex.get(uuid)
+      if (index === undefined) return
+      setLastJumped(uuid)
+      jumpTo(uuid, index)
+    },
+    [rowIndex, jumpTo],
+  )
   // Keep the highlighted row visible when the panel scrolls internally — on a
   // long session the turn being read could otherwise sit off-screen. `nearest`
   // only scrolls when the row is actually out of view, so it never fights the
@@ -742,9 +862,12 @@ function TurnNavPanel({
     >
       <div className="max-h-[calc(100vh-4rem)] overflow-y-auto rounded-lg border border-border bg-popover p-1 shadow-lg">
         {/* Toolbar: prev / next session on the left (audit walks between
-          sessions), bulk collapse / expand on the right. The nav icons show
-          where each step lands; the collapse icon shows the ACTION it
-          performs next (collapse when rows are open, expand when collapsed). */}
+          sessions), in-session search + bulk collapse / expand on the right.
+          The nav icons show where each step lands; the collapse icon shows
+          the ACTION it performs next (collapse when rows are open, expand
+          when collapsed). Tooltips open ABOVE the buttons — the panel's left
+          edge faces the sheet, so a left-side tooltip would be clipped by it
+          (the previous side="left" tip never surfaced). */}
         <div className="mb-0.5 flex items-center justify-between gap-1 pr-0.5">
           <div className="flex items-center gap-0.5">
             <Tooltip>
@@ -761,7 +884,12 @@ function TurnNavPanel({
               >
                 <ChevronUp className="size-3.5" />
               </TooltipTrigger>
-              <TooltipContent side="left">
+              {/* bg-popover! 覆盖默认的反色芯片 —— 跟随明暗模式的主题表面，
+                与轮次行的全文预览 tooltip 一致。 */}
+              <TooltipContent
+                side="top"
+                className="border border-border bg-popover! text-popover-foreground!"
+              >
                 {t("sessions.detail.prevSession")}
               </TooltipContent>
             </Tooltip>
@@ -779,82 +907,206 @@ function TurnNavPanel({
               >
                 <ChevronDown className="size-3.5" />
               </TooltipTrigger>
-              <TooltipContent side="left">
+              <TooltipContent
+                side="top"
+                className="border border-border bg-popover! text-popover-foreground!"
+              >
                 {t("sessions.detail.nextSession")}
               </TooltipContent>
             </Tooltip>
           </div>
-          <Tooltip>
-            <TooltipTrigger
-              render={
-                <Button
-                  variant="ghost"
-                  size="icon-xs"
-                  aria-label={t(
-                    allCollapsed
-                      ? "sessions.detail.expandAll"
-                      : "sessions.detail.collapseAll",
-                  )}
-                  onClick={onToggleAll}
-                />
-              }
-            >
-              {allCollapsed ? (
-                <ChevronsUpDown className="size-3.5" />
-              ) : (
-                <ChevronsDownUp className="size-3.5" />
-              )}
-            </TooltipTrigger>
-            <TooltipContent side="left">
-              {t(
-                allCollapsed
-                  ? "sessions.detail.expandAll"
-                  : "sessions.detail.collapseAll",
-              )}
-            </TooltipContent>
-          </Tooltip>
-        </div>
-        {turns.map((turn) => {
-          const active = turn.uuid === activeUuid
-          return (
-            <Tooltip key={turn.uuid}>
+          <div className="flex items-center gap-0.5">
+            <Tooltip>
               <TooltipTrigger
                 render={
-                  <button
-                    type="button"
-                    ref={active ? activeRef : undefined}
-                    onClick={() => jumpTo(turn.uuid)}
+                  <Button
+                    variant="ghost"
+                    size="icon-xs"
+                    aria-label={t("sessions.detail.searchInSession")}
+                    onClick={() => {
+                      setSearching((v) => !v)
+                      // Closing the mode drops the query — the panel returns
+                      // to the clean turn index.
+                      if (searching) {
+                        setQuery("")
+                        setLastJumped(null)
+                      }
+                    }}
                     className={cn(
-                      "flex w-full min-w-0 items-center rounded px-1.5 py-1 text-left text-xs focus-visible:ring-2 focus-visible:ring-ring/40 focus-visible:outline-none",
-                      active
-                        ? "bg-accent-tint text-foreground"
-                        : "text-muted-foreground hover:bg-muted hover:text-foreground",
+                      searching && "bg-accent-tint text-accent-brand-strong",
                     )}
                   />
                 }
               >
-                <span className="truncate">
-                  {firstLine(turn.content) || "—"}
-                </span>
+                <Search className="size-3.5" />
               </TooltipTrigger>
               <TooltipContent
-                side="left"
-                align="start"
-                sideOffset={8}
-                // Override the shared tooltip's inverted colors — a full-text
-                // read needs the theme's surface, not a high-contrast chip.
-                className="max-h-72 max-w-md overflow-y-auto border border-border bg-popover! text-[13px] text-popover-foreground!"
+                side="top"
+                className="border border-border bg-popover! text-popover-foreground!"
               >
-                <div className="text-muted-foreground mb-1 text-[10px] tabular-nums">
-                  {turn.ts ? dayjs(turn.ts).format("MM/DD HH:mm") : "—"}
-                </div>
-                <div className="break-words whitespace-pre-wrap">
-                  {turn.content}
-                </div>
+                {t("sessions.detail.searchInSession")}
               </TooltipContent>
             </Tooltip>
-          )
-        })}
+            <Tooltip>
+              <TooltipTrigger
+                render={
+                  <Button
+                    variant="ghost"
+                    size="icon-xs"
+                    aria-label={t(
+                      allCollapsed
+                        ? "sessions.detail.expandAll"
+                        : "sessions.detail.collapseAll",
+                    )}
+                    onClick={onToggleAll}
+                  />
+                }
+              >
+                {allCollapsed ? (
+                  <ChevronsUpDown className="size-3.5" />
+                ) : (
+                  <ChevronsDownUp className="size-3.5" />
+                )}
+              </TooltipTrigger>
+              <TooltipContent
+                side="top"
+                className="border border-border bg-popover! text-popover-foreground!"
+              >
+                {t(
+                  allCollapsed
+                    ? "sessions.detail.expandAll"
+                    : "sessions.detail.collapseAll",
+                )}
+              </TooltipContent>
+            </Tooltip>
+          </div>
+        </div>
+
+        {searching ? (
+          /* 搜索模式 — 全量消息里扫关键词（不只用户轮次），命中行点击
+            跳转到消息本身（复用 flash 反馈）。Esc 或工具栏按钮退出。 */
+          <div className="px-1 pb-1">
+            <div className="relative">
+              <Search className="text-muted-foreground absolute top-1/2 left-1.5 size-3 -translate-y-1/2" />
+              <Input
+                value={query}
+                onChange={(e) => {
+                  setQuery(e.target.value)
+                  setLastJumped(null)
+                }}
+                onKeyDown={(e) => {
+                  if (e.key === "Escape") {
+                    setSearching(false)
+                    setQuery("")
+                    setLastJumped(null)
+                  }
+                }}
+                placeholder={t("sessions.detail.searchInSession")}
+                aria-label={t("sessions.detail.searchInSession")}
+                className="h-7 pr-6 pl-6 text-xs"
+                autoFocus
+              />
+              {query ? (
+                // 清空 = 退出搜索模式：空搜索态没有意义（无命中可看），
+                // 一次点击直接回到干净的轮次索引。
+                <button
+                  type="button"
+                  onClick={() => {
+                    setSearching(false)
+                    setQuery("")
+                    setLastJumped(null)
+                  }}
+                  aria-label={t("sessions.detail.clearSearch")}
+                  title={t("sessions.detail.clearSearch")}
+                  className="text-muted-foreground hover:text-foreground absolute top-1/2 right-1 -translate-y-1/2 rounded p-0.5"
+                >
+                  <X className="size-3" />
+                </button>
+              ) : null}
+            </div>
+            {query.trim() ? (
+              <div className="text-muted-foreground mt-1.5 px-1 text-[10px] tabular-nums">
+                {matches.length > 0
+                  ? t("sessions.detail.searchMatches", { n: matches.length })
+                  : t("sessions.detail.searchNoMatch")}
+              </div>
+            ) : null}
+            {matches.map(({ message, snippet }) => (
+              <button
+                key={message.uuid}
+                type="button"
+                onClick={() => jump(message.uuid)}
+                className={cn(
+                  "mt-0.5 flex w-full min-w-0 flex-col items-start rounded px-1.5 py-1 text-left focus-visible:ring-2 focus-visible:ring-ring/40 focus-visible:outline-none",
+                  lastJumped === message.uuid
+                    ? "bg-accent-tint"
+                    : "hover:bg-muted",
+                )}
+              >
+                <span className="text-muted-foreground/70 font-mono text-[9px] tabular-nums">
+                  {message.ts ? dayjs(message.ts).format("MM/DD HH:mm") : "—"}
+                </span>
+                <span className="text-foreground w-full min-w-0 truncate text-[11px]">
+                  {highlight(snippet, query)}
+                </span>
+              </button>
+            ))}
+          </div>
+        ) : (
+          turns.map((turn, i) => {
+            const active = turn.uuid === activeUuid
+            return (
+              <Tooltip key={turn.uuid}>
+                <TooltipTrigger
+                  render={
+                    <button
+                      type="button"
+                      ref={active ? activeRef : undefined}
+                      onClick={() => jumpTo(turn.uuid)}
+                      className={cn(
+                        "flex w-full min-w-0 items-center gap-1.5 rounded px-1.5 py-1 text-left text-xs focus-visible:ring-2 focus-visible:ring-ring/40 focus-visible:outline-none",
+                        active
+                          ? "bg-accent-tint text-foreground"
+                          : "text-muted-foreground hover:bg-muted hover:text-foreground",
+                      )}
+                    />
+                  }
+                >
+                  {/* 轮次编号 — 目录感：等宽右对齐、宽度固定，active 轮次
+                    升为品牌色，指示「你在第几轮」。 */}
+                  <span
+                    className={cn(
+                      "w-5 shrink-0 text-right font-mono text-[10px] tabular-nums",
+                      active
+                        ? "text-accent-brand-strong"
+                        : "text-muted-foreground/60",
+                    )}
+                  >
+                    {i + 1}
+                  </span>
+                  <span className="min-w-0 truncate">
+                    {firstLine(turn.content) || "—"}
+                  </span>
+                </TooltipTrigger>
+                <TooltipContent
+                  side="left"
+                  align="start"
+                  sideOffset={8}
+                  // Override the shared tooltip's inverted colors — a full-text
+                  // read needs the theme's surface, not a high-contrast chip.
+                  className="max-h-72 max-w-md overflow-y-auto border border-border bg-popover! text-[13px] text-popover-foreground!"
+                >
+                  <div className="text-muted-foreground mb-1 text-[10px] tabular-nums">
+                    {turn.ts ? dayjs(turn.ts).format("MM/DD HH:mm") : "—"}
+                  </div>
+                  <div className="break-words whitespace-pre-wrap">
+                    {turn.content}
+                  </div>
+                </TooltipContent>
+              </Tooltip>
+            )
+          })
+        )}
       </div>
     </nav>
   )
