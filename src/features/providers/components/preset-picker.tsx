@@ -20,11 +20,10 @@ import {
 
 import type { App, ProviderCategory } from "@/types/generated/bindings"
 
-/** 分组展示顺序：官方 → 云厂商 → 国内官方 → 聚合。 */
+/** 分组展示顺序：官方 → 云厂商 → 聚合。 */
 const CATEGORY_ORDER: ProviderCategory[] = [
   "official",
   "cloud_provider",
-  "cn_official",
   "aggregator",
 ]
 
@@ -46,7 +45,13 @@ export function PresetPicker({
       : all
     return CATEGORY_ORDER.map((category) => ({
       category,
-      presets: matches.filter((p) => p.category === category),
+      // cn_official 与 official 显示同名（界面不按地域区分官方供应商），
+      // 预设并入「官方」组不单列；DB 里存的 category 值仍是 cn_official。
+      presets: matches.filter((p) =>
+        category === "official"
+          ? p.category === "official" || p.category === "cn_official"
+          : p.category === category,
+      ),
     })).filter((group) => group.presets.length > 0)
   }, [query, app])
 

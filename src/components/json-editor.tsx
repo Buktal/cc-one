@@ -13,14 +13,13 @@ import { Compartment, EditorState } from "@codemirror/state"
 import { oneDark } from "@codemirror/theme-one-dark"
 import { placeholder } from "@codemirror/view"
 import { basicSetup, EditorView } from "codemirror"
-import { Wand2 } from "lucide-react"
+import { AlertCircle, Wand2 } from "lucide-react"
 import { useTheme } from "next-themes"
-import { useEffect, useMemo, useRef } from "react"
+import { useEffect, useMemo, useRef, useState } from "react"
 import { useTranslation } from "react-i18next"
-import { toast } from "sonner"
 
 import { Button } from "@/components/ui/button"
-import { formatJson } from "@/lib/json"
+import { formatJson, parseJsonObject } from "@/lib/json"
 import { cn } from "@/lib/utils"
 
 export interface JsonEditorProps {
@@ -124,6 +123,11 @@ export function JsonEditor({
   // True only while a programmatic dispatch is pushing an external value in —
   // the update listener skips emitting while this is set, breaking the echo.
   const pushingRef = useRef(false)
+  // Validation message shown under the editor (in addition to the linter's
+  // red squiggle): the linter pinpoints the location, the strip says what
+  // failed. Mirrors the editor's own doc — user edits land in `value` via
+  // onChange → parent, so checking on [value] covers both paths.
+  const [validationError, setValidationError] = useState<string | null>(null)
 
   const themeCompartment = useMemo(() => new Compartment(), [])
   const langCompartment = useMemo(() => new Compartment(), [])
@@ -183,18 +187,36 @@ export function JsonEditor({
 
   // External value → push into the editor without echoing back. No-op when the
   // doc already holds the value (covers the editor's own edits round-tripping
-  // through the parent).
+  // through the parent). A compact JSON external value is expanded to multi-line
+  // on the way in — opening the form shows a readable structure instead of a
+  // single compressed line. formatJson is lenient (jsonc-parser): even broken
+  // JSON spreads into an outline, never throws. The expanded text is reported
+  // back through onChange so the parent state follows (single source of truth);
+  // the editor's own edits never reach this path (cur === value).
   useEffect(() => {
     const view = viewRef.current
     if (!view) return
     const cur = view.state.doc.toString()
     if (cur === value) return
+    let insert = value
+    if (!pushingRef.current) {
+      const formatted = formatJson(value)
+      if (formatted !== value) insert = formatted
+    }
     pushingRef.current = true
     try {
-      view.dispatch({ changes: { from: 0, to: cur.length, insert: value } })
+      view.dispatch({ changes: { from: 0, to: cur.length, insert } })
     } finally {
       pushingRef.current = false
     }
+    if (insert !== value) onChangeRef.current(insert)
+  }, [value])
+
+  // Refresh the validation strip whenever the controlled text changes (user
+  // edits round-trip through `value`; programmatic pushes set it directly).
+  useEffect(() => {
+    const result = parseJsonObject(value)
+    setValidationError(result.ok ? null : result.error)
   }, [value])
 
   useEffect(() => {
@@ -237,24 +259,19 @@ export function JsonEditor({
     if (!view) return
     const text = view.state.doc.toString()
     if (!text.trim()) return
-    try {
-      const formatted = formatJson(text)
-      if (formatted !== text) {
-        pushingRef.current = true
-        try {
-          view.dispatch({
-            changes: { from: 0, to: text.length, insert: formatted },
-          })
-        } finally {
-          pushingRef.current = false
-        }
+    // Lenient (jsonc-parser): never throws, broken JSON spreads too.
+    const formatted = formatJson(text)
+    if (formatted !== text) {
+      pushingRef.current = true
+      try {
+        view.dispatch({
+          changes: { from: 0, to: text.length, insert: formatted },
+        })
+      } finally {
+        pushingRef.current = false
       }
-      onChange(formatted)
-    } catch (err) {
-      toast.error(t("jsonEditor.formatError"), {
-        description: err instanceof Error ? err.message : String(err),
-      })
     }
+    onChange(formatted)
   }
 
   return (
@@ -263,6 +280,12 @@ export function JsonEditor({
         ref={containerRef}
         className="min-h-24 min-w-0 flex-1 overflow-hidden"
       />
+      {validationError ? (
+        <p className="bg-destructive/10 text-destructive flex items-start gap-1.5 rounded-md px-2.5 py-1.5 text-xs">
+          <AlertCircle className="mt-0.5 size-3.5 shrink-0" />
+          <span>{validationError}</span>
+        </p>
+      ) : null}
       <div className="flex items-center gap-2">
         <Button
           type="button"
@@ -270,6 +293,7 @@ export function JsonEditor({
           size="xs"
           disabled={disabled}
           onClick={handleFormat}
+          title={t("jsonEditor.formatHint")}
         >
           <Wand2 />
           {t("jsonEditor.format")}

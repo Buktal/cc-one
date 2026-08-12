@@ -28,6 +28,7 @@ import {
   SelectValue,
 } from "@/components/ui/select"
 import type { ProviderImportMode } from "@/types/generated/bindings"
+import { ImportModeCards } from "./import-mode-cards"
 
 /** Which transfer direction the dialog is showing. */
 export type TransferKind = "export" | "import"
@@ -38,11 +39,6 @@ type KeysChoice = "withoutKeys" | "withKeys"
 const KEYS_OPTIONS: ReadonlyArray<[KeysChoice, string]> = [
   ["withoutKeys", "providers.transfer.keys.withoutKeys"],
   ["withKeys", "providers.transfer.keys.withKeys"],
-]
-
-const MODE_OPTIONS: ReadonlyArray<[ProviderImportMode, string]> = [
-  ["merge", "providers.transfer.mode.merge"],
-  ["overwrite", "providers.transfer.mode.overwrite"],
 ]
 
 export function ProviderTransferDialog({
@@ -113,30 +109,9 @@ export function ProviderTransferDialog({
         ) : (
           <div className="flex flex-col gap-2">
             <Label>{t("providers.transfer.mode.label")}</Label>
-            <Select
-              value={mode}
-              onValueChange={(v) => setMode(v as ProviderImportMode)}
-            >
-              <SelectTrigger className="w-64">
-                <SelectValue>
-                  {(v: string) =>
-                    t(MODE_OPTIONS.find((o) => o[0] === v)?.[1] ?? v)
-                  }
-                </SelectValue>
-              </SelectTrigger>
-              <SelectContent>
-                {MODE_OPTIONS.map(([value, key]) => (
-                  <SelectItem key={value} value={value}>
-                    {t(key)}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-            <p className="text-muted-foreground text-xs">
-              {mode === "merge"
-                ? t("providers.transfer.mode.mergeHint")
-                : t("providers.transfer.mode.overwriteHint")}
-            </p>
+            {/* 与 CC-Switch 导入弹窗共享同一决策卡：选项平铺、语义进卡片，
+                不再下拉藏选项 + 行下动态小字。 */}
+            <ImportModeCards value={mode} onValueChange={setMode} />
           </div>
         )}
         <DialogFooter>

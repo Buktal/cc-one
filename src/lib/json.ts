@@ -2,6 +2,8 @@
 // settingsConfig sync. Kept in lib/ (not a feature) so the editor stays
 // feature-agnostic — any future settings-snapshot editor can reuse them.
 
+import { applyEdits, format } from "jsonc-parser"
+
 /** Result of parsing JSON text into a plain object. Empty text counts as `{}`
  *  (a blank snapshot); a syntax error and a non-object top level are reported
  *  separately so callers can decide which failure to surface. */
@@ -33,8 +35,13 @@ export function parseJsonObject(text: string): JsonObjectResult {
   }
 }
 
-/** Trim → parse → 2-space stringify. Throws on invalid JSON — callers surface
- *  the error (editor format button, tests). */
+/** 容错格式化：与 VS Code 的 JSON 编辑器同款（jsonc-parser tokenizer 重排，
+ *  不依赖完整 parse）——2 空格缩进展开成多行；语法错误 / 注释 / 尾逗号等
+ *  无效内容也能展开成可读结构（字符串字面量里的逗号、括号不受影响）。
+ *  不抛错；已展开的文本幂等（重复调用不变）。合法 JSON 的输出与
+ *  JSON.stringify(parsed, null, 2) 一致。 */
 export function formatJson(text: string): string {
-  return JSON.stringify(JSON.parse(text.trim()), null, 2)
+  const trimmed = text.trim()
+  const edits = format(trimmed, undefined, { tabSize: 2, insertSpaces: true })
+  return applyEdits(trimmed, edits)
 }

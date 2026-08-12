@@ -39,12 +39,26 @@ describe("formatJson", () => {
     )
   })
 
-  it("throws on invalid JSON", () => {
-    expect(() => formatJson("{ nope")).toThrow()
-  })
-
-  it("leaves already-formatted JSON unchanged", () => {
+  it("leaves already-formatted JSON unchanged (idempotent)", () => {
     const text = '{\n  "env": {}\n}'
     expect(formatJson(text)).toBe(text)
+  })
+
+  it("spreads broken JSON into a readable outline without throwing", () => {
+    expect(formatJson('{"a":1,"b":')).toBe('{\n  "a": 1,\n  "b":')
+  })
+
+  it("keeps string literals intact (commas / braces inside strings)", () => {
+    expect(formatJson('{"msg":"a,b{c}","n":1')).toBe(
+      '{\n  "msg": "a,b{c}",\n  "n": 1',
+    )
+  })
+
+  it("handles JSONC comments and trailing commas", () => {
+    expect(formatJson('// note\n{"a":1,}')).toBe('// note\n{\n  "a": 1,\n}')
+  })
+
+  it("returns empty string for empty input", () => {
+    expect(formatJson("")).toBe("")
   })
 })

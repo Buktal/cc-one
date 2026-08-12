@@ -3,10 +3,11 @@
 // 步骤、要展示跳过明细报告）。自包含：内部调 importFromCcSwitch mutation、
 // 展示报告（导入数 / 合并跳过 / 代理跳过名称列表）与「未找到 CC-Switch」错误。
 
-import { Loader2, Upload } from "lucide-react"
+import { AlertCircle, CheckCircle2, Loader2, Upload } from "lucide-react"
 import { useState } from "react"
 import { useTranslation } from "react-i18next"
 import { useImportFromCcSwitchMutation } from "@/app/store/api"
+import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import {
   Dialog,
@@ -18,24 +19,13 @@ import {
 } from "@/components/ui/dialog"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select"
 import { toStructuredError } from "@/lib/error"
 import type {
   CcSwitchImportReport,
   ProviderImportMode,
   SkipReason,
 } from "@/types/generated/bindings"
-
-const MODE_OPTIONS: ReadonlyArray<[ProviderImportMode, string]> = [
-  ["merge", "providers.transfer.mode.merge"],
-  ["overwrite", "providers.transfer.mode.overwrite"],
-]
+import { ImportModeCards } from "./import-mode-cards"
 
 /** 跳过原因 → i18n key。枚举变体跨边界转成 snake_case（needs_proxy /
  *  needs_o_auth / unsupported_app——注意 OAuth 被拆成 o_auth，与后端 serde 一致）。 */
@@ -95,68 +85,58 @@ export function CcSwitchImportDialog({
         </DialogHeader>
 
         {report ? (
-          // 结果视图：导入数 / 合并跳过 / 代理跳过明细。
-          <div className="flex flex-col gap-3 text-sm">
-            <p>
-              {t("providers.ccswitch.report.imported", {
-                count: report.imported,
-              })}
-            </p>
+          // 结果视图：成功 = emerald 色块（与 settings 的同步验证同一套
+          // 「成功」语言）；跳过明细 = 分隔线列表，行内名字 + 原因徽标，
+          // 标题不再复述原因（每项自标，原「跳过 1 个（需代理/OAuth 或不
+          // 支持的应用）：」的括弧概括既绕又和明细重复）。
+          <div className="flex flex-col gap-3">
+            <div className="border-emerald-500/40 bg-emerald-500/5 text-emerald-600 dark:text-emerald-400 flex items-start gap-2 rounded-md border p-2.5 text-sm">
+              <CheckCircle2 className="mt-0.5 size-4 shrink-0" />
+              <span>
+                {t("providers.ccswitch.report.imported", {
+                  count: report.imported,
+                })}
+              </span>
+            </div>
             {report.mergeSkipped > 0 ? (
-              <p className="text-muted-foreground">
+              <p className="text-muted-foreground text-xs">
                 {t("providers.ccswitch.report.mergeSkipped", {
                   count: report.mergeSkipped,
                 })}
               </p>
             ) : null}
             {report.proxySkipped.length > 0 ? (
-              <div className="flex flex-col gap-1">
-                <p className="text-muted-foreground">
+              <div className="flex flex-col">
+                <p className="text-muted-foreground mb-1.5 text-xs font-medium">
                   {t("providers.ccswitch.report.skipped", {
                     count: report.proxySkipped.length,
                   })}
                 </p>
-                <ul className="text-muted-foreground list-disc pl-5 text-xs">
-                  {report.proxySkipped.map((s) => (
-                    /* Each skipped provider appears once per report, so the
-                       name is a stable key (no index suffix needed). */
-                    <li key={s.name}>
-                      {s.name}（{t(SKIP_REASON_LABEL[s.reason])}）
-                    </li>
-                  ))}
-                </ul>
+                {report.proxySkipped.map((s) => (
+                  /* Each skipped provider appears once per report, so the
+                     name is a stable key (no index suffix needed). */
+                  <div
+                    key={s.name}
+                    className="flex items-center justify-between gap-3 border-b border-border py-1.5 text-sm last:border-b-0"
+                  >
+                    <span className="truncate">{s.name}</span>
+                    <Badge variant="secondary" className="shrink-0 font-normal">
+                      {t(SKIP_REASON_LABEL[s.reason])}
+                    </Badge>
+                  </div>
+                ))}
               </div>
             ) : null}
           </div>
         ) : (
-          // 表单视图：冲突模式 + 可选配置位置。
-          <div className="flex flex-col gap-3">
+          // 表单视图：冲突策略 + 可选配置位置。
+          // 冲突策略用可见决策卡（ImportModeCards，与 JSON 迁移弹窗共享）：
+          // 选项平铺可对比、语义在卡片内——下拉藏选项 + 行下动态小字在切换
+          // 时会文字跳变撑高布局，正是这个弹窗「乱」的来源。
+          <div className="flex flex-col gap-4">
             <div className="flex flex-col gap-2">
               <Label>{t("providers.transfer.mode.label")}</Label>
-              <Select
-                value={mode}
-                onValueChange={(v) => setMode(v as ProviderImportMode)}
-              >
-                <SelectTrigger className="w-64">
-                  <SelectValue>
-                    {(v: string) =>
-                      t(MODE_OPTIONS.find((o) => o[0] === v)?.[1] ?? v)
-                    }
-                  </SelectValue>
-                </SelectTrigger>
-                <SelectContent>
-                  {MODE_OPTIONS.map(([value, key]) => (
-                    <SelectItem key={value} value={value}>
-                      {t(key)}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-              <p className="text-muted-foreground text-xs">
-                {mode === "merge"
-                  ? t("providers.transfer.mode.mergeHint")
-                  : t("providers.transfer.mode.overwriteHint")}
-              </p>
+              <ImportModeCards value={mode} onValueChange={setMode} />
             </div>
             <div className="flex flex-col gap-2">
               <Label>{t("providers.ccswitch.path")}</Label>
@@ -167,11 +147,19 @@ export function CcSwitchImportDialog({
                 spellCheck={false}
                 className="font-mono text-xs"
               />
+              {/* placeholder 示范输入格式，hint 承诺留空自动检测——各司其职，
+                  不再像原来的「自动检测（留空）」占位符那样和 hint 重复。 */}
               <p className="text-muted-foreground text-xs">
                 {t("providers.ccswitch.pathHint")}
               </p>
             </div>
-            {error ? <p className="text-destructive text-xs">{error}</p> : null}
+            {error ? (
+              // 错误用色块 + 图标与上面的 hint 区分，一眼可辨是出错了。
+              <p className="bg-destructive/10 text-destructive flex items-start gap-1.5 rounded-md px-3 py-2 text-xs">
+                <AlertCircle className="mt-0.5 size-3.5 shrink-0" />
+                <span>{error}</span>
+              </p>
+            ) : null}
           </div>
         )}
 

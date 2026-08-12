@@ -274,8 +274,11 @@ export function ProvidersView() {
           ))}
         </fieldset>
         <div className="ml-auto flex gap-2">
-          {/* 数据迁移类操作收进菜单：导出 / 导入 / CC-Switch 导入，附加模式
-              (opencode) 多一项「从 live 导入」。主操作「新增」独立为 primary。 */}
+          {/* 数据迁移类操作收进菜单：常规的导出 / 导入 / CC-Switch 导入在前，
+              附加模式 (opencode) 特有的「从 opencode.json 导入」沉底——它是
+              少数派路径，不挡常规入口。主操作「新增」独立为 primary。
+              w-max: 菜单按内容宽度展开（共享组件默认菜单宽=触发器宽，而
+              「从 opencode.json 导入」等长文案会把菜单撑得换行）。 */}
           <DropdownMenu>
             <DropdownMenuTrigger
               render={<Button variant="outline" size="sm" />}
@@ -284,13 +287,7 @@ export function ProvidersView() {
               {t("providers.dataMenu.label")}
               <ChevronDown />
             </DropdownMenuTrigger>
-            <DropdownMenuContent align="end">
-              {isAdditive ? (
-                <DropdownMenuItem onClick={() => void onImportFromLive()}>
-                  <RefreshCw />
-                  {t("providers.live.import")}
-                </DropdownMenuItem>
-              ) : null}
+            <DropdownMenuContent align="end" className="w-max">
               <DropdownMenuItem onClick={() => setTransfer("export")}>
                 <Download />
                 {t("providers.transfer.export")}
@@ -303,6 +300,12 @@ export function ProvidersView() {
                 <ArrowRightLeft />
                 {t("providers.ccswitch.button")}
               </DropdownMenuItem>
+              {isAdditive ? (
+                <DropdownMenuItem onClick={() => void onImportFromLive()}>
+                  <RefreshCw />
+                  {t("providers.live.import")}
+                </DropdownMenuItem>
+              ) : null}
             </DropdownMenuContent>
           </DropdownMenu>
           <Button size="sm" onClick={openNew}>
@@ -359,7 +362,12 @@ export function ProvidersView() {
             </div>
           ) : (
             <div className="min-h-0 flex-1 -mr-2.5 overflow-auto pr-2.5">
-              <div className="text-muted-foreground grid grid-cols-[minmax(10rem,1.2fr)_auto_1.4fr_1fr_auto] gap-3 px-4 pb-2 text-xs">
+              {/* 每行是独立 grid 容器——列宽必须全部由模板决定，不能随行内容
+                  漂移：分类列固定 8rem（容纳最长的 "Cloud provider"）、操作列
+                  固定 10rem（与下方 w-40 占位一致）、端点/模型列 minmax(0,…)
+                  可收缩截断。任何 auto 列都会让 fr 分配逐行不同，三列起点错乱
+                  （英文下尤其明显）。与下方 ProviderRow 的模板保持一致。 */}
+              <div className="text-muted-foreground grid grid-cols-[minmax(10rem,1.2fr)_8rem_minmax(0,1.4fr)_minmax(0,1fr)_10rem] gap-3 px-4 pb-2 text-xs">
                 <span>{t("providers.col.name")}</span>
                 <span>{t("providers.col.category")}</span>
                 <span>{t("providers.col.endpoint")}</span>
@@ -502,7 +510,9 @@ function ProviderRow({
     <div
       ref={ref}
       className={cn(
-        "grid grid-cols-[minmax(10rem,1.2fr)_auto_1.4fr_1fr_auto] items-center gap-3 rounded-lg px-4 py-2 transition-colors",
+        // 与列头模板一致（分类 8rem / 操作 10rem 固定）：行是独立 grid 容器，
+        // 任何 auto 列都会让列宽逐行漂移——见列头注释。
+        "grid grid-cols-[minmax(10rem,1.2fr)_8rem_minmax(0,1.4fr)_minmax(0,1fr)_10rem] items-center gap-3 rounded-lg px-4 py-2 transition-colors",
         // 当前使用：品牌色背景 + 左侧色条，作为列表的视觉锚点（取代旧的独立
         // 「当前使用」卡片）。不置顶——保留用户拖拽自定义的顺序。
         isActive
@@ -520,6 +530,16 @@ function ProviderRow({
           />
         ) : null}
         <span className="truncate font-medium">{p.name}</span>
+        {additive && liveManaged ? (
+          /* 「已加入 live」状态徽标放名字旁而非操作区：操作列固定 10rem，
+             徽标若留在按钮组会把操作列撑宽、列宽逐行漂移（见列头注释）。 */
+          <Badge
+            variant="outline"
+            className="h-5 shrink-0 px-1.5 text-[11px] font-normal"
+          >
+            {t("providers.live.added")}
+          </Badge>
+        ) : null}
         {missingRequired.length > 0 ? (
           <Tooltip>
             <TooltipTrigger
@@ -547,33 +567,29 @@ function ProviderRow({
       <span className="text-muted-foreground truncate text-xs">
         {model || "—"}
       </span>
+      {/* 行内按钮 hover 用 hover:!bg-accent-brand/25（主题色，比 accent-tint
+          浓——accent-tint 只有品牌色 10-12% 透明，肉眼近于无）覆盖 Button
+          默认的 hover:bg-muted：整行 hover 也是 bg-muted，按钮的 hover 反馈
+          会被行吞掉（深浅主题都成立），! 确保覆盖。 */}
       <div className="flex justify-end gap-1">
         {additive ? (
-          // 附加模式（opencode）：按 liveManaged 显示「加入」或「已加入 + 移出」，
-          // 不走单激活的「切换 / 使用中」。
+          // 附加模式（opencode）：按 liveManaged 显示「移出」或「加入」，不走
+          // 单激活的「切换 / 使用中」。已加入状态徽标在名字列（见上）。
           liveManaged ? (
-            <>
-              <Badge
-                variant="outline"
-                className="h-7 shrink-0 px-2 font-normal"
-              >
-                {t("providers.live.added")}
-              </Badge>
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={onRemoveFromLive}
-                className="shrink-0"
-              >
-                {t("providers.live.remove")}
-              </Button>
-            </>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={onRemoveFromLive}
+              className="shrink-0 hover:!bg-accent-brand/25"
+            >
+              {t("providers.live.remove")}
+            </Button>
           ) : (
             <Button
               variant="outline"
               size="sm"
               onClick={onAddToLive}
-              className="shrink-0"
+              className="shrink-0 hover:!bg-accent-brand/25"
             >
               {t("providers.live.add")}
             </Button>
@@ -594,7 +610,7 @@ function ProviderRow({
             variant="outline"
             size="sm"
             onClick={onSwitch}
-            className="shrink-0"
+            className="shrink-0 hover:!bg-accent-brand/25"
           >
             {t("providers.switch")}
           </Button>
@@ -607,6 +623,7 @@ function ProviderRow({
                 size="icon-sm"
                 onClick={onEdit}
                 aria-label={t("common.edit")}
+                className="hover:!bg-accent-brand/25"
               />
             }
           >
@@ -622,6 +639,7 @@ function ProviderRow({
                 size="icon-sm"
                 onClick={onDelete}
                 aria-label={t("common.delete")}
+                className="hover:!bg-accent-brand/25"
               />
             }
           >

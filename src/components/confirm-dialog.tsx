@@ -19,6 +19,7 @@
 // module's wording.
 
 import { Loader2 } from "lucide-react"
+import { useEffect, useState } from "react"
 import { useTranslation } from "react-i18next"
 
 import {
@@ -51,13 +52,22 @@ export function ConfirmDialog({
   onConfirm: () => void
 }) {
   const { t } = useTranslation()
+  // Callers clear their target (e.g. `deleting`) the moment the dialog closes,
+  // so title/description would flash to their empty state during the fade-out
+  // animation. Cache the last open content and render it while closing.
+  const [lastOpen, setLastOpen] = useState({ title, description })
+  useEffect(() => {
+    if (open) setLastOpen({ title, description })
+  }, [open, title, description])
+  const shownTitle = open ? title : lastOpen.title
+  const shownDescription = open ? description : lastOpen.description
   return (
     <AlertDialog open={open} onOpenChange={onOpenChange}>
       <AlertDialogContent onBackdropClick={() => onOpenChange(false)}>
         <AlertDialogHeader>
-          <AlertDialogTitle>{title}</AlertDialogTitle>
-          {description ? (
-            <AlertDialogDescription>{description}</AlertDialogDescription>
+          <AlertDialogTitle>{shownTitle}</AlertDialogTitle>
+          {shownDescription ? (
+            <AlertDialogDescription>{shownDescription}</AlertDialogDescription>
           ) : null}
         </AlertDialogHeader>
         <AlertDialogFooter>
