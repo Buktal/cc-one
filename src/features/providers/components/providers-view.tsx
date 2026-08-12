@@ -413,7 +413,10 @@ export function ProvidersView() {
         onImport={importProviders}
         onOpenChange={setTransfer}
       />
-      <CcSwitchImportDialog open={ccswitchOpen} onOpenChange={setCcswitchOpen} />
+      <CcSwitchImportDialog
+        open={ccswitchOpen}
+        onOpenChange={setCcswitchOpen}
+      />
     </div>
   )
 }

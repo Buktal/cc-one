@@ -97,7 +97,11 @@ export function CcSwitchImportDialog({
         {report ? (
           // 结果视图：导入数 / 合并跳过 / 代理跳过明细。
           <div className="flex flex-col gap-3 text-sm">
-            <p>{t("providers.ccswitch.report.imported", { count: report.imported })}</p>
+            <p>
+              {t("providers.ccswitch.report.imported", {
+                count: report.imported,
+              })}
+            </p>
             {report.mergeSkipped > 0 ? (
               <p className="text-muted-foreground">
                 {t("providers.ccswitch.report.mergeSkipped", {
