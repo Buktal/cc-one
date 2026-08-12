@@ -241,10 +241,18 @@ export function LibraryView() {
             )
           ) : (
             <div className="min-h-0 flex-1 -mr-2.5 overflow-auto pr-2.5">
-              <Table>
+              {/* table-fixed: column widths come from the header row, so the
+                  name column never changes width when a row switches to the
+                  inline rename editor (under auto layout the input's intrinsic
+                  width stretched the column and shoved the other columns
+                  sideways). The name column takes the remaining space and
+                  truncates long names; every other column is fixed-width. */}
+              <Table className="table-fixed">
                 <TableHeader>
                   <TableRow>
-                    <TableHead>{t("library.col.name")}</TableHead>
+                    <TableHead className="min-w-32">
+                      {t("library.col.name")}
+                    </TableHead>
                     <TableHead className="w-24">
                       {t("library.col.kind")}
                     </TableHead>
@@ -256,7 +264,7 @@ export function LibraryView() {
                         ? t("library.col.device")
                         : t("library.col.modified")}
                     </TableHead>
-                    <TableHead className="text-right">
+                    <TableHead className="w-32 text-right">
                       {t("library.col.actions")}
                     </TableHead>
                   </TableRow>
@@ -275,11 +283,12 @@ export function LibraryView() {
                       <TableRow key={e.rel_path}>
                         <TableCell>
                           {isRenaming ? (
-                            /* w-full tracks the name column — the inline
-                               editor must not widen the column (a fixed-width
-                               input would shift every row sideways while
-                               renaming). Confirm/cancel float inside the input
-                               so they take no layout width.
+                            /* w-full tracks the fixed table-fixed column, so
+                               the editor can't widen the name column (under
+                               auto layout the input's intrinsic width would
+                               stretch it and shift every row sideways).
+                               Confirm/cancel float inside the input so they
+                               take no layout width.
                                Blur = commit: clicking away saves instead of
                                leaving a stray editor open. The two inner
                                buttons preventDefault on mousedown so the blur
@@ -327,7 +336,12 @@ export function LibraryView() {
                             <button
                               type="button"
                               className={cn(
-                                "hover:text-accent-brand-strong flex items-center gap-2",
+                                /* min-w-0 max-w-full: under table-fixed the
+                                   cell is clipped to the column — the flex
+                                   button must shrink and let the span
+                                   truncate instead of spilling into the next
+                                   column. */
+                                "hover:text-accent-brand-strong flex min-w-0 max-w-full items-center gap-2",
                                 /* Directories read heavier so the structure
                                    scans at a glance (file-manager norm). */
                                 e.kind === "dir" && "font-medium",
@@ -337,7 +351,9 @@ export function LibraryView() {
                               }
                             >
                               <Icon className="size-4 shrink-0" />
-                              <span>{e.name}</span>
+                              <span className="min-w-0 truncate" title={e.name}>
+                                {e.name}
+                              </span>
                             </button>
                           )}
                         </TableCell>
@@ -347,7 +363,13 @@ export function LibraryView() {
                         <TableCell className="text-muted-foreground text-xs tabular-nums">
                           {formatSize(e.size)}
                         </TableCell>
-                        <TableCell className="text-muted-foreground text-xs">
+                        {/* truncate + title: the device column is fixed at
+                            w-40 under table-fixed — a long device name clips
+                            to the column, title keeps it readable. */}
+                        <TableCell
+                          className="text-muted-foreground text-xs truncate"
+                          title={showDevice ? e.device_name : undefined}
+                        >
                           {showDevice ? (
                             e.is_self ? (
                               t("devices.thisDevice")
