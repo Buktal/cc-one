@@ -255,9 +255,11 @@ export function ProvidersView() {
               className={cn(
                 "rounded-md",
                 a === app &&
-                  // 激活锚点：tint 底 + 品牌字色 + 底部 2px accent 色条。inset
-                  // shadow 不占盒模型——切换激活零布局跳动（border 方案会闪）。
-                  "bg-accent-tint text-accent-brand-strong font-medium shadow-[inset_0_-2px_0_0_var(--accent-brand)]",
+                  // 激活态与侧栏 NavItem 选中同一套（tint 底 + 品牌字色）——单一
+                  // 事实来源。去掉了原先叠加的底部 accent 色条：tint + 字色已够
+                  // 区分，三重装饰显得绚丽。明暗由 --accent-tint /
+                  // --accent-brand-strong 在 :root/.dark 各自定义，都成立。
+                  "bg-accent-tint text-accent-brand-strong font-medium",
               )}
             >
               {t(`providers.app.${a}`)}
