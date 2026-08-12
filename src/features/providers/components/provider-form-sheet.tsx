@@ -541,7 +541,8 @@ export function ProviderFormSheet({
             >
               {t(`providers.app.${effectiveApp}`)}
             </Badge>
-            {editing && effectiveApp === "opencode" &&
+            {editing &&
+            effectiveApp === "opencode" &&
             providerLiveManaged(editing) ? (
               <Badge
                 variant="outline"
@@ -777,121 +778,123 @@ export function ProviderFormSheet({
             ) : null}
             {effectiveApp === "claude" ? (
               <>
-              {/* 分区标题与操作按钮同处一行（SectionHeader 的 action 槽），
+                {/* 分区标题与操作按钮同处一行（SectionHeader 的 action 槽），
                   box 只承担字段分组——与「基本信息 / 高级配置」同一分区语言。 */}
-              <SectionHeader
-                action={
-                  <div className="flex items-center gap-2">
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      onClick={onFetchModels}
-                      disabled={fetching}
-                    >
-                      <RefreshCw
-                        className={cn("size-3.5", fetching && "animate-spin")}
-                      />
-                      {fetching
-                        ? t("providers.form.fetchModels.fetching")
-                        : t("providers.form.fetchModels.fetch")}
-                    </Button>
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      onClick={onApplyAll}
-                      disabled={!canApplyAll}
-                    >
-                      <Wand2 className="size-3.5" />
-                      {t("providers.form.applyAll")}
-                    </Button>
-                  </div>
-                }
-              >
-                {t("providers.form.modelMapping")}
-              </SectionHeader>
-              <div className="rounded-md border p-3">
-                <p className="mb-2 text-xs text-muted-foreground">
-                  {t("providers.form.modelMappingHint")}
-                </p>
-                {fetchedModels.length > 0 ? (
-                  <div className="mb-2">
-                    <Select
-                      onValueChange={(model) => {
-                        if (typeof model === "string") onPickModel(model)
-                      }}
-                    >
-                      <SelectTrigger
-                        className="font-mono text-xs"
-                        aria-label={t("providers.form.fetchModels.placeholder")}
+                <SectionHeader
+                  action={
+                    <div className="flex items-center gap-2">
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={onFetchModels}
+                        disabled={fetching}
                       >
-                        <SelectValue
-                          placeholder={t(
+                        <RefreshCw
+                          className={cn("size-3.5", fetching && "animate-spin")}
+                        />
+                        {fetching
+                          ? t("providers.form.fetchModels.fetching")
+                          : t("providers.form.fetchModels.fetch")}
+                      </Button>
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={onApplyAll}
+                        disabled={!canApplyAll}
+                      >
+                        <Wand2 className="size-3.5" />
+                        {t("providers.form.applyAll")}
+                      </Button>
+                    </div>
+                  }
+                >
+                  {t("providers.form.modelMapping")}
+                </SectionHeader>
+                <div className="rounded-md border p-3">
+                  <p className="mb-2 text-xs text-muted-foreground">
+                    {t("providers.form.modelMappingHint")}
+                  </p>
+                  {fetchedModels.length > 0 ? (
+                    <div className="mb-2">
+                      <Select
+                        onValueChange={(model) => {
+                          if (typeof model === "string") onPickModel(model)
+                        }}
+                      >
+                        <SelectTrigger
+                          className="font-mono text-xs"
+                          aria-label={t(
                             "providers.form.fetchModels.placeholder",
                           )}
-                        />
-                      </SelectTrigger>
-                      <SelectContent>
-                        {fetchedModels.map((model) => (
-                          <SelectItem
-                            key={model}
-                            value={model}
-                            className="font-mono text-xs"
-                          >
-                            {model}
-                          </SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
-                  </div>
-                ) : null}
-                <div className="space-y-2">
-                  {roleRows.map(({ role, fields }) => (
-                    <div key={role.id} className="space-y-1">
-                      <div className="flex items-center justify-between">
-                        <Label className="text-muted-foreground text-xs">
-                          {t(`providers.form.role.${role.id}`)}
-                        </Label>
-                        {role.supportsOneM ? (
-                          <label
-                            htmlFor={`model-role-one-m-${role.id}`}
-                            className="flex cursor-pointer items-center gap-1.5 text-xs text-muted-foreground"
-                          >
-                            <Checkbox
-                              id={`model-role-one-m-${role.id}`}
-                              checked={fields.oneM}
-                              onCheckedChange={(checked) =>
-                                onRoleOneMChange(role.id, checked)
-                              }
-                            />
-                            {t("providers.form.oneM")}
-                          </label>
-                        ) : null}
-                      </div>
-                      <div className="grid grid-cols-2 gap-2">
-                        <Field label={t("providers.form.displayName")}>
-                          <Input
-                            value={fields.name}
-                            onChange={(e) =>
-                              onRoleNameChange(role.id, e.target.value)
-                            }
-                            placeholder={stripOneM(fields.model)}
-                            spellCheck={false}
+                        >
+                          <SelectValue
+                            placeholder={t(
+                              "providers.form.fetchModels.placeholder",
+                            )}
                           />
-                        </Field>
-                        <Field label={t("providers.form.requestModel")}>
-                          <Input
-                            value={fields.model}
-                            onChange={(e) =>
-                              onRoleModelChange(role.id, e.target.value)
-                            }
-                            spellCheck={false}
-                          />
-                        </Field>
-                      </div>
+                        </SelectTrigger>
+                        <SelectContent>
+                          {fetchedModels.map((model) => (
+                            <SelectItem
+                              key={model}
+                              value={model}
+                              className="font-mono text-xs"
+                            >
+                              {model}
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
                     </div>
-                  ))}
+                  ) : null}
+                  <div className="space-y-2">
+                    {roleRows.map(({ role, fields }) => (
+                      <div key={role.id} className="space-y-1">
+                        <div className="flex items-center justify-between">
+                          <Label className="text-muted-foreground text-xs">
+                            {t(`providers.form.role.${role.id}`)}
+                          </Label>
+                          {role.supportsOneM ? (
+                            <label
+                              htmlFor={`model-role-one-m-${role.id}`}
+                              className="flex cursor-pointer items-center gap-1.5 text-xs text-muted-foreground"
+                            >
+                              <Checkbox
+                                id={`model-role-one-m-${role.id}`}
+                                checked={fields.oneM}
+                                onCheckedChange={(checked) =>
+                                  onRoleOneMChange(role.id, checked)
+                                }
+                              />
+                              {t("providers.form.oneM")}
+                            </label>
+                          ) : null}
+                        </div>
+                        <div className="grid grid-cols-2 gap-2">
+                          <Field label={t("providers.form.displayName")}>
+                            <Input
+                              value={fields.name}
+                              onChange={(e) =>
+                                onRoleNameChange(role.id, e.target.value)
+                              }
+                              placeholder={stripOneM(fields.model)}
+                              spellCheck={false}
+                            />
+                          </Field>
+                          <Field label={t("providers.form.requestModel")}>
+                            <Input
+                              value={fields.model}
+                              onChange={(e) =>
+                                onRoleModelChange(role.id, e.target.value)
+                              }
+                              spellCheck={false}
+                            />
+                          </Field>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
                 </div>
-              </div>
               </>
             ) : null}
             <SectionHeader>

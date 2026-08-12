@@ -9,7 +9,13 @@
 // 密钥不进预览载荷：条目只有 hasSecret 布尔，密钥值永不跨边界（Rust 侧有防泄漏
 // 回归测试锁着）。
 
-import { AlertCircle, CheckCircle2, FileJson, Loader2, Upload } from "lucide-react"
+import {
+  AlertCircle,
+  CheckCircle2,
+  FileJson,
+  Loader2,
+  Upload,
+} from "lucide-react"
 import { useEffect, useState } from "react"
 import { useTranslation } from "react-i18next"
 import {
@@ -44,11 +50,9 @@ type Phase =
 /** mutation 错误 → 人类可读消息（AppError 的 data 优先，与 CC-Switch 导入一致）。 */
 function errorMessage(error: unknown): string {
   const structured = toStructuredError(error)
-  return (
-    structured?.kind === "app"
-      ? structured.data
-      : (structured?.message ?? String(error))
-  )
+  return structured?.kind === "app"
+    ? structured.data
+    : (structured?.message ?? String(error))
 }
 
 export function OpencodeImportDialog({
@@ -67,7 +71,8 @@ export function OpencodeImportDialog({
   const [phase, setPhase] = useState<Phase>({ kind: "loading" })
 
   // 打开 → 立即预览（mutation 无缓存，每次打开都是新读盘；`!open` 时组件已
-  // unmount，本 effect 只在挂载后跑一次）。
+  // unmount，本 effect 只在挂载后跑一次）。preview trigger 引用跨渲染稳定，
+  // 加进依赖数组无副作用（RTK Query 保证）。
   useEffect(() => {
     setPhase({ kind: "loading" })
     void (async () => {
@@ -82,8 +87,7 @@ export function OpencodeImportDialog({
       }
       setPhase({ kind: "ready", entries: result.data.entries })
     })()
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [app])
+  }, [app, preview])
 
   async function onConfirm() {
     if (phase.kind !== "ready") return
@@ -128,7 +132,9 @@ export function OpencodeImportDialog({
         ) : phase.kind === "missing" ? (
           <p className="bg-destructive/10 text-destructive flex items-start gap-1.5 rounded-md px-3 py-2 text-xs">
             <AlertCircle className="mt-0.5 size-3.5 shrink-0" />
-            <span>{t("providers.opencodeImport.missing", { path: phase.path })}</span>
+            <span>
+              {t("providers.opencodeImport.missing", { path: phase.path })}
+            </span>
           </p>
         ) : phase.kind === "error" ? (
           <p className="bg-destructive/10 text-destructive flex items-start gap-1.5 rounded-md px-3 py-2 text-xs">
@@ -145,10 +151,7 @@ export function OpencodeImportDialog({
             <p className="text-muted-foreground text-xs">
               {t("providers.opencodeImport.summary", { created, updated })}
             </p>
-            <ImportPreviewList
-              entries={phase.entries}
-              preview
-            />
+            <ImportPreviewList entries={phase.entries} preview />
           </div>
         ) : (
           <div className="flex flex-col gap-3">
@@ -204,9 +207,9 @@ function ImportPreviewList({
         >
           <span className="min-w-0">
             <span className="truncate font-medium">{e.name}</span>
-            {e.base_url ? (
+            {e.baseUrl ? (
               <span className="text-muted-foreground ml-2 truncate font-mono text-xs">
-                {e.base_url}
+                {e.baseUrl}
               </span>
             ) : null}
           </span>
