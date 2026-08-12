@@ -2,6 +2,7 @@ import dayjs from "dayjs"
 import { describe, expect, it } from "vitest"
 
 import {
+  hourlySnapshot,
   modelMetricValue,
   stopReasonTone,
   tokenSnapshot,
@@ -119,6 +120,53 @@ describe("tokenSnapshot", () => {
 
   it("daily average is 0 over an empty window", () => {
     expect(tokenSnapshot(stats(0), []).dailyAvg).toBe(0)
+  })
+})
+
+describe("hourlySnapshot", () => {
+  // now 固定为 8-12 14:30 → cutoff = 14 (0..14 共 15 个已过小时)。
+  const now = dayjs("2026-08-12T14:30")
+  const todayHour = (h: number, v: number) =>
+    trend(`2026-08-12T${String(h).padStart(2, "0")}`, v)
+  const yesterdayHour = (h: number, v: number) =>
+    trend(`2026-08-11T${String(h).padStart(2, "0")}`, v)
+
+  it("delta = today vs yesterday same hours, avg = sum / elapsed hours", () => {
+    const today = Array.from({ length: 15 }, (_, h) => todayHour(h, 100))
+    const yesterday = Array.from({ length: 15 }, (_, h) =>
+      yesterdayHour(h, 120),
+    )
+    const snap = hourlySnapshot(today, yesterday, now)
+    expect(snap.deltaPct).toBeCloseTo((1500 - 1800) / 1800)
+    expect(snap.hourlyAvg).toBe(100)
+  })
+
+  it("delta is null when yesterday has no data (first day of collection)", () => {
+    const today = Array.from({ length: 15 }, (_, h) => todayHour(h, 100))
+    expect(hourlySnapshot(today, [], now).deltaPct).toBeNull()
+  })
+
+  it("elapsed hours include hour 0 → avg over exactly one hour", () => {
+    const snap = hourlySnapshot(
+      [todayHour(0, 50)],
+      [yesterdayHour(0, 40)],
+      dayjs("2026-08-12T00:10"),
+    )
+    expect(snap.deltaPct).toBe(0.25)
+    expect(snap.hourlyAvg).toBe(50)
+  })
+
+  it("missing today buckets count as zero, yesterday buckets outside the cutoff are ignored", () => {
+    const today = [todayHour(0, 50)] // T01–T03 missing
+    const yesterday = [
+      yesterdayHour(0, 10),
+      yesterdayHour(1, 10),
+      yesterdayHour(2, 10),
+      yesterdayHour(3, 10),
+    ]
+    const snap = hourlySnapshot(today, yesterday, dayjs("2026-08-12T03:00"))
+    expect(snap.deltaPct).toBe(0.25) // (50 - 40) / 40
+    expect(snap.hourlyAvg).toBe(12.5) // 50 / 4
   })
 })
 

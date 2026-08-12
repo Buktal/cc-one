@@ -1,7 +1,8 @@
 // Pure read-model derivations for the usage dashboard: trend zero-fill, token
-// snapshot (delta vs window start + daily average), top-N model aggregation,
-// and stop_reason → tone classification. Every function here is pure — `now`
-// is injected and i18n labels are applied by the caller — so each is testable
+// snapshot (multi-day delta vs window start + daily average, single-day delta
+// vs yesterday same hours + hourly average), top-N model aggregation, and
+// stop_reason → tone classification. Every function here is pure — `now` is
+// injected and i18n labels are applied by the caller — so each is testable
 // through its signature alone.
 
 import type { Dayjs } from "dayjs"
@@ -78,6 +79,46 @@ export function tokenSnapshot(
   }
   const dailyAvg = points.length > 0 ? stats.total_tokens / points.length : 0
   return { deltaPct, dailyAvg }
+}
+
+export interface HourlySnapshot {
+  /** 今日已发生 vs 昨日同时段比值, 或 null (昨日无数据)。 */
+  deltaPct: number | null
+  /** 今日总量 / 已过小时数 —— 单日窗口下「日均」的等价物。 */
+  hourlyAvg: number
+}
+
+/**
+ * 单日 (hourly) 窗口的对比快照: 今日 [0 点, now] 各小时之和 vs 昨日相同时段
+ * 各小时之和, 以及每小时均值。`now` 注入保证可测。
+ *
+ * 为什么存在: 多日窗口的 tokenSnapshot (末点 vs 首点 + 日均) 在单日窗口下
+ * 语义失真 —— 只有一天时趋势点只剩 1 个, delta 恒为 null, 「日均」退化为
+ * 总量本身。这里改为「vs 昨日同时段」, 涨幅才是用户能读懂的「今天比昨天
+ * 快/慢了」; 昨日全天无数据 (未采集) 时 delta 为 null, 调用方不渲染涨幅。
+ */
+export function hourlySnapshot(
+  today: TrendPoint[],
+  yesterday: TrendPoint[],
+  now: Dayjs,
+): HourlySnapshot {
+  const hourSum = (points: TrendPoint[], day: string, h: number) =>
+    Number(
+      points.find((p) => p.day === `${day}T${String(h).padStart(2, "0")}`)
+        ?.total_tokens ?? 0,
+    )
+  const todayPrefix = now.format("YYYY-MM-DD")
+  const yesterdayPrefix = now.subtract(1, "day").format("YYYY-MM-DD")
+  const cutoff = now.hour()
+  let todaySum = 0
+  let yesterdaySum = 0
+  for (let h = 0; h <= cutoff; h++) {
+    todaySum += hourSum(today, todayPrefix, h)
+    yesterdaySum += hourSum(yesterday, yesterdayPrefix, h)
+  }
+  const deltaPct =
+    yesterdaySum > 0 ? (todaySum - yesterdaySum) / yesterdaySum : null
+  return { deltaPct, hourlyAvg: todaySum / (cutoff + 1) }
 }
 
 export type ModelMetric = "cost" | "tokens"

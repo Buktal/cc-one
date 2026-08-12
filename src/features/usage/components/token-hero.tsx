@@ -1,16 +1,20 @@
 // Token hero — token-first Tier 1 anchor. 总消耗 headline + delta
-// (vs 窗首) + daily avg + 四桶堆叠 composition bar + legend (label/value 行) +
-// 缓存命中率 footer.
+// (多日: vs 窗首; 单日: vs 昨日同时段) + 日均/近 N 小时均 + 四桶堆叠
+// composition bar + legend (label/value 行) + 缓存命中率 footer.
 //
 // 右栏窄布局: 纵向，无 sparkline — 中栏已有大趋势图，此处只留当前
 // 窗口的数值快照。颜色全部走 CSS 变量，换主题不改本件。
 
+import dayjs from "dayjs"
+import { useMemo } from "react"
 import { useTranslation } from "react-i18next"
 import { useStatsQuery, useTrendQuery, ZERO_STATS } from "@/app/store/api"
 import type { FilterState } from "@/app/store/slices/filterSlice"
 import { Card, CardContent } from "@/components/ui/card"
-import { tokenSnapshot } from "@/features/usage/derive"
+import { hourlySnapshot, tokenSnapshot } from "@/features/usage/derive"
+import { dayRangeToTs, effectiveDays } from "@/lib/date-range"
 import { formatInt, formatPct, formatTokens } from "@/lib/format"
+import type { TrendBucket } from "@/types/generated/bindings"
 
 const SEGMENTS = [
   {
@@ -38,11 +42,46 @@ const SEGMENTS = [
 export function TokenHero({ filter }: { filter: FilterState }) {
   const { t } = useTranslation()
   const { data: stats } = useStatsQuery(filter)
-  const { data: trend = [] } = useTrendQuery({ filter, bucket: "Day" })
+  // 单日窗口 (today / 单日 custom) 判定与趋势图一致: 时间戳范围落在同一个
+  // 本地日 → 小时粒度。此时多日的 delta/日均语义失真 (日趋势只有 1 个点,
+  // delta 恒 null, 日均退化回总量), 改走 hourlySnapshot 的「vs 昨日同时段」。
+  const { from_day, to_day } = effectiveDays(filter)
+  const { from_ts: fromTs, to_ts: toTs } = dayRangeToTs(from_day, to_day)
+  const singleDay = !!fromTs && !!toTs && dayjs(fromTs).isSame(toTs, "day")
+  // 昨日 filter —— 与当前 filter 同维度 (model/source/device), 只把窗口换成
+  // 昨天的具体日期。queryKey 一天内稳定, 跨天滚动自动重查。
+  const yesterdayFilter = useMemo<FilterState>(
+    () =>
+      singleDay
+        ? {
+            ...filter,
+            range_preset: "custom",
+            from_day: dayjs(from_day).subtract(1, "day").format("YYYY-MM-DD"),
+            to_day: dayjs(from_day).subtract(1, "day").format("YYYY-MM-DD"),
+          }
+        : filter,
+    [filter, singleDay, from_day],
+  )
+  const bucket: TrendBucket = singleDay ? "Hour" : "Day"
+  const { data: trend = [] } = useTrendQuery({ filter, bucket })
+  const { data: yesterday = [] } = useTrendQuery(
+    { filter: yesterdayFilter, bucket: "Hour" },
+    { skip: !singleDay },
+  )
   const s = stats ?? ZERO_STATS
   const total = s.total_tokens || 1
-  // delta = 末日 vs 窗首 (trend 已按日升序); 日均 = 总量 / 窗口天数.
-  const { deltaPct, dailyAvg } = tokenSnapshot(s, trend)
+  // 多日: delta = 末日 vs 窗首 (trend 已按日升序), 日均 = 总量 / 窗口天数;
+  // 单日: delta = 今日 vs 昨日同时段, 均值 = 总量 / 已过小时数。
+  const now = dayjs()
+  const hourlySnap = singleDay ? hourlySnapshot(trend, yesterday, now) : null
+  const multiSnap = singleDay ? null : tokenSnapshot(s, trend)
+  const deltaPct = hourlySnap?.deltaPct ?? multiSnap?.deltaPct ?? null
+  const avgNode = hourlySnap
+    ? t("usage.hero.hourlyAvg", {
+        n: now.hour() + 1,
+        avg: formatTokens(hourlySnap.hourlyAvg),
+      })
+    : t("usage.hero.dailyAvg", { avg: formatTokens(multiSnap?.dailyAvg ?? 0) })
 
   return (
     <Card interactive>
@@ -63,12 +102,14 @@ export function TokenHero({ filter }: { filter: FilterState }) {
               >
                 {deltaPct >= 0 ? "↑" : "↓"} {formatPct(Math.abs(deltaPct))}
                 <span className="text-muted-foreground font-normal">
-                  {t("usage.hero.vsStart")}
+                  {singleDay
+                    ? t("usage.hero.vsYesterday")
+                    : t("usage.hero.vsStart")}
                 </span>
               </span>
             ) : null}
             <span className="text-muted-foreground text-xs tabular-nums">
-              {t("usage.hero.dailyAvg", { avg: formatTokens(dailyAvg) })}
+              {avgNode}
             </span>
           </div>
         </div>

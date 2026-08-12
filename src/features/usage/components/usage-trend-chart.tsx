@@ -15,7 +15,7 @@
 // change (extend TrendPoint); tracked in backlog.
 
 import dayjs from "dayjs"
-import { useMemo } from "react"
+import { useMemo, useState } from "react"
 import { useTranslation } from "react-i18next"
 import { CartesianGrid, Line, LineChart, XAxis, YAxis } from "recharts"
 import { useTrendQuery } from "@/app/store/api"
@@ -31,13 +31,12 @@ import {
 import {
   type ChartConfig,
   ChartContainer,
-  ChartLegend,
-  ChartLegendContent,
   ChartTooltip,
 } from "@/components/ui/chart"
 import { zeroFillTrend } from "@/features/usage/derive"
 import { dayRangeToTs, effectiveDays } from "@/lib/date-range"
-import { formatDay, formatTokens } from "@/lib/format"
+import { formatCost, formatDay, formatTokens } from "@/lib/format"
+import { cn } from "@/lib/utils"
 
 import type { TrendBucket, TrendPoint } from "@/types/generated/bindings"
 
@@ -89,6 +88,16 @@ export function UsageTrendChart({ filter }: { filter: FilterState }) {
   // window that still falls on one local day, so isSame("day") catches it.
   const hourly = !!fromTs && !!toTs && dayjs(fromTs).isSame(toTs, "day")
   const bucket: TrendBucket = hourly ? "Hour" : "Day"
+  // 图例显隐集合 —— 点击图例 toggle 单线显隐。隐藏的桶不再渲染 Line
+  // (tooltip 也不含), 但手写图例始终全量, 保证能点回来。
+  const [hidden, setHidden] = useState<ReadonlySet<string>>(() => new Set())
+  const toggleLine = (key: string) =>
+    setHidden((prev) => {
+      const next = new Set(prev)
+      if (next.has(key)) next.delete(key)
+      else next.add(key)
+      return next
+    })
   const {
     data: rawData = [],
     isLoading,
@@ -184,8 +193,7 @@ export function UsageTrendChart({ filter }: { filter: FilterState }) {
                 stroke="var(--muted-foreground)"
               />
               <ChartTooltip content={<TrendTooltip hourly={hourly} />} />
-              <ChartLegend content={<ChartLegendContent />} />
-              {BUCKETS.map((b) => (
+              {BUCKETS.filter((b) => !hidden.has(b.key)).map((b) => (
                 <Line
                   key={b.key}
                   type="monotone"
@@ -200,9 +208,65 @@ export function UsageTrendChart({ filter }: { filter: FilterState }) {
               ))}
             </LineChart>
           </ChartContainer>
+          <TrendLegend
+            buckets={BUCKETS}
+            hidden={hidden}
+            onToggle={toggleLine}
+          />
         </QueryState>
       </CardContent>
     </Card>
+  )
+}
+
+/** 可点击图例 —— 点击切换单线显隐, 隐藏项半透明 + 划线。
+ *  不用 recharts <Legend>: 它的 payload 只含「已渲染」的 series, 隐藏的线
+ *  无法点回来; 手写图例始终渲染全部 4 项, 显隐只影响 Line 渲染。 */
+function TrendLegend({
+  buckets,
+  hidden,
+  onToggle,
+}: {
+  buckets: Bucket[]
+  hidden: ReadonlySet<string>
+  onToggle: (key: string) => void
+}) {
+  const { t } = useTranslation()
+  return (
+    <div className="flex items-center justify-center gap-4 pt-3">
+      {buckets.map((b) => {
+        const off = hidden.has(b.key)
+        return (
+          <button
+            key={b.key}
+            type="button"
+            aria-pressed={!off}
+            aria-label={t(b.name)}
+            onClick={() => onToggle(b.key)}
+            className={cn(
+              "flex items-center gap-1.5 rounded-sm outline-none transition-opacity focus-visible:ring-2 focus-visible:ring-ring/40",
+              off && "opacity-40",
+            )}
+          >
+            <span
+              className={cn(
+                "size-2 shrink-0 rounded-[2px]",
+                off && "opacity-60",
+              )}
+              style={{ backgroundColor: b.color }}
+            />
+            <span
+              className={cn(
+                "text-xs",
+                off && "text-muted-foreground line-through",
+              )}
+            >
+              {t(b.name)}
+            </span>
+          </button>
+        )
+      })}
+    </div>
   )
 }
 
@@ -211,6 +275,8 @@ type TooltipPayload = {
   value: number | null
   name: string
   color: string
+  /** 原始数据点 (recharts 注入), 用于取桶外的派生字段。 */
+  payload?: { total_cost_usd?: number | null }
 }
 
 function TrendTooltip(props: {
@@ -223,6 +289,9 @@ function TrendTooltip(props: {
   const { active, payload, label, hourly } = props
   if (!active || !payload?.length) return null
   const total = payload.reduce((sum, p) => sum + Number(p.value ?? 0), 0)
+  // 该时间点总成本 —— TrendPoint 自带, 补上「钱」的维度 (看板其他卡片
+  // 没有成本的时间序列, 这里是最不打断浏览的位置)。
+  const cost = payload[0]?.payload?.total_cost_usd ?? null
   return (
     <div className="bg-popover rounded-md border p-2 text-xs shadow-sm">
       <div className="mb-1 font-medium">
@@ -247,6 +316,12 @@ function TrendTooltip(props: {
         <span>{t("usage.trend.total")}</span>
         <span className="tabular-nums">{formatTokens(total)}</span>
       </div>
+      {cost != null ? (
+        <div className="flex items-center justify-between gap-4 text-muted-foreground">
+          <span>{t("usage.kpi.totalCost")}</span>
+          <span className="tabular-nums">{formatCost(Number(cost))}</span>
+        </div>
+      ) : null}
     </div>
   )
 }

@@ -28,6 +28,7 @@ export function DashboardView() {
           <ModelDistribution
             filter={filter}
             onPickModel={(m) => dispatch(patchFilter({ model: m }))}
+            onClearModel={() => dispatch(patchFilter({ model: "" }))}
           />
           <RecentRequests />
         </div>

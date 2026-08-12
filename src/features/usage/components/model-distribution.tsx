@@ -3,6 +3,7 @@
 // re-runs every Usage-tagged query including this one (providesTags is
 // filter-scoped, so the list itself refreshes too).
 
+import { X } from "lucide-react"
 import { useState } from "react"
 import { useTranslation } from "react-i18next"
 import { useModelsQuery } from "@/app/store/api"
@@ -16,15 +17,19 @@ import {
 } from "@/components/ui/card"
 import { topNModels } from "@/features/usage/derive"
 import { formatCost, formatPct, formatTokens } from "@/lib/format"
+import { cn } from "@/lib/utils"
 
 const TOP_N = 5
 
 export function ModelDistribution({
   filter,
   onPickModel,
+  onClearModel,
 }: {
   filter: FilterState
   onPickModel: (model: string) => void
+  /** 清除当前模型筛选 (header chip 的 ×)。 */
+  onClearModel: () => void
 }) {
   const { t } = useTranslation()
   const { data: rows = [] } = useModelsQuery(filter)
@@ -60,28 +65,44 @@ export function ModelDistribution({
     <Card interactive>
       <CardHeader>
         <CardTitle>{t("usage.models.title")}</CardTitle>
-        {/* 指标开关放进 CardAction: header 的 has-[card-action] 会切到
-            grid-cols-[1fr_auto], 开关待在自己的 auto 宽列里、justify-self-end
-            右对齐, 永不被标题宽度拉伸 (否则英文长标题会把胶囊背景撑出一截空隙)。
-            与同目录 usage-trend-chart 的 header 写法一致。 */}
+        {/* 筛选 chip + 指标开关一起放进 CardAction (说明见下)。 */}
         <CardAction>
-          <div className="bg-muted/60 inline-flex items-center gap-0.5 rounded-md p-0.5">
-            {(["tokens", "cost"] as const).map((m) => (
+          <div className="flex items-center gap-2">
+            {filter.model ? (
               <button
-                key={m}
                 type="button"
-                onClick={() => setMetric(m)}
-                className={`rounded-[5px] px-2 py-0.5 text-xs font-medium transition-colors outline-none focus-visible:ring-2 focus-visible:ring-ring/40 ${
-                  metric === m
-                    ? "bg-background text-foreground shadow-sm"
-                    : "text-muted-foreground hover:text-foreground"
-                }`}
+                onClick={onClearModel}
+                aria-label={t("usage.models.clearFilter")}
+                className="bg-accent-tint text-accent-brand-strong hover:bg-accent-tint/70 inline-flex items-center gap-1 rounded-md px-2 py-0.5 text-xs font-medium outline-none transition-colors focus-visible:ring-2 focus-visible:ring-ring/40"
               >
-                {m === "tokens"
-                  ? t("usage.models.tokens")
-                  : t("usage.models.cost")}
+                <span className="max-w-32 truncate font-mono">
+                  {filter.model}
+                </span>
+                <X className="size-3 shrink-0" />
               </button>
-            ))}
+            ) : null}
+            {/* 指标开关: header 的 has-[card-action] 会切到
+                grid-cols-[1fr_auto], 开关待在自己的 auto 宽列里、justify-self-end
+                右对齐, 永不被标题宽度拉伸 (否则英文长标题会把胶囊背景撑出一截空隙)。
+                与同目录 usage-trend-chart 的 header 写法一致。 */}
+            <div className="bg-muted/60 inline-flex items-center gap-0.5 rounded-md p-0.5">
+              {(["tokens", "cost"] as const).map((m) => (
+                <button
+                  key={m}
+                  type="button"
+                  onClick={() => setMetric(m)}
+                  className={`rounded-[5px] px-2 py-0.5 text-xs font-medium transition-colors outline-none focus-visible:ring-2 focus-visible:ring-ring/40 ${
+                    metric === m
+                      ? "bg-background text-foreground shadow-sm"
+                      : "text-muted-foreground hover:text-foreground"
+                  }`}
+                >
+                  {m === "tokens"
+                    ? t("usage.models.tokens")
+                    : t("usage.models.cost")}
+                </button>
+              ))}
+            </div>
           </div>
         </CardAction>
       </CardHeader>
@@ -93,16 +114,30 @@ export function ModelDistribution({
         ) : (
           items.map((it) => {
             const pct = (it.value / total) * 100
+            // 当前 filter 选中的模型行高亮 —— 点击行收窄全看板后, 这里
+            // 既是反馈 (知道筛选生效) 也是入口 (header chip 一键清除)。
+            const selected = it.model === filter.model
             return (
               <button
                 key={it.label}
                 type="button"
                 disabled={!it.model}
+                aria-pressed={it.model ? selected : undefined}
                 onClick={() => it.model && onPickModel(it.model)}
-                className="group flex flex-col gap-1 text-left disabled:cursor-default"
+                className={cn(
+                  "group -mx-2 flex flex-col gap-1 rounded-md px-2 py-1.5 text-left disabled:cursor-default",
+                  selected ? "bg-accent-tint" : it.model && "hover:bg-muted/50",
+                )}
               >
                 <div className="flex items-center justify-between gap-2 text-xs">
-                  <span className="text-foreground truncate font-mono group-hover:text-primary">
+                  <span
+                    className={cn(
+                      "text-foreground truncate font-mono",
+                      selected
+                        ? "text-accent-brand-strong"
+                        : "group-hover:text-primary",
+                    )}
+                  >
                     {it.label}
                   </span>
                   <span className="text-muted-foreground shrink-0 tabular-nums">
