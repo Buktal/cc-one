@@ -205,138 +205,142 @@ export function PricingView() {
             }}
           >
             <div className="min-h-0 flex-1 -mr-2.5 overflow-auto pr-2.5">
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead>
-                    <SortHeader
-                      label={t("pricing.col.modelKey")}
-                      k="model_key"
-                      {...sortProps}
-                    />
-                  </TableHead>
-                  <TableHead>
-                    <SortHeader
-                      label={t("pricing.col.displayName")}
-                      k="display_name"
-                      {...sortProps}
-                    />
-                  </TableHead>
-                  <TableHead>
-                    <SortHeader
-                      label={t("usage.tokens.input")}
-                      k="input_per_million"
-                      unit="$/1M"
-                      {...sortProps}
-                    />
-                  </TableHead>
-                  <TableHead>
-                    <SortHeader
-                      label={t("usage.tokens.output")}
-                      k="output_per_million"
-                      unit="$/1M"
-                      {...sortProps}
-                    />
-                  </TableHead>
-                  <TableHead>
-                    <SortHeader
-                      label={t("usage.tokens.cacheRead")}
-                      k="cache_read_per_million"
-                      unit="$/1M"
-                      {...sortProps}
-                    />
-                  </TableHead>
-                  <TableHead>
-                    <SortHeader
-                      label={t("usage.tokens.cacheCreation")}
-                      k="cache_creation_per_million"
-                      unit="$/1M"
-                      {...sortProps}
-                    />
-                  </TableHead>
-                  <TableHead>{t("usage.logs.col.source")}</TableHead>
-                  <TableHead className="text-right">
-                    {t("pricing.col.actions")}
-                  </TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {total === 0 ? (
+              <Table>
+                <TableHeader>
                   <TableRow>
-                    <TableCell
-                      colSpan={8}
-                      className="text-muted-foreground py-8 text-center"
-                    >
-                      {t("pricing.noMatch")}
-                    </TableCell>
+                    <TableHead>
+                      <SortHeader
+                        label={t("pricing.col.modelKey")}
+                        k="model_key"
+                        {...sortProps}
+                      />
+                    </TableHead>
+                    <TableHead>
+                      <SortHeader
+                        label={t("pricing.col.displayName")}
+                        k="display_name"
+                        {...sortProps}
+                      />
+                    </TableHead>
+                    <TableHead>
+                      <SortHeader
+                        label={t("usage.tokens.input")}
+                        k="input_per_million"
+                        unit="$/1M"
+                        {...sortProps}
+                      />
+                    </TableHead>
+                    <TableHead>
+                      <SortHeader
+                        label={t("usage.tokens.output")}
+                        k="output_per_million"
+                        unit="$/1M"
+                        {...sortProps}
+                      />
+                    </TableHead>
+                    <TableHead>
+                      <SortHeader
+                        label={t("usage.tokens.cacheRead")}
+                        k="cache_read_per_million"
+                        unit="$/1M"
+                        {...sortProps}
+                      />
+                    </TableHead>
+                    <TableHead>
+                      <SortHeader
+                        label={t("usage.tokens.cacheCreation")}
+                        k="cache_creation_per_million"
+                        unit="$/1M"
+                        {...sortProps}
+                      />
+                    </TableHead>
+                    <TableHead>{t("usage.logs.col.source")}</TableHead>
+                    <TableHead className="text-right">
+                      {t("pricing.col.actions")}
+                    </TableHead>
                   </TableRow>
-                ) : (
-                  paged.map((e) => (
-                    <TableRow key={e.model_key}>
-                      <TableCell className="font-mono text-xs">
-                        {e.model_key}
-                      </TableCell>
-                      <TableCell>{e.display_name}</TableCell>
-                      <TableCell className="pr-4 text-right tabular-nums">
-                        {formatCostAmount(e.input_per_million)}
-                      </TableCell>
-                      <TableCell className="pr-4 text-right tabular-nums">
-                        {formatCostAmount(e.output_per_million)}
-                      </TableCell>
-                      <TableCell className="pr-4 text-right tabular-nums">
-                        {formatCostAmount(e.cache_read_per_million)}
-                      </TableCell>
-                      <TableCell className="pr-4 text-right tabular-nums">
-                        {formatCostAmount(e.cache_creation_per_million)}
-                      </TableCell>
-                      <TableCell>
-                        <Badge variant={e.is_builtin ? "secondary" : "default"}>
-                          {e.is_builtin
-                            ? t("pricing.builtin")
-                            : t("pricing.custom")}
-                        </Badge>
-                      </TableCell>
-                      <TableCell className="text-right">
-                        <div className="flex justify-end gap-1">
-                          <Tooltip>
-                            <TooltipTrigger
-                              render={
-                                <Button
-                                  variant="ghost"
-                                  size="icon-sm"
-                                  onClick={() => openEdit(e)}
-                                  aria-label={t("common.edit")}
-                                />
-                              }
-                            >
-                              <Pencil />
-                            </TooltipTrigger>
-                            <TooltipContent>{t("common.edit")}</TooltipContent>
-                          </Tooltip>
-                          <Tooltip>
-                            <TooltipTrigger
-                              render={
-                                <Button
-                                  variant="ghost"
-                                  size="icon-sm"
-                                  onClick={() => setDeleting(e)}
-                                  aria-label={t("common.delete")}
-                                />
-                              }
-                            >
-                              <Trash2 />
-                            </TooltipTrigger>
-                            <TooltipContent>
-                              {t("common.delete")}
-                            </TooltipContent>
-                          </Tooltip>
-                        </div>
+                </TableHeader>
+                <TableBody>
+                  {total === 0 ? (
+                    <TableRow>
+                      <TableCell
+                        colSpan={8}
+                        className="text-muted-foreground py-8 text-center"
+                      >
+                        {t("pricing.noMatch")}
                       </TableCell>
                     </TableRow>
-                  ))
-                )}
-              </TableBody>
-            </Table>
+                  ) : (
+                    paged.map((e) => (
+                      <TableRow key={e.model_key}>
+                        <TableCell className="font-mono text-xs">
+                          {e.model_key}
+                        </TableCell>
+                        <TableCell>{e.display_name}</TableCell>
+                        <TableCell className="pr-4 text-right tabular-nums">
+                          {formatCostAmount(e.input_per_million)}
+                        </TableCell>
+                        <TableCell className="pr-4 text-right tabular-nums">
+                          {formatCostAmount(e.output_per_million)}
+                        </TableCell>
+                        <TableCell className="pr-4 text-right tabular-nums">
+                          {formatCostAmount(e.cache_read_per_million)}
+                        </TableCell>
+                        <TableCell className="pr-4 text-right tabular-nums">
+                          {formatCostAmount(e.cache_creation_per_million)}
+                        </TableCell>
+                        <TableCell>
+                          <Badge
+                            variant={e.is_builtin ? "secondary" : "default"}
+                          >
+                            {e.is_builtin
+                              ? t("pricing.builtin")
+                              : t("pricing.custom")}
+                          </Badge>
+                        </TableCell>
+                        <TableCell className="text-right">
+                          <div className="flex justify-end gap-1">
+                            <Tooltip>
+                              <TooltipTrigger
+                                render={
+                                  <Button
+                                    variant="ghost"
+                                    size="icon-sm"
+                                    onClick={() => openEdit(e)}
+                                    aria-label={t("common.edit")}
+                                  />
+                                }
+                              >
+                                <Pencil />
+                              </TooltipTrigger>
+                              <TooltipContent>
+                                {t("common.edit")}
+                              </TooltipContent>
+                            </Tooltip>
+                            <Tooltip>
+                              <TooltipTrigger
+                                render={
+                                  <Button
+                                    variant="ghost"
+                                    size="icon-sm"
+                                    onClick={() => setDeleting(e)}
+                                    aria-label={t("common.delete")}
+                                  />
+                                }
+                              >
+                                <Trash2 />
+                              </TooltipTrigger>
+                              <TooltipContent>
+                                {t("common.delete")}
+                              </TooltipContent>
+                            </Tooltip>
+                          </div>
+                        </TableCell>
+                      </TableRow>
+                    ))
+                  )}
+                </TableBody>
+              </Table>
             </div>
           </QueryState>
 

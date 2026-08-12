@@ -26,16 +26,7 @@ import {
 } from "lucide-react"
 import { useState } from "react"
 import { useTranslation } from "react-i18next"
-import {
-  AlertDialog,
-  AlertDialogAction,
-  AlertDialogCancel,
-  AlertDialogContent,
-  AlertDialogDescription,
-  AlertDialogFooter,
-  AlertDialogHeader,
-  AlertDialogTitle,
-} from "@/components/ui/alert-dialog"
+import { ConfirmDialog } from "@/components/confirm-dialog"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import {
@@ -376,29 +367,15 @@ function GroupRow({
         ESC / backdrop click — the user has to pick Cancel or Delete. Sessions
         inside the group survive (they move to Ungrouped), so the description
         says so instead of threatening data loss. */}
-      <AlertDialog open={deleteConfirmOpen} onOpenChange={setDeleteConfirmOpen}>
-        <AlertDialogContent>
-          <AlertDialogHeader>
-            <AlertDialogTitle>
-              {t("sessions.group.deleteConfirmTitle")}
-            </AlertDialogTitle>
-            <AlertDialogDescription>
-              {t("sessions.group.deleteConfirmDesc", { name: g.name })}
-            </AlertDialogDescription>
-          </AlertDialogHeader>
-          <AlertDialogFooter>
-            <AlertDialogCancel disabled={busy}>
-              {t("common.cancel")}
-            </AlertDialogCancel>
-            <AlertDialogAction
-              variant="destructive"
-              onClick={() => void executeDelete()}
-            >
-              {t("sessions.group.deleteConfirmAction")}
-            </AlertDialogAction>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
+      <ConfirmDialog
+        open={deleteConfirmOpen}
+        onOpenChange={setDeleteConfirmOpen}
+        title={t("sessions.group.deleteConfirmTitle")}
+        description={t("sessions.group.deleteConfirmDesc", { name: g.name })}
+        confirmLabel={t("sessions.group.deleteConfirmAction")}
+        busy={busy}
+        onConfirm={() => void executeDelete()}
+      />
     </div>
   )
 }

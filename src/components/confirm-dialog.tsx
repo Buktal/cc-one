@@ -60,7 +60,9 @@ export function ConfirmDialog({
           ) : null}
         </AlertDialogHeader>
         <AlertDialogFooter>
-          <AlertDialogCancel disabled={busy}>{t("common.cancel")}</AlertDialogCancel>
+          <AlertDialogCancel disabled={busy}>
+            {t("common.cancel")}
+          </AlertDialogCancel>
           <AlertDialogAction
             variant="destructive"
             disabled={busy}
