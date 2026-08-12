@@ -26,6 +26,8 @@ import {
   Check,
   ChevronDown,
   ChevronRight,
+  ChevronsDownUp,
+  ChevronsUpDown,
   Copy,
   Info,
   Loader2,
@@ -75,7 +77,14 @@ import type {
   SessionMessage,
   SessionRow,
 } from "@/types/generated/bindings"
-import { firstLine, modelsUsed, sessionSpan } from "../derive"
+import {
+  collapseAllMessages,
+  expandAllMessages,
+  firstLine,
+  isAllCollapsed,
+  modelsUsed,
+  sessionSpan,
+} from "../derive"
 import { sessionSourceLabel } from "../source-labels"
 import { MarkdownContent, ToolContent } from "./markdown-content"
 
@@ -168,6 +177,17 @@ export function SessionDetailSheet(props: SessionDetailSheetProps) {
       role === "tool" ? collapsed.has(uuid) : !collapsed.has(uuid),
     [collapsed],
   )
+  // Bulk collapse / expand — the end-state sets come from derive (the
+  // membership-is-opposite-of-default rule lives there, tested). The toggle
+  // flips between the two ends, so its label follows the current state.
+  const allCollapsed = isAllCollapsed(transcript, collapsed)
+  const toggleAll = useCallback(() => {
+    setCollapsed(
+      allCollapsed
+        ? expandAllMessages(transcript)
+        : collapseAllMessages(transcript),
+    )
+  }, [allCollapsed, transcript])
 
   return (
     <>
@@ -224,6 +244,8 @@ export function SessionDetailSheet(props: SessionDetailSheetProps) {
         turns={turnNav.turns}
         activeUuid={turnNav.activeUuid}
         jumpTo={turnNav.jumpTo}
+        allCollapsed={allCollapsed}
+        onToggleAll={toggleAll}
       />
     </>
   )
@@ -665,10 +687,15 @@ function TurnNavPanel({
   turns,
   activeUuid,
   jumpTo,
+  allCollapsed,
+  onToggleAll,
 }: {
   turns: SessionMessage[]
   activeUuid: string | null
   jumpTo: (uuid: string) => void
+  /** Every message row is collapsed — the toggle then offers "expand all". */
+  allCollapsed: boolean
+  onToggleAll: () => void
 }) {
   const { t } = useTranslation()
   // Keep the highlighted row visible when the panel scrolls internally — on a
@@ -688,6 +715,40 @@ function TurnNavPanel({
       style={{ right: NAV_PANEL_RIGHT, width: NAV_PANEL_WIDTH }}
     >
       <div className="max-h-[calc(100vh-4rem)] overflow-y-auto rounded-lg border border-border bg-popover p-1 shadow-lg">
+        {/* Bulk collapse / expand — right-aligned above the turn list. The
+          icon shows the ACTION the button performs next: collapse (chevrons
+          down) when rows are open, expand (chevrons up) when all collapsed. */}
+        <div className="mb-0.5 flex justify-end pr-0.5">
+          <Tooltip>
+            <TooltipTrigger
+              render={
+                <Button
+                  variant="ghost"
+                  size="icon-xs"
+                  aria-label={t(
+                    allCollapsed
+                      ? "sessions.detail.expandAll"
+                      : "sessions.detail.collapseAll",
+                  )}
+                  onClick={onToggleAll}
+                />
+              }
+            >
+              {allCollapsed ? (
+                <ChevronsUpDown className="size-3.5" />
+              ) : (
+                <ChevronsDownUp className="size-3.5" />
+              )}
+            </TooltipTrigger>
+            <TooltipContent side="left">
+              {t(
+                allCollapsed
+                  ? "sessions.detail.expandAll"
+                  : "sessions.detail.collapseAll",
+              )}
+            </TooltipContent>
+          </Tooltip>
+        </div>
         {turns.map((turn) => {
           const active = turn.uuid === activeUuid
           return (

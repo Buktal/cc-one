@@ -13,9 +13,12 @@ import {
   ALL_GROUPS,
   applyGroupOrder,
   canCreateSyncedGroup,
+  collapseAllMessages,
   effectiveFavorite,
+  expandAllMessages,
   favKey,
   firstLine,
+  isAllCollapsed,
   modelsUsed,
   nextFavValue,
   reorderGroupIds,
@@ -465,6 +468,51 @@ describe("modelsUsed", () => {
 })
 
 // ------------------------------------------------------------- transcript --
+
+describe("collapseAllMessages / expandAllMessages / isAllCollapsed", () => {
+  const msgs = (...roles: SessionMessage["role"][]): SessionMessage[] =>
+    roles.map((role, i) => ({
+      uuid: `u${i}`,
+      role,
+      content: "",
+    })) as SessionMessage[]
+
+  it("collapseAll puts every non-tool row in the set", () => {
+    expect(
+      collapseAllMessages(msgs("user", "assistant", "tool", "system")),
+    ).toEqual(new Set(["u0", "u1", "u3"]))
+  })
+
+  it("expandAll puts every tool row in the set", () => {
+    expect(
+      expandAllMessages(msgs("user", "assistant", "tool", "system")),
+    ).toEqual(new Set(["u2"]))
+  })
+
+  it("isAllCollapsed is true only when every non-tool row is in the set", () => {
+    const all = msgs("user", "assistant", "tool", "system")
+    expect(isAllCollapsed(all, new Set(["u0", "u1", "u3"]))).toBe(true)
+    expect(isAllCollapsed(all, new Set(["u0", "u3"]))).toBe(false)
+  })
+
+  it("isAllCollapsed is false on a tool-only or empty transcript", () => {
+    expect(isAllCollapsed(msgs("tool"), new Set())).toBe(false)
+    expect(isAllCollapsed([], new Set())).toBe(false)
+  })
+
+  it("bulk sets round-trip through the row's own isOpen rule", () => {
+    // Simulate the detail view's isOpen: non-tool open = not-in-set, tool
+    // open = in-set. After collapseAll no row is open; after expandAll every
+    // row is open.
+    const all = msgs("user", "tool", "assistant")
+    const isOpen = (m: SessionMessage, set: Set<string>) =>
+      m.role === "tool" ? set.has(m.uuid) : !set.has(m.uuid)
+    const collapsed = collapseAllMessages(all)
+    expect(all.every((m) => !isOpen(m, collapsed))).toBe(true)
+    const expanded = expandAllMessages(all)
+    expect(all.every((m) => isOpen(m, expanded))).toBe(true)
+  })
+})
 
 describe("firstLine", () => {
   it("returns the first line of multiline text", () => {

@@ -11,6 +11,7 @@
 import dayjs from "dayjs"
 import relativeTime from "dayjs/plugin/relativeTime"
 import { MessagesSquare, Search, Star } from "lucide-react"
+import type { ReactNode } from "react"
 import { useTranslation } from "react-i18next"
 import {
   DateRangeChip,
@@ -45,7 +46,7 @@ import {
 import { formatCost, formatInt, formatTokens } from "@/lib/format"
 import { cn } from "@/lib/utils"
 import type { SessionRow } from "@/types/generated/bindings"
-import type { SessionTab } from "../derive"
+import { favKey, type SessionTab } from "../derive"
 import { sessionAgentKind, sessionSourceLabel } from "../source-labels"
 import { SESSIONS_PAGE_SIZE, useSessionsBrowser } from "../use-sessions-browser"
 import { GroupCreateDialog } from "./group-create-dialog"
@@ -64,8 +65,11 @@ export function SessionsView() {
 
   return (
     <div className="flex min-h-0 flex-1 flex-col gap-3">
-      {/* Control row — tabs + filter chips on the left; collect · search on
-        the right. Mirrors the request-log ControlBar's chip layout. */}
+      {/* Control row — two-line responsive: tabs + date + search stay on the
+        first line (search pinned right via ml-auto); the source / model /
+        device chips drop to a full-width second line on narrow windows
+        (w-full) and return inline on wide ones (xl:w-auto), so wrapping never
+        scatters the chips between the tabs and the search box. */}
       <div className="flex flex-wrap items-center gap-2">
         <Tabs value={b.tab} onValueChange={(v) => b.setTab(v as SessionTab)}>
           <TabsList>
@@ -88,19 +92,21 @@ export function SessionsView() {
           startKey="sessions.filter.start"
           endKey="sessions.filter.end"
         />
-        <SourceSelect value={b.source} onChange={b.setSource} />
-        <ModelSelect
-          value={b.model}
-          onChange={b.setModel}
-          options={b.modelOptions}
-        />
-        {b.deviceOptions.length > 0 && b.tab === "favorites" ? (
-          <DeviceSelect
-            options={b.deviceOptions}
-            value={b.deviceScope}
-            onChange={b.setDeviceScope}
+        <div className="flex w-full flex-wrap items-center gap-2 xl:w-auto">
+          <SourceSelect value={b.source} onChange={b.setSource} />
+          <ModelSelect
+            value={b.model}
+            onChange={b.setModel}
+            options={b.modelOptions}
           />
-        ) : null}
+          {b.deviceOptions.length > 0 && b.tab === "favorites" ? (
+            <DeviceSelect
+              options={b.deviceOptions}
+              value={b.deviceScope}
+              onChange={b.setDeviceScope}
+            />
+          ) : null}
+        </div>
         <div className="ml-auto flex items-center gap-2">
           <div className="relative w-56">
             <Search className="text-muted-foreground absolute top-1/2 left-2 size-3.5 -translate-y-1/2" />
@@ -146,10 +152,23 @@ export function SessionsView() {
               error={b.error}
               isEmpty={!b.isLoading && b.visibleSessions.length === 0}
               emptyIcon={MessagesSquare}
+              // Empty means different things per tab: Local = nothing
+              // collected yet (go run a CLI), Favorites = nothing starred yet
+              // (go star in the Local tab). Same copy for both would mislead.
               emptyLabel={
-                b.search ? t("sessions.noMatch") : t("sessions.empty.title")
+                b.search
+                  ? t("sessions.noMatch")
+                  : b.tab === "local"
+                    ? t("sessions.empty.title")
+                    : t("sessions.empty.favoritesTitle")
               }
-              emptyDescription={b.search ? undefined : t("sessions.empty.desc")}
+              emptyDescription={
+                b.search
+                  ? undefined
+                  : b.tab === "local"
+                    ? t("sessions.empty.desc")
+                    : t("sessions.empty.favoritesDesc")
+              }
             >
               <SessionsTable
                 rows={b.visibleSessions}
@@ -158,6 +177,8 @@ export function SessionsView() {
                 onOpen={b.setPreview}
                 showDeviceColumn={b.showDeviceColumn}
                 deviceLabel={b.deviceLabel}
+                openFavKey={b.preview ? favKey(b.preview) : null}
+                search={b.search}
               />
             </QueryState>
 
@@ -242,6 +263,8 @@ function SessionsTable({
   onOpen,
   showDeviceColumn,
   deviceLabel,
+  openFavKey,
+  search,
 }: {
   rows: SessionRow[]
   effectiveFavorite: (s: SessionRow) => boolean
@@ -249,6 +272,11 @@ function SessionsTable({
   onOpen: (s: SessionRow) => void
   showDeviceColumn: boolean
   deviceLabel: Map<string, string>
+  /** favKey of the row whose detail sheet is open — that row gets a tinted
+   *  selected state so closing the sheet leaves a visible anchor. */
+  openFavKey: string | null
+  /** Live search box value — matched title spans get highlighted. */
+  search: string
 }) {
   const { t } = useTranslation()
   return (
@@ -295,8 +323,14 @@ function SessionsTable({
         <TableBody>
           {rows.map((s) => {
             const fav = effectiveFavorite(s)
+            const open = openFavKey === favKey(s)
             return (
-              <TableRow key={`${s.device_id}/${s.id}`}>
+              <TableRow
+                key={favKey(s)}
+                // Selected row keeps its tint on hover too — the default
+                // hover:bg-muted/50 would otherwise flash grey over it.
+                className={cn(open && "bg-accent-tint hover:bg-accent-tint")}
+              >
                 <TableCell>
                   <Tooltip>
                     <TooltipTrigger
@@ -347,14 +381,14 @@ function SessionsTable({
                       }
                     >
                       <span className="block w-full min-w-0 truncate font-medium">
-                        {s.title || t("sessions.untitled")}
+                        {highlight(s.title || t("sessions.untitled"), search)}
                       </span>
                       <span className="text-muted-foreground text-xs">
                         {sessionSourceLabel(s.source)}
                       </span>
                     </TooltipTrigger>
                     <TooltipContent className="max-w-md">
-                      {s.title || t("sessions.untitled")}
+                      {highlight(s.title || t("sessions.untitled"), search)}
                     </TooltipContent>
                   </Tooltip>
                 </TableCell>
@@ -413,10 +447,14 @@ function SessionsTable({
                 <TableCell className="text-right text-xs tabular-nums">
                   {formatInt(s.request_count)}
                 </TableCell>
-                <TableCell className="text-right text-xs tabular-nums">
+                {/* Tokens + cost are the two numbers a usage tool is scanned
+                  for — half-bold them so they read above the request count;
+                  cost additionally picks up the brand color (deep grey on the
+                  Neutral skin, chromatic on the colored skins). */}
+                <TableCell className="text-right text-xs font-medium tabular-nums">
                   {formatTokens(s.total_tokens)}
                 </TableCell>
-                <TableCell className="text-right text-xs tabular-nums">
+                <TableCell className="text-accent-brand-strong text-right text-xs font-medium tabular-nums">
                   {formatCost(s.total_cost_usd)}
                 </TableCell>
               </TableRow>
@@ -426,6 +464,39 @@ function SessionsTable({
       </Table>
     </div>
   )
+}
+
+/**
+ * Mark the query's occurrences in `text` with a highlight — case-insensitive,
+ * every hit wrapped in <mark>. Returns plain `text` when there's nothing to
+ * highlight (empty query / no hit), so callers can treat it as text-or-nodes.
+ * Pure display — lives here, not in derive.ts, because it produces JSX.
+ */
+function highlight(text: string, query: string): ReactNode {
+  const q = query.trim()
+  if (!q) return text
+  const lower = text.toLowerCase()
+  const needle = q.toLowerCase()
+  const parts: ReactNode[] = []
+  let i = 0
+  for (
+    let idx = lower.indexOf(needle);
+    idx !== -1;
+    idx = lower.indexOf(needle, i)
+  ) {
+    if (idx > i) parts.push(text.slice(i, idx))
+    parts.push(
+      <mark
+        key={idx}
+        className="bg-accent-tint text-accent-brand-strong rounded-[3px] px-0.5"
+      >
+        {text.slice(idx, idx + q.length)}
+      </mark>,
+    )
+    i = idx + q.length
+  }
+  if (i < text.length) parts.push(text.slice(i))
+  return parts.length > 0 ? parts : text
 }
 
 /** "All sources" sentinel for the source dropdown. */

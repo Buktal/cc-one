@@ -372,3 +372,48 @@ export function tryFormatJson(text: string): string | null {
 export function firstLine(text: string): string {
   return text.split("\n")[0]
 }
+
+/**
+ * The collapsed-row sets for the bulk collapse / expand toggle. Row open-state
+ * is a Set<uuid> whose membership means the OPPOSITE of the row's default:
+ * messages default expanded (open = not-in-set), tool rows default collapsed
+ * (open = in-set). So "collapse all" = every message uuid in the set, and
+ * "expand all" = every tool uuid in the set (messages drop out, tools join).
+ * Pure so the toggle's end states are testable — see isAllCollapsed.
+ */
+export function collapseAllMessages(
+  messages: readonly SessionMessage[],
+): Set<string> {
+  const out = new Set<string>()
+  for (const m of messages) {
+    if (m.role !== "tool") out.add(m.uuid)
+  }
+  return out
+}
+
+export function expandAllMessages(
+  messages: readonly SessionMessage[],
+): Set<string> {
+  const out = new Set<string>()
+  for (const m of messages) {
+    if (m.role === "tool") out.add(m.uuid)
+  }
+  return out
+}
+
+/** Is every message row collapsed — the "collapse all" end state? False when
+ *  the transcript has no expandable (non-tool) rows (e.g. tool-only or empty),
+ *  so the toggle never reports a full-collapse on a transcript that has no
+ *  messages to collapse. */
+export function isAllCollapsed(
+  messages: readonly SessionMessage[],
+  collapsed: ReadonlySet<string>,
+): boolean {
+  let sawExpandable = false
+  for (const m of messages) {
+    if (m.role === "tool") continue
+    sawExpandable = true
+    if (!collapsed.has(m.uuid)) return false
+  }
+  return sawExpandable
+}
