@@ -188,13 +188,22 @@ export function useSessionsBrowser() {
     { ...scope, limit: SESSIONS_PAGE_SIZE, offset },
     { skip: !selfDeviceId },
   )
-  // Paging-independent counts under the same scope: the total (All row +
-  // paginator) and the per-bucket sidebar numbers.
-  const countsQuery = useSessionCountsQuery(
+  // 两套计数，语义不同：
+  // - 侧栏计数（分组分布 + 「全部」行）：**全局聚合，不含选中分组**——选中
+  //   分组只是过滤右侧列表，侧栏分布不该跟着变（否则切到 A 组时 B/C/D 的
+  //   数字全部归零，明显错乱）。
+  // - 视图计数（分页 total）：跟随当前分组——列表已被分组过滤，分页总数
+  //   必须匹配列表范围，否则翻页错位。
+  const sidebarCountsQuery = useSessionCountsQuery(
+    { spec: { ...scope, selectedGroupId: ALL_GROUPS }, track: effectiveTrack },
+    { skip: !selfDeviceId },
+  )
+  const viewCountsQuery = useSessionCountsQuery(
     { spec: scope, track: effectiveTrack },
     { skip: !selfDeviceId },
   )
-  const counts = countsQuery.data ?? { total: 0, groups: [] }
+  const sidebarCounts = sidebarCountsQuery.data ?? { total: 0, groups: [] }
+  const viewCounts = viewCountsQuery.data ?? { total: 0, groups: [] }
   const groupsQuery = useListGroupsQuery()
   const groups = groupsQuery.data ?? []
   const { data: devices = [] } = useDevicesQuery()
@@ -251,27 +260,29 @@ export function useSessionsBrowser() {
   // Sidebar counts from the backend aggregation: the per-bucket map (group
   // rows) and the derived ungrouped count (total minus known buckets — stale
   // ids count as ungrouped, the rule the old client-side grouping applied).
+  // 用全局聚合（sidebarCounts）——切分组不改变侧栏分布。
   const groupCounts = useMemo(() => {
     const m = new Map<string, number>()
-    for (const g of counts.groups) m.set(g.group_id, g.count)
+    for (const g of sidebarCounts.groups) m.set(g.group_id, g.count)
     return m
-  }, [counts])
+  }, [sidebarCounts])
   const knownGroupIds = useMemo(
     () => new Set(trackGroups.map((g) => g.id)),
     [trackGroups],
   )
   const ungroupedN = useMemo(
-    () => ungroupedCount(counts, knownGroupIds),
-    [counts, knownGroupIds],
+    () => ungroupedCount(sidebarCounts, knownGroupIds),
+    [sidebarCounts, knownGroupIds],
   )
   // The visible list is the backend's current page — already narrowed by the
   // tab/toolbar/search AND the sidebar group selection, time-desc ordered.
   const visibleSessions = sessionsQuery.data ?? []
 
   // Page stats for the footer control (clamped so a shrunken result set can't
-  // leave the paginator pointing past the end).
+  // leave the paginator pointing past the end). 分页用视图计数（viewCounts，
+  // 跟随分组过滤）；侧栏「全部」行用全局计数（sidebarCounts.total）。
   const { totalPages, page } = paginate(
-    counts.total,
+    viewCounts.total,
     offset,
     SESSIONS_PAGE_SIZE,
   )
@@ -333,9 +344,9 @@ export function useSessionsBrowser() {
         previewKey ? favKey(previewKey) : null,
         offset,
         SESSIONS_PAGE_SIZE,
-        counts.total,
+        viewCounts.total,
       ),
-    [visibleSessions, previewKey, offset, counts.total],
+    [visibleSessions, previewKey, offset, viewCounts.total],
   )
 
   function openNeighbor(delta: 1 | -1): void {
@@ -600,7 +611,10 @@ export function useSessionsBrowser() {
     trackGroups,
     visibleSessions,
     // paging + sidebar counts
-    totalCount: counts.total,
+    // totalCount = 侧栏「全部」行（全局聚合，切分组不变）；viewTotal = 分页
+    // 总数（跟随当前分组过滤的列表范围）。
+    totalCount: sidebarCounts.total,
+    viewTotal: viewCounts.total,
     page,
     totalPages,
     offset,

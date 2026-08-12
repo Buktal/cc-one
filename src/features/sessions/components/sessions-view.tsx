@@ -202,7 +202,7 @@ export function SessionsView() {
               <PaginationBar
                 page={b.page}
                 totalPages={b.totalPages}
-                total={b.totalCount}
+                total={b.viewTotal}
                 loading={b.isFetching}
                 onPageChange={(p) => b.setOffset((p - 1) * SESSIONS_PAGE_SIZE)}
               />
