@@ -50,6 +50,7 @@ import {
   SheetTitle,
 } from "@/components/ui/sheet"
 import { Textarea } from "@/components/ui/textarea"
+import { OpenCodeFormFields } from "@/features/providers/components/opencode-form-fields"
 import type { ModelRoleId } from "@/features/providers/derive"
 import {
   type AuthField,
@@ -68,6 +69,8 @@ import {
   grokConfigToml,
   MODEL_ROLES,
   metaTemplateValues,
+  openCodeApiKey,
+  openCodeBaseUrl,
   providerApiKey,
   providerEndpoint,
   providerFromPreset,
@@ -318,6 +321,27 @@ export function ProviderFormSheet({
       baseUrl: geminiBaseUrl(configText).trim(),
       apiKey: key,
       // Gemini 端点形状固定（GET /v1beta/models），不走 modelsUrl 覆写。
+      modelsUrl: null,
+    })
+  }
+
+  /** 拉 OpenCode 模型列表：端点 = options.baseURL、认证 = options.apiKey（OpenAI
+   *  兼容分支——后端对非 Gemini app 统一走 fetch_models）。端点 / key 缺任一 → 提示。 */
+  async function onFetchOpenCodeModels() {
+    const baseUrl = openCodeBaseUrl(configText).trim()
+    const key = openCodeApiKey(configText).trim()
+    if (!baseUrl) {
+      toast.error(t("providers.toast.fetchModels.endpointRequired"))
+      return
+    }
+    if (!key) {
+      toast.error(t("providers.toast.fetchModels.keyRequired"))
+      return
+    }
+    await runFetchModels({
+      app: "opencode",
+      baseUrl,
+      apiKey: key,
       modelsUrl: null,
     })
   }
@@ -693,6 +717,15 @@ export function ProviderFormSheet({
                 {t("providers.form.grokConfigHint")}
               </p>
             </Field>
+          ) : null}
+          {effectiveApp === "opencode" ? (
+            <OpenCodeFormFields
+              configText={configText}
+              onChange={setConfigText}
+              fetching={fetching}
+              fetchedModels={fetchedModels}
+              onFetchModels={onFetchOpenCodeModels}
+            />
           ) : null}
           {effectiveApp === "claude" ? (
             <div className="rounded-md border p-3">

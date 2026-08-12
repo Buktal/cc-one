@@ -13,6 +13,7 @@ import {
 } from "@dnd-kit/react"
 import { useSortable } from "@dnd-kit/react/sortable"
 import {
+  ArrowRightLeft,
   Download,
   Pencil,
   Plus,
@@ -66,6 +67,7 @@ import { usePersistedState } from "@/lib/persistence"
 import { cn } from "@/lib/utils"
 
 import type { App, Provider } from "@/types/generated/bindings"
+import { CcSwitchImportDialog } from "./cc-switch-import-dialog"
 import { CommonConfigSnippetCard } from "./common-config-snippet-card"
 import { PresetSidePanel } from "./preset-side-panel"
 import { ProviderFormSheet } from "./provider-form-sheet"
@@ -107,6 +109,7 @@ export function ProvidersView() {
   const [editing, setEditing] = useState<Provider | null>(null)
   const [preset, setPreset] = useState<ProviderPreset | null>(null)
   const [transfer, setTransfer] = useState<TransferKind | null>(null)
+  const [ccswitchOpen, setCcswitchOpen] = useState(false)
   const [query, setQuery] = useState("")
   // 切换确认对话框：切到缺必填项（端点/key/模板变量）的供应商前先问一句，
   // 用户确认后照切不误（「我已经知道它缺东西，就是要切」）。
@@ -273,6 +276,14 @@ export function ProvidersView() {
             <Upload />
             {t("providers.transfer.import")}
           </Button>
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => setCcswitchOpen(true)}
+          >
+            <ArrowRightLeft />
+            {t("providers.ccswitch.button")}
+          </Button>
           <Button size="sm" onClick={openNew}>
             <Plus />
             {t("providers.add")}
@@ -402,6 +413,7 @@ export function ProvidersView() {
         onImport={importProviders}
         onOpenChange={setTransfer}
       />
+      <CcSwitchImportDialog open={ccswitchOpen} onOpenChange={setCcswitchOpen} />
     </div>
   )
 }

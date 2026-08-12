@@ -4,6 +4,7 @@ import type {
   App,
   AppError,
   AppInfo,
+  CcSwitchImportReport,
   CommonConfigSnippet,
   DeviceInfo,
   DeviceLibrarySummary,
@@ -542,6 +543,16 @@ export const vaultApi = createApi({
         run(commands.importProvidersCmd(sourcePath, mode)),
       invalidatesTags: ["Providers"],
     }),
+    /** 从 CC-Switch 导入供应商：定位本机 CC-Switch 配置 → 翻译成 cc one
+     *  Provider → 复用 apply_import 写库。代理 / OAuth / 不支持应用跳过并进报告。 */
+    importFromCcSwitch: b.mutation<
+      CcSwitchImportReport,
+      { mode: ProviderImportMode; dbPath: string | null }
+    >({
+      queryFn: async ({ mode, dbPath }) =>
+        run(commands.importFromCcswitchCmd(mode, dbPath)),
+      invalidatesTags: ["Providers"],
+    }),
     /** 拉取供应商的模型列表（按应用分派端点格式；claude/codex 走 OpenAI
      *  兼容 GET /v1/models，后端发请求避免 WebView CORS）。失败时 error 是
      *  `FetchModels` 变体，data 为带分桶标签的错误串——表单按标签映射成
@@ -659,6 +670,7 @@ export const {
   useSetCommonConfigSnippetMutation,
   useExportProvidersMutation,
   useImportProvidersMutation,
+  useImportFromCcSwitchMutation,
   useFetchModelsMutation,
 } = vaultApi
 

@@ -8,11 +8,13 @@
 import { describe, expect, it } from "vitest"
 import { CODEX_PROVIDER_PRESETS } from "@/features/providers/codex-presets"
 import {
+  parseOpenCodeConfig,
   providerEndpoint,
   providerFromPreset,
 } from "@/features/providers/derive"
 import { GEMINI_PROVIDER_PRESETS } from "@/features/providers/gemini-presets"
 import { GROK_PROVIDER_PRESETS } from "@/features/providers/grok-presets"
+import { OPENCODE_PROVIDER_PRESETS } from "@/features/providers/opencode-presets"
 import { PROVIDER_PRESETS, presetsForApp } from "@/features/providers/presets"
 
 import type { App, ProviderCategory } from "@/types/generated/bindings"
@@ -414,6 +416,76 @@ describe("GROK_PROVIDER_PRESETS", () => {
   })
 })
 
+describe("OPENCODE_PROVIDER_PRESETS", () => {
+  /** 权威清单：名称与顺序不得增删改（官方 3 + 国内大厂 6 + 热门聚合 3）。 */
+  const EXPECTED_OPENCODE_NAMES = [
+    "OpenAI",
+    "Anthropic",
+    "Google Gemini",
+    "DeepSeek",
+    "Kimi",
+    "Zhipu GLM",
+    "阿里百炼",
+    "火山方舟",
+    "MiniMax",
+    "OpenRouter",
+    "千象 Qiniu",
+    "AIHubMix",
+  ]
+
+  it("总数 12 且名称与顺序与需求清单完全一致", () => {
+    expect(OPENCODE_PROVIDER_PRESETS).toHaveLength(12)
+    expect(OPENCODE_PROVIDER_PRESETS.map((p) => p.name)).toEqual(
+      EXPECTED_OPENCODE_NAMES,
+    )
+  })
+
+  it("名称唯一", () => {
+    const names = OPENCODE_PROVIDER_PRESETS.map((p) => p.name)
+    expect(new Set(names).size).toBe(names.length)
+  })
+
+  it("category 分组合计为 官方 3 / 国内 6 / 聚合 3", () => {
+    const counts: Record<ProviderCategory, number> = {
+      official: 0,
+      cloud_provider: 0,
+      cn_official: 0,
+      aggregator: 0,
+      custom: 0,
+    }
+    for (const preset of OPENCODE_PROVIDER_PRESETS) {
+      counts[preset.category] += 1
+    }
+    expect(counts).toEqual({
+      official: 3,
+      cloud_provider: 0,
+      cn_official: 6,
+      aggregator: 3,
+      custom: 0,
+    })
+  })
+
+  it("每项 settingsConfig 经 parseOpenCodeConfig 读出 npm + baseURL（OpenCode entry 形状）", () => {
+    for (const preset of OPENCODE_PROVIDER_PRESETS) {
+      const cfg = parseOpenCodeConfig(preset.settingsConfig)
+      expect(cfg.npm, `${preset.name} 应带 @ai-sdk/* 包名`).toMatch(
+        /^@ai-sdk\//,
+      )
+      expect(cfg.baseURL, `${preset.name} 应带 baseURL`).toBeTruthy()
+      // apiKey 占位为空——密钥由表单填，不进预设。
+      expect(cfg.apiKey).toBe("")
+    }
+  })
+
+  it("每个预设都带必填元数据（websiteUrl / icon / iconColor）", () => {
+    for (const preset of OPENCODE_PROVIDER_PRESETS) {
+      expect(preset.websiteUrl).toBeTruthy()
+      expect(preset.icon).toBeTruthy()
+      expect(preset.iconColor).toBeTruthy()
+    }
+  })
+})
+
 describe("presetsForApp", () => {
   it("claude 返回 18 个 Claude 预设数组", () => {
     expect(presetsForApp("claude")).toBe(PROVIDER_PRESETS)
@@ -435,21 +507,31 @@ describe("presetsForApp", () => {
     expect(presetsForApp("grok")).toHaveLength(6)
   })
 
-  it("四个 app 的返回值互不相同（应用维度分派，不串池）", () => {
+  it("opencode 返回 12 个 OpenCode 预设数组", () => {
+    expect(presetsForApp("opencode")).toBe(OPENCODE_PROVIDER_PRESETS)
+    expect(presetsForApp("opencode")).toHaveLength(12)
+  })
+
+  it("五个 app 的返回值互不相同（应用维度分派，不串池）", () => {
     const claude = presetsForApp("claude")
     const codex = presetsForApp("codex")
     const gemini = presetsForApp("gemini")
     const grok = presetsForApp("grok")
+    const opencode = presetsForApp("opencode")
     expect(claude).not.toBe(codex)
     expect(claude).not.toBe(gemini)
     expect(claude).not.toBe(grok)
+    expect(claude).not.toBe(opencode)
     expect(codex).not.toBe(gemini)
     expect(codex).not.toBe(grok)
+    expect(codex).not.toBe(opencode)
     expect(gemini).not.toBe(grok)
+    expect(gemini).not.toBe(opencode)
+    expect(grok).not.toBe(opencode)
   })
 
   it("覆盖所有 App 类型（类型已约束，穷尽即可）", () => {
-    const apps: App[] = ["claude", "codex", "gemini", "grok"]
+    const apps: App[] = ["claude", "codex", "gemini", "grok", "opencode"]
     for (const app of apps) {
       expect(presetsForApp(app).length).toBeGreaterThan(0)
     }

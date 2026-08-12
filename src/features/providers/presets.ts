@@ -11,6 +11,7 @@
 import { CODEX_PROVIDER_PRESETS } from "@/features/providers/codex-presets"
 import { GEMINI_PROVIDER_PRESETS } from "@/features/providers/gemini-presets"
 import { GROK_PROVIDER_PRESETS } from "@/features/providers/grok-presets"
+import { OPENCODE_PROVIDER_PRESETS } from "@/features/providers/opencode-presets"
 import type { App, ProviderCategory } from "@/types/generated/bindings"
 
 /** 一个内置预设：字段对齐 Provider，但没有 id / sortIndex / updatedAt——
@@ -338,7 +339,6 @@ export function presetsForApp(app: App): ProviderPreset[] {
     case "grok":
       return GROK_PROVIDER_PRESETS
     case "opencode":
-      // OpenCode 是附加模式 (多供应商共存于 opencode.json), 不走单激活预设。
-      return []
+      return OPENCODE_PROVIDER_PRESETS
   }
 }

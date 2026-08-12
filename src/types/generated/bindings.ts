@@ -301,6 +301,12 @@ export const commands = {
 	 */
 	importProvidersFromLiveCmd: (app: App) => typedError<number, AppError>(__TAURI_INVOKE("import_providers_from_live_cmd", { app })),
 	/**
+	 *  「从 CC-Switch 导入」按钮：定位本机 CC-Switch 配置 → 读 + 转换供应商 → 复用
+	 *  `apply_import`（merge / overwrite）写本机库。代理 / OAuth / 不支持应用的供应商
+	 *  跳过并进报告明细。找不到配置 → 明确错误（前端展示友好提示）。
+	 */
+	importFromCcswitchCmd: (mode: ProviderImportMode, dbPath: string | null) => typedError<CcSwitchImportReport, AppError>(__TAURI_INVOKE("import_from_ccswitch_cmd", { mode, dbPath })),
+	/**
 	 *  Dock the given window against the right edge of its current monitor.
 	 * 
 	 *  `client_logical_w/h` is the desired CLIENT (visible content) size in logical
@@ -422,6 +428,16 @@ export type AppInfo = {
 	github_user: string | null,
 	claude_projects_dir: string | null,
 	version: string,
+};
+
+/**  CC-Switch 导入报告（跨 Rust→JS 边界，`u32` 计数避免 specta BigInt 问题）。 */
+export type CcSwitchImportReport = {
+	/**  实际写入数（来自 apply_import）。 */
+	imported: number,
+	/**  merge 模式下 (app, id) 冲突跳过数。 */
+	mergeSkipped: number,
+	/**  代理 / OAuth / 不支持应用跳过明细。 */
+	proxySkipped: SkipDetail[],
 };
 
 /**  Window-close behavior preference. Crosses the Rust→JS boundary. */
@@ -890,6 +906,26 @@ export type Skin_Deserialize = "neutral" | "pixso" | "sage" | "cuiwei" | "azure"
  *  default) → `Neutral` (the new default); the rest map by hue family.
  */
 export type Skin_Serialize = "neutral" | "sage" | "azure" | "crimson" | "mauve";
+
+export type SkipDetail = {
+	name: string,
+	reason: SkipReason,
+};
+
+/**  跳过原因（跨 Rust→JS 边界，报告里展示给用户）。 */
+export type SkipReason = 
+/**
+ *  `meta.apiFormat ∈ {openai_chat, openai_responses, gemini_native}`——需协议
+ *  转换代理，cc one 不做。
+ */
+"needs_proxy" | 
+/**
+ *  `meta.providerType ∈ {github_copilot, codex_oauth, xai_oauth}`，或 Claude
+ *  端点命中 `githubcopilot.com` / `chatgpt.com/backend-api/codex`——需 OAuth。
+ */
+"needs_o_auth" | 
+/**  claude-desktop / openclaw / hermes 等 cc one 不做的应用。 */
+"unsupported_app";
 
 /**  A synced-group row (`data/<deviceId>/groups.json`; cross-device via git). */
 export type SyncedGroup = {

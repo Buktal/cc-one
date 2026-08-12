@@ -112,6 +112,7 @@ fn specta_builder() -> Builder<tauri::Wry> {
         commands::add_provider_to_live_cmd,
         commands::remove_provider_from_live_cmd,
         commands::import_providers_from_live_cmd,
+        commands::import_from_ccswitch_cmd,
         window_geom::dock_window_right,
         window_geom::center_window,
         window_geom::set_window_rect,
