@@ -1,5 +1,5 @@
 // DateRangeChip — 共享时间范围 popover: 一排预设按钮 (今天 / 7天 / 30天 /
-// 全部) + 两个手填日期框. 纯展示: 调用方拥有值 (preset / fromDay / toDay) 与
+// 全部) + 日历弹层选范围. 纯展示: 调用方拥有值 (preset / fromDay / toDay) 与
 // 回调 (onPreset / onFromDay / onToDay), 所以这一份组件同时支撑 usage 的
 // ControlBar (值经 Redux filterSlice 读写) 与 sessions 工具栏 (本地 hook
 // state). i18n key 由调用方传入, 各视图保留自己的翻译命名空间 —— JSX 与
@@ -7,9 +7,19 @@
 //
 // `onPreset` 只回传 preset 值本身; 由调用方负责同时落具体 day 边界
 // (presetDays) —— 本组件不碰任何状态, 只上报点击.
+//
+// 日历 (shadcn Calendar / react-day-picker range mode): 选中日期即回调
+// onFromDay / onToDay (与旧原生 date input 的 onChange 同语义), 调用方转入
+// custom 预设。日历上的选中态 = 当前 EFFECTIVE 窗口 (动态预设也高亮当天/
+// 近 7 天), 点击任何日期即切 custom。range 模式重选时旧 to 会被清掉 (半选
+// 态), 与「选范围」的心智一致。
 
+import type { Locale } from "date-fns/locale"
+import { enUS, ja, zhCN } from "date-fns/locale"
+import dayjs from "dayjs"
 import { CalendarRange } from "lucide-react"
 import { useTranslation } from "react-i18next"
+import { Calendar } from "@/components/ui/calendar"
 import {
   Popover,
   PopoverContent,
@@ -18,7 +28,15 @@ import {
 import { effectiveDays, type Preset } from "@/lib/date-range"
 import { cn } from "@/lib/utils"
 
-/** 可选预设 —— "custom" 由手填日期隐式触发, 永不作为按钮出现. */
+/** 显示语言 → date-fns locale (日历月名 / 星期名跟随界面语言)。与 dayjs
+ *  locale 映射并列, 见 src/i18n/languages.ts。 */
+const DATE_FNS_LOCALES: Record<string, Locale> = {
+  en: enUS,
+  zh: zhCN,
+  ja,
+}
+
+/** 可选预设 —— "custom" 由日历选日期隐式触发, 永不作为按钮出现. */
 export type SelectablePreset = Exclude<Preset, "custom">
 
 /** 一个预设按钮: 值 + 其 i18n key. 各视图自带 key 列表注入. */
@@ -40,10 +58,6 @@ export interface DateRangeChipProps {
   allTimeKey: string
   /** 当前 preset 在 presets 里找不到匹配项时回退的 i18n key. */
   dateRangeKey: string
-  /** 起始日期框标签的 i18n key. */
-  startKey: string
-  /** 结束日期框标签的 i18n key. */
-  endKey: string
   /** popover 相对触发器的对齐. */
   align?: "start" | "end"
 }
@@ -58,11 +72,9 @@ export function DateRangeChip({
   presets,
   allTimeKey,
   dateRangeKey,
-  startKey,
-  endKey,
   align = "start",
 }: DateRangeChipProps) {
-  const { t } = useTranslation()
+  const { t, i18n } = useTranslation()
   // 日期框显示 EFFECTIVE 天 —— 动态预设 (如昨天点的「今天」) 渲染当天, 而非
   // 冻结的存储值.
   const { from_day: effFrom, to_day: effTo } = effectiveDays({
@@ -94,8 +106,8 @@ export function DateRangeChip({
           </button>
         }
       />
-      <PopoverContent align={align} className="w-72">
-        <div className="bg-muted/60 inline-flex items-center gap-0.5 rounded-md p-0.5">
+      <PopoverContent align={align} className="w-auto p-3">
+        <div className="bg-muted/60 mb-1 inline-flex items-center gap-0.5 rounded-md p-0.5">
           {presets.map((p) => (
             <button
               key={p.value}
@@ -112,26 +124,28 @@ export function DateRangeChip({
             </button>
           ))}
         </div>
-        <div className="mt-3 flex flex-col gap-2">
-          <label className="flex flex-col gap-1 text-xs">
-            <span className="text-muted-foreground">{t(startKey)}</span>
-            <input
-              type="date"
-              value={effFrom}
-              onChange={(e) => onFromDay(e.target.value)}
-              className="border-input bg-background h-8 rounded-md border px-2 text-xs"
-            />
-          </label>
-          <label className="flex flex-col gap-1 text-xs">
-            <span className="text-muted-foreground">{t(endKey)}</span>
-            <input
-              type="date"
-              value={effTo}
-              onChange={(e) => onToDay(e.target.value)}
-              className="border-input bg-background h-8 rounded-md border px-2 text-xs"
-            />
-          </label>
-        </div>
+        {/* 日历 range 模式: 选中日期即回调, 与旧原生 date input 的
+            onChange 同语义 (调用方转 custom 预设)。日历选中态显示当前
+            EFFECTIVE 窗口, 动态预设 (今天 / 7 天…) 也如实高亮。 */}
+        <Calendar
+          mode="range"
+          locale={DATE_FNS_LOCALES[i18n.language] ?? enUS}
+          selected={
+            effFrom || effTo
+              ? {
+                  from: effFrom ? dayjs(effFrom).toDate() : undefined,
+                  to: effTo ? dayjs(effTo).toDate() : undefined,
+                }
+              : undefined
+          }
+          onSelect={(range) => {
+            // range 模式: 点第一下只有 from (旧 to 清空成半选态), 点第二下
+            // 补全 to。取消选择 (range undefined) 不动作。
+            if (!range?.from) return
+            onFromDay(dayjs(range.from).format("YYYY-MM-DD"))
+            onToDay(range.to ? dayjs(range.to).format("YYYY-MM-DD") : "")
+          }}
+        />
       </PopoverContent>
     </Popover>
   )

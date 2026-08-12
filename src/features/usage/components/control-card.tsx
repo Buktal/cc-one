@@ -66,7 +66,7 @@ function Row({ label, children }: { label: string; children: ReactNode }) {
 /** 日期范围 chip —— 把 Redux filterSlice 适配成受控共享组件 (ControlCard 默认
  *  右对齐, ControlBar 左对齐). 数据语义与 sessions 工具栏版一致: 动态预设
  *  (today/7d/30d) 只存 preset、不存具体日期 (日期在 queryFn 实时派生);
- *  手填日期转 custom 并存具体值. 共享的 JSX / 标签拼装在
+ *  日历选日期转 custom 并存具体值. 共享的 JSX / 标签拼装在
  *  @/components/date-range-chip, 此处只做 slice 读写适配. */
 function DateRangeChip({ align = "end" }: { align?: "start" | "end" }) {
   const dispatch = useAppDispatch()
@@ -90,8 +90,6 @@ function DateRangeChip({ align = "end" }: { align?: "start" | "end" }) {
       presets={PRESETS}
       allTimeKey="usage.control.allTime"
       dateRangeKey="usage.control.dateRange"
-      startKey="usage.control.start"
-      endKey="usage.control.end"
       align={align}
     />
   )

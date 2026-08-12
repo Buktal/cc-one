@@ -89,8 +89,6 @@ export function SessionsView() {
           presets={RANGE_PRESETS}
           allTimeKey="sessions.filter.allTime"
           dateRangeKey="sessions.filter.dateRange"
-          startKey="sessions.filter.start"
-          endKey="sessions.filter.end"
         />
         <div className="flex w-full flex-wrap items-center gap-2 xl:w-auto">
           <SourceSelect value={b.source} onChange={b.setSource} />
