@@ -550,6 +550,8 @@
   "usage.logs.detail.requestId": "请求 ID",
   "usage.logs.detail.serviceTier": "服务层级",
   "usage.logs.detail.session": "会话",
+  "usage.logs.detail.tier.priority": "优先档",
+  "usage.logs.detail.tier.standard": "标准档",
   "usage.logs.detail.tools": "工具调用",
   "usage.logs.detail.webFetch": "网页抓取 {{n}} 次",
   "usage.logs.detail.webSearch": "网页搜索 {{n}} 次",

@@ -552,6 +552,8 @@
   "usage.logs.detail.requestId": "Request ID",
   "usage.logs.detail.serviceTier": "Service tier",
   "usage.logs.detail.session": "Session",
+  "usage.logs.detail.tier.priority": "Priority",
+  "usage.logs.detail.tier.standard": "Standard",
   "usage.logs.detail.tools": "Tool use",
   "usage.logs.detail.webFetch": "{{n}} web fetch",
   "usage.logs.detail.webSearch": "{{n}} web search",

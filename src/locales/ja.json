@@ -535,6 +535,8 @@
   "usage.logs.detail.requestId": "リクエスト ID",
   "usage.logs.detail.serviceTier": "サービス階層",
   "usage.logs.detail.session": "セッション",
+  "usage.logs.detail.tier.priority": "優先",
+  "usage.logs.detail.tier.standard": "標準",
   "usage.logs.detail.tools": "ツール使用",
   "usage.logs.detail.webFetch": "ウェブ取得 {{n}} 回",
   "usage.logs.detail.webSearch": "ウェブ検索 {{n}} 回",

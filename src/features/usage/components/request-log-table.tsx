@@ -245,12 +245,28 @@ function StopReasonCell({ value }: { value: string }) {
   )
 }
 
-/** Cost breakdown section label + value line, reused by the detail row. */
-function CostLine({ label, value }: { label: ReactNode; value: string }) {
+/** Cost breakdown section line: label + token count + amount, reused by the
+ *  detail row. `tokens` renders as a muted prefix ("1.2k →") so the eye reads
+ *  token → 金额 at a glance; a line without token data (e.g. totals) shows the
+ *  amount alone. */
+function CostLine({
+  label,
+  tokens,
+  value,
+}: {
+  label: ReactNode
+  tokens?: string
+  value: string
+}) {
   return (
     <div className="flex items-baseline justify-between gap-3">
       <span className="text-muted-foreground text-xs">{label}</span>
-      <span className="tabular-nums text-xs">{value}</span>
+      <span className="tabular-nums text-xs">
+        {tokens ? (
+          <span className="text-muted-foreground mr-1.5">{tokens} →</span>
+        ) : null}
+        {value}
+      </span>
     </div>
   )
 }
@@ -275,83 +291,119 @@ function DetailRow({ r }: { r: UsageLogRow }) {
     <TableRow className="hover:bg-transparent">
       <TableCell colSpan={7} className="bg-muted/20 border-t-0 px-3 py-2.5">
         <div className="grid grid-cols-[minmax(0,auto)_minmax(0,1fr)] gap-x-8 gap-y-1.5">
-          {/* 成本明细 — the "why is this call expensive" half. */}
+          {/* 成本明细 — the "why is this call expensive" half. 每行 token →
+              金额，读一眼就知道这笔钱花在哪。 */}
           <div className="flex flex-col gap-1">
             <div className="text-foreground mb-0.5 text-[11px] font-semibold">
               {t("usage.logs.detail.costTitle")}
             </div>
             <CostLine
               label={t("usage.logs.detail.output")}
+              tokens={formatTokens(r.tokens.output)}
               value={formatCost(r.cost.output_usd)}
             />
             <CostLine
               label={t("usage.logs.detail.input")}
+              tokens={formatTokens(r.tokens.input)}
               value={formatCost(r.cost.input_usd)}
             />
             <CostLine
               label={t("usage.logs.detail.cacheRead")}
+              tokens={formatTokens(r.tokens.cache_read)}
               value={formatCost(r.cost.cache_read_usd)}
             />
             <CostLine
               label={t("usage.logs.detail.cacheCreate")}
+              tokens={formatTokens(r.tokens.cache_creation)}
               value={formatCost(r.cost.cache_creation_usd)}
             />
             <CostLine
               label={t("usage.logs.col.cost")}
+              tokens={formatTokens(tokenTotal(r))}
               value={formatCost(r.total_cost_usd)}
             />
           </div>
-          {/* 其余字段 — identity + context. */}
-          <div className="text-muted-foreground flex flex-col gap-1 text-xs">
+          {/* 其余字段 — identity + context. 两列 grid：标签列等宽，所有行的
+              值从同一位置开始（会话/请求 ID 是变长值，inline 布局会对不齐）。
+              行距 gap-y-1 与原 flex gap-1 一致（4px，不改变原版行步长）；
+              CopyButton 缩到 size-4 与 12px 文本行高等高——按钮默认
+              icon-sm 是 size-8，会把它所在的行撑高、让行距看起来变大。
+              会话 ID 与请求 ID 相邻成组（都能复制），随后是迭代/层级/
+              工具/计价模型。 */}
+          <div className="text-muted-foreground grid grid-cols-[auto_minmax(0,1fr)] items-center gap-x-3 gap-y-1 text-xs">
             {r.session_id ? (
-              <span className="truncate" title={r.session_id}>
+              <>
                 <span className="font-medium">
                   {t("usage.logs.detail.session")}
-                </span>{" "}
-                <span className="font-mono">{r.session_id}</span>
-              </span>
+                </span>
+                <span className="flex min-w-0 items-center gap-1.5">
+                  <span className="truncate font-mono" title={r.session_id}>
+                    {r.session_id}
+                  </span>
+                  <CopyButton
+                    value={r.session_id}
+                    label={t("usage.logs.detail.copy")}
+                    className="size-4"
+                  />
+                </span>
+              </>
             ) : null}
-            {r.iterations > 0 ? (
-              <span>
-                <span className="font-medium">
-                  {t("usage.logs.detail.iterations")}
-                </span>{" "}
-                <span className="tabular-nums">{formatInt(r.iterations)}</span>
-              </span>
-            ) : null}
-            {r.service_tier ? (
-              <span>
-                <span className="font-medium">
-                  {t("usage.logs.detail.serviceTier")}
-                </span>{" "}
-                <span className="font-mono">{r.service_tier}</span>
-              </span>
-            ) : null}
-            {tools.length > 0 ? (
-              <span>
-                <span className="font-medium">
-                  {t("usage.logs.detail.tools")}
-                </span>{" "}
-                <span>{tools.join(" · ")}</span>
-              </span>
-            ) : null}
-            {r.pricing_model && r.pricing_model !== r.model ? (
-              <span className="truncate" title={r.pricing_model}>
-                <span className="font-medium">
-                  {t("usage.logs.detail.pricingModel")}
-                </span>{" "}
-                <span className="font-mono">{r.pricing_model}</span>
-              </span>
-            ) : null}
-            <span className="flex items-center gap-1.5">
-              <span className="font-medium">
-                {t("usage.logs.detail.requestId")}
-              </span>{" "}
+            <span className="font-medium">
+              {t("usage.logs.detail.requestId")}
+            </span>
+            <span className="flex min-w-0 items-center gap-1.5">
               <span className="truncate font-mono" title={r.uuid}>
                 {r.uuid}
               </span>
-              <CopyButton value={r.uuid} label={t("usage.logs.detail.copy")} />
+              <CopyButton
+                value={r.uuid}
+                label={t("usage.logs.detail.copy")}
+                className="size-4"
+              />
             </span>
+            {r.iterations > 0 ? (
+              <>
+                <span className="font-medium">
+                  {t("usage.logs.detail.iterations")}
+                </span>
+                <span className="tabular-nums">{formatInt(r.iterations)}</span>
+              </>
+            ) : null}
+            {r.service_tier ? (
+              <>
+                <span className="font-medium">
+                  {t("usage.logs.detail.serviceTier")}
+                </span>
+                <span className="font-mono">
+                  {/* standard/priority 是 Anthropic API 的档位（Claude Code
+                      JSONL 的 usage.service_tier 原样透传）：已知档位显示
+                      本地化文案，未知值原样（新档位不崩）。 */}
+                  {r.service_tier === "standard"
+                    ? t("usage.logs.detail.tier.standard")
+                    : r.service_tier === "priority"
+                      ? t("usage.logs.detail.tier.priority")
+                      : r.service_tier}
+                </span>
+              </>
+            ) : null}
+            {tools.length > 0 ? (
+              <>
+                <span className="font-medium">
+                  {t("usage.logs.detail.tools")}
+                </span>
+                <span>{tools.join(" · ")}</span>
+              </>
+            ) : null}
+            {r.pricing_model && r.pricing_model !== r.model ? (
+              <>
+                <span className="font-medium">
+                  {t("usage.logs.detail.pricingModel")}
+                </span>
+                <span className="truncate font-mono" title={r.pricing_model}>
+                  {r.pricing_model}
+                </span>
+              </>
+            ) : null}
           </div>
         </div>
       </TableCell>

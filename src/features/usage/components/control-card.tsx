@@ -181,9 +181,10 @@ function SourceChip({
     >
       <SelectTrigger
         className={cn(
-          "border-border bg-card hover:bg-muted/60 h-8 w-30 rounded-md",
-          // 「全部应用」4 字 + padding 约 102px → w-30 (120px) 足够，与
-          // sessions 的来源/设备下拉同宽；长名称由 line-clamp-1 截断。
+          // 纵卡 ControlCard 内与应用/设备下拉统一 w-36（模型名最长的容纳
+          // 宽度，三下拉等宽对齐）；横排 ControlBar 与 sessions 的来源/设备
+          // 下拉同宽 w-30。长名称由 line-clamp-1 截断。
+          "border-border bg-card hover:bg-muted/60 h-8 w-36 rounded-md",
           bar && "w-30",
         )}
         aria-label={t("usage.control.source")}
