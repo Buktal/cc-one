@@ -296,6 +296,8 @@
   "providers.transfer.importTitle": "导入供应商",
   "providers.transfer.keys.label": "API key",
   "providers.transfer.keys.withKeys": "包含 API key",
+  "providers.transfer.keys.withoutKeysHint": "密钥不写进导出文件，换设备后需重新填写（安全默认）",
+  "providers.transfer.keys.withKeysHint": "密钥随配置一起导出，换设备可直接使用——文件含密钥请妥善保管",
   "providers.transfer.keys.withoutKeys": "不含 API key",
   "providers.transfer.mode.label": "冲突处理",
   "providers.transfer.mode.merge": "合并（保留已有）",

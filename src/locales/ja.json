@@ -284,6 +284,8 @@
   "providers.transfer.importTitle": "プロバイダーをインポート",
   "providers.transfer.keys.label": "API キー",
   "providers.transfer.keys.withKeys": "API キーを含める",
+  "providers.transfer.keys.withoutKeysHint": "キーはエクスポートファイルに含まれません。別デバイスで再入力が必要です（安全な既定値）",
+  "providers.transfer.keys.withKeysHint": "キーも一緒にエクスポートされ、別デバイスでそのまま使えます——ファイルの保管に注意",
   "providers.transfer.keys.withoutKeys": "API キーを含めない",
   "providers.transfer.mode.label": "競合の扱い",
   "providers.transfer.mode.merge": "マージ（既存を保持）",

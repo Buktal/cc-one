@@ -20,15 +20,12 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog"
 import { Label } from "@/components/ui/label"
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select"
 import type { ProviderImportMode } from "@/types/generated/bindings"
-import { ImportModeCards } from "./import-mode-cards"
+import {
+  IMPORT_MODE_OPTIONS,
+  type OptionCardOption,
+  OptionCards,
+} from "./option-cards"
 
 /** Which transfer direction the dialog is showing. */
 export type TransferKind = "export" | "import"
@@ -36,9 +33,19 @@ export type TransferKind = "export" | "import"
 /** Export key option: strip secrets (default) or carry them for migration. */
 type KeysChoice = "withoutKeys" | "withKeys"
 
-const KEYS_OPTIONS: ReadonlyArray<[KeysChoice, string]> = [
-  ["withoutKeys", "providers.transfer.keys.withoutKeys"],
-  ["withKeys", "providers.transfer.keys.withKeys"],
+/** 导出密钥选项：与导入冲突处理同一套决策卡视觉（OptionCards），
+ *  语义写进卡片内部。 */
+const KEYS_OPTIONS: ReadonlyArray<OptionCardOption<KeysChoice>> = [
+  {
+    value: "withoutKeys",
+    labelKey: "providers.transfer.keys.withoutKeys",
+    hintKey: "providers.transfer.keys.withoutKeysHint",
+  },
+  {
+    value: "withKeys",
+    labelKey: "providers.transfer.keys.withKeys",
+    hintKey: "providers.transfer.keys.withKeysHint",
+  },
 ]
 
 export function ProviderTransferDialog({
@@ -86,32 +93,24 @@ export function ProviderTransferDialog({
         {isExport ? (
           <div className="flex flex-col gap-2">
             <Label>{t("providers.transfer.keys.label")}</Label>
-            <Select
+            {/* 与导入冲突处理同一套决策卡：选项平铺、语义进卡片。 */}
+            <OptionCards
               value={keysChoice}
-              onValueChange={(v) => setKeysChoice(v as KeysChoice)}
-            >
-              <SelectTrigger className="w-64">
-                <SelectValue>
-                  {(v: string) =>
-                    t(KEYS_OPTIONS.find((o) => o[0] === v)?.[1] ?? v)
-                  }
-                </SelectValue>
-              </SelectTrigger>
-              <SelectContent>
-                {KEYS_OPTIONS.map(([value, key]) => (
-                  <SelectItem key={value} value={value}>
-                    {t(key)}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
+              onValueChange={setKeysChoice}
+              options={KEYS_OPTIONS}
+              ariaLabel={t("providers.transfer.keys.label")}
+            />
           </div>
         ) : (
           <div className="flex flex-col gap-2">
             <Label>{t("providers.transfer.mode.label")}</Label>
-            {/* 与 CC-Switch 导入弹窗共享同一决策卡：选项平铺、语义进卡片，
-                不再下拉藏选项 + 行下动态小字。 */}
-            <ImportModeCards value={mode} onValueChange={setMode} />
+            {/* 与 CC-Switch 导入弹窗共享同一决策卡：选项平铺、语义进卡片。 */}
+            <OptionCards
+              value={mode}
+              onValueChange={setMode}
+              options={IMPORT_MODE_OPTIONS}
+              ariaLabel={t("providers.transfer.mode.label")}
+            />
           </div>
         )}
         <DialogFooter>

@@ -98,9 +98,11 @@ export function PresetPicker({
                       aria-pressed={isSelected}
                       className={cn(
                         "justify-start",
-                        // 选中态与 ImportModeCards 决策卡同一套视觉语言。
+                        // 选中态与 OptionCards 决策卡同一套视觉语言：inset shadow
+                        // 描边 + 淡色底，字体颜色保持不动（border-* 自定义色会被
+                        // outline variant 的 border-border 覆盖，见 option-cards）。
                         isSelected &&
-                          "border-accent-brand bg-accent-tint text-accent-brand-strong font-medium",
+                          "border-transparent bg-accent-tint shadow-[inset_0_0_0_1px_var(--accent-brand)] dark:border-transparent dark:bg-accent-tint",
                       )}
                     >
                       {preset.iconColor ? (

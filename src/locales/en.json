@@ -300,6 +300,8 @@
   "providers.transfer.importTitle": "Import providers",
   "providers.transfer.keys.label": "API keys",
   "providers.transfer.keys.withKeys": "Include API keys",
+  "providers.transfer.keys.withoutKeysHint": "Keys stay out of the exported file; re-enter them on the new device (safe default)",
+  "providers.transfer.keys.withKeysHint": "Keys travel with the config so the new device works immediately — keep the file safe",
   "providers.transfer.keys.withoutKeys": "Without API keys",
   "providers.transfer.mode.label": "Conflict mode",
   "providers.transfer.mode.merge": "Merge (keep existing)",

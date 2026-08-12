@@ -25,7 +25,7 @@ import type {
   ProviderImportMode,
   SkipReason,
 } from "@/types/generated/bindings"
-import { ImportModeCards } from "./import-mode-cards"
+import { IMPORT_MODE_OPTIONS, OptionCards } from "./option-cards"
 
 /** 跳过原因 → i18n key。枚举变体跨边界转成 snake_case（needs_proxy /
  *  needs_o_auth / unsupported_app——注意 OAuth 被拆成 o_auth，与后端 serde 一致）。 */
@@ -130,13 +130,18 @@ export function CcSwitchImportDialog({
           </div>
         ) : (
           // 表单视图：冲突策略 + 可选配置位置。
-          // 冲突策略用可见决策卡（ImportModeCards，与 JSON 迁移弹窗共享）：
+          // 冲突策略用可见决策卡（OptionCards，与 JSON 迁移弹窗共享）：
           // 选项平铺可对比、语义在卡片内——下拉藏选项 + 行下动态小字在切换
           // 时会文字跳变撑高布局，正是这个弹窗「乱」的来源。
           <div className="flex flex-col gap-4">
             <div className="flex flex-col gap-2">
               <Label>{t("providers.transfer.mode.label")}</Label>
-              <ImportModeCards value={mode} onValueChange={setMode} />
+              <OptionCards
+                value={mode}
+                onValueChange={setMode}
+                options={IMPORT_MODE_OPTIONS}
+                ariaLabel={t("providers.transfer.mode.label")}
+              />
             </div>
             <div className="flex flex-col gap-2">
               <Label>{t("providers.ccswitch.path")}</Label>
