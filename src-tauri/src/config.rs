@@ -305,6 +305,9 @@ impl Default for ConfigData {
             active_provider_id: None,
             common_config_snippets: BTreeMap::new(),
             common_config_snippet: default_common_config_snippet(),
+            // 旧全局字段的默认保持 false（历史语义；该字段已被
+            // common_config_snippets 取代——片段默认开启由 snippet_for /
+            // migrate_legacy_fields 在 map 层保证，这里不影响任何行为）。
             common_config_snippet_enabled: false,
         }
     }
@@ -338,13 +341,15 @@ impl ConfigData {
 
     /// 某应用的通用配置片段：已有条目原样返回；缺省（新应用池 / 手改
     /// config.json 删了键）按应用给默认——claude 沿用隐藏署名片段，其余应用
-    /// 默认空片段（它们的配置里没有署名概念，留空由用户自填）。
+    /// 默认空片段（它们的配置里没有署名概念，留空由用户自填）。未保存过 →
+    /// **默认启用**（片段是跨供应商的共享默认值，开箱即生效；显式保存过
+    /// enabled=false 的条目原样返回，尊重用户关闭）。
     pub fn snippet_for(&self, app: App) -> CommonConfigSnippet {
         self.common_config_snippets
             .get(app.as_str())
             .cloned()
             .unwrap_or_else(|| CommonConfigSnippet {
-                enabled: false,
+                enabled: true,
                 content: if app == App::Claude {
                     default_common_config_snippet()
                 } else {
@@ -488,10 +493,14 @@ fn migrate_legacy_fields(data: &mut ConfigData) -> bool {
         dirty = true;
     }
     if !data.common_config_snippets.contains_key("claude") {
+        // 未保存过片段（map 无键）→ 插入时恒为启用：片段默认开启是产品
+        // 语义（跨供应商共享默认值开箱生效），旧全局字段的默认 false 只是
+        // 旧版本的产品默认，不是用户主动选择——显式保存过 enabled=false
+        // 的条目在 map 里有键，这里不会覆盖它。
         data.common_config_snippets.insert(
             "claude".to_string(),
             CommonConfigSnippet {
-                enabled: data.common_config_snippet_enabled,
+                enabled: true,
                 content: data.common_config_snippet.clone(),
             },
         );
@@ -626,7 +635,9 @@ mod tests {
 
     #[test]
     fn snippet_fields_default_and_roundtrip() {
-        // 旧 config.json 没有片段字段 → 默认：隐藏署名片段、未启用。
+        // 旧 config.json 没有片段字段 → 旧全局字段反序列化默认 false（历史
+        // 语义；产品「默认开启」由 snippet_for / migrate_legacy_fields 在
+        // common_config_snippets 层保证，不在此字段）。
         let c: ConfigData =
             serde_json::from_str(r#"{"device_id":"abc123def456","display_name":"V"}"#).unwrap();
         assert_eq!(c.common_config_snippet, r#"{"includeCoAuthoredBy": false}"#);
@@ -685,9 +696,10 @@ mod tests {
     fn snippet_for_defaults_per_app() {
         let c = ConfigData::default();
         // claude 默认隐藏署名片段；codex/gemini/grok 默认空片段（留空自填）。
+        // 未保存过 → 默认启用（跨供应商共享默认值开箱生效）。
         let claude = c.snippet_for(App::Claude);
         assert_eq!(claude.content, r#"{"includeCoAuthoredBy": false}"#);
-        assert!(!claude.enabled);
+        assert!(claude.enabled);
         assert_eq!(c.snippet_for(App::Codex).content, "");
         assert_eq!(c.snippet_for(App::Gemini).content, "");
         assert_eq!(c.snippet_for(App::Grok).content, "");
@@ -743,6 +755,25 @@ mod tests {
         // 幂等：再跑一遍 → 无变化，不再标记重写。
         assert!(!migrate_legacy_fields(&mut c), "新格式幂等：无需重写");
         assert_eq!(c.active_provider_id_for(App::Claude).as_deref(), Some("p1"));
+    }
+
+    /// 旧 config.json 里片段从未启用（旧产品默认 false，用户没动过）→ 迁移
+    /// 后 claude 键默认启用（新产品语义：片段默认开启）；用户显式保存过的
+    /// false 在 map 里有键，迁移不会覆盖（见 migrate_legacy_fields）。
+    #[test]
+    fn migrate_flips_unset_snippet_to_enabled() {
+        let c: ConfigData = serde_json::from_str(
+            r#"{"device_id":"abc123def456","display_name":"V","common_config_snippet":"{\"includeCoAuthoredBy\": false}","common_config_snippet_enabled":false}"#,
+        )
+        .unwrap();
+        let mut c = c;
+        assert!(migrate_legacy_fields(&mut c));
+        assert!(
+            c.snippet_for(App::Claude).enabled,
+            "未主动保存的片段随新产品默认开启"
+        );
+        // 幂等。
+        assert!(!migrate_legacy_fields(&mut c));
     }
 
     /// 新旧字段并存（手改/回滚残留）→ 新字段（map）为准，旧键是 stale 的。

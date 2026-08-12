@@ -172,6 +172,30 @@ export function JsonEditor({
           ),
           EditorView.updateListener.of((update) => {
             if (!update.docChanged || pushingRef.current) return
+            // 粘贴（含「全部替换」式插入）即自动展开：与外部值进入同一规则
+            // （formatJson 容错，语法错误 / 尾逗号等无效 JSON 也展开成可读
+            // 结构，字符串字面量不受影响）。先 dispatch 再回传格式化结果，
+            // 父级状态一次到位，不会闪过原文。错误位置由 jsonParseLinter 的
+            // 红线标记，这里只负责排版。
+            const pasted = update.transactions.some((t) =>
+              t.isUserEvent("input.paste"),
+            )
+            if (pasted) {
+              const text = update.view.state.doc.toString()
+              const formatted = formatJson(text)
+              if (formatted !== text) {
+                pushingRef.current = true
+                try {
+                  update.view.dispatch({
+                    changes: { from: 0, to: text.length, insert: formatted },
+                  })
+                } finally {
+                  pushingRef.current = false
+                }
+              }
+              onChangeRef.current(formatted)
+              return
+            }
             onChangeRef.current(update.state.doc.toString())
           }),
         ],

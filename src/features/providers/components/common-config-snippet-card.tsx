@@ -20,7 +20,7 @@ import { Label } from "@/components/ui/label"
 import { Switch } from "@/components/ui/switch"
 import { snippetMissingKeys } from "@/features/providers/derive"
 import { useMutateWithToast } from "@/hooks/use-toast-mutation"
-import { parseJsonObject } from "@/lib/json"
+import { formatJson, parseJsonObject } from "@/lib/json"
 
 import type { App, CommonConfigSnippet } from "@/types/generated/bindings"
 
@@ -43,25 +43,52 @@ export function CommonConfigSnippetCard({ app }: { app: App }) {
     setContent(snippet.content)
   }, [snippet])
 
-  async function onSave() {
-    const parsed = parseJsonObject(content)
+  // 保存（内容 / 开关共用）：**保存前格式化为多行展开**——后端存展开版，
+  // 回读时天然展开。否则手输 / 编辑的单行紧凑 JSON 保存后重开时，编辑器
+  // 文档恰好等于后端返回的同一份单行文本，JsonEditor 的「外部值进入才展开」
+  // 会被 `cur === value` 提前跳过，紧凑单行就永远留着（加载路径只覆盖从未
+  // 编辑过的内容）。校验失败返回 false（调用方决定回滚）。
+  async function persist(next: {
+    enabled: boolean
+    content: string
+  }): Promise<boolean> {
+    const parsed = parseJsonObject(next.content)
     if (!parsed.ok) {
       toast.error(t("providers.snippet.invalidJson"), {
         description: parsed.error,
       })
-      return
+      return false
     }
-    await runWithToast(
+    const formatted = formatJson(next.content)
+    return await runWithToast(
       save,
       {
         app,
-        snippet: { enabled, content } satisfies CommonConfigSnippet,
+        snippet: {
+          enabled: next.enabled,
+          content: formatted,
+        } satisfies CommonConfigSnippet,
       },
       {
         success: { key: "providers.snippet.saved" },
         failed: { key: "providers.snippet.saveFailed" },
       },
     )
+  }
+
+  async function onSave() {
+    const ok = await persist({ enabled, content })
+    if (ok) setContent(formatJson(content))
+  }
+
+  // 开关翻转即写盘：启用状态是「生效」开关（切换供应商时后端按它决定是否
+  // 合并片段），不依赖下方的「保存」按钮——否则开了开关不点保存，切供应商
+  // 时片段不生效，开关形同虚设。内容非法则拒绝翻转（保存失败 + 回滚）。
+  // 内容编辑仍走保存按钮。
+  async function onToggleEnabled(checked: boolean): Promise<void> {
+    setEnabled(checked)
+    const ok = await persist({ enabled: checked, content })
+    if (!ok) setEnabled(!checked)
   }
 
   // 子集判定提示：对当前激活供应商，片段会补上什么。
@@ -86,7 +113,7 @@ export function CommonConfigSnippetCard({ app }: { app: App }) {
             id="common-snippet-enabled"
             checked={enabled}
             disabled={isLoading}
-            onCheckedChange={setEnabled}
+            onCheckedChange={(c) => void onToggleEnabled(c)}
           />
         </div>
       </CardHeader>
