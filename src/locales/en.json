@@ -69,7 +69,7 @@
   "library.scope.all": "All devices",
   "library.searchAria": "Search files",
   "library.searchPlaceholder": "Search files…",
-  "library.title": "Library",
+  "library.title": "Files",
   "library.toast.deleted": "Deleted",
   "library.toast.exported": "Exported",
   "library.toast.failed": "Action failed",
@@ -86,8 +86,7 @@
   "library.upload.title": "Upload to Library",
   "library.upload.uploading": "Uploading…",
   "nav.dashboard": "Dashboard",
-  "nav.heading": "Navigation",
-  "nav.library": "Library",
+  "nav.library": "Files",
   "nav.logs": "Request Logs",
   "nav.pricing": "Pricing",
   "nav.providers": "Apps & Providers",
@@ -587,5 +586,7 @@
   "usage.trend.noData": "No data",
   "usage.trend.title": "Usage trend",
   "usage.trend.total": "Total",
-  "sessions.detail.source": "App"
+  "sessions.detail.source": "App",
+  "nav.group.watch": "Observe",
+  "nav.group.manage": "Manage"
 }

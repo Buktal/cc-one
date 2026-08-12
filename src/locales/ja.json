@@ -64,7 +64,7 @@
   "library.scope.all": "すべてのデバイス",
   "library.searchAria": "ファイルを検索",
   "library.searchPlaceholder": "ファイルを検索…",
-  "library.title": "ライブラリ",
+  "library.title": "ファイル",
   "library.toast.deleted": "削除しました",
   "library.toast.exported": "エクスポートしました",
   "library.toast.failed": "操作に失敗しました",
@@ -81,8 +81,7 @@
   "library.upload.title": "ライブラリへアップロード",
   "library.upload.uploading": "アップロード中…",
   "nav.dashboard": "ダッシュボード",
-  "nav.heading": "ナビゲーション",
-  "nav.library": "ライブラリ",
+  "nav.library": "ファイル",
   "nav.logs": "リクエストログ",
   "nav.pricing": "料金",
   "nav.providers": "アプリとプロバイダー",
@@ -570,5 +569,7 @@
   "usage.trend.noData": "データなし",
   "usage.trend.title": "使用トレンド",
   "usage.trend.total": "合計",
-  "sessions.detail.source": "アプリ"
+  "sessions.detail.source": "アプリ",
+  "nav.group.watch": "観察",
+  "nav.group.manage": "管理"
 }

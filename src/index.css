@@ -351,6 +351,17 @@
   }
 }
 
+/* Scrollable region without a visible scrollbar — used by the sidebar nav
+   column (a thin window must not show a scrollbar in a 16-wide gutter, but
+   the nav must still scroll to reach the footer's controls). Scrolling still
+   works with wheel / trackpad / arrow keys. */
+.scrollbar-none {
+  scrollbar-width: none;
+}
+.scrollbar-none::-webkit-scrollbar {
+  display: none;
+}
+
 /* Dot-grid backdrop utility (opt-in; default surface is flat solid). */
 .bg-grid {
   background-image: radial-gradient(var(--border) 1px, transparent 1px);

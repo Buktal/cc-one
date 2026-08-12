@@ -66,7 +66,7 @@
   "library.scope.all": "全部设备",
   "library.searchAria": "搜索文件",
   "library.searchPlaceholder": "搜索文件…",
-  "library.title": "库",
+  "library.title": "文件库",
   "library.toast.deleted": "已删除",
   "library.toast.exported": "已导出",
   "library.toast.failed": "操作失败",
@@ -83,8 +83,7 @@
   "library.upload.title": "上传到库",
   "library.upload.uploading": "上传中…",
   "nav.dashboard": "数据看板",
-  "nav.heading": "导航",
-  "nav.library": "库",
+  "nav.library": "文件库",
   "nav.logs": "请求日志",
   "nav.pricing": "成本定价",
   "nav.providers": "应用与供应商",
@@ -585,5 +584,7 @@
   "usage.trend.noData": "无数据",
   "usage.trend.title": "使用趋势",
   "usage.trend.total": "合计",
-  "sessions.detail.source": "应用"
+  "sessions.detail.source": "应用",
+  "nav.group.watch": "观察",
+  "nav.group.manage": "管理"
 }

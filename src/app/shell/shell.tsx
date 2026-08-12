@@ -12,10 +12,10 @@ import {
   BookText,
   Gauge,
   Library,
-  List,
   MessagesSquare,
   PanelLeftClose,
   PanelLeftOpen,
+  ScrollText,
   Server,
   Settings,
   Tags,
@@ -42,22 +42,36 @@ import { TitleBar } from "./title-bar"
 import { UpdateIndicator } from "./update-card"
 import { useUpdateCheck } from "./use-update-check"
 
-const NAV: Array<{
-  id: ViewId
-  key: string
-  icon: typeof Gauge
-  beta?: boolean
+// 7 views split into two groups — 观察 (data views) and 管理 (system config).
+// The group headings make the sidebar scannable in two regions instead of a
+// flat list; the flat icon order is preserved (groups flatten back into it),
+// so keyboard order and portrait top-bar order don't change.
+const NAV_GROUPS: Array<{
+  heading: string
+  items: Array<{ id: ViewId; key: string; icon: typeof Gauge; beta?: boolean }>
 }> = [
-  { id: "dashboard", key: "nav.dashboard", icon: Gauge },
-  { id: "sessions", key: "nav.sessions", icon: MessagesSquare },
-  { id: "logs", key: "nav.logs", icon: List },
-  { id: "pricing", key: "nav.pricing", icon: Tags },
-  { id: "library", key: "nav.library", icon: Library },
-  // 应用与供应商处于 beta：codex / gemini / grok / opencode 多应用接入与
-  // opencode 附加模式刚上线，真实环境验证尚不充分。
-  { id: "providers", key: "nav.providers", icon: Server, beta: true },
-  { id: "settings", key: "nav.settings", icon: Settings },
+  {
+    heading: "nav.group.watch",
+    items: [
+      { id: "dashboard", key: "nav.dashboard", icon: Gauge },
+      { id: "sessions", key: "nav.sessions", icon: MessagesSquare },
+      { id: "logs", key: "nav.logs", icon: ScrollText },
+      { id: "pricing", key: "nav.pricing", icon: Tags },
+    ],
+  },
+  {
+    heading: "nav.group.manage",
+    items: [
+      { id: "library", key: "nav.library", icon: Library },
+      // 应用与供应商处于 beta：codex / gemini / grok / opencode 多应用接入与
+      // opencode 附加模式刚上线，真实环境验证尚不充分。
+      { id: "providers", key: "nav.providers", icon: Server, beta: true },
+      { id: "settings", key: "nav.settings", icon: Settings },
+    ],
+  },
 ]
+
+const NAV = NAV_GROUPS.flatMap((group) => group.items)
 
 const COLLAPSE_KEY = "cc-one:sidebar-collapsed"
 
@@ -67,7 +81,12 @@ const COLLAPSE_KEY = "cc-one:sidebar-collapsed"
 function Logo({ collapsed }: { collapsed: boolean }) {
   const { t } = useTranslation()
   return (
-    <div className="flex items-center gap-2.5">
+    <div
+      className={cn(
+        "flex items-center transition-[gap] duration-200",
+        collapsed ? "gap-0" : "gap-2.5",
+      )}
+    >
       <img
         src="/cc-one-dark.svg"
         alt=""
@@ -78,14 +97,26 @@ function Logo({ collapsed }: { collapsed: boolean }) {
         alt=""
         className="block dark:hidden size-9 shrink-0"
       />
-      {collapsed ? null : (
-        <div className="flex flex-col leading-tight">
-          <span className="text-sm font-semibold">cc one</span>
-          <span className="text-muted-foreground text-[10px]">
-            {t("shell.logoSubtitle")}
-          </span>
-        </div>
-      )}
+      <div
+        className={cn(
+          // Wordmark fades with the same timing as the nav labels — out on
+          // collapse, back in only after the width slide — and its max-width
+          // shrinks/grows in lockstep so it can't wrap or squeeze mid-slide.
+          // max-width interpolates (width:auto can't), and the comma-delayed
+          // transition (opacity first, then max-width) keeps the text
+          // invisible until the slide finishes. max-w-0 also collapses the
+          // wordmark fully for the portrait top bar's `<Logo collapsed />`.
+          "flex min-w-0 flex-col overflow-hidden leading-tight whitespace-nowrap transition-[max-width,opacity] duration-200",
+          collapsed
+            ? "max-w-0 opacity-0"
+            : "max-w-full opacity-100 delay-[200ms,0ms]",
+        )}
+      >
+        <span className="text-sm font-semibold">cc one</span>
+        <span className="text-muted-foreground text-[10px]">
+          {t("shell.logoSubtitle")}
+        </span>
+      </div>
     </div>
   )
 }
@@ -96,7 +127,6 @@ function NavItem({
   collapsed,
   onClick,
   tooltipSide = "right",
-  accentBar = "left",
 }: {
   item: { id: ViewId; key: string; icon: typeof Gauge; beta?: boolean }
   active: boolean
@@ -104,9 +134,6 @@ function NavItem({
   onClick: () => void
   /** Tooltip direction when `collapsed` (icon-only). */
   tooltipSide?: "right" | "bottom"
-  /** Which edge the active accent bar sits on. Vertical sidebar = left;
-   *  the portrait top nav = bottom. */
-  accentBar?: "left" | "bottom"
 }) {
   const { t } = useTranslation()
   const Icon = item.icon
@@ -117,32 +144,48 @@ function NavItem({
       onClick={onClick}
       aria-current={active ? "page" : undefined}
       className={cn(
-        "flex items-center rounded-lg text-sm transition-colors",
-        collapsed ? "size-9 justify-center" : "w-full gap-2.5 px-3 py-2",
+        // Layout transitions: width / padding / gap all animate with the
+        // aside's width slide, so the icon glides (12px→8px) instead of
+        // jumping. h-9 on both states keeps the height constant through the
+        // slide (content-expanded height would jump 36→20px on expand).
+        // Selected state = v10 绿字灰底 (tint fill + brand label).
+        "relative flex h-9 items-center rounded-lg text-sm transition-[width,padding,gap] duration-200",
+        collapsed ? "w-9 gap-0 px-2" : "w-full gap-2.5 px-3",
         active
-          ? cn(
-              "bg-accent-tint font-medium text-accent-brand-strong",
-              accentBar === "bottom"
-                ? "shadow-[inset_0_-2px_0_var(--accent-brand)]"
-                : "shadow-[inset_2px_0_0_var(--accent-brand)]",
-            )
+          ? "bg-accent-tint font-medium text-accent-brand-strong"
           : "text-muted-foreground hover:bg-muted/60 hover:text-foreground",
       )}
     >
       <Icon className={cn("shrink-0", collapsed ? "size-5" : "size-4")} />
-      {collapsed ? null : (
-        <span className="flex min-w-0 flex-1 items-center gap-1.5">
-          <span className="truncate">{label}</span>
-          {item.beta ? (
-            <span
-              className="text-accent-brand/80 text-[9px] font-semibold tracking-wider"
-              title={t("nav.betaTitle")}
-            >
-              BETA
-            </span>
-          ) : null}
-        </span>
-      )}
+      <span
+        className={cn(
+          // Fade the label out right as the width starts to shrink, and back
+          // in only after the width slide completes (delay-200) — the text is
+          // never visible mid-slide, so it can't be squeezed/truncated (that
+          // was the collapse "jitter").
+          "flex min-w-0 flex-1 items-center gap-1.5 transition-opacity duration-150",
+          collapsed ? "opacity-0" : "opacity-100 delay-200",
+        )}
+      >
+        <span className="truncate">{label}</span>
+        {item.beta ? (
+          <span
+            className="text-accent-brand/80 text-[9px] font-semibold tracking-wider"
+            title={t("nav.betaTitle")}
+          >
+            BETA
+          </span>
+        ) : null}
+      </span>
+      {collapsed && item.beta ? (
+        // Beta dot — the BETA text can't fit an icon-only sidebar; a brand
+        // dot on the icon's corner keeps the flag visible. title carries the
+        // same warning as the expanded-state text.
+        <span
+          className="bg-accent-brand absolute top-1 right-1 size-1.5 rounded-full"
+          title={t("nav.betaTitle")}
+        />
+      ) : null}
     </button>
   )
   if (!collapsed) return button
@@ -191,17 +234,23 @@ function CollapseButton({
 
 // Icon-only collect button — the collapsed sidebar and the portrait top bar
 // share this compact form (the expanded sidebar uses a full-width labeled
-// button instead). tooltipSide adapts to the surface it sits on.
+// button instead). tooltipSide adapts to the surface it sits on. `brand`
+// keeps the action's primary-tier presence in the icon-only sidebar (tint
+// fill + brand icon), instead of dropping it to a plain ghost icon like the
+// other footer controls; the portrait top bar stays ghost — it's a dense
+// strip where one tinted tile among eleven would read as noise.
 function CollectIconButton({
   label,
   collecting,
   onCollect,
   tooltipSide = "right",
+  brand = false,
 }: {
   label: string
   collecting: boolean
   onCollect: () => void
   tooltipSide?: "right" | "bottom"
+  brand?: boolean
 }) {
   return (
     <Tooltip>
@@ -210,7 +259,11 @@ function CollectIconButton({
           <Button
             variant="ghost"
             size="icon-sm"
-            className="text-muted-foreground"
+            className={
+              brand
+                ? "bg-accent-tint text-accent-brand hover:bg-accent-brand/15 hover:text-accent-brand-strong"
+                : "text-muted-foreground"
+            }
             disabled={collecting}
             onClick={onCollect}
             aria-label={label}
@@ -286,7 +339,6 @@ function TopNav({
             active={view === item.id}
             collapsed
             tooltipSide="bottom"
-            accentBar="bottom"
             onClick={() => onNavigate(item.id)}
           />
         ))}
@@ -451,10 +503,15 @@ export function Shell({ children }: { children: React.ReactNode }) {
               collapsed ? "w-16" : "w-48",
             )}
           >
+            {/* Logo row — the icon's position is driven by padding alone
+                (16px expanded, 14px collapsed = the exact centering position
+                in a 64px column), never justify-center: centering would track
+                the container's mid-line while the width slides, making the
+                icon drift left-then-right on collapse. */}
             <div
               className={cn(
-                "flex items-center",
-                collapsed ? "justify-center px-2 py-4" : "px-4 py-4",
+                "flex items-center py-4 transition-[padding] duration-200",
+                collapsed ? "px-[14px]" : "px-4",
               )}
             >
               <Logo collapsed={collapsed} />
@@ -462,37 +519,67 @@ export function Shell({ children }: { children: React.ReactNode }) {
 
             <Separator />
 
-            {collapsed ? null : (
-              <div className="text-muted-foreground/60 px-5 pt-3 pb-1 text-[10px] font-medium tracking-wide">
-                {t("nav.heading")}
-              </div>
-            )}
-            <nav
-              className={cn(
-                "flex flex-col gap-1.5",
-                collapsed ? "items-center p-2" : "p-2",
-              )}
-            >
-              {NAV.map((item) => (
-                <NavItem
-                  key={item.id}
-                  item={item}
-                  active={view === item.id}
-                  collapsed={collapsed}
-                  onClick={() => dispatch(setView(item.id))}
-                />
+            {/* Nav column scrolls independently (scrollbar hidden) so the
+                footer's controls stay pinned and reachable in short
+                windows; the nav is the only part allowed to overflow. */}
+            <div className="scrollbar-none min-h-0 flex-1 overflow-y-auto">
+              {NAV_GROUPS.map((group, index) => (
+                <div
+                  key={group.heading}
+                  className={index > 0 ? "mt-3" : undefined}
+                >
+                  {collapsed ? null : (
+                    <div
+                      className={cn(
+                        // Same fade timing as the labels: out on collapse, in
+                        // after the slide. Block width follows the aside, so no
+                        // width transition needed — overflow-hidden only guards
+                        // long titles.
+                        "overflow-hidden px-5 pt-3 pb-1 text-[10px] font-medium tracking-wide text-muted-foreground/60 transition-opacity duration-150",
+                        collapsed ? "opacity-0" : "opacity-100 delay-200",
+                      )}
+                    >
+                      {t(group.heading)}
+                    </div>
+                  )}
+                  <nav
+                    className={cn(
+                      "flex flex-col gap-1.5",
+                      collapsed ? "items-center p-2" : "p-2",
+                    )}
+                  >
+                    {group.items.map((item) => (
+                      <NavItem
+                        key={item.id}
+                        item={item}
+                        active={view === item.id}
+                        collapsed={collapsed}
+                        onClick={() => dispatch(setView(item.id))}
+                      />
+                    ))}
+                  </nav>
+                </div>
               ))}
-            </nav>
+            </div>
 
-            <div className="mt-auto p-3">
+            {/* Expanded only: the nav column scrolls against this boundary
+                (items slide right up to the collect deck), so a rule separates
+                navigation from the control deck — same rhythm as the logo and
+                device rules. Collapsed keeps no rule: the icon column already
+                has one below the collect icon, two would sandwich it. */}
+            {collapsed ? null : <Separator />}
+
+            <div className="shrink-0 p-3">
               {collapsed ? (
                 /* Icon-only collect — the freshness text can't fit a 16-wide
-                 sidebar; the device status dot already signals online. */
+                 sidebar; the device status dot already signals online. brand
+                 keeps it at primary tier among the ghost footer icons. */
                 <div className="mb-3 flex flex-col items-center">
                   <CollectIconButton
                     label={collectLabel}
                     collecting={collecting}
                     onCollect={onCollect}
+                    brand
                   />
                 </div>
               ) : (
@@ -517,7 +604,7 @@ export function Shell({ children }: { children: React.ReactNode }) {
                       "mb-5 size-2 rounded-full",
                       synced ? "bg-primary" : "bg-muted-foreground/40",
                     )}
-                    title={`${modeLabel} · ${deviceName}`}
+                    title={`${modeLabel} · ${deviceName} · ${info?.device_id ?? "—"}`}
                   />
                   <div className="flex flex-col items-center gap-2">
                     <ThemeToggle />
@@ -532,18 +619,24 @@ export function Shell({ children }: { children: React.ReactNode }) {
                   <div className="text-muted-foreground/60 text-[10px] tracking-wide">
                     {t("shell.thisDevice")}
                   </div>
-                  <div className="truncate">
-                    <span className="text-muted-foreground">
-                      {t("shell.deviceName")}
-                    </span>
-                    <span className="font-medium">{deviceName}</span>
-                  </div>
-                  <div className="text-muted-foreground truncate">
-                    <span>{t("shell.deviceId")}</span>
-                    <span className="font-mono text-[11px]">
-                      {info?.device_id ?? "—"}
-                    </span>
-                  </div>
+                  {/* The raw device id is a machine code for troubleshooting —
+                      not daily UI. Hover the name to read it (same access as
+                      the collapsed sidebar's status-dot title). */}
+                  <Tooltip>
+                    <TooltipTrigger
+                      render={
+                        <div className="truncate">
+                          <span className="text-muted-foreground">
+                            {t("shell.deviceName")}
+                          </span>
+                          <span className="font-medium">{deviceName}</span>
+                        </div>
+                      }
+                    />
+                    <TooltipContent side="right">
+                      {t("shell.deviceId")} {info?.device_id ?? "—"}
+                    </TooltipContent>
+                  </Tooltip>
                   <div className="mt-1 flex items-center justify-between gap-2">
                     <span
                       className={cn(
