@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vitest"
 
-import { filterAndSortPricing, nextSortState } from "@/features/pricing/derive"
+import {
+  filterAndSortPricing,
+  nextSortState,
+  parsePriceInput,
+} from "@/features/pricing/derive"
 
 import type { PricingEntry } from "@/types/generated/bindings"
 
@@ -75,5 +79,22 @@ describe("nextSortState", () => {
       sortKey: "display_name",
       sortDir: "asc",
     })
+  })
+})
+
+describe("parsePriceInput", () => {
+  it("parses a plain decimal price", () => {
+    expect(parsePriceInput("1.7564")).toBe(1.7564)
+    expect(parsePriceInput("0.0001")).toBe(0.0001)
+  })
+
+  it("treats empty input as free (0)", () => {
+    expect(parsePriceInput("")).toBe(0)
+    expect(parsePriceInput("0")).toBe(0)
+  })
+
+  it("degrades non-numeric leftovers (partial `1e`) to 0 instead of NaN", () => {
+    expect(parsePriceInput("1e")).toBe(0)
+    expect(parsePriceInput("abc")).toBe(0)
   })
 })

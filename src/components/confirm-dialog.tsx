@@ -1,10 +1,13 @@
 // Shared destructive-action confirmation dialog. Four delete surfaces (pricing
 // rows, library entries, providers, session groups) show the same pattern: a
-// title, an optional description, Cancel, and a destructive confirm button.
-// Wraps the base-ui AlertDialog primitive — clicking the backdrop is treated
-// as cancel (onBackdropClick → onOpenChange(false)); ESC already closes by
-// default, and the buttons always remain explicit. Deleting still requires a
-// deliberate click on the destructive button — backdrop and ESC only cancel.
+// title, an optional description, Cancel (an outline button), and a destructive
+// confirm button that carries the same Trash2 icon as the row-level delete
+// buttons — the danger identity lives on the confirm action alone, the header
+// stays quiet. Wraps the base-ui AlertDialog primitive — clicking the backdrop
+// is treated as cancel (onBackdropClick → onOpenChange(false)); ESC already
+// closes by default. Deleting still requires a deliberate click on the
+// destructive button: focus lands on Cancel on open (initialFocus), so Enter
+// only cancels; backdrop and ESC also only cancel.
 //
 // Two wiring styles, choose by whether the caller already has a per-row busy
 // state:
@@ -18,8 +21,8 @@
 // everything else is plain props, like EmptyState, so callers keep their
 // module's wording.
 
-import { Loader2 } from "lucide-react"
-import { useEffect, useState } from "react"
+import { Loader2, Trash2 } from "lucide-react"
+import { useEffect, useRef, useState } from "react"
 import { useTranslation } from "react-i18next"
 
 import {
@@ -52,6 +55,9 @@ export function ConfirmDialog({
   onConfirm: () => void
 }) {
   const { t } = useTranslation()
+  // Enter (and the initial focus) must land on Cancel, never on the
+  // destructive action — deletion is always a deliberate click.
+  const cancelRef = useRef<HTMLButtonElement>(null)
   // Callers clear their target (e.g. `deleting`) the moment the dialog closes,
   // so title/description would flash to their empty state during the fade-out
   // animation. Cache the last open content and render it while closing.
@@ -63,7 +69,12 @@ export function ConfirmDialog({
   const shownDescription = open ? description : lastOpen.description
   return (
     <AlertDialog open={open} onOpenChange={onOpenChange}>
-      <AlertDialogContent onBackdropClick={() => onOpenChange(false)}>
+      <AlertDialogContent
+        onBackdropClick={() => onOpenChange(false)}
+        initialFocus={cancelRef}
+      >
+        {/* 危险身份由确认按钮上的 Trash2 + destructive 样式承担，标题区保持
+            安静——一个对话框只做一个强调点。 */}
         <AlertDialogHeader>
           <AlertDialogTitle>{shownTitle}</AlertDialogTitle>
           {shownDescription ? (
@@ -71,7 +82,7 @@ export function ConfirmDialog({
           ) : null}
         </AlertDialogHeader>
         <AlertDialogFooter>
-          <AlertDialogCancel disabled={busy}>
+          <AlertDialogCancel ref={cancelRef} disabled={busy}>
             {t("common.cancel")}
           </AlertDialogCancel>
           <AlertDialogAction
@@ -79,7 +90,7 @@ export function ConfirmDialog({
             disabled={busy}
             onClick={onConfirm}
           >
-            {busy ? <Loader2 className="animate-spin" /> : null}
+            {busy ? <Loader2 className="animate-spin" /> : <Trash2 />}
             {confirmLabel}
           </AlertDialogAction>
         </AlertDialogFooter>

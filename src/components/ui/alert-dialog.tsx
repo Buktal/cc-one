@@ -16,7 +16,6 @@ import { cn } from "@/lib/utils"
 const AlertDialog = AlertDialogPrimitive.Root
 const AlertDialogTrigger = AlertDialogPrimitive.Trigger
 const AlertDialogPortal = AlertDialogPrimitive.Portal
-const AlertDialogCancel = AlertDialogPrimitive.Close
 
 function AlertDialogOverlay({
   className,
@@ -82,7 +81,9 @@ function AlertDialogFooter({
     <div
       data-slot="alert-dialog-footer"
       className={cn(
-        "flex flex-col-reverse gap-2 sm:flex-row sm:justify-end",
+        // gap-3 (12px): the two actions sit close enough to read as one group,
+        // with room to breathe between cancel and the destructive confirm.
+        "flex flex-col-reverse gap-3 sm:flex-row sm:justify-end",
         className,
       )}
       {...props}
@@ -111,6 +112,29 @@ function AlertDialogDescription({
     <AlertDialogPrimitive.Description
       data-slot="alert-dialog-description"
       className={cn("text-sm text-muted-foreground", className)}
+      {...props}
+    />
+  )
+}
+
+// base-ui's Close is a bare unstyled <button> — render it as an outline Button
+// so Cancel reads as a real button, weight-matched against the destructive
+// Action (a bare text link next to a filled red button looks broken).
+// Function-form render spreads every base-ui prop explicitly onto the Button,
+// so the outline styles can never be dropped by prop merging.
+function AlertDialogCancel({
+  className,
+  ...props
+}: AlertDialogPrimitive.Close.Props) {
+  return (
+    <AlertDialogPrimitive.Close
+      render={(renderProps) => (
+        <Button
+          variant="outline"
+          className={cn(className, renderProps.className)}
+          {...renderProps}
+        />
+      )}
       {...props}
     />
   )

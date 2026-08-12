@@ -31,6 +31,7 @@ import {
   useSaveProviderMutation,
 } from "@/app/store/api"
 import { JsonEditor } from "@/components/json-editor"
+import { SectionHeader } from "@/components/section-header"
 import { Button } from "@/components/ui/button"
 import { Checkbox } from "@/components/ui/checkbox"
 import { Input } from "@/components/ui/input"
@@ -893,14 +894,6 @@ export function ProviderFormSheet({
 
 // 表单章节标题：上方 hairline + 小标题，给长表单（基本信息 / 认证 / 模型映射
 // / 高级配置）可扫读的视觉锚点。border-t 兼作段落分隔。
-function SectionHeader({ children }: { children: React.ReactNode }) {
-  return (
-    <div className="text-muted-foreground mt-3 border-border/60 border-t pt-2 text-[11px] font-semibold">
-      {children}
-    </div>
-  )
-}
-
 function Field({
   label,
   className,

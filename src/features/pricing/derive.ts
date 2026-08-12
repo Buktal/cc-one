@@ -40,6 +40,18 @@ export function filterAndSortPricing(
 }
 
 /**
+ * Parse a price input string into a USD-per-1M number. Empty input means 0
+ * (free); anything non-numeric — e.g. a partial `1e` left over from the number
+ * input's scientific notation — also degrades to 0, so the editor never stores
+ * NaN. Clamping negatives is deliberately left to the input's `min`; this only
+ * guards against NaN.
+ */
+export function parsePriceInput(v: string): number {
+  const n = Number(v)
+  return Number.isFinite(n) ? n : 0
+}
+
+/**
  * Next sort state after clicking column `k`: the same column flips direction, a
  * new column defaults to asc. Pure so the click decision is testable on its own
  * — `usePricingTable` just applies the result and resets the offset.
