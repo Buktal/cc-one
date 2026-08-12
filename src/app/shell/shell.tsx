@@ -539,8 +539,11 @@ export function Shell({ children }: { children: React.ReactNode }) {
                         // Same fade timing as the labels: out on collapse, in
                         // after the slide. Block width follows the aside, so no
                         // width transition needed — overflow-hidden only guards
-                        // long titles.
-                        "overflow-hidden px-5 pt-3 pb-1 text-[10px] font-medium tracking-wide text-muted-foreground/60 transition-opacity duration-150",
+                        // long titles. pt-2 (not pt-3): the heading sits below
+                        // the previous group's nav p-2, so 8+8px reads as one
+                        // step up from the in-group gap (6px) instead of a
+                        // doubled gap.
+                        "overflow-hidden px-5 pt-2 pb-1 text-[10px] font-medium tracking-wide text-muted-foreground/60 transition-opacity duration-150",
                         collapsed ? "opacity-0" : "opacity-100 delay-200",
                       )}
                     >
