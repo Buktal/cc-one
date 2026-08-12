@@ -117,8 +117,10 @@ export function CcSwitchImportDialog({
                   })}
                 </p>
                 <ul className="text-muted-foreground list-disc pl-5 text-xs">
-                  {report.proxySkipped.map((s, i) => (
-                    <li key={`${s.name}-${i}`}>
+                  {report.proxySkipped.map((s) => (
+                    /* Each skipped provider appears once per report, so the
+                       name is a stable key (no index suffix needed). */
+                    <li key={s.name}>
                       {s.name}（{t(SKIP_REASON_LABEL[s.reason])}）
                     </li>
                   ))}

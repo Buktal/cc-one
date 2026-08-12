@@ -117,9 +117,13 @@ export function ProvidersView() {
   async function onConfirmDelete() {
     if (!deleting) return
     setDeletingBusy(true)
-    try {
-      if (await onDelete(deleting)) setDeleting(null)
-    } finally {
+    // Busy stays true on success: the dialog closes on the same tick, so its
+    // closing frame replaces the button — resetting here would flash the
+    // spinner back to the label for one frame. Failure resets it for a retry;
+    // any close path (cancel / backdrop) resets it in onOpenChange below.
+    if (await onDelete(deleting)) {
+      setDeleting(null)
+    } else {
       setDeletingBusy(false)
     }
   }
@@ -438,10 +442,17 @@ export function ProvidersView() {
       <ConfirmDialog
         open={deleting !== null}
         onOpenChange={(open) => {
-          if (!open) setDeleting(null)
+          if (!open) {
+            setDeleting(null)
+            // Success leaves busy true (see onConfirmDelete) — release it on
+            // every close path so the next dialog opens with a live button.
+            setDeletingBusy(false)
+          }
         }}
         title={t("confirm.deleteTitle", { name: deleting?.name ?? "" })}
-        description={t("providers.confirm.deleteDesc")}
+        description={t("providers.confirm.deleteDesc", {
+          name: deleting?.name ?? "",
+        })}
         confirmLabel={t("common.delete")}
         busy={deletingBusy}
         onConfirm={() => void onConfirmDelete()}

@@ -269,36 +269,43 @@ export function LibraryView() {
                       <TableRow key={e.rel_path}>
                         <TableCell>
                           {isRenaming ? (
-                            <div className="flex items-center gap-1">
+                            /* w-full tracks the name column — the inline
+                               editor must not widen the column (a fixed-width
+                               input would shift every row sideways while
+                               renaming). Confirm/cancel float inside the input
+                               so they take no layout width. */
+                            <div className="relative w-full">
                               <Input
                                 value={renameVal}
                                 onChange={(ev) => setRenameVal(ev.target.value)}
-                                className="h-7 w-44"
+                                className="h-7 w-full pr-16"
                                 onKeyDown={(ev) => {
                                   if (ev.key === "Enter") commitRename(e)
                                   if (ev.key === "Escape") cancelRename()
                                 }}
                                 autoFocus
                               />
-                              <Button
-                                variant="ghost"
-                                size="icon-sm"
-                                disabled={busy}
-                                onClick={() => commitRename(e)}
-                              >
-                                {busy ? (
-                                  <Loader2 className="animate-spin" />
-                                ) : (
-                                  <Check />
-                                )}
-                              </Button>
-                              <Button
-                                variant="ghost"
-                                size="icon-sm"
-                                onClick={cancelRename}
-                              >
-                                <X />
-                              </Button>
+                              <div className="absolute top-1/2 right-1 flex -translate-y-1/2 gap-0.5">
+                                <Button
+                                  variant="ghost"
+                                  size="icon-sm"
+                                  disabled={busy}
+                                  onClick={() => commitRename(e)}
+                                >
+                                  {busy ? (
+                                    <Loader2 className="animate-spin" />
+                                  ) : (
+                                    <Check />
+                                  )}
+                                </Button>
+                                <Button
+                                  variant="ghost"
+                                  size="icon-sm"
+                                  onClick={cancelRename}
+                                >
+                                  <X />
+                                </Button>
+                              </div>
                             </div>
                           ) : (
                             <button
@@ -466,7 +473,9 @@ export function LibraryView() {
           if (!open) setDeleting(null)
         }}
         title={t("confirm.deleteTitle", { name: deleting?.name ?? "" })}
-        description={t("library.confirm.deleteDesc")}
+        description={t("library.confirm.deleteDesc", {
+          name: deleting?.name ?? "",
+        })}
         confirmLabel={t("common.delete")}
         onConfirm={onConfirmDelete}
       />

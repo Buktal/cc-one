@@ -74,29 +74,32 @@ export function usePricingTable() {
   /** Delete trigger: toasts the outcome and exposes a busy flag for the confirm
    *  dialog (pattern mirrors sessions' deleteGroup). On success the offset is
    *  clamped back into the now-shorter list — deleting the last row of the last
-   *  page would otherwise leave `paged` empty with the header hanging bare. */
+   *  page would otherwise leave `paged` empty with the header hanging bare.
+   *
+   *  Busy stays true on success: the dialog closes on the same tick, so its
+   *  closing frame replaces the button — resetting here would flash the
+   *  spinner back to the label for one frame. Failure resets it so the user
+   *  can retry; the view resets it again when the dialog closes (cancel). */
   async function remove(key: string): Promise<boolean> {
     setRemoving(true)
-    try {
-      const ok = await runWithToast(removeMut, key, {
-        success: { key: "pricing.toast.deleted", vars: { name: key } },
-        failed: { key: "pricing.toast.deleteFailed" },
-      })
-      if (ok) {
-        // `filtered` here is the pre-delete list; the post-delete list is
-        // exactly one row shorter, so clamp to the last page's start offset.
-        const remaining = filtered.length - 1
-        setOffset((o) =>
-          Math.min(
-            o,
-            Math.max(0, Math.floor((remaining - 1) / PAGE_SIZE) * PAGE_SIZE),
-          ),
-        )
-      }
-      return ok
-    } finally {
+    const ok = await runWithToast(removeMut, key, {
+      success: { key: "pricing.toast.deleted", vars: { name: key } },
+      failed: { key: "pricing.toast.deleteFailed" },
+    })
+    if (ok) {
+      // `filtered` here is the pre-delete list; the post-delete list is
+      // exactly one row shorter, so clamp to the last page's start offset.
+      const remaining = filtered.length - 1
+      setOffset((o) =>
+        Math.min(
+          o,
+          Math.max(0, Math.floor((remaining - 1) / PAGE_SIZE) * PAGE_SIZE),
+        ),
+      )
+    } else {
       setRemoving(false)
     }
+    return ok
   }
 
   return {
@@ -104,6 +107,7 @@ export function usePricingTable() {
     error,
     remove,
     removing,
+    setRemoving,
     search,
     setSearch,
     sortKey,

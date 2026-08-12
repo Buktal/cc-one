@@ -100,7 +100,12 @@ export function PreviewSheet({
 
   return (
     <Sheet open={true} onOpenChange={(o) => !o && onClose()}>
-      <SheetContent className="flex w-[640px] flex-col gap-3 sm:max-w-[640px]">
+      {/* No top-right X — a viewer shouldn't look closable-mid-content; ESC
+          and the backdrop still close it. */}
+      <SheetContent
+        showClose={false}
+        className="flex w-[640px] flex-col gap-3 sm:max-w-[640px]"
+      >
         <SheetHeader className="flex flex-row items-center justify-between gap-2">
           <SheetTitle className="min-w-0 truncate">{entry.name}</SheetTitle>
           {/* Row actions, reachable without closing the preview: export keeps

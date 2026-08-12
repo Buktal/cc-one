@@ -75,6 +75,7 @@ export function PricingView() {
     totalPages,
     paged,
     goToPage,
+    setRemoving,
   } = usePricingTable()
 
   const [editing, setEditing] = useState<PricingEntry | null>(null)
@@ -368,10 +369,18 @@ export function PricingView() {
       <ConfirmDialog
         open={deleting !== null}
         onOpenChange={(o) => {
-          if (!o) setDeleting(null)
+          if (!o) {
+            setDeleting(null)
+            // Any close path (cancel, backdrop, or success — success leaves
+            // busy true to skip the spinner flash-back) must release busy so
+            // the next dialog opens with a live button.
+            setRemoving(false)
+          }
         }}
         title={t("confirm.deleteTitle", { name: deleting?.model_key ?? "" })}
-        description={t("pricing.confirm.deleteDesc")}
+        description={t("pricing.confirm.deleteDesc", {
+          name: deleting?.model_key ?? "",
+        })}
         confirmLabel={t("common.delete")}
         busy={removing}
         onConfirm={() => void onConfirmDelete()}
