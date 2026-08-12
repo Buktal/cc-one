@@ -17,6 +17,11 @@ import { type ReactNode, useEffect, useState } from "react"
 import { useTranslation } from "react-i18next"
 import { useAppDispatch } from "@/app/store/hooks"
 import { setLightweightPhase, setMode } from "@/app/store/slices/viewSlice"
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipTrigger,
+} from "@/components/ui/tooltip"
 import { cn } from "@/lib/utils"
 
 export function TitleBar() {
@@ -52,6 +57,7 @@ export function TitleBar() {
           dispatch(setLightweightPhase("expanded"))
         }}
         label={t("titlebar.lightweight")}
+        tooltip={t("titlebar.lightweight")}
         className="me-1"
       >
         <PictureInPicture2 className="size-3.5" />
@@ -62,6 +68,7 @@ export function TitleBar() {
           dispatch(setLightweightPhase("tucked"))
         }}
         label={t("titlebar.lightweightSmall")}
+        tooltip={t("titlebar.lightweightSmall")}
         className="me-1"
       >
         <AlignHorizontalJustifyEnd className="size-3.5" />
@@ -97,14 +104,18 @@ function CtrlButton({
   children,
   onClick,
   label,
+  tooltip,
   className,
 }: {
   children: ReactNode
   onClick: () => void
   label: string
+  /** Hover hint — the lightweight shape switches are the only non-obvious
+   *  icons in this bar (system-convention minimize/maximize/close get none). */
+  tooltip?: string
   className?: string
 }) {
-  return (
+  const button = (
     <button
       type="button"
       onClick={onClick}
@@ -116,5 +127,12 @@ function CtrlButton({
     >
       {children}
     </button>
+  )
+  if (!tooltip) return button
+  return (
+    <Tooltip>
+      <TooltipTrigger render={button} />
+      <TooltipContent>{tooltip}</TooltipContent>
+    </Tooltip>
   )
 }

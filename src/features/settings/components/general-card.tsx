@@ -24,6 +24,7 @@ import {
   useSetCloseBehaviorMutation,
   useSetCollectIntervalMutation,
   useSetLanguageMutation,
+  useSetLightweightAutoTuckMutation,
   useSetLightweightExpandMutation,
   useSetPushIntervalMutation,
   useSetSkinMutation,
@@ -60,6 +61,10 @@ const EXPAND_OPTIONS: ReadonlyArray<[LightweightExpand, string]> = [
   ["click", "settings.general.lightweightExpandClick"],
   ["hover", "settings.general.lightweightExpandHover"],
 ]
+
+/** Auto-tuck presets: delay before an invisible full window morphs into the
+ *  mini bar; 0 = off. Seconds (matching the collect/push preset pattern). */
+const AUTO_TUCK_OPTIONS: ReadonlyArray<number> = [0, 10, 30, 60, 300]
 
 /** Collect presets: seconds-level, local-only. */
 const COLLECT_OPTIONS: ReadonlyArray<number> = [5, 10, 30, 60]
@@ -102,6 +107,8 @@ export function GeneralCard() {
   const [setLanguage, { isLoading: savingLang }] = useSetLanguageMutation()
   const [setLightweightExpand, { isLoading: savingExpand }] =
     useSetLightweightExpandMutation()
+  const [setAutoTuck, { isLoading: savingAutoTuck }] =
+    useSetLightweightAutoTuckMutation()
   const [setCloseBehavior, { isLoading: savingClose }] =
     useSetCloseBehaviorMutation()
   const [setCollectInterval, { isLoading: savingCollect }] =
@@ -307,6 +314,44 @@ export function GeneralCard() {
             </Button>
           ))}
         </div>
+      </SettingRow>
+
+      <SettingRow
+        label={t("settings.general.autoTuck")}
+        hint={t("settings.general.autoTuckHint")}
+      >
+        <Select
+          value={prefs ? String(prefs.lightweight_auto_tuck_secs) : undefined}
+          onValueChange={async (v) => {
+            await runWithToast(setAutoTuck, Number(v), {
+              failed: { key: "settings.toast.saveFailed" },
+            })
+          }}
+        >
+          <SelectTrigger className="w-36" disabled={savingAutoTuck}>
+            <SelectValue placeholder="—">
+              {(v: string) => {
+                const secs = Number(v)
+                return secs === 0
+                  ? t("settings.general.autoTuckOff")
+                  : secs < 60
+                    ? t("common.seconds", { n: secs })
+                    : t("common.minutes", { n: secs / 60 })
+              }}
+            </SelectValue>
+          </SelectTrigger>
+          <SelectContent>
+            {AUTO_TUCK_OPTIONS.map((v) => (
+              <SelectItem key={v} value={String(v)}>
+                {v === 0
+                  ? t("settings.general.autoTuckOff")
+                  : v < 60
+                    ? t("common.seconds", { n: v })
+                    : t("common.minutes", { n: v / 60 })}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
       </SettingRow>
 
       <SettingRow

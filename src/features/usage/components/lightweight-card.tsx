@@ -49,11 +49,21 @@ import {
   patchFilter,
 } from "@/app/store/slices/filterSlice"
 import { setMode } from "@/app/store/slices/viewSlice"
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipTrigger,
+} from "@/components/ui/tooltip"
 import { formatTokens } from "@/lib/format"
 import { cn } from "@/lib/utils"
 
 import { DeviceScopeControl } from "./device-scope-control"
 import { TokenHero } from "./token-hero"
+
+/** Hover dwell before the tucked bar expands (hover-expand preference).
+ *  Long enough that a mouse sweeping past the screen's right edge does not
+ *  flip the glance open; short enough that a real hover feels instant. */
+const HOVER_EXPAND_DELAY_MS = 250
 
 export function LightweightCard() {
   const { t } = useTranslation()
@@ -108,6 +118,23 @@ export function LightweightCard() {
   const { data: stats } = useStatsQuery(todayFilterState)
   const s = stats ?? ZERO_STATS
 
+  // ESC closes the expanded dialog-shaped card back to the full window —
+  // the card declares role="dialog", so the standard dialog exit must work
+  // (tucked is a 40px strip with no keyboard expectations; it keeps none).
+  useEffect(() => {
+    if (phase !== "expanded") return
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") dispatch(setMode("full"))
+    }
+    window.addEventListener("keydown", onKey)
+    return () => window.removeEventListener("keydown", onKey)
+  }, [phase, dispatch])
+
+  // Hover-to-expand debounce: a mouse sweeping across the screen's right edge
+  // would otherwise flip the tucked bar open on every pass. A 250ms dwell
+  // separates "sweeping past" from "hovering".
+  const hoverTimer = useRef<number | null>(null)
+
   // Measure the expanded card's natural height and tell the hook, so the
   // window shrinks to fit the content. Tucked is a fixed mini-bar, so skip it.
   const rootRef = useRef<HTMLDivElement>(null)
@@ -150,6 +177,11 @@ export function LightweightCard() {
         onMouseLeave={() => {
           disarm()
           scheduleClose()
+          // Abort a pending hover-expand when the pointer leaves early.
+          if (hoverTimer.current != null) {
+            window.clearTimeout(hoverTimer.current)
+            hoverTimer.current = null
+          }
         }}
         className="bg-background flex h-screen w-screen flex-col animate-in fade-in slide-in-from-right-2 cursor-grab overflow-hidden duration-150 motion-reduce:animate-none"
       >
@@ -159,7 +191,19 @@ export function LightweightCard() {
         <div className="bg-background relative z-10 flex h-10 shrink-0 items-center gap-1 px-1">
           <button
             type="button"
-            onMouseEnter={hoverExpand ? expand : undefined}
+            onMouseEnter={
+              hoverExpand
+                ? () => {
+                    if (hoverTimer.current != null) {
+                      window.clearTimeout(hoverTimer.current)
+                    }
+                    hoverTimer.current = window.setTimeout(
+                      expand,
+                      HOVER_EXPAND_DELAY_MS,
+                    )
+                  }
+                : undefined
+            }
             onClick={() => {
               if (!dragged.current) expand()
             }}
@@ -170,15 +214,22 @@ export function LightweightCard() {
               {formatTokens(s.total_tokens)}
             </span>
           </button>
-          <button
-            type="button"
-            aria-label={t("usage.lightweight.expandFull")}
-            onMouseDown={(e) => e.stopPropagation()}
-            onClick={() => dispatch(setMode("full"))}
-            className="text-muted-foreground hover:bg-muted hover:text-foreground inline-flex w-6 shrink-0 items-center justify-center rounded-md my-0.5"
-          >
-            <Airplay className="size-3.5" />
-          </button>
+          <Tooltip>
+            <TooltipTrigger
+              render={
+                <button
+                  type="button"
+                  aria-label={t("usage.lightweight.expandFull")}
+                  onMouseDown={(e) => e.stopPropagation()}
+                  onClick={() => dispatch(setMode("full"))}
+                  className="text-muted-foreground hover:bg-muted hover:text-foreground inline-flex w-6 shrink-0 items-center justify-center rounded-md my-0.5"
+                />
+              }
+            >
+              <Airplay className="size-3.5" />
+            </TooltipTrigger>
+            <TooltipContent>{t("usage.lightweight.expandFull")}</TooltipContent>
+          </Tooltip>
         </div>
         {drawerHover && drawerEnabled ? (
           <button
@@ -255,22 +306,36 @@ export function LightweightCard() {
       >
         <span data-tauri-drag-region>{t("usage.lightweight.header")}</span>
         <div className="flex items-center">
-          <button
-            type="button"
-            aria-label={t("usage.lightweight.expandFull")}
-            onClick={() => dispatch(setMode("full"))}
-            className="text-muted-foreground hover:bg-muted hover:text-foreground inline-flex size-7 items-center justify-center rounded-md transition-colors"
-          >
-            <Airplay className="size-3.5" />
-          </button>
-          <button
-            type="button"
-            aria-label={t("usage.lightweight.tuck")}
-            onClick={tuck}
-            className="text-muted-foreground hover:bg-muted hover:text-foreground inline-flex size-7 items-center justify-center rounded-md transition-colors"
-          >
-            <AlignHorizontalJustifyEnd className="size-3.5" />
-          </button>
+          <Tooltip>
+            <TooltipTrigger
+              render={
+                <button
+                  type="button"
+                  aria-label={t("usage.lightweight.expandFull")}
+                  onClick={() => dispatch(setMode("full"))}
+                  className="text-muted-foreground hover:bg-muted hover:text-foreground inline-flex size-7 items-center justify-center rounded-md transition-colors"
+                />
+              }
+            >
+              <Airplay className="size-3.5" />
+            </TooltipTrigger>
+            <TooltipContent>{t("usage.lightweight.expandFull")}</TooltipContent>
+          </Tooltip>
+          <Tooltip>
+            <TooltipTrigger
+              render={
+                <button
+                  type="button"
+                  aria-label={t("usage.lightweight.tuck")}
+                  onClick={tuck}
+                  className="text-muted-foreground hover:bg-muted hover:text-foreground inline-flex size-7 items-center justify-center rounded-md transition-colors"
+                />
+              }
+            >
+              <AlignHorizontalJustifyEnd className="size-3.5" />
+            </TooltipTrigger>
+            <TooltipContent>{t("usage.lightweight.tuck")}</TooltipContent>
+          </Tooltip>
         </div>
       </div>
 

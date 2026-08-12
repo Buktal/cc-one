@@ -32,6 +32,7 @@ import {
 } from "@/app/store/api"
 import { JsonEditor } from "@/components/json-editor"
 import { SectionHeader } from "@/components/section-header"
+import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Checkbox } from "@/components/ui/checkbox"
 import { Input } from "@/components/ui/input"
@@ -76,6 +77,7 @@ import {
   providerApiKey,
   providerEndpoint,
   providerFromPreset,
+  providerLiveManaged,
   replaceTemplateVarsInText,
   restoreTemplatePlaceholders,
   stripOneM,
@@ -524,13 +526,31 @@ export function ProviderFormSheet({
         )}
       >
         <SheetHeader className="px-6 pt-6">
-          <SheetTitle>
-            {editing
-              ? t("providers.form.editTitle")
-              : preset
-                ? t("providers.form.presetTitle")
-                : t("providers.form.newTitle")}
-          </SheetTitle>
+          <div className="flex items-center gap-2">
+            <SheetTitle>
+              {editing
+                ? t("providers.form.editTitle")
+                : preset
+                  ? t("providers.form.presetTitle")
+                  : t("providers.form.newTitle")}
+            </SheetTitle>
+            {/* 当前编辑的应用池徽标——长表单里一眼知道在配哪个 app 的供应商。 */}
+            <Badge
+              variant="secondary"
+              className="h-5 shrink-0 px-1.5 text-[11px] font-normal"
+            >
+              {t(`providers.app.${effectiveApp}`)}
+            </Badge>
+            {editing && effectiveApp === "opencode" &&
+            providerLiveManaged(editing) ? (
+              <Badge
+                variant="outline"
+                className="h-5 shrink-0 px-1.5 text-[11px] font-normal"
+              >
+                {t("providers.live.added")}
+              </Badge>
+            ) : null}
+          </div>
           {preset ? (
             <p className="text-muted-foreground text-xs">
               {t("providers.form.presetHint", { name: preset.name })}
@@ -540,11 +560,15 @@ export function ProviderFormSheet({
 
         <div className="flex min-h-0 flex-1">
           {showPicker ? (
-            <PresetPicker app={effectiveApp} onSelect={setPreset} />
+            <PresetPicker
+              app={effectiveApp}
+              selected={preset}
+              onSelect={setPreset}
+            />
           ) : null}
           <div className="flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto px-6">
             {effectiveApp === "claude" && templateVarNames.length > 0 ? (
-              <div className="rounded-lg border bg-muted/40 p-3">
+              <div className="rounded-md border p-3">
                 <p className="mb-1 text-xs font-medium">
                   {t("providers.form.templateVars")}
                 </p>
@@ -752,11 +776,11 @@ export function ProviderFormSheet({
               />
             ) : null}
             {effectiveApp === "claude" ? (
-              <div className="rounded-md border p-3">
-                <div className="flex flex-wrap items-center justify-between gap-2">
-                  <Label className="text-muted-foreground text-xs">
-                    {t("providers.form.modelMapping")}
-                  </Label>
+              <>
+              {/* 分区标题与操作按钮同处一行（SectionHeader 的 action 槽），
+                  box 只承担字段分组——与「基本信息 / 高级配置」同一分区语言。 */}
+              <SectionHeader
+                action={
                   <div className="flex items-center gap-2">
                     <Button
                       variant="outline"
@@ -781,8 +805,12 @@ export function ProviderFormSheet({
                       {t("providers.form.applyAll")}
                     </Button>
                   </div>
-                </div>
-                <p className="mt-1.5 mb-2 text-xs text-muted-foreground">
+                }
+              >
+                {t("providers.form.modelMapping")}
+              </SectionHeader>
+              <div className="rounded-md border p-3">
+                <p className="mb-2 text-xs text-muted-foreground">
                   {t("providers.form.modelMappingHint")}
                 </p>
                 {fetchedModels.length > 0 ? (
@@ -864,6 +892,7 @@ export function ProviderFormSheet({
                   ))}
                 </div>
               </div>
+              </>
             ) : null}
             <SectionHeader>
               {t("providers.form.section.advanced")}

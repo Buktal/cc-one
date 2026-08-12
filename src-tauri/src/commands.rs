@@ -7,8 +7,8 @@
 //! The state holds `Arc`s so blocking work can be moved onto `spawn_blocking`
 //! without borrowing the request-scoped `State` (which is not `'static`).
 
-use std::collections::HashMap;
-use std::path::PathBuf;
+use std::collections::{HashMap, HashSet};
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use rusqlite::{Connection, OpenFlags};
@@ -441,6 +441,7 @@ pub struct Preferences {
     pub push_interval_secs: u32,
     pub language: Language,
     pub lightweight_expand: LightweightExpand,
+    pub lightweight_auto_tuck_secs: u32,
     pub skin: Skin,
 }
 
@@ -451,6 +452,7 @@ fn to_preferences(cfg: &crate::config::ConfigData) -> Preferences {
         push_interval_secs: cfg.push_interval_secs,
         language: cfg.language,
         lightweight_expand: cfg.lightweight_expand,
+        lightweight_auto_tuck_secs: cfg.lightweight_auto_tuck_secs,
         skin: cfg.skin,
     }
 }
@@ -553,6 +555,21 @@ pub fn set_lightweight_expand(
     let cfg = state
         .config
         .update(|c| c.lightweight_expand = lightweight_expand)?;
+    Ok(to_preferences(&cfg))
+}
+
+/// Persist the auto-tuck delay (seconds; `0` = off) before an invisible full
+/// window morphs into the mini bar. Pure frontend behavior; Rust stores it for
+/// unity with the other Settings prefs.
+#[tauri::command]
+#[specta::specta]
+pub fn set_lightweight_auto_tuck(
+    state: State<'_, AppState>,
+    secs: u32,
+) -> AppResult<Preferences> {
+    let cfg = state
+        .config
+        .update(|c| c.lightweight_auto_tuck_secs = secs)?;
     Ok(to_preferences(&cfg))
 }
 
@@ -1260,6 +1277,122 @@ pub async fn import_providers_from_live_cmd(
     Ok(count)
 }
 
+// ---------------- 附加模式（OpenCode）导入预览 ----------------
+
+/// 「从 opencode.json 导入」的预览载荷。文件不存在 → `Missing`（带完整路径，
+/// 前端展示）；存在 → 将导入的条目列表（空 = 无 provider 段）。
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, specta::Type)]
+#[serde(tag = "kind", rename_all = "camelCase")]
+pub enum OpenCodeImportPreview {
+    Missing { path: String },
+    Ready {
+        entries: Vec<OpenCodeImportPreviewEntry>,
+    },
+}
+
+/// 一条将导入的供应商预览。**密钥绝不进预览载荷**——只有布尔
+/// `has_secret`，apiKey / headers 值不跨边界（见 `secret_in_entry`）。
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, specta::Type)]
+#[serde(rename_all = "camelCase")]
+pub struct OpenCodeImportPreviewEntry {
+    /// `provider.<key>`，即导入后的 liveKey。
+    pub key: String,
+    /// entry.name 优先，缺 → key（与导入的 display_name 规则一致）。
+    pub name: String,
+    /// options.baseURL，缺 → ""。
+    pub base_url: String,
+    /// options.apiKey 或 options.headers 任一值非空。
+    pub has_secret: bool,
+    /// DB 无此 liveKey → 新建；有 → 更新（与导入的判定一致）。
+    pub is_new: bool,
+}
+
+/// 预览「从 opencode.json 导入」：读盘薄壳——核心逻辑在
+/// [`preview_opencode_import_text`]（可测，不碰文件系统/DB）。文件不存在 →
+/// `Missing`（不报错：与导入命令「空文件 → 0 条」同属正常路径）。
+fn preview_opencode_import(
+    store: &Store,
+    app: App,
+    path: &Path,
+) -> AppResult<OpenCodeImportPreview> {
+    if !path.exists() {
+        return Ok(OpenCodeImportPreview::Missing {
+            path: path.display().to_string(),
+        });
+    }
+    let live_text = live::read_live_settings(path)?;
+    let existing_keys: HashSet<String> = store
+        .list_providers_for(app)?
+        .iter()
+        .filter_map(|p| live_opencode::meta_live_key(&p.meta))
+        .collect();
+    Ok(OpenCodeImportPreview::Ready {
+        entries: preview_opencode_import_text(&live_text, &existing_keys),
+    })
+}
+
+/// preview 核心逻辑（可测）：复用 [`live_opencode::provider_entries`]（单一事实
+/// 来源，不重新解析），把 `provider.<key>` 转成预览条目。existing_keys 由调用
+/// 方从 DB 收集——「新建 vs 更新」判定与 import（meta.liveKey 集合）一致。
+fn preview_opencode_import_text(
+    live_text: &str,
+    existing_keys: &HashSet<String>,
+) -> Vec<OpenCodeImportPreviewEntry> {
+    live_opencode::provider_entries(live_text)
+        .into_iter()
+        .map(|(key, entry)| OpenCodeImportPreviewEntry {
+            key: key.clone(),
+            name: entry
+                .get("name")
+                .and_then(|v| v.as_str())
+                .filter(|s| !s.is_empty())
+                .unwrap_or(&key)
+                .to_string(),
+            base_url: entry
+                .pointer("/options/baseURL")
+                .and_then(|v| v.as_str())
+                .unwrap_or_default()
+                .to_string(),
+            has_secret: secret_in_entry(&entry),
+            is_new: !existing_keys.contains(&key),
+        })
+        .collect()
+}
+
+/// entry 里是否携带凭据（只出布尔，不回取密钥值）：options.apiKey 非空，或
+/// options.headers 任一值非空（headers 可携带 Authorization 等认证头）。
+fn secret_in_entry(entry: &serde_json::Value) -> bool {
+    if entry
+        .pointer("/options/apiKey")
+        .and_then(|v| v.as_str())
+        .is_some_and(|s| !s.is_empty())
+    {
+        return true;
+    }
+    entry
+        .pointer("/options/headers")
+        .and_then(|h| h.as_object())
+        .is_some_and(|m| m.values().any(|v| v.as_str().is_some_and(|s| !s.is_empty())))
+}
+
+/// 附加模式「从 opencode.json 导入」预览按钮：只读命令，返回将导入的供应商
+/// （名称/端点/是否含密钥/新建或更新）；文件不存在 → Missing（带路径）。确认
+/// 导入仍走 import_providers_from_live_cmd。不 emit、不失效任何 tag。
+#[tauri::command]
+#[specta::specta]
+pub async fn preview_opencode_import_cmd(
+    state: State<'_, AppState>,
+    app: App,
+) -> AppResult<OpenCodeImportPreview> {
+    let store = state.store.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let path = live_opencode::opencode_config_path()?;
+        preview_opencode_import(&store, app, &path)
+    })
+    .await
+    .map_err(|e| AppError::Internal(format!("preview_opencode_import task failed: {e}")))?
+}
+
 // ---------------- 从 CC-Switch 导入供应商 ----------------
 
 /// 定位本机 CC-Switch 配置：`custom` 优先；否则回退顺序 = 默认 `~/.cc-switch/
@@ -1433,6 +1566,104 @@ mod tests {
         let n = import_opencode_from_live_text(&s, App::OpenCode, r#"{"model":"x"}"#).unwrap();
         assert_eq!(n, 0);
         assert!(s.list_providers_for(App::OpenCode).unwrap().is_empty());
+    }
+
+    // ---------------- 导入预览 ----------------
+
+    /// 预览提取 name / endpoint / 密钥布尔：带 name 用 name，缺 name 用 key；
+    /// baseURL 取 options.baseURL；apiKey 存在 → has_secret=true。键序字母序。
+    #[test]
+    fn preview_lists_entries_with_name_endpoint_and_secret() {
+        let entries = preview_opencode_import_text(opencode_live_json(), &HashSet::new());
+        assert_eq!(entries.len(), 2, "字母序：deepseek 先于 kimi");
+        let ds = &entries[0];
+        assert_eq!(ds.key, "deepseek");
+        assert_eq!(ds.name, "DeepSeek", "entry.name 作显示名");
+        assert_eq!(ds.base_url, "https://api.deepseek.com");
+        assert!(ds.has_secret, "options.apiKey 非空 → 含密钥");
+        assert!(ds.is_new, "DB 无此 liveKey → 新建");
+        let kimi = &entries[1];
+        assert_eq!(kimi.key, "kimi");
+        assert_eq!(kimi.name, "kimi", "无 name → key 作显示名");
+        assert_eq!(kimi.base_url, "https://api.moonshot.cn");
+        assert!(!kimi.has_secret, "无 apiKey → 不含密钥");
+    }
+
+    /// 「新建 vs 更新」判定与导入一致：existing_keys 按 liveKey 集合判定。
+    #[test]
+    fn preview_classifies_new_vs_update() {
+        let existing: HashSet<String> = ["deepseek".to_string()].into_iter().collect();
+        let entries = preview_opencode_import_text(opencode_live_json(), &existing);
+        assert!(!entries[0].is_new, "已有同 liveKey → 更新");
+        assert!(entries[1].is_new, "无此 liveKey → 新建");
+    }
+
+    /// 防泄漏回归护栏：预览载荷序列化后绝不包含密钥值（apiKey 只出布尔）。
+    #[test]
+    fn preview_output_never_contains_secret_value() {
+        let entries = preview_opencode_import_text(opencode_live_json(), &HashSet::new());
+        let json = serde_json::to_string(&entries).expect("preview entries serialize");
+        assert!(
+            !json.contains("sk-x"),
+            "preview 载荷不得携带密钥值: {json}"
+        );
+    }
+
+    /// headers 也能携带凭据（Authorization 等）→ 计入 has_secret；空值不算。
+    #[test]
+    fn preview_detects_headers_secret() {
+        let live = r#"{
+          "provider": {
+            "h1": { "options": { "headers": { "Authorization": "Bearer abc" } } },
+            "h2": { "options": { "headers": { "X-Empty": "" } } },
+            "h3": { "options": { "apiKey": "" } }
+          }
+        }"#;
+        let entries = preview_opencode_import_text(live, &HashSet::new());
+        assert_eq!(entries.len(), 3);
+        assert!(entries[0].has_secret, "headers 非空值 → 含密钥");
+        assert!(!entries[1].has_secret, "headers 空值 → 不含");
+        assert!(!entries[2].has_secret, "apiKey 空串 → 不含");
+    }
+
+    /// 无 provider 段 / 损坏 JSON5 / 非对象根 → 空 Vec（与导入「静默 0 条」一致，
+    /// preview 与 import 语义不得分叉）。
+    #[test]
+    fn preview_empty_or_unparseable_live_is_empty() {
+        for live in [r#"{"model":"x"}"#, "{bad", "[1,2]", ""] {
+            let entries = preview_opencode_import_text(live, &HashSet::new());
+            assert!(entries.is_empty(), "输入 {live:?} 应 → 空 Vec");
+        }
+    }
+
+    /// 薄壳：文件不存在 → Missing 变体（带完整路径），不是 Err。
+    #[test]
+    fn preview_shell_missing_file_is_missing_variant() {
+        let s = mem();
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let path = tmp.path().join("opencode.json");
+        match preview_opencode_import(&s, App::OpenCode, &path).expect("missing is Ok") {
+            OpenCodeImportPreview::Missing { path: shown } => {
+                assert_eq!(shown, path.display().to_string());
+            }
+            OpenCodeImportPreview::Ready { .. } => panic!("缺文件应 Missing"),
+        }
+    }
+
+    /// 薄壳：文件存在 → Ready + 条目（经真实读盘路径）。
+    #[test]
+    fn preview_shell_ready_with_seeded_file() {
+        let s = mem();
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let path = tmp.path().join("opencode.json");
+        std::fs::write(&path, opencode_live_json()).expect("write live file");
+        match preview_opencode_import(&s, App::OpenCode, &path).expect("ready is Ok") {
+            OpenCodeImportPreview::Ready { entries } => {
+                assert_eq!(entries.len(), 2);
+                assert!(entries.iter().all(|e| e.is_new), "空 DB → 全部新建");
+            }
+            OpenCodeImportPreview::Missing { .. } => panic!("文件存在应 Ready"),
+        }
     }
 }
 

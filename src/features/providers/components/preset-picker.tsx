@@ -17,6 +17,7 @@ import {
   type ProviderPreset,
   presetsForApp,
 } from "@/features/providers/presets"
+import { cn } from "@/lib/utils"
 
 import type { App, ProviderCategory } from "@/types/generated/bindings"
 
@@ -29,9 +30,12 @@ const CATEGORY_ORDER: ProviderCategory[] = [
 
 export function PresetPicker({
   app,
+  selected,
   onSelect,
 }: {
   app: App
+  /** 当前表单已选中的预设（新建态；连续切换覆盖）。 */
+  selected?: ProviderPreset | null
   onSelect: (preset: ProviderPreset) => void
 }) {
   const { t } = useTranslation()
@@ -82,25 +86,34 @@ export function PresetPicker({
                 {t(`providers.category.${group.category}`)}
               </div>
               <div className="flex flex-wrap gap-1.5">
-                {group.presets.map((preset) => (
-                  <Button
-                    key={preset.name}
-                    type="button"
-                    variant="outline"
-                    size="sm"
-                    onClick={() => onSelect(preset)}
-                    className="justify-start"
-                  >
-                    {preset.iconColor ? (
-                      <span
-                        aria-hidden
-                        className="size-2 shrink-0 rounded-full"
-                        style={{ backgroundColor: preset.iconColor }}
-                      />
-                    ) : null}
-                    <span className="truncate">{preset.name}</span>
-                  </Button>
-                ))}
+                {group.presets.map((preset) => {
+                  const isSelected = preset.name === selected?.name
+                  return (
+                    <Button
+                      key={preset.name}
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      onClick={() => onSelect(preset)}
+                      aria-pressed={isSelected}
+                      className={cn(
+                        "justify-start",
+                        // 选中态与 ImportModeCards 决策卡同一套视觉语言。
+                        isSelected &&
+                          "border-accent-brand bg-accent-tint text-accent-brand-strong font-medium",
+                      )}
+                    >
+                      {preset.iconColor ? (
+                        <span
+                          aria-hidden
+                          className="size-2 shrink-0 rounded-full"
+                          style={{ backgroundColor: preset.iconColor }}
+                        />
+                      ) : null}
+                      <span className="truncate">{preset.name}</span>
+                    </Button>
+                  )
+                })}
               </div>
             </div>
           ))

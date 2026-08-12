@@ -18,6 +18,7 @@ import type {
   LibraryForgetAction,
   LocalGroup,
   ModelStatsRow,
+  OpenCodeImportPreview,
   PricingEntry,
   Provider,
   ProviderImportMode,
@@ -508,6 +509,11 @@ export const vaultApi = createApi({
       queryFn: async (app) => run(commands.importProvidersFromLiveCmd(app)),
       invalidatesTags: ["Providers"],
     }),
+    /** 附加模式（opencode）「从 opencode.json 导入」预览：只读，返回将导入的
+     *  供应商（名称/端点/是否含密钥/新建或更新）；文件不存在 → Missing。 */
+    previewOpencodeImport: b.mutation<OpenCodeImportPreview, App>({
+      queryFn: async (app) => run(commands.previewOpencodeImportCmd(app)),
+    }),
     /** 某应用的通用配置片段（claude/codex/gemini 各一份）。 */
     getCommonConfigSnippet: b.query<CommonConfigSnippet, App>({
       queryFn: async (app) => run(commands.getCommonConfigSnippetCmd(app)),
@@ -597,6 +603,10 @@ export const vaultApi = createApi({
       queryFn: async (mode) => run(commands.setLightweightExpand(mode)),
       invalidatesTags: ["App"],
     }),
+    setLightweightAutoTuck: b.mutation<Preferences_Serialize, number>({
+      queryFn: async (secs) => run(commands.setLightweightAutoTuck(secs)),
+      invalidatesTags: ["App"],
+    }),
     setSkin: b.mutation<Preferences_Serialize, Skin_Deserialize>({
       queryFn: async (skin) => run(commands.setSkin(skin)),
       invalidatesTags: ["App"],
@@ -642,6 +652,7 @@ export const {
   useSetPushIntervalMutation,
   useSetLanguageMutation,
   useSetLightweightExpandMutation,
+  useSetLightweightAutoTuckMutation,
   useSetSkinMutation,
   useListSessionsQuery,
   useSessionCountsQuery,
@@ -670,6 +681,7 @@ export const {
   useAddProviderToLiveMutation,
   useRemoveProviderFromLiveMutation,
   useImportProvidersFromLiveMutation,
+  usePreviewOpencodeImportMutation,
   useGetCommonConfigSnippetQuery,
   useSetCommonConfigSnippetMutation,
   useExportProvidersMutation,

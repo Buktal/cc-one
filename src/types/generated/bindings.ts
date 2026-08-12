@@ -117,6 +117,12 @@ export const commands = {
 	 */
 	setLightweightExpand: (lightweightExpand: LightweightExpand) => typedError<Preferences_Serialize, AppError>(__TAURI_INVOKE("set_lightweight_expand", { lightweightExpand })),
 	/**
+	 *  Persist the auto-tuck delay (seconds; `0` = off) before an invisible full
+	 *  window morphs into the mini bar. Pure frontend behavior; Rust stores it for
+	 *  unity with the other Settings prefs.
+	 */
+	setLightweightAutoTuck: (secs: number) => typedError<Preferences_Serialize, AppError>(__TAURI_INVOKE("set_lightweight_auto_tuck", { secs })),
+	/**
 	 *  Persist the color skin (multi-skin theming). Pure frontend effect — Rust
 	 *  never reads it back; it rides ConfigData for unity with the other prefs.
 	 */
@@ -300,6 +306,12 @@ export const commands = {
 	 *  cc one DB。返回导入/更新条数。
 	 */
 	importProvidersFromLiveCmd: (app: App) => typedError<number, AppError>(__TAURI_INVOKE("import_providers_from_live_cmd", { app })),
+	/**
+	 *  附加模式「从 opencode.json 导入」预览按钮：只读命令，返回将导入的供应商
+	 *  （名称/端点/是否含密钥/新建或更新）；文件不存在 → Missing（带路径）。确认
+	 *  导入仍走 import_providers_from_live_cmd。不 emit、不失效任何 tag。
+	 */
+	previewOpencodeImportCmd: (app: App) => typedError<OpenCodeImportPreview, AppError>(__TAURI_INVOKE("preview_opencode_import_cmd", { app })),
 	/**
 	 *  「从 CC-Switch 导入」按钮：定位本机 CC-Switch 配置 → 读 + 转换供应商 → 复用
 	 *  `apply_import`（merge / overwrite）写本机库。代理 / OAuth / 不支持应用的供应商
@@ -589,6 +601,29 @@ export type ModelStatsRow = {
 	cache_hit_rate: number | null,
 };
 
+/**
+ *  「从 opencode.json 导入」的预览载荷。文件不存在 → `Missing`（带完整路径，
+ *  前端展示）；存在 → 将导入的条目列表（空 = 无 provider 段）。
+ */
+export type OpenCodeImportPreview = { kind: "missing"; path: string } | { kind: "ready"; entries: OpenCodeImportPreviewEntry[] };
+
+/**
+ *  一条将导入的供应商预览。**密钥绝不进预览载荷**——只有布尔
+ *  `has_secret`，apiKey / headers 值不跨边界（见 `secret_in_entry`）。
+ */
+export type OpenCodeImportPreviewEntry = {
+	/**  `provider.<key>`，即导入后的 liveKey。 */
+	key: string,
+	/**  entry.name 优先，缺 → key（与导入的 display_name 规则一致）。 */
+	name: string,
+	/**  options.baseURL，缺 → ""。 */
+	baseUrl: string,
+	/**  options.apiKey 或 options.headers 任一值非空。 */
+	hasSecret: boolean,
+	/**  DB 无此 liveKey → 新建；有 → 更新（与导入的判定一致）。 */
+	isNew: boolean,
+};
+
 /**  User-tunable preferences surfaced in the Settings「通用」card. */
 export type Preferences = Preferences_Serialize | Preferences_Deserialize;
 
@@ -599,6 +634,7 @@ export type Preferences_Deserialize = {
 	push_interval_secs: number,
 	language: Language,
 	lightweight_expand: LightweightExpand,
+	lightweight_auto_tuck_secs: number,
 	skin: Skin_Deserialize,
 };
 
@@ -609,6 +645,7 @@ export type Preferences_Serialize = {
 	push_interval_secs: number,
 	language: Language,
 	lightweight_expand: LightweightExpand,
+	lightweight_auto_tuck_secs: number,
 	skin: Skin_Serialize,
 };
 

@@ -29,16 +29,15 @@ import {
 } from "lucide-react"
 import { useState } from "react"
 import { useTranslation } from "react-i18next"
-import { toast } from "sonner"
 import {
   useAddProviderToLiveMutation,
   useDeleteProviderMutation,
   useGetActiveProviderQuery,
-  useImportProvidersFromLiveMutation,
   useRemoveProviderFromLiveMutation,
   useSwitchProviderMutation,
 } from "@/app/store/api"
 import { ConfirmDialog } from "@/components/confirm-dialog"
+import { EmptyState } from "@/components/empty-state"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
@@ -77,6 +76,7 @@ import { cn } from "@/lib/utils"
 import type { App, Provider } from "@/types/generated/bindings"
 import { CcSwitchImportDialog } from "./cc-switch-import-dialog"
 import { CommonConfigSnippetCard } from "./common-config-snippet-card"
+import { OpencodeImportDialog } from "./opencode-import-dialog"
 import { ProviderFormSheet } from "./provider-form-sheet"
 import {
   ProviderTransferDialog,
@@ -102,11 +102,10 @@ export function ProvidersView() {
   const { data: activeProvider } = useGetActiveProviderQuery(app)
   const [remove] = useDeleteProviderMutation()
   const [switchProvider] = useSwitchProviderMutation()
-  // opencode 附加模式：加入 / 移出 live 配置（opencode.json），以及从现有
-  // opencode.json 反向导入 DB。单激活四 app 不用这三个。
+  // opencode 附加模式：加入 / 移出 live 配置（opencode.json）。单激活四 app
+  // 不用这两个。「从 opencode.json 导入」走 OpencodeImportDialog（预览式弹窗）。
   const [addProviderToLive] = useAddProviderToLiveMutation()
   const [removeProviderFromLive] = useRemoveProviderFromLiveMutation()
-  const [importProvidersFromLive] = useImportProvidersFromLiveMutation()
   const runWithToast = useMutateWithToast()
 
   const [sheetOpen, setSheetOpen] = useState(false)
@@ -129,6 +128,8 @@ export function ProvidersView() {
   }
   const [transfer, setTransfer] = useState<TransferKind | null>(null)
   const [ccswitchOpen, setCcswitchOpen] = useState(false)
+  // opencode 附加模式「从 opencode.json 导入」预览弹窗。
+  const [opencodeImportOpen, setOpencodeImportOpen] = useState(false)
   const [query, setQuery] = useState("")
   // 切换确认对话框：切到缺必填项（端点/key/模板变量）的供应商前先问一句，
   // 用户确认后照切不误（「我已经知道它缺东西，就是要切」）。
@@ -232,18 +233,6 @@ export function ProvidersView() {
       },
     )
   }
-  async function onImportFromLive() {
-    // 返回导入条数，手动 toast 带上 count（runWithToast 的 vars 不支持返回值）。
-    const result = await importProvidersFromLive(app)
-    if (result.error) {
-      toast.error(t("providers.toast.importFromLiveFailed"))
-    } else {
-      toast.success(
-        t("providers.toast.importedFromLive", { count: result.data }),
-      )
-    }
-  }
-
   const visibleProviders = filterProviders(providers, query)
 
   return (
@@ -266,7 +255,9 @@ export function ProvidersView() {
               className={cn(
                 "rounded-md",
                 a === app &&
-                  "bg-accent-tint text-accent-brand-strong font-medium",
+                  // 激活锚点：tint 底 + 品牌字色 + 底部 2px accent 色条。inset
+                  // shadow 不占盒模型——切换激活零布局跳动（border 方案会闪）。
+                  "bg-accent-tint text-accent-brand-strong font-medium shadow-[inset_0_-2px_0_0_var(--accent-brand)]",
               )}
             >
               {t(`providers.app.${a}`)}
@@ -301,7 +292,7 @@ export function ProvidersView() {
                 {t("providers.ccswitch.button")}
               </DropdownMenuItem>
               {isAdditive ? (
-                <DropdownMenuItem onClick={() => void onImportFromLive()}>
+                <DropdownMenuItem onClick={() => setOpencodeImportOpen(true)}>
                   <RefreshCw />
                   {t("providers.live.import")}
                 </DropdownMenuItem>
@@ -339,7 +330,13 @@ export function ProvidersView() {
           Shell 的滚动容器统一滚动。预设已退居为新增流程的左侧面板（见下）。 */}
       <Card>
         <CardHeader className="flex flex-row items-center justify-between gap-2">
-          <CardTitle>{t("providers.title")}</CardTitle>
+          <CardTitle>
+            {t("providers.title")}
+            {/* 过滤前总数——搜索时数字稳定，无匹配由 noMatch 空态表达。 */}
+            <span className="text-muted-foreground ml-2 text-xs font-normal">
+              {providers.length}
+            </span>
+          </CardTitle>
           <div className="relative w-56">
             <Search className="text-muted-foreground absolute top-1/2 left-2.5 size-4 -translate-y-1/2" />
             <Input
@@ -357,9 +354,16 @@ export function ProvidersView() {
               {t("common.loading")}
             </div>
           ) : visibleProviders.length === 0 ? (
-            <div className="text-muted-foreground py-12 text-center text-sm">
-              {query.trim() ? t("providers.noMatch") : t("providers.empty")}
-            </div>
+            query.trim() ? (
+              <EmptyState icon={Search} title={t("providers.noMatch")} />
+            ) : (
+              <EmptyState
+                icon={Database}
+                title={t("providers.empty")}
+                description={t("providers.emptyDesc")}
+                action={{ label: t("providers.add"), onClick: openNew }}
+              />
+            )
           ) : (
             <div className="min-h-0 flex-1 -mr-2.5 overflow-auto pr-2.5">
               {/* 每行是独立 grid 容器——列宽必须全部由模板决定，不能随行内容
@@ -396,9 +400,11 @@ export function ProvidersView() {
         </CardContent>
       </Card>
 
-      {/* 通用配置片段：切换写盘时合并进受控字段。附加模式（opencode）多供应商
-          共存、无「切换」概念，片段无处合并 → 不显示。 */}
-      {isAdditive ? null : <CommonConfigSnippetCard app={app} />}
+      {/* 通用配置片段：切换写盘时合并进受控字段。后端目前只有 Claude 在切换时
+          真正合并片段（codex/gemini/grok 的合并语义待实现），卡片只对 Claude
+          显示——不给其它应用展示「配了不生效」的控件（见 issues: codex/gemini
+          合并语义）。opencode 附加模式无「切换」概念，本来就不显示。 */}
+      {app === "claude" ? <CommonConfigSnippetCard app={app} /> : null}
 
       <ProviderFormSheet
         open={sheetOpen}
@@ -449,6 +455,11 @@ export function ProvidersView() {
       <CcSwitchImportDialog
         open={ccswitchOpen}
         onOpenChange={setCcswitchOpen}
+      />
+      <OpencodeImportDialog
+        open={opencodeImportOpen}
+        onOpenChange={setOpencodeImportOpen}
+        app={app}
       />
 
       <ConfirmDialog

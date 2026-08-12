@@ -199,6 +199,13 @@ fn default_push_interval_secs() -> u32 {
     600
 }
 
+/// Default delay before an invisible (minimized / hidden-to-tray) full window
+/// auto-tucks into the mini bar (30 s). `0` (off) is chosen in the Settings
+/// Select; the serde default keeps an upgraded config.json on 30, not off.
+fn default_lightweight_auto_tuck_secs() -> u32 {
+    30
+}
+
 /// 通用配置片段默认内容：隐藏署名（`includeCoAuthoredBy: false`）。
 fn default_common_config_snippet() -> String {
     r#"{"includeCoAuthoredBy": false}"#.to_string()
@@ -255,6 +262,10 @@ pub struct ConfigData {
     /// Rust doesn't read it, but it lives here so all Settings prefs are unified.
     #[serde(default)]
     pub lightweight_expand: LightweightExpand,
+    /// Delay (seconds) before an invisible full window auto-tucks into the
+    /// mini bar; `0` = off. Frontend-only — Rust stores it for unity.
+    #[serde(default = "default_lightweight_auto_tuck_secs")]
+    pub lightweight_auto_tuck_secs: u32,
     /// Color skin (multi-skin theming). Frontend-only effect; Rust doesn't act
     /// on it, but it rides ConfigData so every Settings preference is unified.
     #[serde(default)]
@@ -300,6 +311,7 @@ impl Default for ConfigData {
             push_interval_secs: default_push_interval_secs(),
             language: Language::En,
             lightweight_expand: LightweightExpand::Click,
+            lightweight_auto_tuck_secs: default_lightweight_auto_tuck_secs(),
             skin: Skin::Neutral,
             active_providers: BTreeMap::new(),
             active_provider_id: None,

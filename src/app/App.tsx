@@ -16,6 +16,7 @@ import { DashboardView } from "@/features/usage/components/dashboard-view"
 import { LightweightCard } from "@/features/usage/components/lightweight-card"
 import { LogsView } from "@/features/usage/components/logs-view"
 import { Shell } from "./shell/shell"
+import { useAutoTuck } from "./shell/use-auto-tuck"
 import { useUpdateCheck } from "./shell/use-update-check"
 import { useWindowMode } from "./shell/use-window-mode"
 
@@ -33,6 +34,9 @@ export default function App() {
   // Morph the OS window to match the mode. Mounted in App so it is
   // always under the Redux store, regardless of which skin renders below.
   useWindowMode()
+  // Auto-tuck: an invisible full window morphs into the mini bar after the
+  // configured delay (see use-auto-tuck.ts). Active only in full mode.
+  useAutoTuck()
   // Startup update probe: fires once app-wide via the hook's guard,
   // regardless of full vs lightweight skin — lightweight just doesn't render
   // the indicator.
