@@ -6,16 +6,23 @@
 // execute.
 
 import { convertFileSrc } from "@tauri-apps/api/core"
+import { Download, Loader2, Pencil } from "lucide-react"
 import { useRef, useState } from "react"
 import { useTranslation } from "react-i18next"
 import { useLibraryTextQuery } from "@/app/store/api"
 import { QueryState } from "@/components/query-state"
+import { Button } from "@/components/ui/button"
 import {
   Sheet,
   SheetContent,
   SheetHeader,
   SheetTitle,
 } from "@/components/ui/sheet"
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipTrigger,
+} from "@/components/ui/tooltip"
 import { cn } from "@/lib/utils"
 import type { LibraryEntry } from "@/types/generated/bindings"
 import { shouldThemeRender } from "../derive"
@@ -38,10 +45,19 @@ function maybePrettyJson(text: string): string {
 
 export function PreviewSheet({
   entry,
+  busy = false,
   onClose,
+  onExport,
+  onRename,
 }: {
   entry: LibraryEntry
+  /** True while an export for this entry is in flight (row + sheet share it). */
+  busy?: boolean
   onClose: () => void
+  /** Optional so the sheet stays usable without actions; the toolbar only
+   *  renders when a caller provides the callbacks. */
+  onExport?: () => void
+  onRename?: () => void
 }) {
   const { t } = useTranslation()
   const url = convertFileSrc(entry.abs_path)
@@ -85,8 +101,47 @@ export function PreviewSheet({
   return (
     <Sheet open={true} onOpenChange={(o) => !o && onClose()}>
       <SheetContent className="flex w-[640px] flex-col gap-3 sm:max-w-[640px]">
-        <SheetHeader>
-          <SheetTitle className="truncate">{entry.name}</SheetTitle>
+        <SheetHeader className="flex flex-row items-center justify-between gap-2">
+          <SheetTitle className="min-w-0 truncate">{entry.name}</SheetTitle>
+          {/* Row actions, reachable without closing the preview: export keeps
+              the sheet open (native folder picker on top), rename hands back
+              to the row's inline editor. No delete — that goes through the
+              shared confirm flow. Hidden until the caller wires callbacks. */}
+          {onExport && onRename ? (
+            <div className="flex shrink-0 gap-1">
+              <Tooltip>
+                <TooltipTrigger
+                  render={
+                    <Button
+                      variant="ghost"
+                      size="icon-sm"
+                      aria-label={t("library.row.export")}
+                      disabled={busy}
+                      onClick={onExport}
+                    />
+                  }
+                >
+                  {busy ? <Loader2 className="animate-spin" /> : <Download />}
+                </TooltipTrigger>
+                <TooltipContent>{t("library.row.export")}</TooltipContent>
+              </Tooltip>
+              <Tooltip>
+                <TooltipTrigger
+                  render={
+                    <Button
+                      variant="ghost"
+                      size="icon-sm"
+                      aria-label={t("library.row.rename")}
+                      onClick={onRename}
+                    />
+                  }
+                >
+                  <Pencil />
+                </TooltipTrigger>
+                <TooltipContent>{t("library.row.rename")}</TooltipContent>
+              </Tooltip>
+            </div>
+          ) : null}
         </SheetHeader>
         {isImage ? (
           // <img> fits the pane (max-w-full → no horizontal scroll) instead of

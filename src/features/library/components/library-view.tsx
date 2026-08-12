@@ -15,19 +15,17 @@ import {
   Check,
   ChevronRight,
   Download,
-  File as FileIcon,
-  FileJson,
   FilePlus,
-  FileText,
   Folder,
-  Image as ImageIcon,
   Loader2,
   Pencil,
+  Search,
   Trash2,
   X,
 } from "lucide-react"
 import { useTranslation } from "react-i18next"
 import { EmptyState } from "@/components/empty-state"
+import { PaginationBar } from "@/components/pagination-bar"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Input } from "@/components/ui/input"
@@ -51,8 +49,9 @@ import {
   TooltipContent,
   TooltipTrigger,
 } from "@/components/ui/tooltip"
-import { formatInt, formatSize } from "@/lib/format"
+import { formatSize } from "@/lib/format"
 import { cn } from "@/lib/utils"
+import { kindIcon } from "../kind-icon"
 import {
   ALL,
   LIBRARY_PAGE_SIZE,
@@ -63,17 +62,6 @@ import { UploadDialog } from "./upload-dialog"
 
 dayjs.extend(relativeTime)
 
-function kindIcon(name: string, isDir: boolean) {
-  if (isDir) return Folder
-  const ext = name.split(".").pop()?.toLowerCase()
-  if (!ext) return FileIcon
-  if (ext === "json") return FileJson
-  if (["md", "markdown", "txt", "log"].includes(ext)) return FileText
-  if (["png", "jpg", "jpeg", "gif", "webp", "svg", "bmp"].includes(ext))
-    return ImageIcon
-  return FileIcon
-}
-
 export function LibraryView() {
   const { t } = useTranslation()
   const {
@@ -81,7 +69,6 @@ export function LibraryView() {
     totalCount,
     page,
     totalPages,
-    offset,
     setOffset,
     isLoading,
     deviceOptions,
@@ -91,6 +78,8 @@ export function LibraryView() {
     atRoot,
     showDevice,
     breadcrumb,
+    search,
+    setSearch,
     dragging,
     pendingPaths,
     clearPendingPaths,
@@ -182,6 +171,20 @@ export function LibraryView() {
           <div className="ml-auto" />
         )}
 
+        {/* Search filters the current directory client-side — the scan returns
+            a whole directory, so no backend round-trip. Same shape as the
+            sessions toolbar search. */}
+        <div className="relative w-56">
+          <Search className="text-muted-foreground absolute top-1/2 left-2 size-3.5 -translate-y-1/2" />
+          <Input
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            placeholder={t("library.searchPlaceholder")}
+            aria-label={t("library.searchAria")}
+            className="h-8 pl-7"
+          />
+        </div>
+
         <Button size="sm" onClick={onAddFiles}>
           <FilePlus />
           {t("library.add")}
@@ -202,14 +205,22 @@ export function LibraryView() {
             <div className="text-muted-foreground p-4 text-sm">
               {t("common.loading")}
             </div>
-          ) : entries.length === 0 ? (
-            <div className="flex flex-1 items-center justify-center">
-              <EmptyState
-                icon={Folder}
-                title={t("library.empty.title")}
-                description={t("library.empty.desc")}
-              />
-            </div>
+          ) : totalCount === 0 ? (
+            search.trim() ? (
+              /* Searched but nothing matched — a lighter state than the
+                 empty-folder invite, so "no matches" ≠ "add files". */
+              <div className="text-muted-foreground flex flex-1 items-center justify-center py-12 text-sm">
+                {t("library.noMatch")}
+              </div>
+            ) : (
+              <div className="flex flex-1 items-center justify-center">
+                <EmptyState
+                  icon={Folder}
+                  title={t("library.empty.title")}
+                  description={t("library.empty.desc")}
+                />
+              </div>
+            )
           ) : (
             <div className="min-h-0 flex-1 -mr-2.5 overflow-auto pr-2.5">
               <Table>
@@ -280,7 +291,12 @@ export function LibraryView() {
                           ) : (
                             <button
                               type="button"
-                              className="hover:text-accent-brand-strong flex items-center gap-2"
+                              className={cn(
+                                "hover:text-accent-brand-strong flex items-center gap-2",
+                                /* Directories read heavier so the structure
+                                   scans at a glance (file-manager norm). */
+                                e.kind === "dir" && "font-medium",
+                              )}
                               onClick={() =>
                                 e.kind === "dir" ? drill(e) : setPreview(e)
                               }
@@ -385,45 +401,26 @@ export function LibraryView() {
             </div>
           )}
 
-          {/* Paged footer — same control as the request-log / sessions tables
-            (page info left, prev/next right; disabled states agree with the
+          {/* Paged footer — the shared PaginationBar (page info left, numbered
+            pages with ellipsis jumps right; disabled states agree with the
             slice size via LIBRARY_PAGE_SIZE). */}
-          <div className="text-muted-foreground mt-3 flex shrink-0 items-center justify-between text-xs">
-            <span>
-              {t("library.pageInfo", {
-                page,
-                totalPages,
-                total: formatInt(totalCount),
-              })}
-            </span>
-            <div className="flex gap-2">
-              <Button
-                variant="outline"
-                size="sm"
-                disabled={offset === 0}
-                onClick={() =>
-                  setOffset(Math.max(0, offset - LIBRARY_PAGE_SIZE))
-                }
-              >
-                {t("library.prevPage")}
-              </Button>
-              <Button
-                variant="outline"
-                size="sm"
-                disabled={offset + LIBRARY_PAGE_SIZE >= totalCount}
-                onClick={() => setOffset(offset + LIBRARY_PAGE_SIZE)}
-              >
-                {t("library.nextPage")}
-              </Button>
-            </div>
-          </div>
+          <PaginationBar
+            page={page}
+            totalPages={totalPages}
+            total={totalCount}
+            onPageChange={(p) => setOffset((p - 1) * LIBRARY_PAGE_SIZE)}
+          />
         </CardContent>
       </Card>
 
       {dragging ? (
         <div className="pointer-events-none fixed inset-0 z-30 flex items-center justify-center">
           <div className="border-accent-brand bg-accent-tint text-accent-brand-strong rounded-xl border-2 border-dashed px-8 py-6 text-sm font-medium">
-            {t("library.drop.active")}
+            {/* Name the drop target so a stray drop lands somewhere visible,
+                not the directory you happened to be browsing. */}
+            {subpath
+              ? t("library.drop.target", { path: subpath })
+              : t("library.drop.active")}
           </div>
         </div>
       ) : null}
@@ -437,7 +434,18 @@ export function LibraryView() {
       ) : null}
 
       {preview ? (
-        <PreviewSheet entry={preview} onClose={() => setPreview(null)} />
+        <PreviewSheet
+          entry={preview}
+          busy={busyRelPath === preview.rel_path}
+          onClose={() => setPreview(null)}
+          onExport={() => onExport(preview)}
+          /* Rename hands back to the row's inline editor (one rename UI, not
+             a second copy inside the sheet). */
+          onRename={() => {
+            setPreview(null)
+            startRename(preview)
+          }}
+        />
       ) : null}
     </div>
   )

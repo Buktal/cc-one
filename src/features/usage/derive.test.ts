@@ -2,8 +2,12 @@ import dayjs from "dayjs"
 import { describe, expect, it } from "vitest"
 
 import {
+  classifyStopReason,
+  costIsNotable,
+  groupRowsByDay,
   hourlySnapshot,
   modelMetricValue,
+  stopReasonLabelKey,
   stopReasonTone,
   tokenSnapshot,
   topNModels,
@@ -240,5 +244,91 @@ describe("stopReasonTone", () => {
   it("returns null for empty / unknown", () => {
     expect(stopReasonTone("")).toBeNull()
     expect(stopReasonTone("something_new")).toBeNull()
+  })
+})
+
+describe("classifyStopReason / stopReasonLabelKey", () => {
+  it("labels exact values specifically", () => {
+    expect(stopReasonLabelKey("end_turn")).toBe("usage.logs.stopReason.endTurn")
+    expect(stopReasonLabelKey("max_tokens")).toBe(
+      "usage.logs.stopReason.maxTokens",
+    )
+    expect(stopReasonLabelKey("refusal")).toBe("usage.logs.stopReason.refusal")
+  })
+
+  it("labels compound values by their most specific pattern", () => {
+    // "context_window_exceeded" contains both patterns; the label follows the
+    // first match (context_window) and the tone stays warn.
+    expect(classifyStopReason("context_window_exceeded")).toEqual({
+      tone: "warn",
+      labelKey: "usage.logs.stopReason.contextWindow",
+    })
+  })
+
+  it("tone and label always agree (single classifier)", () => {
+    for (const v of [
+      "end_turn",
+      "tool_use",
+      "max_tokens",
+      "refusal",
+      "error",
+    ]) {
+      const { tone, labelKey } = classifyStopReason(v)
+      expect(tone).toBe(stopReasonTone(v))
+      expect(labelKey).not.toBeNull()
+    }
+  })
+
+  it("unknown / empty values have neither tone nor label", () => {
+    expect(classifyStopReason("")).toEqual({ tone: null, labelKey: null })
+    expect(classifyStopReason("something_new")).toEqual({
+      tone: null,
+      labelKey: null,
+    })
+  })
+})
+
+describe("costIsNotable", () => {
+  it("highlights at the threshold and above", () => {
+    expect(costIsNotable(1)).toBe(true)
+    expect(costIsNotable(1.5)).toBe(true)
+    expect(costIsNotable(0.99)).toBe(false)
+    expect(costIsNotable(null)).toBe(false)
+    expect(costIsNotable(undefined)).toBe(false)
+  })
+})
+
+describe("groupRowsByDay", () => {
+  const row = (timestamp: string) => ({ timestamp })
+  // Local-time strings (no tz suffix): grouping follows the LOCAL day, matching
+  // the formatTime display — never UTC, so the separator lands where the user
+  // sees the date change (a UTC string near midnight would group differently
+  // depending on the machine's timezone).
+
+  it("keeps same-day rows in one group", () => {
+    expect(
+      groupRowsByDay([row("2026-08-12T10:00:00"), row("2026-08-12T11:00:00")]),
+    ).toEqual([
+      {
+        dayKey: "2026-08-12",
+        rows: [row("2026-08-12T10:00:00"), row("2026-08-12T11:00:00")],
+      },
+    ])
+  })
+
+  it("starts a new group at each day boundary (time-desc input)", () => {
+    const groups = groupRowsByDay([
+      row("2026-08-12T10:00:00"),
+      row("2026-08-11T23:00:00"),
+      row("2026-08-11T09:00:00"),
+    ])
+    expect(groups.map((g) => g.dayKey)).toEqual(["2026-08-12", "2026-08-11"])
+    expect(groups[1].rows).toHaveLength(2)
+  })
+
+  it("falls back to the raw date prefix on unparseable timestamps", () => {
+    expect(groupRowsByDay([row("garbage"), row("garbage")])[0].dayKey).toBe(
+      "garbage",
+    )
   })
 })

@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest"
 import {
   dateInputToDay,
   formatCost,
+  formatCostAmount,
   formatDay,
   formatDuration,
   formatInt,
@@ -35,6 +36,20 @@ describe("formatTokens", () => {
   })
 })
 
+describe("formatCostAmount", () => {
+  it("nullish / non-finite → 0.0000", () => {
+    expect(formatCostAmount(null)).toBe("0.0000")
+    expect(formatCostAmount(undefined)).toBe("0.0000")
+    expect(formatCostAmount(Number.NaN)).toBe("0.0000")
+  })
+
+  it("formats the plain 4-decimal amount, no currency symbol", () => {
+    expect(formatCostAmount(1.7564)).toBe("1.7564")
+    expect(formatCostAmount(0)).toBe("0.0000")
+    expect(formatCostAmount(-1.5)).toBe("-1.5000")
+  })
+})
+
 describe("formatCost", () => {
   it("nullish / non-finite → $0.0000", () => {
     expect(formatCost(null)).toBe("$0.0000")
@@ -45,6 +60,11 @@ describe("formatCost", () => {
   it("formats USD with 4 decimals", () => {
     expect(formatCost(1.7564)).toBe("$1.7564")
     expect(formatCost(0)).toBe("$0.0000")
+  })
+
+  it("is the currency symbol prefixed to formatCostAmount (single source)", () => {
+    expect(formatCost(1.7564)).toBe(`$${formatCostAmount(1.7564)}`)
+    expect(formatCost(Number.NaN)).toBe(`$${formatCostAmount(Number.NaN)}`)
   })
 })
 

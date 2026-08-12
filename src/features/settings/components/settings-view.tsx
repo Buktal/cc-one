@@ -1,9 +1,11 @@
 // Settings view: device identity, run mode, repo binding
 // (Standalone ↔ Synced), manual sync / rebill.
 //
-// Five sectioned cards (通用 / 本机 / 设备 / 同步 / 维护), each fronted by an
-// eyebrow label. The sync card's state machine (probe / bind / unbind /
-// sync-now + draft inputs) lives in useSyncRepo; this file is presentation.
+// Sectioned cards (通用 / 本机 / 同步 / 设备), each fronted by an eyebrow
+// label. The sync card's state machine (probe / bind / unbind / sync-now +
+// draft inputs) lives in useSyncRepo; this file is presentation. The sync
+// card renders TWO distinct states — unbound (inputs + test/bind) vs bound
+// (current repo, copyable, + test/sync/unbind) — never a mix of both.
 
 import {
   Calculator,
@@ -18,6 +20,7 @@ import {
 import { useState } from "react"
 import { useTranslation } from "react-i18next"
 import { useRebillMutation, useSetDisplayNameMutation } from "@/app/store/api"
+import { CopyButton } from "@/components/copy-button"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent } from "@/components/ui/card"
@@ -64,15 +67,24 @@ export function SettingsView() {
         <GeneralCard />
       </Section>
 
-      {/* 本机 */}
+      {/* 本机 — identity + 补算 (rebill is a data-repair for this machine's
+          records, so it docks here rather than in its own thin card) */}
       <Section
         eyebrow={t("settings.section.local")}
         description={t("settings.sectionDesc.local")}
       >
         <Row label={t("settings.local.deviceId")}>
-          <code className="bg-muted rounded px-2 py-1 font-mono text-xs">
-            {info?.device_id ?? "—"}
-          </code>
+          <span className="flex min-w-0 items-center gap-1">
+            <code className="bg-muted truncate rounded px-2 py-1 font-mono text-xs">
+              {info?.device_id ?? "—"}
+            </code>
+            {info?.device_id ? (
+              <CopyButton
+                value={info.device_id}
+                label={t("settings.local.copyDeviceId")}
+              />
+            ) : null}
+          </span>
         </Row>
         <Row label={t("settings.local.runMode")}>
           <Badge variant={synced ? "default" : "secondary"}>
@@ -80,8 +92,16 @@ export function SettingsView() {
           </Badge>
         </Row>
         <Row label={t("settings.local.claudeLogDir")}>
-          <span className="text-muted-foreground truncate font-mono text-xs">
-            {info?.claude_projects_dir ?? "—"}
+          <span className="flex min-w-0 items-center gap-1">
+            <span className="text-muted-foreground truncate font-mono text-xs">
+              {info?.claude_projects_dir ?? "—"}
+            </span>
+            {info?.claude_projects_dir ? (
+              <CopyButton
+                value={info.claude_projects_dir}
+                label={t("settings.local.copyLogDir")}
+              />
+            ) : null}
           </span>
         </Row>
         <div className="bg-border h-px" />
@@ -92,7 +112,7 @@ export function SettingsView() {
           <div className="flex items-center gap-2">
             <Input
               className="flex-1"
-              placeholder={info?.display_name ?? "Device"}
+              placeholder={t("settings.local.displayNamePlaceholder")}
               value={displayName}
               onChange={(e) => setDisplayName(e.target.value)}
             />
@@ -111,109 +131,16 @@ export function SettingsView() {
             </Button>
           </div>
         </div>
-      </Section>
-
-      {/* 设备 */}
-      <Section
-        eyebrow={t("settings.section.devices")}
-        description={t("settings.sectionDesc.devices")}
-      >
-        <DeviceList />
-      </Section>
-
-      {/* 同步 — 仓库绑定 + 用量同步 */}
-      <Section
-        eyebrow={t("settings.section.sync")}
-        description={t("settings.sectionDesc.sync")}
-      >
-        <Row label={t("settings.sync.currentRepo")}>
-          <span className="text-muted-foreground font-mono text-xs">
-            {info?.repo_url ?? t("settings.sync.notConfigured")}
-          </span>
-        </Row>
-        <Row label="Token">
-          <span className="text-muted-foreground font-mono text-xs">
-            {info?.masked_token ?? t("settings.sync.notConfigured")}
-          </span>
-        </Row>
         <div className="bg-border h-px" />
-        <div className="flex flex-col gap-2">
-          <Label className="text-muted-foreground text-xs">
-            {t("settings.sync.repoUrl")}
-          </Label>
-          <Input
-            placeholder="https://github.com/<owner>/<repo>.git"
-            value={repoUrl}
-            onChange={(e) => setRepoUrl(e.target.value)}
-            disabled={synced}
-          />
-          <Label className="text-muted-foreground text-xs">
-            {t("settings.sync.githubToken")}
-          </Label>
-          <Input
-            type="password"
-            placeholder="github_pat_…"
-            value={token}
-            onChange={(e) => setToken(e.target.value)}
-            disabled={synced}
-          />
-        </div>
-        <div className="flex flex-wrap gap-2">
-          <Button
-            variant="outline"
-            size="sm"
-            disabled={
-              verifying || (!synced && (!repoUrl.trim() || !token.trim()))
-            }
-            onClick={onVerify}
-          >
-            <PlugZap className="size-4" />
-            {verifying
-              ? t("settings.sync.verifying")
-              : t("settings.sync.testConnection")}
-          </Button>
-          <Button
-            size="sm"
-            disabled={binding || synced || !repoUrl.trim() || !token.trim()}
-            onClick={bindRepo}
-          >
-            <CloudUpload className="size-4" />
-            {t("settings.sync.bindAndEnable")}
-          </Button>
-          <Button
-            variant="outline"
-            size="sm"
-            disabled={clearing || !synced}
-            onClick={unbind}
-          >
-            <Unplug className="size-4" />
-            {t("settings.sync.unbind")}
-          </Button>
-          {synced && (
-            <Button
-              variant="outline"
-              size="sm"
-              disabled={syncing}
-              onClick={syncNowAction}
-            >
-              <RefreshCw className="size-4" />
-              {syncing
-                ? t("settings.sync.syncing")
-                : t("settings.sync.syncNow")}
-            </Button>
-          )}
-        </div>
-        {(verifying || verifyResult) && (
-          <VerifyBanner verifying={verifying} result={verifyResult} />
-        )}
-      </Section>
-
-      {/* 维护 */}
-      <Section
-        eyebrow={t("settings.section.maintenance")}
-        description={t("settings.sectionDesc.maintenance")}
-      >
-        <Row label={t("settings.maintenance.rebillLabel")}>
+        <div className="flex items-start justify-between gap-4">
+          <div className="flex min-w-0 flex-col gap-1">
+            <Label className="text-foreground">
+              {t("settings.maintenance.rebillLabel")}
+            </Label>
+            <p className="text-muted-foreground text-xs leading-relaxed">
+              {t("settings.maintenance.rebillHint")}
+            </p>
+          </div>
           <Button
             variant="outline"
             size="sm"
@@ -233,23 +160,138 @@ export function SettingsView() {
               ? t("settings.maintenance.rebilling")
               : t("settings.maintenance.rebillButton")}
           </Button>
-        </Row>
+        </div>
+      </Section>
+
+      {/* 同步 — 仓库绑定 + 用量同步。两态分离：未绑定只展示输入与绑定；
+          已绑定只展示当前配置（可复制）与操作，绝不混排。 */}
+      <Section
+        id="sync-section"
+        eyebrow={t("settings.section.sync")}
+        description={t("settings.sectionDesc.sync")}
+      >
+        {synced ? (
+          <>
+            <Row label={t("settings.sync.currentRepo")}>
+              <span className="flex min-w-0 items-center gap-1">
+                <span className="text-muted-foreground truncate font-mono text-xs">
+                  {info?.repo_url ?? "—"}
+                </span>
+                {info?.repo_url ? (
+                  <CopyButton
+                    value={info.repo_url}
+                    label={t("settings.sync.copyRepoUrl")}
+                  />
+                ) : null}
+              </span>
+            </Row>
+            <Row label="Token">
+              <span className="text-muted-foreground font-mono text-xs">
+                {info?.masked_token ?? t("settings.sync.notConfigured")}
+              </span>
+            </Row>
+            <div className="flex flex-wrap gap-2">
+              <Button
+                variant="outline"
+                size="sm"
+                disabled={verifying}
+                onClick={onVerify}
+              >
+                <PlugZap className="size-4" />
+                {verifying
+                  ? t("settings.sync.verifying")
+                  : t("settings.sync.testConnection")}
+              </Button>
+              <Button size="sm" disabled={syncing} onClick={syncNowAction}>
+                <RefreshCw className="size-4" />
+                {syncing
+                  ? t("settings.sync.syncing")
+                  : t("settings.sync.syncNow")}
+              </Button>
+              <Button
+                variant="outline"
+                size="sm"
+                disabled={clearing}
+                onClick={unbind}
+              >
+                <Unplug className="size-4" />
+                {t("settings.sync.unbind")}
+              </Button>
+            </div>
+          </>
+        ) : (
+          <>
+            <div className="flex flex-col gap-2">
+              <Label className="text-muted-foreground text-xs">
+                {t("settings.sync.repoUrl")}
+              </Label>
+              <Input
+                placeholder="https://github.com/<owner>/<repo>.git"
+                value={repoUrl}
+                onChange={(e) => setRepoUrl(e.target.value)}
+              />
+              <Label className="text-muted-foreground text-xs">
+                {t("settings.sync.githubToken")}
+              </Label>
+              <Input
+                type="password"
+                placeholder="github_pat_…"
+                value={token}
+                onChange={(e) => setToken(e.target.value)}
+              />
+            </div>
+            <div className="flex flex-wrap gap-2">
+              <Button
+                variant="outline"
+                size="sm"
+                disabled={verifying || !repoUrl.trim() || !token.trim()}
+                onClick={onVerify}
+              >
+                <PlugZap className="size-4" />
+                {verifying
+                  ? t("settings.sync.verifying")
+                  : t("settings.sync.testConnection")}
+              </Button>
+              <Button
+                size="sm"
+                disabled={binding || !repoUrl.trim() || !token.trim()}
+                onClick={bindRepo}
+              >
+                <CloudUpload className="size-4" />
+                {t("settings.sync.bindAndEnable")}
+              </Button>
+            </div>
+          </>
+        )}
+        {(verifying || verifyResult) && (
+          <VerifyBanner verifying={verifying} result={verifyResult} />
+        )}
+      </Section>
+
+      {/* 设备 — 同步过的设备（同步的产物，故排在同步卡之后） */}
+      <Section
+        eyebrow={t("settings.section.devices")}
+        description={t("settings.sectionDesc.devices")}
+      >
+        <DeviceList />
       </Section>
     </div>
   )
 }
 
 function Section({
+  id,
   eyebrow,
   description,
   children,
 }: {
+  id?: string
   eyebrow: string
   description?: string
   children: React.ReactNode
 }) {
   return (
-    <section className="flex flex-col gap-2.5">
+    <section id={id} className="flex scroll-mt-4 flex-col gap-2.5">
       <div className="flex flex-col gap-1 px-0.5">
         <h2 className="text-muted-foreground text-[11px] font-semibold tracking-[0.14em]">
           {eyebrow}
@@ -276,7 +318,7 @@ function Row({
 }) {
   return (
     <div className="flex items-center justify-between gap-4">
-      <span className="text-muted-foreground text-sm">{label}</span>
+      <span className="text-muted-foreground shrink-0 text-sm">{label}</span>
       {children}
     </div>
   )

@@ -557,6 +557,18 @@ export type LocalGroup = {
 	position: number,
 };
 
+/**
+ *  Per-call cost split by token bucket, f64 mirror of [`CostBreakdown`] for
+ *  the frontend. The table shows the total; the expandable row detail shows
+ *  the buckets so "why is this call expensive" is answerable.
+ */
+export type LogCostBreakdown = {
+	input_usd: number | null,
+	output_usd: number | null,
+	cache_read_usd: number | null,
+	cache_creation_usd: number | null,
+};
+
 /**  Query params for the request-log endpoint (adds paging to `UsageFilter`). */
 export type LogsQuery = {
 	filter: UsageFilter,
@@ -678,6 +690,12 @@ export type ProviderImportReport = {
 
 /**  Run mode: default Standalone; Synced once a repo is configured. */
 export type RunMode = "standalone" | "synced";
+
+/**  Server-side tool usage reported by Claude Code's usage block. */
+export type ServerToolUse = {
+	web_search: number,
+	web_fetch: number,
+};
 
 /**
  *  Optional filter for `query_sessions`. Every field optional; `None` = no
@@ -1006,16 +1024,33 @@ export type UsageFilter = {
 	device_scope: string | null,
 };
 
-/**  One row of the request-log table. */
+/**
+ *  One row of the request-log table. Beyond the visible columns, carries the
+ *  full per-call fields the row-detail panel shows (cost buckets, session,
+ *  tier, iterations, tool use) — one query, zero extra round-trip on expand.
+ */
 export type UsageLogRow = {
 	uuid: string,
 	timestamp: string,
 	model: string,
+	/**  Normalized model key used for pricing lookup (rebill key). */
+	pricing_model: string,
 	source: string,
+	/**
+	 *  Session this call belongs to (Claude = the jsonl file stem). Empty when
+	 *  the parser has not been wired for sessions yet.
+	 */
+	session_id: string,
 	device_id: string,
 	tokens: TokenCounts,
 	stop_reason: string,
+	/**  Service tier label, e.g. `standard`. Empty when unrecorded. */
+	service_tier: string,
+	/**  Reasoning/thinking iteration count. 0 when unrecorded. */
+	iterations: number,
+	server_tool_use: ServerToolUse,
 	total_cost_usd: number | null,
+	cost: LogCostBreakdown,
 };
 
 /**  Aggregate totals over a filtered range. */

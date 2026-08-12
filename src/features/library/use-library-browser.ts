@@ -22,7 +22,12 @@ import {
 import { useMutateWithToast } from "@/hooks/use-toast-mutation"
 import { paginate } from "@/lib/pagination"
 import type { LibraryEntry } from "@/types/generated/bindings"
-import { buildBreadcrumb, splitEntryPath, upFromSubpath } from "./derive"
+import {
+  buildBreadcrumb,
+  filterEntriesByName,
+  splitEntryPath,
+  upFromSubpath,
+} from "./derive"
 
 /** Sentinel for the "all devices" scope. Lives here so the component's scope
  *  picker and the hook's scope derivation share one definition. */
@@ -37,9 +42,13 @@ export function useLibraryBrowser() {
   const { t } = useTranslation()
   const [deviceScope, setDeviceScope] = useState<string>(ALL)
   const [subpath, setSubpath] = useState("")
+  // Client-side name filter over the current directory's scan (the backend
+  // returns a full directory, so filtering needs no Rust changes).
+  const [search, setSearch] = useState("")
   // Page offset into the current directory's entry list. Reset when the
-  // navigation changes — a different directory can be shorter than the page
-  // we were on (mirrors the sessions/logs filter-reset pattern).
+  // navigation or the search changes — a different directory / narrower
+  // filter can be shorter than the page we were on (mirrors the
+  // sessions/logs filter-reset pattern).
   const [offset, setOffset] = useState(0)
   const [dragging, setDragging] = useState(false)
   const [pendingPaths, setPendingPaths] = useState<string[] | null>(null)
@@ -56,21 +65,29 @@ export function useLibraryBrowser() {
     deviceScope: scope,
     subpath,
   })
-  // Reset the page when the directory changes — a shallower directory can
-  // leave a stale offset past its end (the slice would render empty).
-  // biome-ignore lint/correctness/useExhaustiveDependencies: intentional — reset page on navigation; the body needs no scope/subpath values
+  // Reset the page when the directory or the search changes — a shallower
+  // directory / narrower filter can leave a stale offset past its end (the
+  // slice would render empty).
+  // biome-ignore lint/correctness/useExhaustiveDependencies: intentional — reset page on navigation; the body needs no scope/subpath/search values
   useEffect(() => {
     setOffset(0)
-  }, [deviceScope, subpath])
+  }, [deviceScope, subpath, search])
 
-  // The page the table renders. A directory's entry list is a small fs scan
-  // (unlike the SQL-backed sessions/logs), so slicing client-side is the
-  // right altitude — the DOM is the thing that grows, and this caps it at one
-  // page. Paging controls match the other tables' (LIBRARY_PAGE_SIZE + the
-  // shared paginate math).
-  const visibleEntries = entries.slice(offset, offset + LIBRARY_PAGE_SIZE)
+  // Search filter first, then the page the table renders. A directory's
+  // entry list is a small fs scan (unlike the SQL-backed sessions/logs), so
+  // filtering + slicing client-side is the right altitude — the DOM is the
+  // thing that grows, and this caps it at one page. Paging controls match the
+  // other tables' (LIBRARY_PAGE_SIZE + the shared paginate math).
+  const filteredEntries = useMemo(
+    () => filterEntriesByName(entries, search),
+    [entries, search],
+  )
+  const visibleEntries = filteredEntries.slice(
+    offset,
+    offset + LIBRARY_PAGE_SIZE,
+  )
   const { totalPages, page } = paginate(
-    entries.length,
+    filteredEntries.length,
     offset,
     LIBRARY_PAGE_SIZE,
   )
@@ -211,12 +228,15 @@ export function useLibraryBrowser() {
   return {
     // scan data
     entries: visibleEntries,
-    totalCount: entries.length,
+    totalCount: filteredEntries.length,
     page,
     totalPages,
     offset,
     setOffset,
     isLoading,
+    // search
+    search,
+    setSearch,
     // device picker
     deviceOptions,
     // navigation state

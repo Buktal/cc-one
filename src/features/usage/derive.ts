@@ -5,7 +5,7 @@
 // injected and i18n labels are applied by the caller — so each is testable
 // through its signature alone.
 
-import type { Dayjs } from "dayjs"
+import dayjs, { type Dayjs } from "dayjs"
 
 import type {
   ModelStatsRow,
@@ -170,23 +170,103 @@ export function topNModels(
 
 export type StopReasonTone = "success" | "tool" | "warn" | "error" | null
 
-/**
- * stop_reason → semantic tone. Free-form source string matched by exact value
- * / contains. Color signals outcome: normal completion / tool call stay calm,
- * hitting a limit warns, a refusal / error alarms. Unknown or empty values
- * fall back to null (no chip).
- */
-export function stopReasonTone(value: string): StopReasonTone {
-  const v = value.toLowerCase()
-  if (!v) return null
-  if (v === "end_turn") return "success"
-  if (v.includes("tool_use")) return "tool"
+/** stop_reason exact/contains match → i18n label key for the chip text.
+ *  Keys resolve under `usage.logs.stopReason.*`; the English raw value stays
+ *  in the chip's title tooltip. Order matters for contains-matching compound
+ *  values like `context_window_exceeded` — the first pattern that matches wins
+ *  the label, while the tone follows the same branch the old matcher took. */
+const STOP_REASON_LABELS: [string, string][] = [
+  ["end_turn", "usage.logs.stopReason.endTurn"],
+  ["tool_use", "usage.logs.stopReason.toolUse"],
+  ["max_tokens", "usage.logs.stopReason.maxTokens"],
+  ["context_window", "usage.logs.stopReason.contextWindow"],
+  ["exceeded", "usage.logs.stopReason.exceeded"],
+  ["refusal", "usage.logs.stopReason.refusal"],
+  ["error", "usage.logs.stopReason.error"],
+]
+
+/** tone for a matched pattern — mirrors the original stopReasonTone branches
+ *  so tone and label never disagree about which bucket a value lands in. */
+function toneFor(pattern: string): StopReasonTone {
+  if (pattern === "end_turn") return "success"
+  if (pattern === "tool_use") return "tool"
   if (
-    v.includes("max_tokens") ||
-    v.includes("exceeded") ||
-    v.includes("context_window")
+    pattern === "max_tokens" ||
+    pattern === "exceeded" ||
+    pattern === "context_window"
   )
     return "warn"
-  if (v.includes("refusal") || v.includes("error")) return "error"
+  if (pattern === "refusal" || pattern === "error") return "error"
   return null
+}
+
+export interface StopReasonInfo {
+  tone: StopReasonTone
+  /** i18n label key, or null when the value is unknown (render raw). */
+  labelKey: string | null
+}
+
+/**
+ * stop_reason → { tone, labelKey } in one pass — the single classifier shared
+ * by `stopReasonTone` (chip color) and `stopReasonLabelKey` (chip text) so the
+ * two never drift apart. Free-form source string matched by exact value first
+ * (specific labels), then by contains (compound values). Unknown or empty
+ * values fall back to null / null (no chip).
+ */
+export function classifyStopReason(value: string): StopReasonInfo {
+  const v = value.toLowerCase()
+  if (!v) return { tone: null, labelKey: null }
+  for (const [pattern, labelKey] of STOP_REASON_LABELS) {
+    if (v === pattern) return { tone: toneFor(pattern), labelKey }
+  }
+  for (const [pattern, labelKey] of STOP_REASON_LABELS) {
+    if (v.includes(pattern)) return { tone: toneFor(pattern), labelKey }
+  }
+  return { tone: null, labelKey: null }
+}
+
+/** stop_reason → semantic tone. Color signals outcome: normal completion /
+ *  tool call stay calm, hitting a limit warns, a refusal / error alarms. */
+export function stopReasonTone(value: string): StopReasonTone {
+  return classifyStopReason(value).tone
+}
+
+/** stop_reason → i18n label key for the chip text, or null when unknown. */
+export function stopReasonLabelKey(value: string): string | null {
+  return classifyStopReason(value).labelKey
+}
+
+/** A single call is "notable" when it costs at least this much (USD) — the
+ *  log table highlights such rows so expensive calls surface at a glance. */
+export const COST_NOTABLE_THRESHOLD = 1
+
+/** Whether a call cost is notable enough to highlight (null/absent → false). */
+export function costIsNotable(usd: number | null | undefined): boolean {
+  return Number(usd ?? 0) >= COST_NOTABLE_THRESHOLD
+}
+
+export interface DayGroup<T> {
+  /** Local `YYYY-MM-DD` of the rows in this group (caller formats for display). */
+  dayKey: string
+  rows: T[]
+}
+
+/** Split time-desc rows into consecutive local-day groups so the ledger can
+ *  insert a day separator when the window spans multiple days. Rows are
+ *  assumed time-desc (as the log query returns); a day boundary is a new
+ *  group. Unparseable timestamps fall back to their raw `yyyy-mm-dd` prefix. */
+export function groupRowsByDay<T extends { timestamp: string }>(
+  rows: T[],
+): DayGroup<T>[] {
+  const groups: DayGroup<T>[] = []
+  for (const r of rows) {
+    const d = dayjs(r.timestamp)
+    const dayKey = d.isValid()
+      ? d.format("YYYY-MM-DD")
+      : r.timestamp.slice(0, 10)
+    const last = groups[groups.length - 1]
+    if (last && last.dayKey === dayKey) last.rows.push(r)
+    else groups.push({ dayKey, rows: [r] })
+  }
+  return groups
 }

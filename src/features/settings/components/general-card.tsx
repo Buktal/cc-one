@@ -143,7 +143,7 @@ export function GeneralCard() {
                   })
                 }}
                 className={cn(
-                  "flex h-8 w-8 items-center justify-center rounded-md border-2 transition",
+                  "flex h-8 w-8 items-center justify-center rounded-md border-2 transition outline-none focus-visible:ring-2 focus-visible:ring-ring/40",
                   selected
                     ? "border-foreground"
                     : "border-transparent hover:border-border",
@@ -246,9 +246,18 @@ export function GeneralCard() {
             </SelectContent>
           </Select>
         ) : (
-          <span className="text-muted-foreground text-xs">
+          /* 指向「同步」卡的提示 — 可点击滚到目标卡，而不是只指路 */
+          <button
+            type="button"
+            onClick={() =>
+              document
+                .getElementById("sync-section")
+                ?.scrollIntoView({ behavior: "smooth" })
+            }
+            className="text-muted-foreground hover:text-foreground rounded-sm text-xs underline underline-offset-2 outline-none focus-visible:ring-2 focus-visible:ring-ring/40"
+          >
             {t("settings.general.pushNeedsSync")}
-          </span>
+          </button>
         )}
       </SettingRow>
 

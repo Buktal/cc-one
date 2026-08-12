@@ -22,3 +22,30 @@ export function paginate(
   const page = Math.min(Math.floor(offset / pageSize) + 1, totalPages)
   return { totalPages, page }
 }
+
+/** A page number, or an ellipsis gap marker. */
+export type PageNumber = number | "…"
+
+/**
+ * Page-number sequence for a pager bar: always 1 and the last page, the
+ * current page ±1, with ellipsis gaps in between. 7 or fewer pages render
+ * fully. `page` is clamped into range. Pure — the pager bar (request-log /
+ * sessions / pricing / library) renders this directly.
+ */
+export function pageNumbers(page: number, totalPages: number): PageNumber[] {
+  const last = Math.max(totalPages, 1)
+  const cur = Math.min(Math.max(page, 1), last)
+  if (last <= 7) return Array.from({ length: last }, (_, i) => i + 1)
+  const around = new Set([1, last, cur - 1, cur, cur + 1])
+  const sorted = [...around]
+    .filter((p) => p >= 1 && p <= last)
+    .sort((a, b) => a - b)
+  const out: PageNumber[] = []
+  let prev = 0
+  for (const p of sorted) {
+    if (prev && p - prev > 1) out.push("…")
+    out.push(p)
+    prev = p
+  }
+  return out
+}

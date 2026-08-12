@@ -64,7 +64,9 @@ export function EntryEditorDialog({
     }
     const ok = await runWithToast(
       save,
-      { entry: draft, isBuiltin: draft.is_builtin },
+      // 保存即视为用户自定义：编辑内置条目后也要落成自定义（is_builtin=false），
+      // 否则下次 LiteLLM 拉取会无条件覆盖。Rust 侧 unwrap_or(false) 兜底。
+      { entry: draft, isBuiltin: false },
       {
         success: {
           key: "pricing.toast.saved",
@@ -87,6 +89,8 @@ export function EntryEditorDialog({
           </DialogTitle>
           <DialogDescription>
             {t("pricing.editor.description")}
+            {/* 编辑内置条目时预告状态变化：保存后即变自定义，LiteLLM 拉取不再覆盖。 */}
+            {entry?.is_builtin ? ` ${t("pricing.editor.builtinHint")}` : ""}
           </DialogDescription>
         </DialogHeader>
 
@@ -95,6 +99,7 @@ export function EntryEditorDialog({
             <Input
               value={draft.model_key}
               onChange={(e) => set({ model_key: e.target.value })}
+              placeholder={t("pricing.editor.modelKeyPlaceholder")}
             />
           </Field>
           <Field label={t("pricing.col.displayName")}>
@@ -103,10 +108,13 @@ export function EntryEditorDialog({
               onChange={(e) => set({ display_name: e.target.value })}
             />
           </Field>
+          {/* 缓存价常低于 $0.01/1M（如 $0.0001），step 必须匹配表格的 4 位小数
+            显示，否则箭头步进失效、输入会被浏览器标 invalid。 */}
           <Field label={t("pricing.editor.input")}>
             <Input
               type="number"
-              step="0.01"
+              min="0"
+              step="0.0001"
               value={draft.input_per_million ?? 0}
               onChange={(e) =>
                 set({ input_per_million: Number(e.target.value) })
@@ -116,7 +124,8 @@ export function EntryEditorDialog({
           <Field label={t("pricing.editor.output")}>
             <Input
               type="number"
-              step="0.01"
+              min="0"
+              step="0.0001"
               value={draft.output_per_million ?? 0}
               onChange={(e) =>
                 set({ output_per_million: Number(e.target.value) })
@@ -126,7 +135,8 @@ export function EntryEditorDialog({
           <Field label={t("pricing.editor.cacheRead")}>
             <Input
               type="number"
-              step="0.01"
+              min="0"
+              step="0.0001"
               value={draft.cache_read_per_million ?? 0}
               onChange={(e) =>
                 set({ cache_read_per_million: Number(e.target.value) })
@@ -136,7 +146,8 @@ export function EntryEditorDialog({
           <Field label={t("pricing.editor.cacheCreation")}>
             <Input
               type="number"
-              step="0.01"
+              min="0"
+              step="0.0001"
               value={draft.cache_creation_per_million ?? 0}
               onChange={(e) =>
                 set({ cache_creation_per_million: Number(e.target.value) })

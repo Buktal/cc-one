@@ -595,6 +595,7 @@ export function useSessionsBrowser() {
     deviceOptions,
     // data
     isLoading: sessionsQuery.isLoading,
+    isFetching: sessionsQuery.isFetching,
     error: sessionsQuery.error,
     trackGroups,
     visibleSessions,

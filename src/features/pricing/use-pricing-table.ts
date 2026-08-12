@@ -13,6 +13,7 @@ import {
   nextSortState,
   type PricingSortKey,
 } from "@/features/pricing/derive"
+import { useMutateWithToast } from "@/hooks/use-toast-mutation"
 import { paginate } from "@/lib/pagination"
 
 /** Client-side page size — the full list is already loaded; rendering all of
@@ -28,8 +29,9 @@ export const PAGE_SIZE = 20
  * first page of the freshly filtered/sorted result set.
  */
 export function usePricingTable() {
-  const { data: entries = [], isLoading } = usePricingQuery()
-  const [remove] = useDeletePricingMutation()
+  const { data: entries = [], isLoading, error } = usePricingQuery()
+  const [removeMut] = useDeletePricingMutation()
+  const runWithToast = useMutateWithToast()
 
   const [search, setSearchState] = useState("")
   const [sortKey, setSortKey] = useState<PricingSortKey | null>(null)
@@ -62,16 +64,46 @@ export function usePricingTable() {
     setOffset(0)
   }
 
-  function prevPage() {
-    setOffset(Math.max(0, offset - PAGE_SIZE))
+  /** 1-based page jump for the shared PaginationBar. */
+  function goToPage(p: number) {
+    setOffset(Math.max(0, (p - 1) * PAGE_SIZE))
   }
-  function nextPage() {
-    setOffset(offset + PAGE_SIZE)
+
+  const [removing, setRemoving] = useState(false)
+
+  /** Delete trigger: toasts the outcome and exposes a busy flag for the confirm
+   *  dialog (pattern mirrors sessions' deleteGroup). On success the offset is
+   *  clamped back into the now-shorter list — deleting the last row of the last
+   *  page would otherwise leave `paged` empty with the header hanging bare. */
+  async function remove(key: string): Promise<boolean> {
+    setRemoving(true)
+    try {
+      const ok = await runWithToast(removeMut, key, {
+        success: { key: "pricing.toast.deleted", vars: { name: key } },
+        failed: { key: "pricing.toast.deleteFailed" },
+      })
+      if (ok) {
+        // `filtered` here is the pre-delete list; the post-delete list is
+        // exactly one row shorter, so clamp to the last page's start offset.
+        const remaining = filtered.length - 1
+        setOffset((o) =>
+          Math.min(
+            o,
+            Math.max(0, Math.floor((remaining - 1) / PAGE_SIZE) * PAGE_SIZE),
+          ),
+        )
+      }
+      return ok
+    } finally {
+      setRemoving(false)
+    }
   }
 
   return {
     isLoading,
+    error,
     remove,
+    removing,
     search,
     setSearch,
     sortKey,
@@ -81,9 +113,6 @@ export function usePricingTable() {
     page,
     totalPages,
     paged,
-    prevPage,
-    nextPage,
-    hasPrev: offset > 0,
-    hasNext: offset + PAGE_SIZE < total,
+    goToPage,
   }
 }

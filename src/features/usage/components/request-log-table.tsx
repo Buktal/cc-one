@@ -1,20 +1,24 @@
-// Request log table — per-API-call ledger. Columns: Time / Source / Billed
-// Model / 输入 / 输出 / 缓存创建 / 缓存命中 / 总 Token / Cost / 停止原因 /
-// Device. The Source cell shows the human-readable tag (`sourceLabel`), with the
-// raw tag (e.g. `claude_code`) in the title tooltip. `stop_reason` (end_turn /
-// tool_use / max_tokens …) is the
-// per-call end semantic. No latency / TTFT / HTTP-status columns.
-// Fixed time-desc (no sort UI); paginated; empty state offers an inline 采集
-// CTA so the user isn't bounced to the command bar to seed the first rows.
+// Request log table — per-API-call ledger. Columns: Time / App / Billed
+// Model / Total / Cost / Stop / Device. The four token buckets and the cost
+// breakdown live in the expandable row detail (one row click) instead of five
+// extra columns, so the ledger stays scannable; the Source cell shows the
+// human-readable tag (`sourceLabel`) with the raw tag in the title tooltip.
+// stop_reason renders a localized chip (`stopReasonLabelKey`) with the raw
+// English value in the tooltip; calls costing ≥ COST_NOTABLE_THRESHOLD get a
+// highlighted cost cell. Rows are time-desc grouped by local day with a day
+// separator. Paginated with the shared PaginationBar (ellipsis jumps); the
+// bar disables while a page refetches. Empty state offers an inline 采集 CTA
+// so the user isn't bounced to the command bar to seed the first rows.
 
 import { FileText } from "lucide-react"
-import { type ReactNode, useEffect, useState } from "react"
+import { Fragment, type ReactNode, useEffect, useState } from "react"
 import { useTranslation } from "react-i18next"
 
 import { useCountQuery, useLogsQuery } from "@/app/store/api"
 import type { FilterState } from "@/app/store/slices/filterSlice"
+import { CopyButton } from "@/components/copy-button"
+import { PaginationBar } from "@/components/pagination-bar"
 import { QueryState } from "@/components/query-state"
-import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import {
   Table,
@@ -24,46 +28,45 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table"
-import { stopReasonTone } from "@/features/usage/derive"
+import {
+  classifyStopReason,
+  costIsNotable,
+  groupRowsByDay,
+} from "@/features/usage/derive"
 import { useCollectAction } from "@/hooks/use-collect-action"
-import { formatCost, formatInt, formatTime } from "@/lib/format"
+import {
+  formatCost,
+  formatDay,
+  formatInt,
+  formatTime,
+  formatTokens,
+} from "@/lib/format"
 import { paginate } from "@/lib/pagination"
 import { tokenTotal } from "@/lib/usage"
 import { cn } from "@/lib/utils"
+import type { UsageLogRow } from "@/types/generated/bindings"
 import { sourceLabel } from "../source-labels"
 import { useDeviceLabelMap, useDeviceOptions } from "../use-device-options"
 
 const PAGE_SIZE = 20
 
-/**
- * Right-aligned token-column header: label + a muted, language-neutral `tok`
- * unit. Cells stay pure numbers (tabular-nums) — the unit rides the header so
- * the dense ledger stays scannable (consistent with the recent-requests card).
- */
-function TokHead({ children }: { children: ReactNode }) {
-  return (
-    <TableHead className="text-right">
-      <span className="inline-flex items-center justify-end gap-1">
-        {children}
-        <span className="text-muted-foreground text-[10px] font-normal">
-          tok
-        </span>
-      </span>
-    </TableHead>
-  )
-}
-
 export function RequestLogTable({ filter }: { filter: FilterState }) {
   const { t } = useTranslation()
   const deviceLabel = useDeviceLabelMap()
   const [offset, setOffset] = useState(0)
-  // Reset to page 1 when the filter changes — otherwise a narrower filter
-  // (e.g. fewer rows after switching model/device) can land on an empty page.
-  // biome-ignore lint/correctness/useExhaustiveDependencies: intentional — offset resets on filter change; the body needs no filter value
-  useEffect(() => setOffset(0), [filter])
+  const [expandedId, setExpandedId] = useState<string | null>(null)
+  // Reset to page 1 and collapse any expanded row when the filter changes —
+  // a narrower filter (e.g. fewer rows after switching model/device) can land
+  // on an empty page, and the expanded row's page may no longer exist.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: intentional — offset/expanded reset on filter change; the body needs no filter value
+  useEffect(() => {
+    setOffset(0)
+    setExpandedId(null)
+  }, [filter])
   const {
     data: rows = [],
     isLoading,
+    isFetching,
     error,
   } = useLogsQuery({
     filter,
@@ -78,6 +81,7 @@ export function RequestLogTable({ filter }: { filter: FilterState }) {
   const { onCollect, collecting } = useCollectAction(multiDevice)
 
   const { totalPages, page } = paginate(total, offset, PAGE_SIZE)
+  const dayGroups = groupRowsByDay(rows)
 
   return (
     <Card className="min-h-0 flex-1">
@@ -106,11 +110,9 @@ export function RequestLogTable({ filter }: { filter: FilterState }) {
                   <TableHead>{t("usage.logs.col.time")}</TableHead>
                   <TableHead>{t("usage.logs.col.source")}</TableHead>
                   <TableHead>{t("usage.logs.col.billedModel")}</TableHead>
-                  <TokHead>{t("usage.tokens.input")}</TokHead>
-                  <TokHead>{t("usage.tokens.output")}</TokHead>
-                  <TokHead>{t("usage.tokens.cacheCreation")}</TokHead>
-                  <TokHead>{t("usage.tokens.cacheRead")}</TokHead>
-                  <TokHead>{t("usage.logs.col.totalToken")}</TokHead>
+                  <TableHead className="text-right">
+                    {t("usage.logs.col.totalToken")}
+                  </TableHead>
                   <TableHead className="text-right">
                     {t("usage.logs.col.cost")}
                   </TableHead>
@@ -119,92 +121,240 @@ export function RequestLogTable({ filter }: { filter: FilterState }) {
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {rows.map((r) => (
-                  <TableRow key={r.uuid}>
-                    <TableCell className="tabular-nums whitespace-nowrap">
-                      {formatTime(r.timestamp)}
-                    </TableCell>
-                    <TableCell title={r.source}>
-                      {sourceLabel(r.source) || "—"}
-                    </TableCell>
-                    <TableCell className="font-mono text-xs">
-                      {r.model}
-                    </TableCell>
-                    <TableCell className="text-right tabular-nums">
-                      {formatInt(r.tokens.input)}
-                    </TableCell>
-                    <TableCell className="text-right tabular-nums">
-                      {formatInt(r.tokens.output)}
-                    </TableCell>
-                    <TableCell className="text-right tabular-nums">
-                      {formatInt(r.tokens.cache_creation)}
-                    </TableCell>
-                    <TableCell className="text-right tabular-nums">
-                      {formatInt(r.tokens.cache_read)}
-                    </TableCell>
-                    <TableCell className="text-right font-medium tabular-nums">
-                      {formatInt(tokenTotal(r))}
-                    </TableCell>
-                    <TableCell className="text-right tabular-nums">
-                      {formatCost(r.total_cost_usd)}
-                    </TableCell>
-                    <TableCell>
-                      <StopReasonCell value={r.stop_reason} />
-                    </TableCell>
-                    <TableCell
-                      className="text-muted-foreground text-xs"
-                      title={r.device_id || undefined}
-                    >
-                      {r.device_id
-                        ? (deviceLabel.get(r.device_id) ??
-                          r.device_id.slice(0, 8))
-                        : "—"}
-                    </TableCell>
-                  </TableRow>
+                {dayGroups.map((g) => (
+                  <Fragment key={g.dayKey}>
+                    {/* Day separator — the ledger stays grouped by local day
+                      across multi-day windows. */}
+                    <TableRow className="bg-muted/40 border-border/60">
+                      <TableCell
+                        colSpan={7}
+                        className="text-muted-foreground px-3 py-1 text-[11px] font-medium"
+                      >
+                        {formatDay(g.dayKey)}
+                      </TableCell>
+                    </TableRow>
+                    {g.rows.map((r) => (
+                      <Fragment key={r.uuid}>
+                        <LogRow
+                          r={r}
+                          deviceLabel={deviceLabel}
+                          expanded={expandedId === r.uuid}
+                          onToggle={() =>
+                            setExpandedId(expandedId === r.uuid ? null : r.uuid)
+                          }
+                        />
+                        {expandedId === r.uuid ? <DetailRow r={r} /> : null}
+                      </Fragment>
+                    ))}
+                  </Fragment>
                 ))}
               </TableBody>
             </Table>
           </div>
         </QueryState>
 
-        <div className="text-muted-foreground mt-3 flex shrink-0 items-center justify-between text-xs">
-          <span>
-            {t("usage.logs.pageInfo", {
-              page,
-              totalPages,
-              total: formatInt(total),
-            })}
-          </span>
-          <div className="flex gap-2">
-            <Button
-              variant="outline"
-              size="sm"
-              disabled={offset === 0}
-              onClick={() => setOffset(Math.max(0, offset - PAGE_SIZE))}
-            >
-              {t("usage.logs.prevPage")}
-            </Button>
-            <Button
-              variant="outline"
-              size="sm"
-              disabled={offset + PAGE_SIZE >= total}
-              onClick={() => setOffset(offset + PAGE_SIZE)}
-            >
-              {t("usage.logs.nextPage")}
-            </Button>
-          </div>
-        </div>
+        {total > 0 ? (
+          <PaginationBar
+            page={page}
+            totalPages={totalPages}
+            total={total}
+            loading={isFetching}
+            onPageChange={(p) => setOffset((p - 1) * PAGE_SIZE)}
+          />
+        ) : null}
       </CardContent>
     </Card>
   )
 }
 
+function LogRow({
+  r,
+  deviceLabel,
+  expanded,
+  onToggle,
+}: {
+  r: UsageLogRow
+  deviceLabel: Map<string, string>
+  expanded: boolean
+  onToggle: () => void
+}) {
+  const notable = costIsNotable(r.total_cost_usd)
+  return (
+    <TableRow
+      className={cn("cursor-pointer", expanded && "bg-muted/50")}
+      onClick={onToggle}
+      aria-expanded={expanded}
+      tabIndex={0}
+      onKeyDown={(e) => {
+        if (e.key === "Enter" || e.key === " ") {
+          e.preventDefault()
+          onToggle()
+        }
+      }}
+    >
+      <TableCell className="tabular-nums whitespace-nowrap">
+        {formatTime(r.timestamp)}
+      </TableCell>
+      <TableCell title={r.source}>{sourceLabel(r.source) || "—"}</TableCell>
+      <TableCell className="font-mono text-xs" title={r.model}>
+        <span className="inline-block max-w-48 truncate align-bottom">
+          {r.model}
+        </span>
+      </TableCell>
+      <TableCell
+        className="text-right tabular-nums"
+        title={formatInt(tokenTotal(r))}
+      >
+        {formatTokens(tokenTotal(r))}
+      </TableCell>
+      <TableCell
+        className={cn(
+          "text-right tabular-nums",
+          notable && "text-[var(--sr-warn)] font-semibold",
+        )}
+      >
+        {formatCost(r.total_cost_usd)}
+      </TableCell>
+      <TableCell>
+        <StopReasonCell value={r.stop_reason} />
+      </TableCell>
+      <TableCell
+        className="text-muted-foreground text-xs"
+        title={r.device_id || undefined}
+      >
+        {r.device_id
+          ? (deviceLabel.get(r.device_id) ?? r.device_id.slice(0, 8))
+          : "—"}
+      </TableCell>
+    </TableRow>
+  )
+}
+
 function StopReasonCell({ value }: { value: string }) {
+  const { t } = useTranslation()
   if (!value) return <span className="text-muted-foreground">—</span>
-  const tone = stopReasonTone(value)
-  if (!tone)
+  const { tone, labelKey } = classifyStopReason(value)
+  if (!tone || !labelKey)
     return (
       <span className="text-muted-foreground font-mono text-xs">{value}</span>
     )
-  return <span className={cn("sr-chip font-mono", `sr-${tone}`)}>{value}</span>
+  return (
+    <span title={value} className={cn("sr-chip font-mono", `sr-${tone}`)}>
+      {t(labelKey)}
+    </span>
+  )
+}
+
+/** Cost breakdown section label + value line, reused by the detail row. */
+function CostLine({ label, value }: { label: ReactNode; value: string }) {
+  return (
+    <div className="flex items-baseline justify-between gap-3">
+      <span className="text-muted-foreground text-xs">{label}</span>
+      <span className="tabular-nums text-xs">{value}</span>
+    </div>
+  )
+}
+
+/** Expandable per-row detail — cost buckets, session, tier, iterations, tool
+ *  use, request ID (copyable). All fields come from the row payload itself
+ *  (the log query selects the full record), so expanding costs no round-trip. */
+function DetailRow({ r }: { r: UsageLogRow }) {
+  const { t } = useTranslation()
+
+  const tools: ReactNode[] = []
+  if (r.server_tool_use.web_search > 0)
+    tools.push(
+      t("usage.logs.detail.webSearch", { n: r.server_tool_use.web_search }),
+    )
+  if (r.server_tool_use.web_fetch > 0)
+    tools.push(
+      t("usage.logs.detail.webFetch", { n: r.server_tool_use.web_fetch }),
+    )
+
+  return (
+    <TableRow className="hover:bg-transparent">
+      <TableCell colSpan={7} className="bg-muted/20 border-t-0 px-3 py-2.5">
+        <div className="grid grid-cols-[minmax(0,auto)_minmax(0,1fr)] gap-x-8 gap-y-1.5">
+          {/* 成本明细 — the "why is this call expensive" half. */}
+          <div className="flex flex-col gap-1">
+            <div className="text-foreground mb-0.5 text-[11px] font-semibold">
+              {t("usage.logs.detail.costTitle")}
+            </div>
+            <CostLine
+              label={t("usage.logs.detail.output")}
+              value={formatCost(r.cost.output_usd)}
+            />
+            <CostLine
+              label={t("usage.logs.detail.input")}
+              value={formatCost(r.cost.input_usd)}
+            />
+            <CostLine
+              label={t("usage.logs.detail.cacheRead")}
+              value={formatCost(r.cost.cache_read_usd)}
+            />
+            <CostLine
+              label={t("usage.logs.detail.cacheCreate")}
+              value={formatCost(r.cost.cache_creation_usd)}
+            />
+            <CostLine
+              label={t("usage.logs.col.cost")}
+              value={formatCost(r.total_cost_usd)}
+            />
+          </div>
+          {/* 其余字段 — identity + context. */}
+          <div className="text-muted-foreground flex flex-col gap-1 text-xs">
+            {r.session_id ? (
+              <span className="truncate" title={r.session_id}>
+                <span className="font-medium">
+                  {t("usage.logs.detail.session")}
+                </span>{" "}
+                <span className="font-mono">{r.session_id}</span>
+              </span>
+            ) : null}
+            {r.iterations > 0 ? (
+              <span>
+                <span className="font-medium">
+                  {t("usage.logs.detail.iterations")}
+                </span>{" "}
+                <span className="tabular-nums">{formatInt(r.iterations)}</span>
+              </span>
+            ) : null}
+            {r.service_tier ? (
+              <span>
+                <span className="font-medium">
+                  {t("usage.logs.detail.serviceTier")}
+                </span>{" "}
+                <span className="font-mono">{r.service_tier}</span>
+              </span>
+            ) : null}
+            {tools.length > 0 ? (
+              <span>
+                <span className="font-medium">
+                  {t("usage.logs.detail.tools")}
+                </span>{" "}
+                <span>{tools.join(" · ")}</span>
+              </span>
+            ) : null}
+            {r.pricing_model && r.pricing_model !== r.model ? (
+              <span className="truncate" title={r.pricing_model}>
+                <span className="font-medium">
+                  {t("usage.logs.detail.pricingModel")}
+                </span>{" "}
+                <span className="font-mono">{r.pricing_model}</span>
+              </span>
+            ) : null}
+            <span className="flex items-center gap-1.5">
+              <span className="font-medium">
+                {t("usage.logs.detail.requestId")}
+              </span>{" "}
+              <span className="truncate font-mono" title={r.uuid}>
+                {r.uuid}
+              </span>
+              <CopyButton value={r.uuid} label={t("usage.logs.detail.copy")} />
+            </span>
+          </div>
+        </div>
+      </TableCell>
+    </TableRow>
+  )
 }

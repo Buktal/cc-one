@@ -17,6 +17,7 @@ import {
   DateRangeChip,
   type DateRangePreset,
 } from "@/components/date-range-chip"
+import { PaginationBar } from "@/components/pagination-bar"
 import { QueryState } from "@/components/query-state"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
@@ -180,42 +181,20 @@ export function SessionsView() {
               />
             </QueryState>
 
-            {/* Paged footer — mirrors the request-log table's paginator: page
-              info on the left, prev/next on the right. Disabled states agree
-              with the page query's size (SESSIONS_PAGE_SIZE, single source).
+            {/* Paged footer — the shared PaginationBar (page info left,
+              numbered pages with ellipsis jumps right; disabled states agree
+              with the page query's size — SESSIONS_PAGE_SIZE, single source).
               Hidden on an empty result set (loading or zero rows): a "0 of 0
               pages" strip under a centered empty state reads as a broken
               layout. */}
             {b.totalCount > 0 ? (
-              <div className="text-muted-foreground mt-3 flex shrink-0 items-center justify-between text-xs">
-                <span>
-                  {t("sessions.pageInfo", {
-                    page: b.page,
-                    totalPages: b.totalPages,
-                    total: formatInt(b.totalCount),
-                  })}
-                </span>
-                <div className="flex gap-2">
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    disabled={b.offset === 0}
-                    onClick={() =>
-                      b.setOffset(Math.max(0, b.offset - SESSIONS_PAGE_SIZE))
-                    }
-                  >
-                    {t("sessions.prevPage")}
-                  </Button>
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    disabled={b.offset + SESSIONS_PAGE_SIZE >= b.totalCount}
-                    onClick={() => b.setOffset(b.offset + SESSIONS_PAGE_SIZE)}
-                  >
-                    {t("sessions.nextPage")}
-                  </Button>
-                </div>
-              </div>
+              <PaginationBar
+                page={b.page}
+                totalPages={b.totalPages}
+                total={b.totalCount}
+                loading={b.isFetching}
+                onPageChange={(p) => b.setOffset((p - 1) * SESSIONS_PAGE_SIZE)}
+              />
             ) : null}
           </CardContent>
         </Card>

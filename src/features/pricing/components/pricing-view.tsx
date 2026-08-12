@@ -1,9 +1,12 @@
 // Pricing view (BLUEPRINT 成本定价): model pricing table with add /
-// edit / delete (via Dialog), LiteLLM upstream fetch, pricing.json read/write,
-// plus client-side search and single-column sort. Editing/删除 use icon buttons
-// with tooltips; the toolbar is an icon group to keep density high. Table state
-// (data, search/sort/pagination, delete) lives in usePricingTable; this file is
-// just the render — dialog UI and the fetch/reload/save toolbar actions.
+// edit (via Dialog) / delete (via ConfirmDialog), LiteLLM upstream fetch as the
+// primary text-button action, pricing.json import/export as icon buttons, plus
+// client-side search and single-column sort. Price columns keep the `$/1M`
+// unit in the header so cells stay bare numbers. Empty state routes a fresh
+// install to 拉取 LiteLLM; a search miss gets a lightweight in-table row. Table
+// state (data, search/sort/pagination, delete) lives in usePricingTable; this
+// file is just the render — dialog UI and the fetch/reload/save toolbar
+// actions.
 
 import {
   ChevronUp,
@@ -22,6 +25,9 @@ import {
   useReloadPricingMutation,
   useSavePricingToFileMutation,
 } from "@/app/store/api"
+import { ConfirmDialog } from "@/components/confirm-dialog"
+import { PaginationBar } from "@/components/pagination-bar"
+import { QueryState } from "@/components/query-state"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
@@ -42,7 +48,7 @@ import {
 import type { PricingSortKey } from "@/features/pricing/derive"
 import { usePricingTable } from "@/features/pricing/use-pricing-table"
 import { useMutateWithToast } from "@/hooks/use-toast-mutation"
-import { formatCost } from "@/lib/format"
+import { formatCostAmount } from "@/lib/format"
 
 import type { PricingEntry } from "@/types/generated/bindings"
 import { EntryEditorDialog, emptyEntry } from "./entry-editor-dialog"
@@ -56,7 +62,9 @@ export function PricingView() {
 
   const {
     isLoading,
+    error,
     remove,
+    removing,
     search,
     setSearch,
     sortKey,
@@ -66,14 +74,17 @@ export function PricingView() {
     page,
     totalPages,
     paged,
-    prevPage,
-    nextPage,
-    hasPrev,
-    hasNext,
+    goToPage,
   } = usePricingTable()
 
   const [editing, setEditing] = useState<PricingEntry | null>(null)
   const [dialogOpen, setDialogOpen] = useState(false)
+  // 待删除条目（非 null 时弹确认框）；确认后成功才清空——保持打开直到完成。
+  const [deleting, setDeleting] = useState<PricingEntry | null>(null)
+
+  async function onConfirmDelete() {
+    if (deleting && (await remove(deleting.model_key))) setDeleting(null)
+  }
 
   function openNew() {
     setEditing(emptyEntry())
@@ -122,23 +133,18 @@ export function PricingView() {
             aria-label={t("pricing.searchAria")}
           />
         </div>
+        {/* 拉取 LiteLLM 是种子数据的来源——主动作带文字，导入/导出留在 icon
+          组里保持密度。 */}
+        <Button
+          variant="outline"
+          size="sm"
+          disabled={fetching}
+          onClick={onFetchLitellm}
+        >
+          <CloudDownload />
+          {t("pricing.fetchLitellm")}
+        </Button>
         <div className="flex items-center gap-1">
-          <Tooltip>
-            <TooltipTrigger
-              render={
-                <Button
-                  variant="outline"
-                  size="icon-sm"
-                  disabled={fetching}
-                  onClick={onFetchLitellm}
-                  aria-label={t("pricing.fetchLitellm")}
-                />
-              }
-            >
-              <CloudDownload />
-            </TooltipTrigger>
-            <TooltipContent>{t("pricing.fetchLitellm")}</TooltipContent>
-          </Tooltip>
           <Tooltip>
             <TooltipTrigger
               render={
@@ -147,13 +153,13 @@ export function PricingView() {
                   size="icon-sm"
                   disabled={reloading}
                   onClick={onReloadFile}
-                  aria-label={t("pricing.reloadFile")}
+                  aria-label={t("pricing.importFile")}
                 />
               }
             >
               <FileUp />
             </TooltipTrigger>
-            <TooltipContent>{t("pricing.reloadFile")}</TooltipContent>
+            <TooltipContent>{t("pricing.importFile")}</TooltipContent>
           </Tooltip>
           <Tooltip>
             <TooltipTrigger
@@ -163,13 +169,13 @@ export function PricingView() {
                   size="icon-sm"
                   disabled={savingFile}
                   onClick={onSaveFile}
-                  aria-label={t("pricing.saveFile")}
+                  aria-label={t("pricing.exportFile")}
                 />
               }
             >
               <FileDown />
             </TooltipTrigger>
-            <TooltipContent>{t("pricing.saveFile")}</TooltipContent>
+            <TooltipContent>{t("pricing.exportFile")}</TooltipContent>
           </Tooltip>
         </div>
         <div className="ml-auto" />
@@ -183,7 +189,22 @@ export function PricingView() {
           <CardTitle>{t("pricing.title")}</CardTitle>
         </CardHeader>
         <CardContent className="flex min-h-0 flex-1 flex-col">
-          <div className="min-h-0 flex-1 -mr-2.5 overflow-auto pr-2.5">
+          {/* 空态两分支：数据源为空 → EmptyState 引导拉取或新增；搜索无结果 →
+            表格内的轻量提示行（total === 0 且搜索非空）。 */}
+          <QueryState
+            isLoading={isLoading}
+            error={error}
+            isEmpty={!isLoading && total === 0 && !search.trim()}
+            emptyIcon={CloudDownload}
+            emptyLabel={t("pricing.empty.title")}
+            emptyDescription={t("pricing.empty.desc")}
+            emptyAction={{
+              label: t("pricing.fetchLitellm"),
+              onClick: onFetchLitellm,
+              disabled: fetching,
+            }}
+          >
+            <div className="min-h-0 flex-1 -mr-2.5 overflow-auto pr-2.5">
             <Table>
               <TableHeader>
                 <TableRow>
@@ -205,6 +226,7 @@ export function PricingView() {
                     <SortHeader
                       label={t("usage.tokens.input")}
                       k="input_per_million"
+                      unit="$/1M"
                       {...sortProps}
                     />
                   </TableHead>
@@ -212,6 +234,7 @@ export function PricingView() {
                     <SortHeader
                       label={t("usage.tokens.output")}
                       k="output_per_million"
+                      unit="$/1M"
                       {...sortProps}
                     />
                   </TableHead>
@@ -219,6 +242,7 @@ export function PricingView() {
                     <SortHeader
                       label={t("usage.tokens.cacheRead")}
                       k="cache_read_per_million"
+                      unit="$/1M"
                       {...sortProps}
                     />
                   </TableHead>
@@ -226,6 +250,7 @@ export function PricingView() {
                     <SortHeader
                       label={t("usage.tokens.cacheCreation")}
                       k="cache_creation_per_million"
+                      unit="$/1M"
                       {...sortProps}
                     />
                   </TableHead>
@@ -236,13 +261,7 @@ export function PricingView() {
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {isLoading ? (
-                  <TableRow>
-                    <TableCell colSpan={8} className="text-muted-foreground">
-                      {t("common.loading")}
-                    </TableCell>
-                  </TableRow>
-                ) : total === 0 ? (
+                {total === 0 ? (
                   <TableRow>
                     <TableCell
                       colSpan={8}
@@ -259,16 +278,16 @@ export function PricingView() {
                       </TableCell>
                       <TableCell>{e.display_name}</TableCell>
                       <TableCell className="pr-4 text-right tabular-nums">
-                        {formatCost(e.input_per_million)}
+                        {formatCostAmount(e.input_per_million)}
                       </TableCell>
                       <TableCell className="pr-4 text-right tabular-nums">
-                        {formatCost(e.output_per_million)}
+                        {formatCostAmount(e.output_per_million)}
                       </TableCell>
                       <TableCell className="pr-4 text-right tabular-nums">
-                        {formatCost(e.cache_read_per_million)}
+                        {formatCostAmount(e.cache_read_per_million)}
                       </TableCell>
                       <TableCell className="pr-4 text-right tabular-nums">
-                        {formatCost(e.cache_creation_per_million)}
+                        {formatCostAmount(e.cache_creation_per_million)}
                       </TableCell>
                       <TableCell>
                         <Badge variant={e.is_builtin ? "secondary" : "default"}>
@@ -300,7 +319,7 @@ export function PricingView() {
                                 <Button
                                   variant="ghost"
                                   size="icon-sm"
-                                  onClick={() => remove(e.model_key)}
+                                  onClick={() => setDeleting(e)}
                                   aria-label={t("common.delete")}
                                 />
                               }
@@ -318,29 +337,17 @@ export function PricingView() {
                 )}
               </TableBody>
             </Table>
-          </div>
-
-          <div className="text-muted-foreground mt-3 flex shrink-0 items-center justify-between text-xs">
-            <span>{t("usage.logs.pageInfo", { page, totalPages, total })}</span>
-            <div className="flex gap-2">
-              <Button
-                variant="outline"
-                size="sm"
-                disabled={!hasPrev}
-                onClick={prevPage}
-              >
-                {t("usage.logs.prevPage")}
-              </Button>
-              <Button
-                variant="outline"
-                size="sm"
-                disabled={!hasNext}
-                onClick={nextPage}
-              >
-                {t("usage.logs.nextPage")}
-              </Button>
             </div>
-          </div>
+          </QueryState>
+
+          {total > 0 ? (
+            <PaginationBar
+              page={page}
+              totalPages={totalPages}
+              total={total}
+              onPageChange={goToPage}
+            />
+          ) : null}
         </CardContent>
       </Card>
 
@@ -353,18 +360,33 @@ export function PricingView() {
           setEditing(null)
         }}
       />
+
+      <ConfirmDialog
+        open={deleting !== null}
+        onOpenChange={(o) => {
+          if (!o) setDeleting(null)
+        }}
+        title={t("confirm.deleteTitle", { name: deleting?.model_key ?? "" })}
+        description={t("pricing.confirm.deleteDesc")}
+        confirmLabel={t("common.delete")}
+        busy={removing}
+        onConfirm={() => void onConfirmDelete()}
+      />
     </div>
   )
 }
 
 function SortHeader({
   label,
+  unit,
   k,
   sortKey,
   sortDir,
   onSort,
 }: {
   label: string
+  /** 列单位小标（如 `$/1M`）——单元格保持纯数字，单位放表头不重复。 */
+  unit?: string
   k: PricingSortKey
   sortKey: PricingSortKey | null
   sortDir: "asc" | "desc"
@@ -380,6 +402,11 @@ function SortHeader({
       }`}
     >
       {label}
+      {unit ? (
+        <span className="text-muted-foreground text-[10px] font-normal">
+          {unit}
+        </span>
+      ) : null}
       <ChevronUp
         className={`size-3 transition-transform ${
           active && sortDir === "desc" ? "rotate-180" : ""

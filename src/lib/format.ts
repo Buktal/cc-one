@@ -19,11 +19,18 @@ export function formatTokens(n: number | null | undefined): string {
   return v.toLocaleString("en-US")
 }
 
+/** USD amount with 4 decimals, no currency symbol — `1.7564`. Null/0 →
+ *  `0.0000`. Tables that carry the `$` unit in the column header use this so
+ *  the symbol doesn't repeat per cell. */
+export function formatCostAmount(usd: number | null | undefined): string {
+  const v = Number(usd ?? 0)
+  if (!Number.isFinite(v)) return "0.0000"
+  return v.toFixed(4)
+}
+
 /** USD cost with 4 decimals, e.g. `$1.7564`. Null/0 → `$0.0000`. */
 export function formatCost(usd: number | null | undefined): string {
-  const v = Number(usd ?? 0)
-  if (!Number.isFinite(v)) return "$0.0000"
-  return `$${v.toFixed(4)}`
+  return `$${formatCostAmount(usd)}`
 }
 
 /** Integer with thousands separators. */

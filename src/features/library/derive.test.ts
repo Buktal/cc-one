@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest"
 
-import { shouldThemeRender } from "./derive"
+import { filterEntriesByName, shouldThemeRender } from "./derive"
 
 describe("shouldThemeRender", () => {
   it("renders text extensions theme-side, case-insensitively", () => {
@@ -29,5 +29,35 @@ describe("shouldThemeRender", () => {
     ]) {
       expect(shouldThemeRender(name), name).toBe(false)
     }
+  })
+})
+
+describe("filterEntriesByName", () => {
+  const entries = [
+    { name: "notes.md" },
+    { name: "Notes" },
+    { name: "config.json" },
+    { name: "README.md" },
+  ]
+
+  it("matches names case-insensitively", () => {
+    expect(filterEntriesByName(entries, "notes")).toEqual([
+      { name: "notes.md" },
+      { name: "Notes" },
+    ])
+  })
+
+  it("returns the list untouched for a blank query", () => {
+    expect(filterEntriesByName(entries, "  ")).toBe(entries)
+  })
+
+  it("returns nothing when no entry matches", () => {
+    expect(filterEntriesByName(entries, "zzz")).toEqual([])
+  })
+
+  it("trims the query", () => {
+    expect(filterEntriesByName(entries, "  README  ")).toEqual([
+      { name: "README.md" },
+    ])
   })
 })

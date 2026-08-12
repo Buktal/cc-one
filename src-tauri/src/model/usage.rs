@@ -186,17 +186,41 @@ pub struct TurnDuration {
 
 // ---- DTOs crossing the boundary (specta-typed, f64 cost) ----
 
-/// One row of the request-log table.
+/// Per-call cost split by token bucket, f64 mirror of [`CostBreakdown`] for
+/// the frontend. The table shows the total; the expandable row detail shows
+/// the buckets so "why is this call expensive" is answerable.
+#[derive(Debug, Clone, Copy, Default, serde::Serialize, serde::Deserialize, specta::Type)]
+pub struct LogCostBreakdown {
+    pub input_usd: f64,
+    pub output_usd: f64,
+    pub cache_read_usd: f64,
+    pub cache_creation_usd: f64,
+}
+
+/// One row of the request-log table. Beyond the visible columns, carries the
+/// full per-call fields the row-detail panel shows (cost buckets, session,
+/// tier, iterations, tool use) — one query, zero extra round-trip on expand.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, specta::Type)]
 pub struct UsageLogRow {
     pub uuid: String,
     pub timestamp: String,
     pub model: String,
+    /// Normalized model key used for pricing lookup (rebill key).
+    pub pricing_model: String,
     pub source: String,
+    /// Session this call belongs to (Claude = the jsonl file stem). Empty when
+    /// the parser has not been wired for sessions yet.
+    pub session_id: String,
     pub device_id: String,
     pub tokens: TokenCounts,
     pub stop_reason: String,
+    /// Service tier label, e.g. `standard`. Empty when unrecorded.
+    pub service_tier: String,
+    /// Reasoning/thinking iteration count. 0 when unrecorded.
+    pub iterations: u32,
+    pub server_tool_use: ServerToolUse,
     pub total_cost_usd: f64,
+    pub cost: LogCostBreakdown,
 }
 
 /// Aggregate totals over a filtered range.

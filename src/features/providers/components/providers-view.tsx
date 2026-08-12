@@ -38,6 +38,7 @@ import {
   useRemoveProviderFromLiveMutation,
   useSwitchProviderMutation,
 } from "@/app/store/api"
+import { ConfirmDialog } from "@/components/confirm-dialog"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
@@ -110,6 +111,18 @@ export function ProvidersView() {
 
   const [sheetOpen, setSheetOpen] = useState(false)
   const [editing, setEditing] = useState<Provider | null>(null)
+  // 待删除供应商（非 null 弹确认框）；删除成功才清空——保持打开直到完成。
+  const [deleting, setDeleting] = useState<Provider | null>(null)
+  const [deletingBusy, setDeletingBusy] = useState(false)
+  async function onConfirmDelete() {
+    if (!deleting) return
+    setDeletingBusy(true)
+    try {
+      if (await onDelete(deleting)) setDeleting(null)
+    } finally {
+      setDeletingBusy(false)
+    }
+  }
   const [transfer, setTransfer] = useState<TransferKind | null>(null)
   const [ccswitchOpen, setCcswitchOpen] = useState(false)
   const [query, setQuery] = useState("")
@@ -147,8 +160,9 @@ export function ProvidersView() {
     setEditing(p)
     setSheetOpen(true)
   }
-  async function onDelete(p: Provider) {
-    await runWithToast(
+  // 返回成功与否：删除确认框保持打开直到成功（成功才关），失败留在框内重试。
+  async function onDelete(p: Provider): Promise<boolean> {
+    return await runWithToast(
       remove,
       { app, id: p.id },
       {
@@ -354,7 +368,7 @@ export function ProvidersView() {
                     isActive={activeProvider?.id === p.id}
                     liveManaged={providerLiveManaged(p)}
                     onEdit={() => openEdit(p)}
-                    onDelete={() => void onDelete(p)}
+                    onDelete={() => setDeleting(p)}
                     onSwitch={() => onSwitch(p)}
                     onAddToLive={() => void onAddToLive(p)}
                     onRemoveFromLive={() => void onRemoveFromLive(p)}
@@ -419,6 +433,18 @@ export function ProvidersView() {
       <CcSwitchImportDialog
         open={ccswitchOpen}
         onOpenChange={setCcswitchOpen}
+      />
+
+      <ConfirmDialog
+        open={deleting !== null}
+        onOpenChange={(open) => {
+          if (!open) setDeleting(null)
+        }}
+        title={t("confirm.deleteTitle", { name: deleting?.name ?? "" })}
+        description={t("providers.confirm.deleteDesc")}
+        confirmLabel={t("common.delete")}
+        busy={deletingBusy}
+        onConfirm={() => void onConfirmDelete()}
       />
     </div>
   )

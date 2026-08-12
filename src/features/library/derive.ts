@@ -65,6 +65,21 @@ export function upFromSubpath(subpath: string): string {
 }
 
 /**
+ * Case-insensitive name filter for the current directory's entries — the
+ * library's search matches what the scan returned for this scope + subpath
+ * (one directory level; the backend has no recursive search). A blank query
+ * returns the list untouched.
+ */
+export function filterEntriesByName<T extends { name: string }>(
+  entries: T[],
+  query: string,
+): T[] {
+  const q = query.trim().toLowerCase()
+  if (!q) return entries
+  return entries.filter((e) => e.name.toLowerCase().includes(q))
+}
+
+/**
  * Build the breadcrumb trail as pure data (labels + navigation targets, no
  * callbacks). The device crumb is labelled from `deviceScope` (passed in —
  * `subpath` never carries the device id, matching how `drill` and the scan

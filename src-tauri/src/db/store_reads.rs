@@ -176,35 +176,55 @@ impl super::Store {
             .map_err(AppError::from)
     }
 
-    /// Request-log rows (BLUEPRINT 请求日志; columns).
+    /// Request-log rows (BLUEPRINT 请求日志; columns). Selects the full
+    /// per-call field set — the row-detail panel reads from these rows, so
+    /// expanding a row costs no extra round-trip. `server_tool_use` is a JSON
+    /// text column; unknown/corrupt payloads fall back to zeros.
     pub fn query_logs(&self, q: &LogsQuery) -> AppResult<Vec<UsageLogRow>> {
         let conn = self.conn.lock().expect("db mutex poisoned");
         let (clause, params_vec) = build_where(&q.filter, true, true);
         let limit = q.limit.clamp(1, 1000) as i64;
         let offset = q.offset as i64;
         let sql = format!(
-            "SELECT uuid, timestamp, model, source, device_id,
+            "SELECT uuid, timestamp, model, pricing_model, source, session_id, device_id,
                     input_tokens, output_tokens, cache_creation_tokens, cache_read_tokens,
-                    stop_reason, CAST(total_cost_usd AS REAL)
+                    stop_reason, service_tier, iterations, server_tool_use,
+                    CAST(total_cost_usd AS REAL),
+                    CAST(input_cost_usd AS REAL), CAST(output_cost_usd AS REAL),
+                    CAST(cache_read_cost_usd AS REAL), CAST(cache_creation_cost_usd AS REAL)
              FROM usage_records {clause}
              ORDER BY timestamp DESC LIMIT {limit} OFFSET {offset}"
         );
         let mut stmt = conn.prepare(&sql)?;
         let rows = stmt.query_map(params_from_iter(params_vec.iter()), |r| {
+            let tool_json: String = r.get(14)?;
+            let server_tool_use =
+                serde_json::from_str(&tool_json).unwrap_or(ServerToolUse::default());
             Ok(UsageLogRow {
                 uuid: r.get(0)?,
                 timestamp: r.get(1)?,
                 model: r.get(2)?,
-                source: r.get(3)?,
-                device_id: r.get(4)?,
+                pricing_model: r.get(3)?,
+                source: r.get(4)?,
+                session_id: r.get(5)?,
+                device_id: r.get(6)?,
                 tokens: TokenCounts {
-                    input: r.get::<_, i64>(5)? as u32,
-                    output: r.get::<_, i64>(6)? as u32,
-                    cache_creation: r.get::<_, i64>(7)? as u32,
-                    cache_read: r.get::<_, i64>(8)? as u32,
+                    input: r.get::<_, i64>(7)? as u32,
+                    output: r.get::<_, i64>(8)? as u32,
+                    cache_creation: r.get::<_, i64>(9)? as u32,
+                    cache_read: r.get::<_, i64>(10)? as u32,
                 },
-                stop_reason: r.get(9)?,
-                total_cost_usd: r.get(10)?,
+                stop_reason: r.get(11)?,
+                service_tier: r.get(12)?,
+                iterations: r.get::<_, i64>(13)? as u32,
+                server_tool_use,
+                total_cost_usd: r.get(15)?,
+                cost: LogCostBreakdown {
+                    input_usd: r.get(16)?,
+                    output_usd: r.get(17)?,
+                    cache_read_usd: r.get(18)?,
+                    cache_creation_usd: r.get(19)?,
+                },
             })
         })?;
         rows.collect::<rusqlite::Result<Vec<_>>>()
