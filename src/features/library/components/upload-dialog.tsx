@@ -4,14 +4,7 @@
 // Same-name different-kind is not pre-detected here — the backend rejects it
 // and surfaces a toast (rare; the drop flow asks the user to rename anyway).
 
-import {
-  File as FileIcon,
-  FileJson,
-  FileText,
-  Folder,
-  Image as ImageIcon,
-  Loader2,
-} from "lucide-react"
+import { Loader2 } from "lucide-react"
 import { Fragment, useMemo, useState } from "react"
 import { useTranslation } from "react-i18next"
 import {
@@ -30,6 +23,7 @@ import {
 import { Input } from "@/components/ui/input"
 import { useMutateWithToast } from "@/hooks/use-toast-mutation"
 import type { UploadItem } from "@/types/generated/bindings"
+import { kindIcon } from "../kind-icon"
 
 type Row = { sourcePath: string; name: string }
 
@@ -39,14 +33,11 @@ function basename(p: string): string {
   return parts[parts.length - 1] || p
 }
 
+/** The dialog only has dropped paths, not kinds — no extension is its best
+ *  guess for "directory". Delegates to the shared kindIcon (single source). */
 function rowIcon(name: string) {
   const ext = name.split(".").pop()?.toLowerCase()
-  if (!ext || name === ext) return Folder
-  if (ext === "json") return FileJson
-  if (["md", "markdown", "txt", "log"].includes(ext)) return FileText
-  if (["png", "jpg", "jpeg", "gif", "webp", "svg", "bmp"].includes(ext))
-    return ImageIcon
-  return FileIcon
+  return kindIcon(name, !ext || name === ext)
 }
 
 export function UploadDialog({
