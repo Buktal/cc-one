@@ -787,6 +787,113 @@ export function snippetMissingKeys(
   return missing
 }
 
+// ---- 通用片段凭据键判定（claude / gemini 共用）----
+//
+// TS 镜像后端 `provider::snippet::is_sensitive_config_key`，**逐字一致**
+// （ADR-0010：前后端判定必须一致，否则后端拦了、前端还允许写回）。三张表移植
+// 自 CC-Switch，统一转大写后比较：EXACT 精确、SUFFIXES 后缀、CONTAINS 子串。
+// 模式匹配覆盖整类凭据键而非枚举——枚举挡不住下一个 `*_API_KEY`（CC-Switch 曾
+// 因只枚举两个固定键名，让 `GOOGLE_API_KEY` 漏进共享片段、被深合并进其它供应商
+// env、随请求发往对方 base_url）。仅 claude / gemini 片段用（两者写 env 认证
+// 通道）；codex / grok 片段写 mcp_servers（不经 LLM 端点），允许凭据，不用本判定。
+
+/** 凭据键精确匹配表（转大写后全等）。与后端 EXACT 逐字一致。 */
+const SENSITIVE_EXACT = [
+  "APIKEY",
+  "API_KEY",
+  "TOKEN",
+  "SECRET",
+  "PASSWORD",
+  "CREDENTIALS",
+] as const
+
+/** 凭据键后缀表（转大写后以此结尾）。与后端 SUFFIXES 逐字一致。 */
+const SENSITIVE_SUFFIXES = [
+  "_KEY",
+  "_API_KEY",
+  "_ACCESS_KEY",
+  "_ACCESS_KEY_ID",
+  "_KEY_ID",
+  "_PRIVATE_KEY",
+  "_APIKEY",
+  "_ACCESSKEY",
+  "_SECRETKEY",
+  "_APITOKEN",
+  "_AUTH_TOKEN",
+  "_TOKEN",
+  "_PAT",
+  "_PWD",
+  "_PASS",
+  "_PASSPHRASE",
+  "_CREDS",
+] as const
+
+/** 凭据键子串表（转大写后包含）。与后端 CONTAINS 逐字一致。 */
+const SENSITIVE_CONTAINS = [
+  "SECRET",
+  "PASSWORD",
+  "PASSWD",
+  "CREDENTIAL",
+  "PRIVATE_KEY",
+  "BEARER_TOKEN",
+] as const
+
+/** 判定一个配置键名是否像凭据（API key / token / secret / password 等）。
+ *  与后端 `is_sensitive_config_key` 对齐：三张表相同、统一转大写后比较。env 键
+ *  均 ASCII，故 JS `toUpperCase` 与后端 `to_ascii_uppercase` 实际等价（非 ASCII
+ *  键理论上有差异，但配置键名不存在该情况）。 */
+export function isSensitiveConfigKey(name: string): boolean {
+  const upper = name.toUpperCase()
+  return (
+    SENSITIVE_EXACT.some((e) => upper === e) ||
+    SENSITIVE_SUFFIXES.some((s) => upper.endsWith(s)) ||
+    SENSITIVE_CONTAINS.some((c) => upper.includes(c))
+  )
+}
+
+/** 扫描片段对象（顶层 + env 子对象）的键，返回第一个凭据键的显示路径（如
+ *  `GEMINI_API_KEY` 或 `env.GEMINI_API_KEY`），无则 null。与后端
+ *  `reject_sensitive_keys` 同款扫描范围（顶层 + env.*）。 */
+export function findSensitiveConfigKey(
+  obj: Record<string, unknown>,
+): string | null {
+  for (const key of Object.keys(obj)) {
+    if (isSensitiveConfigKey(key)) return key
+  }
+  const env = obj.env
+  if (env && typeof env === "object" && !Array.isArray(env)) {
+    for (const key of Object.keys(env as Record<string, unknown>)) {
+      if (isSensitiveConfigKey(key)) return `env.${key}`
+    }
+  }
+  return null
+}
+
+/** gemini 端点键（决定凭据发往何处；共享会把认证引到错误端点，归供应商）。 */
+const GEMINI_ENDPOINT_KEY = "GOOGLE_GEMINI_BASE_URL"
+
+/** gemini 片段的保存前问题（前端提示用，advisory——实际拒绝仍由后端）：凭据键
+ *  （顶层 + env.*，与后端 `reject_sensitive_keys` 同款扫描范围）或 env 下的端点键
+ *  GOOGLE_GEMINI_BASE_URL（与后端 `validate_gemini_extras` 同款只扫 env）→ 返回该
+ *  键的显示路径；无问题 / 解析不了的草稿 → null。env 值非字符串或空由后端校验
+ *  兜底（JSON 编辑器 + 格式化已降低这类误写）。 */
+export function geminiSnippetIssue(snippetText: string): string | null {
+  const obj = parseSnippetInput(snippetText)
+  if (!obj) return null
+  const credential = findSensitiveConfigKey(obj)
+  if (credential) return credential
+  const env = obj.env
+  if (
+    env &&
+    typeof env === "object" &&
+    !Array.isArray(env) &&
+    GEMINI_ENDPOINT_KEY in (env as Record<string, unknown>)
+  ) {
+    return `env.${GEMINI_ENDPOINT_KEY}`
+  }
+  return null
+}
+
 // ---- Codex 应用：auth + TOML 受控合并的文本级读写 ----
 //
 // Codex settingsConfig 形状：`{"auth": {"OPENAI_API_KEY"?: ...}, "config":

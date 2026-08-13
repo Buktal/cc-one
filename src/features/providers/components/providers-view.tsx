@@ -402,12 +402,14 @@ export function ProvidersView() {
         </CardContent>
       </Card>
 
-      {/* 通用配置片段：按应用分派合并层（ADR-0010）——claude 在 settings_config 层
-          并入、codex 在写盘层补缺失进 live 文件。卡片只对「切换时真正合并片段」
-          的应用显示（#47 原则：不给配了不生效的应用展示控件）；gemini 的卡片随 #50
-          （settings_config 层接线）、grok 的随 #51（写盘层接线）各自放开。opencode
-          附加模式无「切换」概念，不显示。 */}
-      {app === "claude" || app === "codex" ? (
+      {/* 通用配置片段：按应用分派合并层（ADR-0010）——claude/gemini 在
+          settings_config 层并入、codex/grok 在写盘层补缺失进 live 文件。卡片只对
+          「切换时真正合并片段」的应用显示（#47 原则：不给配了不生效的应用展示控件）。
+          opencode 附加模式无「切换」概念，不显示。 */}
+      {app === "claude" ||
+      app === "codex" ||
+      app === "gemini" ||
+      app === "grok" ? (
         <CommonConfigSnippetCard app={app} />
       ) : null}
 

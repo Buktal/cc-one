@@ -563,10 +563,7 @@ pub fn set_lightweight_expand(
 /// unity with the other Settings prefs.
 #[tauri::command]
 #[specta::specta]
-pub fn set_lightweight_auto_tuck(
-    state: State<'_, AppState>,
-    secs: u32,
-) -> AppResult<Preferences> {
+pub fn set_lightweight_auto_tuck(state: State<'_, AppState>, secs: u32) -> AppResult<Preferences> {
     let cfg = state
         .config
         .update(|c| c.lightweight_auto_tuck_secs = secs)?;
@@ -951,11 +948,11 @@ pub fn reorder_providers_cmd(
 /// 一致：只替换受控字段、非受控字段（hooks / MCP / permissions / model /
 /// mcp_servers 等）从 live 原地保留，不整文件覆盖、不做 Backfill。
 ///
-/// 通用片段按应用分派合并层（ADR-0010）：claude 在 settings_config 层并入
-/// （合并前先叠片段、拦截未物化模板变量）；codex/grok 在写盘层补缺失（片段
+/// 通用片段按应用分派合并层（ADR-0010）：claude/gemini 在 settings_config 层
+/// 并入（合并前先叠片段；claude 另拦截未物化模板变量——gemini 的 `.env` 由
+/// dotenv 展开 `${VAR}` 是合法引用，不拦）；codex/grok 在写盘层补缺失（片段
 /// 随 `snippet` 传给 `write_live`，受控合并后补进 live 文件——否则被白名单
-/// 滤掉→零效果）；gemini 的 settings_config 层片段见 #50。「保存」只写 DB
-/// （save_provider_cmd），本命令才真正写盘。
+/// 滤掉→零效果）。「保存」只写 DB（save_provider_cmd），本命令才真正写盘。
 #[tauri::command]
 #[specta::specta]
 pub async fn switch_provider_cmd(
@@ -982,29 +979,35 @@ pub async fn switch_provider_cmd(
         // 片段按 provider 归属的应用读取（claude 池读 claude 片段，存量迁移后即原
         // 全局片段，行为不变）。snippet_for 返回 owned，读 guard 随语句结束释放。
         let snippet_record = config.get().snippet_for(app);
-        let write_provider = if app == App::Claude {
-            let settings_config = crate::provider::snippet::apply_snippet(
-                &provider.settings_config,
-                &snippet_record.content,
-                snippet_record.enabled,
-            )?;
-            // 字面量 `${VAR}` 写进 live 文件等于写一份废配置。
-            crate::provider::live::validate_no_unfilled_template_vars(&settings_config)?;
-            Provider {
-                settings_config,
-                ..provider.clone()
+        let write_provider = match app {
+            // settings_config 层片段（claude/gemini）：片段先并入供应商配置，再随
+            // 受控写盘落地。
+            App::Claude | App::Gemini => {
+                let settings_config = crate::provider::snippet::apply_snippet(
+                    &provider.settings_config,
+                    &snippet_record.content,
+                    snippet_record.enabled,
+                )?;
+                // claude 的 settings.json 是字面量 JSON：${VAR} 占位符会原样写进
+                // live = 废配置，切换前拦下。gemini 的 .env 由 dotenv 展开 ${VAR}
+                // （合法引用，gemini 预设也不用模板变量），不拦。
+                if app == App::Claude {
+                    crate::provider::live::validate_no_unfilled_template_vars(&settings_config)?;
+                }
+                Provider {
+                    settings_config,
+                    ..provider.clone()
+                }
             }
-        } else {
-            // codex 走写盘层（片段随 write_snippet 传给 write_live，受控合并后补
-            // 缺失进 live 文件）；gemini 的 settings_config 层片段见 #50；grok 的
-            // 写盘层片段见 #51（届时 switch_grok_live 加 snippet 参数）。
-            provider.clone()
+            // codex/grok 走写盘层（片段随 write_snippet 传给 write_live，受控合并
+            // 后补缺失进 live 文件）。
+            _ => provider.clone(),
         };
-        // 写盘层片段（codex；grok 见 #51）：启用 → 片段内容，否则空串
-        // （switch_codex_live 空串即无操作）。其余应用一律空串（其片段已在
-        // settings_config 层处理或尚未接通）。
+        // 写盘层片段（codex/grok）：启用 → 片段内容，否则空串（switch_*_live
+        // 空串即无操作）。claude/gemini 一律空串（其片段已在 settings_config 层
+        // 处理）。
         let write_snippet = match app {
-            App::Codex if snippet_record.enabled => snippet_record.content.clone(),
+            App::Codex | App::Grok if snippet_record.enabled => snippet_record.content.clone(),
             _ => String::new(),
         };
         crate::provider::live::write_live(app, &write_provider, &write_snippet)?;
@@ -1298,7 +1301,9 @@ pub async fn import_providers_from_live_cmd(
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, specta::Type)]
 #[serde(tag = "kind", rename_all = "camelCase")]
 pub enum OpenCodeImportPreview {
-    Missing { path: String },
+    Missing {
+        path: String,
+    },
     Ready {
         entries: Vec<OpenCodeImportPreviewEntry>,
     },
@@ -1386,7 +1391,10 @@ fn secret_in_entry(entry: &serde_json::Value) -> bool {
     entry
         .pointer("/options/headers")
         .and_then(|h| h.as_object())
-        .is_some_and(|m| m.values().any(|v| v.as_str().is_some_and(|s| !s.is_empty())))
+        .is_some_and(|m| {
+            m.values()
+                .any(|v| v.as_str().is_some_and(|s| !s.is_empty()))
+        })
 }
 
 /// 附加模式「从 opencode.json 导入」预览按钮：只读命令，返回将导入的供应商
@@ -1617,10 +1625,7 @@ mod tests {
     fn preview_output_never_contains_secret_value() {
         let entries = preview_opencode_import_text(opencode_live_json(), &HashSet::new());
         let json = serde_json::to_string(&entries).expect("preview entries serialize");
-        assert!(
-            !json.contains("sk-x"),
-            "preview 载荷不得携带密钥值: {json}"
-        );
+        assert!(!json.contains("sk-x"), "preview 载荷不得携带密钥值: {json}");
     }
 
     /// headers 也能携带凭据（Authorization 等）→ 计入 has_secret；空值不算。

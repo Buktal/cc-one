@@ -93,8 +93,13 @@ pub fn merge_grok_config(live: &str, target: &str) -> AppResult<String> {
 
     match target_profile {
         Some(profile) => {
-            // 受控写入：替换 [model."cc-one"] + 把 models.default 指向它。
-            table_mut(&mut doc, MODEL_TABLE).insert(CC_ONE_PROFILE, profile);
+            // 受控写入：替换 [model."cc-one"] + 把 models.default 指向它。model 表
+            // 只装 profile 子表、从不持有直接键值，标为隐式——只渲染
+            // [model."cc-one"]、不产出孤立的 [model] 头（toml_edit 对显式空父表与
+            // 其它顶层表共存时渲染不稳，曾致两连切键序漂移、不幂等）。
+            let model = table_mut(&mut doc, MODEL_TABLE);
+            model.insert(CC_ONE_PROFILE, profile);
+            model.set_implicit(true);
             table_mut(&mut doc, MODELS_TABLE).insert("default", toml_edit::value(CC_ONE_PROFILE));
         }
         None => {
@@ -125,9 +130,6 @@ pub fn merge_grok_config(live: &str, target: &str) -> AppResult<String> {
 ///
 /// 边界：`snippet` 空串/纯空白 → 空文档（无操作）；非空非法 TOML → `Err`；
 /// 含身份键 → `Err`。
-// 暂未被生产路径调用——`switch_grok_live` 接 snippet 参数在 #51 完成（与 codex
-// 同构）。校验侧 `validate_grok_snippet` 已接进 `validate_snippet`，此处保留。
-#[allow(dead_code)]
 pub fn merge_grok_snippet(merged: &str, snippet: &str) -> AppResult<String> {
     let mut doc = crate::provider::live::parse_toml_or_empty(merged, "merged config.toml")?;
     let snippet_doc = crate::provider::live::parse_toml_or_empty(snippet, "grok snippet")?;
@@ -179,12 +181,21 @@ fn table_mut<'a>(doc: &'a mut DocumentMut, key: &str) -> &'a mut Table {
         .expect("just ensured table")
 }
 
-/// 切换写盘全流程（薄壳，按序调用）：解析快照 → TOML 受控合并 → 无变化则
-/// 无操作 → 备份 → 原子写。
-pub fn switch_grok_live(config_path: &Path, settings_config: &str) -> AppResult<()> {
+/// 切换写盘全流程（薄壳，按序调用）：解析快照 → TOML 受控合并 → 写盘层补片段
+/// → 无变化则无操作 → 备份 → 原子写。
+///
+/// `snippet` 是写盘层通用片段（与 codex 同构，见 ADR-0010）：`merge_grok_config`
+/// 只搬受控身份键、丢弃 target 其余键，故片段必须在 merge 之后补进 live doc
+/// （settings_config 层合会被写盘白名单滤掉→片段零效果）。空串即无操作。
+pub fn switch_grok_live(config_path: &Path, settings_config: &str, snippet: &str) -> AppResult<()> {
     let target_toml = parse_grok_settings(settings_config)?;
     let live = crate::provider::live::read_live_settings(config_path)?;
-    let merged = merge_grok_config(&live, &target_toml)?;
+    let mut merged = merge_grok_config(&live, &target_toml)?;
+    // 写盘层补片段：merge_grok_config 只搬身份键、丢弃其余，故片段必须在此补
+    // （settings_config 层合会被白名单滤掉→零效果，见 ADR-0010）。片段空则跳过。
+    if !snippet.trim().is_empty() {
+        merged = merge_grok_snippet(&merged, snippet)?;
+    }
 
     // 内容无变化 → 无操作（不备份、不写盘、不碰 mtime）。trim_end 容忍
     // toml_edit 重写时对结尾换行的归一化。
@@ -456,6 +467,7 @@ model   =   "grok-3"
         switch_grok_live(
             &config_path,
             r#"{"config":"[model.cc-one]\nmodel = \"grok-4.5\"\nbase_url = \"https://api.x.ai/v1\"\napi_key = \"k\"\napi_backend = \"responses\"\ncontext_window = 500000\nname = \"xAI\""}"#,
+            "",
         )
         .unwrap();
 
@@ -501,7 +513,7 @@ command = "npx"
         );
 
         // 切到登录态版（空快照）。
-        switch_grok_live(&config_path, r#"{"config":""}"#).unwrap();
+        switch_grok_live(&config_path, r#"{"config":""}"#, "").unwrap();
 
         let written = fs::read_to_string(&config_path).unwrap();
         assert!(get_str(&written, &["model", "cc-one"]).is_none());
@@ -527,6 +539,7 @@ command = "npx"
         switch_grok_live(
             &config_path,
             r#"{"config":"[model.cc-one]\nmodel = \"grok-4.5\"\nbase_url = \"https://api.x.ai/v1\"\napi_key = \"k\"\napi_backend = \"responses\"\ncontext_window = 500000\nname = \"xAI\""}"#,
+            "",
         )
         .unwrap();
 
@@ -543,6 +556,7 @@ command = "npx"
         switch_grok_live(
             &config_path,
             r#"{"config":"[model.cc-one]\nmodel = \"grok-4.5\"\nbase_url = \"https://api.x.ai/v1\"\napi_key = \"k\"\napi_backend = \"responses\"\ncontext_window = 500000\nname = \"xAI\""}"#,
+            "",
         )
         .unwrap();
         assert_eq!(fs::read_to_string(&config_path).unwrap(), before);
@@ -556,6 +570,7 @@ command = "npx"
         switch_grok_live(
             &config_path,
             r#"{"config":"[model.cc-one]\nmodel = \"grok-4.5\"\nbase_url = \"https://api.x.ai/v1\"\napi_key = \"k\"\napi_backend = \"responses\"\ncontext_window = 500000\nname = \"xAI\""}"#,
+            "",
         )
         .unwrap();
         assert!(config_path.exists());
@@ -584,7 +599,7 @@ command = "npx"
         // 第一次切换写出 merged；同样的快照再切一次 → 无操作。用「同一输入
         // 两连切」保证判定不依赖 toml_edit 的字节渲染细节。
         let target = r#"{"config":"[model.cc-one]\nmodel = \"grok-4.5\"\nbase_url = \"https://api.x.ai/v1\"\napi_key = \"k\"\napi_backend = \"responses\"\ncontext_window = 500000\nname = \"xAI\""}"#;
-        switch_grok_live(&config_path, target).unwrap();
+        switch_grok_live(&config_path, target, "").unwrap();
         let written = fs::read_to_string(&config_path).unwrap();
         assert_eq!(
             get_str(&written, &["model", "cc-one", "model"]).as_deref(),
@@ -593,9 +608,109 @@ command = "npx"
         let bak = tmp.path().join("config.toml.bak");
         assert!(bak.exists(), "首次写入（live 已存在）应备份");
         fs::remove_file(&bak).unwrap();
-        switch_grok_live(&config_path, target).unwrap();
+        switch_grok_live(&config_path, target, "").unwrap();
         assert_eq!(fs::read_to_string(&config_path).unwrap(), written);
         assert!(!bak.exists(), "全无变化 → 不备份");
+    }
+
+    #[test]
+    fn switch_writes_snippet_mcp_servers() {
+        // 切换时片段的非受控键（mcp_servers）补进 live doc（写盘层，ADR-0010）。
+        let tmp = tempfile::tempdir().unwrap();
+        let config_path = seed(
+            tmp.path(),
+            Some("[models]\ndefault = \"old\"\n\n[model.old]\nmodel = \"grok-3\"\n"),
+        );
+        let target = r#"{"config":"[model.cc-one]\nmodel = \"grok-4.5\""}"#;
+        let snippet = "[mcp_servers.github]\ncommand = \"npx\"\n";
+
+        switch_grok_live(&config_path, target, snippet).unwrap();
+
+        let written = fs::read_to_string(&config_path).unwrap();
+        // 受控：cc-one profile + default 指针。
+        assert_eq!(
+            get_str(&written, &["model", "cc-one", "model"]).as_deref(),
+            Some("grok-4.5")
+        );
+        assert_eq!(
+            get_str(&written, &["models", "default"]).as_deref(),
+            Some("cc-one")
+        );
+        // 片段补的 mcp_servers 落盘（含凭据也允许——不经 LLM 端点）。
+        assert_eq!(
+            get_str(&written, &["mcp_servers", "github", "command"]).as_deref(),
+            Some("npx"),
+            "片段的 mcp_servers 经切换写盘补进 live"
+        );
+    }
+
+    #[test]
+    fn switch_rejects_snippet_with_identity_key() {
+        // 片段含身份键（cc-one profile / models.default）→ 合并拒绝，切换失败、
+        // 不写盘（与 validate_grok_snippet 同款，防绕过 set 命令的路径）。
+        let tmp = tempfile::tempdir().unwrap();
+        let config_path = seed(tmp.path(), Some("[models]\ndefault = \"old\"\n"));
+        let target = r#"{"config":"[model.cc-one]\nmodel = \"grok-4.5\""}"#;
+
+        let r = switch_grok_live(&config_path, target, "[model.cc-one]\nmodel = \"x\"\n");
+        assert!(r.is_err(), "片段含身份键必须拒绝切换");
+
+        // 拒绝路径不写盘：live 原样。
+        assert_eq!(
+            get_str(
+                &fs::read_to_string(&config_path).unwrap(),
+                &["models", "default"]
+            )
+            .as_deref(),
+            Some("old"),
+            "拒绝路径不得写盘"
+        );
+    }
+
+    #[test]
+    fn switch_with_snippet_is_idempotent() {
+        // 同一供应商连切多次（含片段）：稳态字节不变、不重复备份；身份键与片段键
+        // 各只出现一次（fill_missing 只补缺失，不重复追加——ADR-0010）。
+        //
+        // 注：toml_edit 对**隐式身份表 model**（[model.cc-one] 的隐式父表）与片段
+        // 新加的**显式顶层表**（[mcp_servers]）的兄弟顺序，在 parse/modify 循环里
+        // 非确定——首轮 merge 新建 model（隐式）后 fill_missing 插 mcp_servers，
+        // toml_edit 把显式表摆在隐式表前；第二轮 merge 重触 model 又把它归位到前。
+        // 故**首次切换会做一次性兄弟序归一**（只动顺序、不改语义、不增键），自第
+        // 二次起字节幂等。强求首轮也字节幂等，要么规范化表序（破坏「键序保留」
+        // 验收）、要么缠斗 toml_edit 隐式表内部（DocumentMut 不实现 PartialEq，语
+        // 义比对需另引 toml crate），代价超过这个良性边界场景的收益。
+        let tmp = tempfile::tempdir().unwrap();
+        let config_path = seed(tmp.path(), Some("[models]\ndefault = \"old\"\n"));
+        let target = r#"{"config":"[model.cc-one]\nmodel = \"grok-4.5\""}"#;
+        let snippet = "[mcp_servers.github]\ncommand = \"npx\"\n";
+
+        // 三连切；前两次含首轮归一，第三次起进入稳态。
+        switch_grok_live(&config_path, target, snippet).unwrap();
+        switch_grok_live(&config_path, target, snippet).unwrap();
+        let steady = fs::read_to_string(&config_path).unwrap();
+        let bak = tmp.path().join("config.toml.bak");
+        fs::remove_file(&bak).unwrap();
+        switch_grok_live(&config_path, target, snippet).unwrap();
+
+        // 稳态：第三次与第二次字节相同、不重复备份。
+        assert_eq!(
+            fs::read_to_string(&config_path).unwrap(),
+            steady,
+            "稳态字节幂等"
+        );
+        assert!(!bak.exists(), "稳态无变化 → 不重复备份");
+        // 不重复追加（最关键不变量）：身份键 cc-one 与片段键 mcp_servers 各只一次。
+        assert_eq!(
+            steady.matches("[model.cc-one]").count(),
+            1,
+            "cc-one 不重复追加"
+        );
+        assert_eq!(
+            steady.matches("[mcp_servers.github]").count(),
+            1,
+            "mcp_servers 不重复追加"
+        );
     }
 
     #[test]

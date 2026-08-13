@@ -194,8 +194,9 @@ pub(crate) fn atomic_write_file(path: &Path, content: &str) -> AppResult<()> {
 ///   层（#50），此处 `snippet` 暂不用。
 /// - grok：TOML 受控合并进 `~/.grok/config.toml`（`live_grok` 模块，
 ///   单文件无 auth；cc one 固定写 `[model."cc-one"]` profile + 设
-///   `models.default`，用户其它 profile / mcp_servers 原样保留）。片段在写盘
-///   层补缺失（#51），此处 `snippet` 暂不用。
+///   `models.default`，用户其它 profile / mcp_servers 原样保留）。片段在**写盘
+///   层**补缺失（同 codex 理由，见 ADR-0010），故 `snippet` 透传给
+///   `switch_grok_live`。
 ///
 /// `snippet` 为写盘层片段内容（codex/grok），空串即无操作；非写盘层应用忽略。
 pub fn write_live(app: App, provider: &Provider, snippet: &str) -> AppResult<()> {
@@ -217,7 +218,11 @@ pub fn write_live(app: App, provider: &Provider, snippet: &str) -> AppResult<()>
         App::Gemini => crate::provider::live_gemini::write_gemini_live(&provider.settings_config),
         App::Grok => {
             let config_path = crate::provider::live_grok::grok_config_path()?;
-            crate::provider::live_grok::switch_grok_live(&config_path, &provider.settings_config)
+            crate::provider::live_grok::switch_grok_live(
+                &config_path,
+                &provider.settings_config,
+                snippet,
+            )
         }
         // OpenCode 是附加模式，不走 write_live（单激活专属）——增删/切换走
         // set/remove_opencode_provider，由命令层按 is_additive_mode 分派。这里

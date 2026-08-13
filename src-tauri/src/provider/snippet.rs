@@ -175,15 +175,39 @@ fn validate_gemini_extras(obj: &serde_json::Value) -> AppResult<()> {
 /// TS 镜像落地前无需对外暴露。
 fn is_sensitive_config_key(name: &str) -> bool {
     const EXACT: &[&str] = &[
-        "APIKEY", "API_KEY", "TOKEN", "SECRET", "PASSWORD", "CREDENTIALS",
+        "APIKEY",
+        "API_KEY",
+        "TOKEN",
+        "SECRET",
+        "PASSWORD",
+        "CREDENTIALS",
     ];
     const SUFFIXES: &[&str] = &[
-        "_KEY", "_API_KEY", "_ACCESS_KEY", "_ACCESS_KEY_ID", "_KEY_ID", "_PRIVATE_KEY",
-        "_APIKEY", "_ACCESSKEY", "_SECRETKEY", "_APITOKEN", "_AUTH_TOKEN", "_TOKEN",
-        "_PAT", "_PWD", "_PASS", "_PASSPHRASE", "_CREDS",
+        "_KEY",
+        "_API_KEY",
+        "_ACCESS_KEY",
+        "_ACCESS_KEY_ID",
+        "_KEY_ID",
+        "_PRIVATE_KEY",
+        "_APIKEY",
+        "_ACCESSKEY",
+        "_SECRETKEY",
+        "_APITOKEN",
+        "_AUTH_TOKEN",
+        "_TOKEN",
+        "_PAT",
+        "_PWD",
+        "_PASS",
+        "_PASSPHRASE",
+        "_CREDS",
     ];
     const CONTAINS: &[&str] = &[
-        "SECRET", "PASSWORD", "PASSWD", "CREDENTIAL", "PRIVATE_KEY", "BEARER_TOKEN",
+        "SECRET",
+        "PASSWORD",
+        "PASSWD",
+        "CREDENTIAL",
+        "PRIVATE_KEY",
+        "BEARER_TOKEN",
     ];
     let upper = name.to_ascii_uppercase();
     EXACT.iter().any(|e| &upper == e)
@@ -407,16 +431,12 @@ mod tests {
     #[test]
     fn validate_claude_snippet_rejects_credentials() {
         // env 里的凭据键拒绝（env 是认证通道）。
-        assert!(validate_snippet(
-            App::Claude,
-            r#"{"env": {"ANTHROPIC_AUTH_TOKEN": "sk-x"}}"#
-        )
-        .is_err());
-        assert!(validate_snippet(
-            App::Claude,
-            r#"{"env": {"ANTHROPIC_API_KEY": "sk-x"}}"#
-        )
-        .is_err());
+        assert!(
+            validate_snippet(App::Claude, r#"{"env": {"ANTHROPIC_AUTH_TOKEN": "sk-x"}}"#).is_err()
+        );
+        assert!(
+            validate_snippet(App::Claude, r#"{"env": {"ANTHROPIC_API_KEY": "sk-x"}}"#).is_err()
+        );
         // 顶层凭据键也拒。
         assert!(validate_snippet(App::Claude, r#"{"apiKey": "x"}"#).is_err());
         // 非凭据键放行（模型/端点/开关——供应商赢下无害）。
@@ -430,17 +450,11 @@ mod tests {
     #[test]
     fn validate_gemini_snippet_rejects_credentials_endpoint_and_empty() {
         // 凭据键拒绝（GEMINI_API_KEY 命中 _API_KEY）。
-        assert!(validate_snippet(
-            App::Gemini,
-            r#"{"env": {"GEMINI_API_KEY": "k"}}"#
-        )
-        .is_err());
+        assert!(validate_snippet(App::Gemini, r#"{"env": {"GEMINI_API_KEY": "k"}}"#).is_err());
         // 端点键拒绝。
-        assert!(validate_snippet(
-            App::Gemini,
-            r#"{"env": {"GOOGLE_GEMINI_BASE_URL": "u"}}"#
-        )
-        .is_err());
+        assert!(
+            validate_snippet(App::Gemini, r#"{"env": {"GOOGLE_GEMINI_BASE_URL": "u"}}"#).is_err()
+        );
         // env 值非字符串拒绝。
         assert!(validate_snippet(App::Gemini, r#"{"env": {"GEMINI_MODEL": 123}}"#).is_err());
         // env 值空串拒绝。

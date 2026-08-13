@@ -22,7 +22,10 @@ import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Label } from "@/components/ui/label"
 import { Switch } from "@/components/ui/switch"
-import { snippetMissingKeys } from "@/features/providers/derive"
+import {
+  geminiSnippetIssue,
+  snippetMissingKeys,
+} from "@/features/providers/derive"
 import { useMutateWithToast } from "@/hooks/use-toast-mutation"
 import { formatJson, parseJsonObject } from "@/lib/json"
 
@@ -108,10 +111,18 @@ export function CommonConfigSnippetCard({ app }: { app: App }) {
       ? snippetMissingKeys(activeProvider.settingsConfig, content)
       : []
 
-  // 底部提示按应用：claude 子集判定；codex/grok 列禁身份键；gemini 见 #50。
+  // 底部提示按应用：claude 子集判定；codex/grok 列禁身份键；gemini 动态检测
+  // 凭据/端点键（TS 镜像后端 is_sensitive_config_key，ADR-0010）——有则警告该键
+  // 保存将被拒，无则列允许的键。
   const bottomHint = (() => {
     if (app === "codex") return t("providers.snippet.codexIdentityHint")
     if (app === "grok") return t("providers.snippet.grokIdentityHint")
+    if (app === "gemini") {
+      const issue = geminiSnippetIssue(content)
+      return issue
+        ? t("providers.snippet.geminiCredentialWarn", { key: issue })
+        : t("providers.snippet.geminiCredentialHint")
+    }
     if (app === "claude") {
       if (!activeProvider) return t("providers.snippet.noActiveHint")
       return missingKeys.length > 0

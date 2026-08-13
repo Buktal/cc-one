@@ -253,6 +253,8 @@
   "providers.snippet.tomlPlaceholder": "[tui]\ntheme = \"dark\"",
   "providers.snippet.codexIdentityHint": "TOML snippet; must not contain identity keys (model / model_provider / model_providers / experimental_bearer_token / wire_api, …) — owned by the provider. mcp_servers may carry credentials.",
   "providers.snippet.grokIdentityHint": "TOML snippet; must not contain [model.\"cc-one\"] or models.default — owned by cc one.",
+  "providers.snippet.geminiCredentialHint": "JSON env snippet; must not contain credential keys (GEMINI_API_KEY, …) or the endpoint key GOOGLE_GEMINI_BASE_URL; env values must be non-empty strings. Non-credential keys (GEMINI_MODEL, …) are allowed.",
+  "providers.snippet.geminiCredentialWarn": "Contains {{key}} — save will be rejected (credentials/endpoint keys belong to the provider).",
   "providers.title": "Providers",
   "providers.toast.applyAllSuccess": "Applied to all roles",
   "providers.toast.deleteFailed": "Failed to delete the provider",

@@ -249,6 +249,8 @@
   "providers.snippet.tomlPlaceholder": "[tui]\ntheme = \"dark\"",
   "providers.snippet.codexIdentityHint": "TOML 片段；不得含身份键 model / model_provider / model_providers / experimental_bearer_token / wire_api 等（归供应商）。mcp_servers 可含凭据。",
   "providers.snippet.grokIdentityHint": "TOML 片段；不得含 [model.\"cc-one\"] 或 models.default（归 cc one）。",
+  "providers.snippet.geminiCredentialHint": "JSON env 片段；不得含凭据键（GEMINI_API_KEY 等）或端点键 GOOGLE_GEMINI_BASE_URL，env 值须非空字符串。非凭据键（GEMINI_MODEL 等）允许。",
+  "providers.snippet.geminiCredentialWarn": "含 {{key}}，保存将被拒（凭据/端点键归供应商）。",
   "providers.title": "供应商",
   "providers.toast.applyAllSuccess": "已应用到全部角色",
   "providers.toast.deleted": "已删除 {{name}}",

@@ -160,7 +160,7 @@ pub fn merge_codex_snippet(merged: &str, snippet: &str) -> AppResult<String> {
     let mut doc = crate::provider::live::parse_toml_or_empty(merged, "merged config.toml")?;
     let snippet_doc = crate::provider::live::parse_toml_or_empty(snippet, "codex snippet")?;
     for key in CODEX_CONTROLLED_FIELDS {
-        if snippet_doc.get(*key).is_some() {
+        if snippet_doc.get(key).is_some() {
             return Err(AppError::Config(format!(
                 "codex 通用片段不得包含受控身份键 `{key}`（身份键归供应商管理）"
             )));
@@ -175,7 +175,7 @@ pub fn merge_codex_snippet(merged: &str, snippet: &str) -> AppResult<String> {
 pub fn validate_codex_snippet(snippet: &str) -> AppResult<()> {
     let doc = crate::provider::live::parse_toml_or_empty(snippet, "codex snippet")?;
     for key in CODEX_CONTROLLED_FIELDS {
-        if doc.get(*key).is_some() {
+        if doc.get(key).is_some() {
             return Err(AppError::Config(format!(
                 "codex 通用片段不得包含受控身份键 `{key}`（身份键归供应商管理）"
             )));
@@ -698,7 +698,13 @@ name = "New"
     fn config_missing_creates_file_without_backup() {
         let tmp = tempfile::tempdir().unwrap();
         let (config_path, auth_path) = seed(tmp.path(), None, None);
-        switch_codex_live(&config_path, &auth_path, r#"{"config":"model = \"m\""}"#, "").unwrap();
+        switch_codex_live(
+            &config_path,
+            &auth_path,
+            r#"{"config":"model = \"m\""}"#,
+            "",
+        )
+        .unwrap();
         assert!(config_path.exists());
         let written = fs::read_to_string(&config_path).unwrap();
         assert_eq!(get_str(&written, &["model"]).as_deref(), Some("m"));
@@ -869,8 +875,16 @@ new_field = "from-snippet"
             Some("npx")
         );
         assert_eq!(
-            get_str(&out, &["mcp_servers", "github", "env", "GITHUB_PERSONAL_ACCESS_TOKEN"])
-                .as_deref(),
+            get_str(
+                &out,
+                &[
+                    "mcp_servers",
+                    "github",
+                    "env",
+                    "GITHUB_PERSONAL_ACCESS_TOKEN"
+                ]
+            )
+            .as_deref(),
             Some("ghp_xxx"),
             "mcp_servers 含凭据允许（不经 LLM 端点）"
         );
@@ -891,9 +905,12 @@ new_field = "from-snippet"
     fn snippet_with_identity_key_is_rejected() {
         // 片段含受控身份键 → Err（身份键归供应商）。
         assert!(merge_codex_snippet("", r#"model = "x""#).is_err());
-        assert!(merge_codex_snippet("", r#"[model_providers.foo]
+        assert!(merge_codex_snippet(
+            "",
+            r#"[model_providers.foo]
 name = "x"
-"#)
+"#
+        )
         .is_err());
         assert!(merge_codex_snippet("", r#"experimental_bearer_token = "t""#).is_err());
     }
@@ -934,8 +951,10 @@ theme = "dark"
     #[test]
     fn validate_codex_snippet_accepts_shared_keys_and_rejects_identity() {
         // 合法：非受控共享键（含 mcp_servers 带凭据）。
-        assert!(validate_codex_snippet(r#"[tui]
-theme = "dark""#)
+        assert!(validate_codex_snippet(
+            r#"[tui]
+theme = "dark""#
+        )
         .is_ok());
         assert!(validate_codex_snippet(
             r#"[mcp_servers.github]
@@ -970,14 +989,20 @@ name = "x""#,
         // 由供应商接管（old→kimi）；片段的非受控键补缺失——[tui] theme live 赢
         // （保留 light）、片段独有子键补上、[mcp_servers] 新增（含凭据不禁）。
         let tmp = tempfile::tempdir().unwrap();
-        let (config_path, auth_path) =
-            seed(tmp.path(), None, Some("model = \"old\"\n[tui]\ntheme = \"light\"\n"));
+        let (config_path, auth_path) = seed(
+            tmp.path(),
+            None,
+            Some("model = \"old\"\n[tui]\ntheme = \"light\"\n"),
+        );
         let target = r#"{"config":"model = \"kimi-k2.7-code\""}"#;
         let snippet = "[tui]\ntop_output_style = \"compact\"\n[mcp_servers.github]\ncommand = \"npx\"\nenv = { GITHUB_PERSONAL_ACCESS_TOKEN = \"ghp_x\" }\n";
 
         switch_codex_live(&config_path, &auth_path, target, snippet).unwrap();
         let written = fs::read_to_string(&config_path).unwrap();
-        assert_eq!(get_str(&written, &["model"]).as_deref(), Some("kimi-k2.7-code"));
+        assert_eq!(
+            get_str(&written, &["model"]).as_deref(),
+            Some("kimi-k2.7-code")
+        );
         assert_eq!(
             get_str(&written, &["tui", "theme"]).as_deref(),
             Some("light"),
@@ -993,8 +1018,16 @@ name = "x""#,
             Some("npx")
         );
         assert_eq!(
-            get_str(&written, &["mcp_servers", "github", "env", "GITHUB_PERSONAL_ACCESS_TOKEN"])
-                .as_deref(),
+            get_str(
+                &written,
+                &[
+                    "mcp_servers",
+                    "github",
+                    "env",
+                    "GITHUB_PERSONAL_ACCESS_TOKEN"
+                ]
+            )
+            .as_deref(),
             Some("ghp_x"),
             "mcp_servers 凭据允许进片段"
         );
@@ -1020,9 +1053,13 @@ name = "x""#,
         let (config_path, auth_path) = seed(tmp.path(), None, None);
         let target = r#"{"config":"model = \"m\""}"#;
         assert!(switch_codex_live(&config_path, &auth_path, target, r#"model = "x""#).is_err());
-        assert!(
-            switch_codex_live(&config_path, &auth_path, target, "[model_providers.foo]\nname = \"x\"\n").is_err()
-        );
+        assert!(switch_codex_live(
+            &config_path,
+            &auth_path,
+            target,
+            "[model_providers.foo]\nname = \"x\"\n"
+        )
+        .is_err());
         assert!(!config_path.exists(), "身份键拒绝不得写出 config");
     }
 
@@ -1034,22 +1071,31 @@ name = "x""#,
         // （身份键归供应商，见 ADR-0010）——这是预期行为，本测只验**非受控**键上
         // 的注释/键序保留（用户手写的偏好区不被片段合并破坏）。
         let tmp = tempfile::tempdir().unwrap();
-        let live =
-            "model = \"old\"\n\n# 共享偏好\n[tui]\n# 主题\ntext = \"light\"\n";
+        let live = "model = \"old\"\n\n# 共享偏好\n[tui]\n# 主题\ntext = \"light\"\n";
         let (config_path, auth_path) = seed(tmp.path(), None, Some(live));
         let target = r#"{"config":"model = \"kimi-k2.7-code\""}"#;
-        let snippet = "[tui]\ntop_output_style = \"compact\"\n[mcp_servers.github]\ncommand = \"npx\"\n";
+        let snippet =
+            "[tui]\ntop_output_style = \"compact\"\n[mcp_servers.github]\ncommand = \"npx\"\n";
 
         switch_codex_live(&config_path, &auth_path, target, snippet).unwrap();
         let written = fs::read_to_string(&config_path).unwrap();
 
         // 非受控区注释保留（[tui] 表头前 + 表内 text 前——片段只在 tui 补子键、
         // 新增 mcp_servers，不重写这些行）。
-        assert!(written.contains("# 共享偏好"), "非受控表头注释保留: {written}");
+        assert!(
+            written.contains("# 共享偏好"),
+            "非受控表头注释保留: {written}"
+        );
         assert!(written.contains("# 主题"), "非受控表内注释保留: {written}");
         // 身份键受控替换（old→kimi）；非受控 [tui].text live 赢；片段独有键补上。
-        assert_eq!(get_str(&written, &["model"]).as_deref(), Some("kimi-k2.7-code"));
-        assert_eq!(get_str(&written, &["tui", "text"]).as_deref(), Some("light"));
+        assert_eq!(
+            get_str(&written, &["model"]).as_deref(),
+            Some("kimi-k2.7-code")
+        );
+        assert_eq!(
+            get_str(&written, &["tui", "text"]).as_deref(),
+            Some("light")
+        );
         assert_eq!(
             get_str(&written, &["tui", "top_output_style"]).as_deref(),
             Some("compact")

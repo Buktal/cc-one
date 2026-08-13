@@ -333,7 +333,6 @@ fn settings_env_string(settings: &Value, key: &str) -> String {
 }
 
 /// 统一供应商子 Provider 的 settings_config（各应用形状，模型用缺省）。
-
 fn universal_claude_settings(base_url: &str, api_key: &str) -> Value {
     serde_json::json!({
         "env": {

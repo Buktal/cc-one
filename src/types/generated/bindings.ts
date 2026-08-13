@@ -228,11 +228,11 @@ export const commands = {
 	 *  一致：只替换受控字段、非受控字段（hooks / MCP / permissions / model /
 	 *  mcp_servers 等）从 live 原地保留，不整文件覆盖、不做 Backfill。
 	 * 
-	 *  通用片段按应用分派合并层（ADR-0010）：claude 在 settings_config 层并入
-	 *  （合并前先叠片段、拦截未物化模板变量）；codex/grok 在写盘层补缺失（片段
+	 *  通用片段按应用分派合并层（ADR-0010）：claude/gemini 在 settings_config 层
+	 *  并入（合并前先叠片段；claude 另拦截未物化模板变量——gemini 的 `.env` 由
+	 *  dotenv 展开 `${VAR}` 是合法引用，不拦）；codex/grok 在写盘层补缺失（片段
 	 *  随 `snippet` 传给 `write_live`，受控合并后补进 live 文件——否则被白名单
-	 *  滤掉→零效果）；gemini 的 settings_config 层片段见 #50。「保存」只写 DB
-	 *  （save_provider_cmd），本命令才真正写盘。
+	 *  滤掉→零效果）。「保存」只写 DB（save_provider_cmd），本命令才真正写盘。
 	 */
 	switchProviderCmd: (app: App, id: string) => typedError<Provider, AppError>(__TAURI_INVOKE("switch_provider_cmd", { app, id })),
 	/**

@@ -14,11 +14,14 @@ import {
   emptyProvider,
   extractTemplateVars,
   filterProviders,
+  findSensitiveConfigKey,
   geminiApiKey,
   geminiBaseUrl,
   geminiModel,
+  geminiSnippetIssue,
   grokConfigToml,
   hasOneM,
+  isSensitiveConfigKey,
   metaTemplateValues,
   openCodeApiKey,
   openCodeBaseUrl,
@@ -1172,6 +1175,86 @@ describe("snippetMissingKeys", () => {
     expect(snippetMissingKeys("", "")).toEqual([])
     expect(snippetMissingKeys("{nope", snippet)).toEqual([])
     expect(snippetMissingKeys('{"env":{}}', "{nope")).toEqual([])
+  })
+})
+
+describe("isSensitiveConfigKey", () => {
+  // 用例与后端 `sensitive_keys_detected` 逐字一致（ADR-0010：前后端判定一致）。
+  it("detects credential keys (token / key / secret / password)", () => {
+    for (const key of [
+      "ANTHROPIC_AUTH_TOKEN",
+      "ANTHROPIC_API_KEY",
+      "GEMINI_API_KEY",
+      "GOOGLE_API_KEY", // CC-Switch 泄漏事故的同款键
+      "APIKEY",
+      "API_KEY",
+      "TOKEN",
+      "SECRET",
+      "OPENAI_API_KEY",
+      "MY_PRIVATE_KEY",
+      "DB_PASSWORD",
+      "SERVICE_ACCOUNT_CREDENTIALS",
+    ]) {
+      expect(isSensitiveConfigKey(key), `${key} 应判为凭据`).toBe(true)
+    }
+  })
+
+  // 用例与后端 `non_sensitive_keys_pass_through` 逐字一致。
+  it("passes through non-credential keys (model / endpoint / flags)", () => {
+    for (const key of [
+      "ANTHROPIC_MODEL",
+      "ANTHROPIC_BASE_URL",
+      "ANTHROPIC_DEFAULT_FABLE_MODEL",
+      "ANTHROPIC_DEFAULT_SONNET_MODEL_NAME",
+      "CLAUDE_CODE_EFFORT_LEVEL",
+      "CLAUDE_CODE_SUBAGENT_MODEL",
+      "CLAUDE_CODE_ATTRIBUTION_HEADER",
+      "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC",
+      "GEMINI_MODEL",
+      "MY_FLAG",
+    ]) {
+      expect(isSensitiveConfigKey(key), `${key} 不应判为凭据`).toBe(false)
+    }
+  })
+
+  it("is case-insensitive", () => {
+    expect(isSensitiveConfigKey("anthropic_auth_token")).toBe(true)
+    expect(isSensitiveConfigKey("OpenAI_Api_Key")).toBe(true)
+    expect(isSensitiveConfigKey("anthropic_model")).toBe(false)
+  })
+})
+
+describe("findSensitiveConfigKey", () => {
+  it("scans top-level and env.* keys", () => {
+    expect(findSensitiveConfigKey({ env: { GEMINI_API_KEY: "k" } })).toBe(
+      "env.GEMINI_API_KEY",
+    )
+    expect(findSensitiveConfigKey({ apiKey: "x" })).toBe("apiKey")
+    // 非凭据键 → null。
+    expect(findSensitiveConfigKey({ env: { GEMINI_MODEL: "m" } })).toBeNull()
+    expect(findSensitiveConfigKey({})).toBeNull()
+  })
+})
+
+describe("geminiSnippetIssue", () => {
+  it("detects credential key, endpoint key, and clean snippets", () => {
+    // 凭据键（env 下）。
+    expect(geminiSnippetIssue('{"env": {"GEMINI_API_KEY": "k"}}')).toBe(
+      "env.GEMINI_API_KEY",
+    )
+    // 端点键（env 下——与后端 validate_gemini_extras 同款只扫 env）。
+    expect(geminiSnippetIssue('{"env": {"GOOGLE_GEMINI_BASE_URL": "u"}}')).toBe(
+      "env.GOOGLE_GEMINI_BASE_URL",
+    )
+    // 顶层端点键：后端接受（apply_snippet 会丢弃），前端不报「将拒绝」。
+    expect(geminiSnippetIssue('{"GOOGLE_GEMINI_BASE_URL": "u"}')).toBeNull()
+    // 合法：非凭据、非端点。
+    expect(
+      geminiSnippetIssue('{"env": {"GEMINI_MODEL": "gemini-2.5-flash"}}'),
+    ).toBeNull()
+    // 空 / 垃圾草稿 → null（不误导）。
+    expect(geminiSnippetIssue("")).toBeNull()
+    expect(geminiSnippetIssue("{nope")).toBeNull()
   })
 })
 

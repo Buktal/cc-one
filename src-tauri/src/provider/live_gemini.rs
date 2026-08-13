@@ -618,4 +618,57 @@ mod tests {
         );
         assert!(!env_backup_path(&env_path).exists(), "失败路径不产生备份");
     }
+
+    /// gemini 通用片段经 settings_config 层并入 .env（#50）：apply_snippet 把片段
+    /// env 键级补缺失进供应商 settingsConfig（供应商已有键保留），再走既有写盘
+    /// 整块写 .env——片段键随整块落地。跑 switch_provider_cmd 的 gemini 分支所调
+    /// 的两个纯函数链（apply_snippet → write_gemini_live），验证生产路径。
+    #[test]
+    fn snippet_env_flows_into_env_file_via_settings_config_layer() {
+        let tmp = tempfile::tempdir().unwrap();
+        let env_path = tmp.path().join(".env");
+        let settings_path = tmp.path().join("settings.json");
+
+        // 供应商已有 GEMINI_API_KEY + 端点；片段补 GEMINI_MODEL（缺失键）。
+        let provider_cfg =
+            r#"{"env":{"GEMINI_API_KEY":"sk-x","GOOGLE_GEMINI_BASE_URL":"https://gen.dev"}}"#;
+        let snippet = r#"{"env":{"GEMINI_MODEL":"gemini-2.5-flash"}}"#;
+        let merged = crate::provider::snippet::apply_snippet(provider_cfg, snippet, true).unwrap();
+
+        write_gemini_live_at(&env_path, &settings_path, &merged).unwrap();
+
+        // 片段补的 GEMINI_MODEL 随 .env 整块写落地；供应商已有键保留。
+        let env_text = fs::read_to_string(&env_path).unwrap();
+        assert!(
+            env_text.contains("GEMINI_MODEL=gemini-2.5-flash"),
+            "片段 env 并入 .env"
+        );
+        assert!(env_text.contains("GEMINI_API_KEY=sk-x"), "供应商 env 保留");
+        // 供应商赢：片段不得覆盖供应商已有键（这里片段只补缺失，无冲突键）。
+        // selectedType 不变量：API Key 版（env 含 GEMINI_API_KEY）。
+        let settings = parsed(&fs::read_to_string(&settings_path).unwrap());
+        assert_eq!(
+            settings["security"]["auth"]["selectedType"],
+            serde_json::json!("gemini-api-key")
+        );
+    }
+
+    /// 停用片段 → apply_snippet 原样返回 → .env 只含供应商 env，片段键不出现。
+    #[test]
+    fn disabled_snippet_does_not_merge_into_env_file() {
+        let tmp = tempfile::tempdir().unwrap();
+        let env_path = tmp.path().join(".env");
+        let settings_path = tmp.path().join("settings.json");
+        let provider_cfg = r#"{"env":{"GEMINI_API_KEY":"sk-x"}}"#;
+        let snippet = r#"{"env":{"GEMINI_MODEL":"gemini-2.5-flash"}}"#;
+        // enabled=false → apply_snippet 不解析不合并，原样返回。
+        let passthrough =
+            crate::provider::snippet::apply_snippet(provider_cfg, snippet, false).unwrap();
+        assert_eq!(passthrough, provider_cfg);
+
+        write_gemini_live_at(&env_path, &settings_path, &passthrough).unwrap();
+        let env_text = fs::read_to_string(&env_path).unwrap();
+        assert!(!env_text.contains("GEMINI_MODEL"), "停用片段不并入 .env");
+        assert!(env_text.contains("GEMINI_API_KEY=sk-x"));
+    }
 }
