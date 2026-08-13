@@ -60,15 +60,16 @@ export function PresetPicker({
   }, [query, app])
 
   return (
-    // 左栏与右表单靠底色分层（灰面板 vs 白底）而不是 border-r 分隔——减线
-    // 语言：分组边界用表面明暗，线条留给控件边框。圆角让灰面板在白底上呈
-    // 独立的卡片感（而非贴边直角块）。
-    <aside className="bg-muted/40 flex w-72 shrink-0 flex-col rounded-lg">
-      <div className="px-3 py-2 text-sm font-medium">
+    // 预设栏 = 弹层面（--popover）直接铺开，右侧 border-r hairline 与表单
+    // 流分隔（用户决策 2026-08-14 重调：弹层内两栏不再各自成卡，单面结构
+    // ——暗色下 card #0d0d0f 比弹层 #26262a 更深，卡片会呈凹洞状）。px-6
+    // 与右栏表单对齐。选中 chip 的 tint + 色点语言不变。
+    <aside className="border-border flex w-60 shrink-0 flex-col border-r">
+      <div className="px-6 pt-4 pb-1 text-sm font-medium">
         {t("providers.presets.title")}
       </div>
-      <div className="relative px-3 pt-2">
-        <Search className="text-muted-foreground absolute top-1/2 left-5 size-3.5 -translate-y-1/2" />
+      <div className="relative px-6 pt-1">
+        <Search className="text-muted-foreground absolute top-1/2 left-7 size-3.5 -translate-y-1/2" />
         <Input
           value={query}
           onChange={(e) => setQuery(e.target.value)}
@@ -77,7 +78,7 @@ export function PresetPicker({
           className="h-8 pl-7"
         />
       </div>
-      <div className="flex flex-col gap-3 overflow-y-auto p-3">
+      <div className="flex flex-col gap-3 overflow-y-auto px-6 py-3">
         {groups.length === 0 ? (
           <div className="text-muted-foreground py-4 text-center text-xs">
             {t("providers.presets.noMatch")}
@@ -101,9 +102,11 @@ export function PresetPicker({
                       aria-pressed={isSelected}
                       className={cn(
                         "justify-start",
-                        // 选中态与 OptionCards 决策卡同一套视觉语言：inset shadow
-                        // 描边 + 淡色底，字体颜色保持不动。ghost 无边框——预设
-                        // 芯片的常态是「无框文字」，选中才有色（减线语言）。
+                        // 常态 bg-muted（亮浅灰/暗深灰）——单面弹层上 chip 要
+                        // 有「可点面」才立得住（用户决策 2026-08-14：控件与
+                        // 弹层同色，看不出哪里可按）。hover 走 --hover 加深/
+                        // 提亮，选中态维持 tint + inset shadow 语言不变。
+                        "bg-muted",
                         isSelected &&
                           "bg-accent-tint shadow-[inset_0_0_0_1px_var(--accent-brand)]",
                       )}

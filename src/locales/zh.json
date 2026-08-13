@@ -222,6 +222,7 @@
   "providers.form.newTitle": "新建供应商",
   "providers.form.oneM": "1M",
   "providers.form.requestModel": "请求模型",
+  "providers.form.role": "角色",
   "providers.form.role.fable": "Fable",
   "providers.form.role.haiku": "Haiku",
   "providers.form.role.opus": "Opus",

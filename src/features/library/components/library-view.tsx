@@ -144,7 +144,7 @@ export function LibraryView() {
             {/* w-30: 「全部设备」4 字 + padding 约 102px；长设备名由
               SelectValue 的 line-clamp-1 截断。与其它模块的设备下拉同宽。 */}
             <SelectTrigger
-              className="border-border bg-card hover:bg-muted/60 h-8 w-30 rounded-md"
+              className="border-border bg-card hover:bg-hover h-8 w-30 rounded-md"
               aria-label={t("library.scope.all")}
             >
               <SelectValue className="min-w-0">

@@ -64,7 +64,7 @@ export function DeviceScopeControl({
           // 纵卡 ControlCard 内与应用/模型下拉统一 w-36（三下拉等宽对齐）；
           // 横排 ControlBar 与来源下拉同宽 w-30。长设备名由 line-clamp-1
           // 截断。compact 小窗字号更小更没问题。
-          "border-border bg-card hover:bg-muted/60 h-8 w-36 rounded-md",
+          "border-border bg-card hover:bg-hover h-8 w-36 rounded-md",
           bar && !compact && "w-30",
           compact && "text-[11px]",
         )}

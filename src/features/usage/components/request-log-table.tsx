@@ -186,7 +186,7 @@ function LogRow({
   const notable = costIsNotable(r.total_cost_usd)
   return (
     <TableRow
-      className={cn("cursor-pointer", expanded && "bg-muted/50")}
+      className={cn("cursor-pointer", expanded && "bg-hover")}
       onClick={onToggle}
       aria-expanded={expanded}
       tabIndex={0}

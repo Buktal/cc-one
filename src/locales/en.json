@@ -228,6 +228,7 @@
   "providers.form.presetHint": "Pre-filled from the “{{name}}” preset. Edit and save as a custom provider.",
   "providers.form.presetTitle": "New provider from preset",
   "providers.form.requestModel": "Request model",
+  "providers.form.role": "Role",
   "providers.form.role.fable": "Fable",
   "providers.form.role.haiku": "Haiku",
   "providers.form.role.opus": "Opus",

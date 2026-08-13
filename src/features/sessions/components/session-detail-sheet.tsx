@@ -225,7 +225,7 @@ export function SessionDetailSheet(props: SessionDetailSheetProps) {
           style={{
             right: `calc(${NAV_PANEL_RIGHT} + ${NAV_PANEL_WIDTH} + ${NAV_PANEL_GAP})`,
           }}
-          className="flex w-[min(48vw,48rem)] min-w-[32rem] flex-col gap-0 overflow-hidden p-0 sm:max-w-none"
+          className="flex w-[min(48vw,48rem)] min-w-[32rem] flex-col gap-0 overflow-hidden bg-popover p-0 sm:max-w-none"
         >
           {/* Header: 会话档案 — 识别行（标题 + 操作）在上，信息流
             （身份 → 时间 → 统计 → 模型）一行在下。两行式，流式布局无
@@ -901,11 +901,11 @@ function TurnNavPanel({
               >
                 <ChevronUp className="size-3.5" />
               </TooltipTrigger>
-              {/* bg-popover! 覆盖默认的反色芯片 —— 跟随明暗模式的主题表面，
+              {/* bg-tooltip! 覆盖默认的反色芯片 —— 最浮层语义面，
                 与轮次行的全文预览 tooltip 一致。 */}
               <TooltipContent
                 side="top"
-                className="border border-border bg-popover! text-popover-foreground!"
+                className="border border-border bg-tooltip! text-tooltip-foreground!"
               >
                 {t("sessions.detail.prevSession")}
               </TooltipContent>
@@ -926,7 +926,7 @@ function TurnNavPanel({
               </TooltipTrigger>
               <TooltipContent
                 side="top"
-                className="border border-border bg-popover! text-popover-foreground!"
+                className="border border-border bg-tooltip! text-tooltip-foreground!"
               >
                 {t("sessions.detail.nextSession")}
               </TooltipContent>
@@ -959,7 +959,7 @@ function TurnNavPanel({
               </TooltipTrigger>
               <TooltipContent
                 side="top"
-                className="border border-border bg-popover! text-popover-foreground!"
+                className="border border-border bg-tooltip! text-tooltip-foreground!"
               >
                 {t("sessions.detail.searchInSession")}
               </TooltipContent>
@@ -987,7 +987,7 @@ function TurnNavPanel({
               </TooltipTrigger>
               <TooltipContent
                 side="top"
-                className="border border-border bg-popover! text-popover-foreground!"
+                className="border border-border bg-tooltip! text-tooltip-foreground!"
               >
                 {t(
                   allCollapsed
@@ -1065,7 +1065,7 @@ function TurnNavPanel({
                   "mt-0.5 flex w-full min-w-0 flex-col items-start rounded px-1.5 py-1 text-left focus-visible:ring-2 focus-visible:ring-ring/40 focus-visible:outline-none",
                   lastJumped === message.uuid
                     ? "bg-accent-tint"
-                    : "hover:bg-muted",
+                    : "hover:bg-hover",
                 )}
               >
                 <span className="text-muted-foreground/70 font-mono text-[9px] tabular-nums">
@@ -1092,7 +1092,7 @@ function TurnNavPanel({
                         "flex w-full min-w-0 items-center gap-1.5 rounded py-1 pr-1.5 pl-1 text-left text-xs focus-visible:ring-2 focus-visible:ring-ring/40 focus-visible:outline-none",
                         active
                           ? "bg-accent-tint text-foreground"
-                          : "text-muted-foreground hover:bg-muted hover:text-foreground",
+                          : "text-muted-foreground hover:bg-hover hover:text-foreground",
                       )}
                     />
                   }
@@ -1212,7 +1212,7 @@ function ToolRow({
   // it hides behind the tool name until clicked (messages stay expanded).
   const name = m.name || firstLine(m.content) || "tool"
   return (
-    <div className="bg-muted/40 group rounded-md border border-dashed px-3 py-2 text-xs">
+    <div className="bg-muted group rounded-md border border-dashed px-3 py-2 text-xs">
       {/* biome-ignore lint/a11y/useSemanticElements: collapse trigger must not
         be a <button> — the header embeds the copy <button>, and nested buttons
         are invalid HTML; div keeps the same keyboard contract. */}
@@ -1314,9 +1314,14 @@ function BaseRow({
   // pinned to the row's two ends by justify-between so even a narrow bubble
   // keeps them apart. The user voice flips the whole row with flex-row-reverse
   // (each block reverses internally) for a true mirror of the assistant's.
+  // 消息卡片面：弹层已是 --popover 纯面（用户决策 2026-08-14：会话详情
+  // 去 bg-app 渐变，与新建供应商弹层同面）——assistant 气泡改用 bg-muted
+  // 弹层内嵌块（亮浅灰 / 暗 #141416 凹一档），与弹层同色会隐身；不用
+  // --hover 是因为气泡内按钮的 hover 反馈正是 --hover，同色会隐身。
+  // user 走品牌浅色 tint（用户消息语义）。
   const voiceClass =
     tone === "assistant"
-      ? "mr-auto max-w-[min(72ch,80%)] rounded-lg rounded-bl-sm bg-muted/60"
+      ? "mr-auto max-w-[min(72ch,80%)] rounded-lg rounded-bl-sm bg-muted"
       : tone === "user"
         ? "ml-auto max-w-[min(72ch,80%)] rounded-lg rounded-br-sm bg-accent-tint"
         : "bg-transparent"

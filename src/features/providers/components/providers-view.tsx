@@ -262,10 +262,10 @@ export function ProvidersView() {
               className={cn(
                 "rounded-md",
                 a === app &&
-                  // 激活: 亮色 tint 底 (品牌选中态, SURFACE RULE 豁免),
-                  // 暗色纯黑面 (bg-card) —— 纯白卡叠在灰白亮背景下会隐形,
-                  // 所以亮色保持 tint, 只暗色参与「深面」对换。
-                  "bg-accent-tint text-accent-brand-strong font-medium dark:bg-card",
+                  // 激活: 反色块 —— 亮色纯白 (bg-card) 浮在浅底上、暗色
+                  // 纯黑 (#0d0d0f) 按进渐变背景; 边框 border-border 跟随
+                  // 明暗 (亮深灰 / 暗浅白)。分段控件不套品牌 tint。
+                  "border-border bg-card text-foreground hover:bg-card font-medium border",
               )}
             >
               {t(`providers.app.${a}`)}
@@ -302,9 +302,9 @@ export function ProvidersView() {
       {isAdditive && !bannerDismissed ? (
         // opencode 附加模式说明：多供应商可同时启用，启用即生效，无需切换。
         // 与 AppMark 描边方块呼应，让附加模式与单激活的差异在顶栏就可预期。
-        <div className="bg-muted flex items-center gap-2 rounded-lg px-3 py-2 text-xs">
-          <Info className="text-muted-foreground size-3.5 shrink-0" />
-          <span className="text-muted-foreground flex-1">
+        <div className="border-border bg-card flex items-center gap-2 rounded-lg border px-3 py-2 text-xs">
+          <Info className="text-foreground size-3.5 shrink-0" />
+          <span className="text-foreground flex-1">
             {t("providers.opencode.bannerBody")}
           </span>
           <Button
@@ -565,8 +565,8 @@ function ProviderRow({
         // 「当前使用」卡片）。不置顶——保留用户拖拽自定义的顺序。
         isActive
           ? "bg-accent-tint/60 shadow-[inset_2px_0_0_var(--accent-brand)]"
-          : "hover:bg-muted",
-        isDragging && "bg-muted opacity-70 shadow-sm",
+          : "hover:bg-hover",
+        isDragging && "bg-hover opacity-70 shadow-sm",
       )}
     >
       <span className="flex min-w-0 items-center gap-2">
@@ -638,11 +638,10 @@ function ProviderRow({
       <span className="text-muted-foreground truncate text-xs">
         {model || "—"}
       </span>
-      {/* 行内按钮：行 hover（bg-muted）时灰边框会融进行背景只剩文字——switch
+      {/* 行内按钮：行 hover（bg-hover）时灰边框会融进行背景只剩文字——switch
           按钮（行内主操作）行 hover 时边框换 accent 色保持可辨，编辑/删除是
           ghost 图标按钮，融入可接受。按钮自身 hover 用 hover:!bg-accent-brand/25
-          （主题色，比 accent-tint 浓——accent-tint 只有品牌色 10-12% 透明，肉
-          眼近于无），! 确保覆盖 Button 默认的 hover:bg-muted。 */}
+          （主题色，比 accent-tint 浓），! 确保覆盖 Button 默认的 hover:bg-hover。 */}
       <div className="flex justify-end gap-1">
         {additive ? (
           // 附加模式（opencode）：按 liveManaged 显示「移出」或「加入」，不走

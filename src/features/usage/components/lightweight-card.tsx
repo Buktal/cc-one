@@ -223,7 +223,7 @@ export function LightweightCard() {
                   aria-label={t("usage.lightweight.expandFull")}
                   onMouseDown={(e) => e.stopPropagation()}
                   onClick={() => dispatch(setMode("full"))}
-                  className="text-muted-foreground hover:bg-muted hover:text-foreground inline-flex w-6 shrink-0 items-center justify-center rounded-md my-0.5"
+                  className="text-muted-foreground hover:bg-hover hover:text-foreground inline-flex w-6 shrink-0 items-center justify-center rounded-md my-0.5"
                 />
               }
             >
@@ -239,7 +239,7 @@ export function LightweightCard() {
             aria-expanded={listOpen}
             onMouseDown={(e) => e.stopPropagation()}
             onClick={toggleList}
-            className="border-border bg-background text-foreground hover:bg-muted/60 flex w-full shrink-0 items-center justify-between border-t px-2 py-1 text-[11px] transition-colors"
+            className="border-border bg-background text-foreground hover:bg-hover flex w-full shrink-0 items-center justify-between border-t px-2 py-1 text-[11px] transition-colors"
           >
             <span className="min-w-0 flex-1 truncate">
               {deviceScope
@@ -276,7 +276,7 @@ export function LightweightCard() {
                     "focus-visible:ring-ring/40 flex w-full items-center rounded-none px-2 py-1 text-[11px] outline-none transition-colors focus-visible:ring-2",
                     selected
                       ? "bg-accent-tint text-accent-brand-strong"
-                      : "text-muted-foreground hover:bg-muted/60 hover:text-foreground",
+                      : "text-muted-foreground hover:bg-hover hover:text-foreground",
                   )}
                 >
                   <span className="min-w-0 flex-1 truncate">{it.label}</span>
@@ -314,7 +314,7 @@ export function LightweightCard() {
                   type="button"
                   aria-label={t("usage.lightweight.expandFull")}
                   onClick={() => dispatch(setMode("full"))}
-                  className="text-muted-foreground hover:bg-muted hover:text-foreground inline-flex size-7 items-center justify-center rounded-md transition-colors"
+                  className="text-muted-foreground hover:bg-hover hover:text-foreground inline-flex size-7 items-center justify-center rounded-md transition-colors"
                 />
               }
             >
@@ -329,7 +329,7 @@ export function LightweightCard() {
                   type="button"
                   aria-label={t("usage.lightweight.tuck")}
                   onClick={tuck}
-                  className="text-muted-foreground hover:bg-muted hover:text-foreground inline-flex size-7 items-center justify-center rounded-md transition-colors"
+                  className="text-muted-foreground hover:bg-hover hover:text-foreground inline-flex size-7 items-center justify-center rounded-md transition-colors"
                 />
               }
             >

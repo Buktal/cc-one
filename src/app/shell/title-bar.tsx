@@ -121,7 +121,7 @@ function CtrlButton({
       onClick={onClick}
       aria-label={label}
       className={cn(
-        "text-muted-foreground hover:bg-muted hover:text-foreground inline-flex size-7 items-center justify-center rounded-md transition-colors",
+        "text-muted-foreground hover:bg-hover hover:text-foreground inline-flex size-7 items-center justify-center rounded-md transition-colors",
         className,
       )}
     >

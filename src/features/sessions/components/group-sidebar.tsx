@@ -199,8 +199,9 @@ function SidebarItem({
       type="button"
       onClick={onClick}
       className={cn(
-        "hover:bg-muted flex items-center gap-2 rounded-md px-2 py-1.5 text-left text-sm transition-colors",
-        active && "bg-muted text-foreground",
+        "hover:bg-hover flex items-center gap-2 rounded-md px-2 py-1.5 text-left text-sm transition-colors",
+        active &&
+          "bg-accent-tint text-accent-brand-strong hover:bg-accent-tint",
         !active && "text-muted-foreground",
       )}
     >
@@ -277,8 +278,10 @@ function GroupRow({
     <div
       ref={ref}
       className={cn(
-        "group/grow hover:bg-muted flex items-center gap-1 rounded-md px-2 py-1.5 text-sm transition-colors",
-        active ? "bg-muted text-foreground" : "text-muted-foreground",
+        "group/grow hover:bg-hover flex items-center gap-1 rounded-md px-2 py-1.5 text-sm transition-colors",
+        active
+          ? "bg-accent-tint text-accent-brand-strong hover:bg-accent-tint"
+          : "text-muted-foreground",
         busy && "opacity-60",
         // The dragged row floats above its siblings (the plugin fixes its
         // position + z-index) while the others make room via CSS transforms.
@@ -344,7 +347,7 @@ function GroupRow({
               <div className="flex flex-col gap-0.5">
                 <button
                   type="button"
-                  className="hover:bg-muted flex items-center gap-2 rounded-md px-2 py-1.5 text-left text-sm"
+                  className="hover:bg-hover flex items-center gap-2 rounded-md px-2 py-1.5 text-left text-sm"
                   onClick={startRename}
                 >
                   <Pencil className="size-3.5" />

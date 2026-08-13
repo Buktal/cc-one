@@ -219,6 +219,7 @@
   "providers.form.newTitle": "新しいプロバイダー",
   "providers.form.oneM": "1M",
   "providers.form.requestModel": "リクエストモデル",
+  "providers.form.role": "ロール",
   "providers.form.role.fable": "Fable",
   "providers.form.role.haiku": "Haiku",
   "providers.form.role.opus": "Opus",

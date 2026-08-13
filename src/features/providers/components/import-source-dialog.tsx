@@ -93,7 +93,7 @@ function SourceCard({
       onClick={onClick}
       className={cn(
         "group flex w-full items-center gap-3 rounded-lg border p-3 text-left",
-        "transition-colors hover:bg-muted",
+        "transition-colors hover:bg-hover",
         "focus-visible:ring-ring/40 focus-visible:outline-none focus-visible:ring-2",
       )}
     >

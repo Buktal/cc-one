@@ -153,7 +153,7 @@ function NavItem({
         collapsed ? "w-9 gap-0 px-2" : "w-full gap-2.5 px-3",
         active
           ? "bg-accent-tint font-medium text-accent-brand-strong"
-          : "text-muted-foreground hover:bg-muted/60 hover:text-foreground",
+          : "text-muted-foreground hover:bg-hover hover:text-foreground",
       )}
     >
       <Icon className={cn("shrink-0", collapsed ? "size-5" : "size-4")} />
@@ -479,7 +479,7 @@ export function Shell({ children }: { children: React.ReactNode }) {
   )
 
   return (
-    <div className="bg-background text-foreground flex h-screen w-screen flex-col overflow-hidden">
+    <div className="bg-app text-foreground flex h-screen w-screen flex-col overflow-hidden">
       <TitleBar />
       {portrait ? (
         <div className="flex min-h-0 flex-1 flex-col gap-4 overflow-hidden px-4 pb-4">

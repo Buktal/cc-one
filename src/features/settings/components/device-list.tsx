@@ -230,7 +230,7 @@ export function DeviceList() {
                       "flex items-start gap-2.5 rounded-md border p-3 text-left text-sm transition-colors",
                       selected
                         ? "border-accent-brand-strong bg-accent-tint"
-                        : "border-border hover:bg-muted/60",
+                        : "border-border hover:bg-hover",
                     )}
                   >
                     <span

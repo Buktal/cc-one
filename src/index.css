@@ -25,8 +25,6 @@
   --color-input: var(--input);
   --color-border: var(--border);
   --color-destructive: var(--destructive);
-  --color-accent-foreground: var(--accent-foreground);
-  --color-accent: var(--accent);
   --color-muted-foreground: var(--muted-foreground);
   --color-muted: var(--muted);
   --color-secondary-foreground: var(--secondary-foreground);
@@ -45,7 +43,7 @@
   --color-accent-brand: var(--accent-brand);
   --color-accent-brand-strong: var(--accent-brand-strong);
   --color-accent-tint: var(--accent-tint);
-  --color-row-hover: var(--row-hover);
+  --color-hover: var(--hover);
   --radius-sm: calc(var(--radius) * 0.6);
   --radius-md: calc(var(--radius) * 0.8);
   --radius-lg: var(--radius);
@@ -85,14 +83,22 @@
  *   different color on every host surface (a /30 over a black card reads as
  *   muddy grey, over grey as dark grey — the exact fork that made the same
  *   control look different across views). Alpha stays legal ONLY for
- *   transient feedback (hover) and intentionally weakened layers (subtle
- *   banners, track backgrounds).
+ *   intentionally weakened layers (subtle banners, track backgrounds).
  *   EXEMPTION: brand-tint selection fills (--accent-tint: nav active,
  *   calendar selection) — the tint derives the brand hue on any host, and
  *   every use is the same token, so there is no cross-view fork to prevent.
- *   A surface may mix a light tint fill and a dark pure-token fill via
- *   dark: variants (e.g. providers app-chip active: tint in light, bg-card
- *   in dark).
+ *
+ *   INTERACTION RULE (hover vs selected — one direction per mode, everywhere):
+ *     hover    = neutral grey on the mode-scoped --hover (light #e9e9ea
+ *                darkens on white cards; dark #343438 lifts off black
+ *                cards). Transient, never tinted.
+ *     selected = brand tint --accent-tint + --accent-brand-strong text
+ *                (light: pale brand on white; dark: brand fill that reads
+ *                against #1c1c1e). Persistent.
+ *   Both float the same way per mode — dark lightens, light darkens — so
+ *   hover and selected can never pull in opposite directions. Containers /
+ *   tracks / skeletons stay on --muted (dark #141416 presses in — that's a
+ *   container's job, not a hover's).
  *
  * BUTTON RULE (skin-agnostic, defined once here, every skin inherits it):
  *     light  --primary = --brand-strong   --primary-foreground = --btn-fg
@@ -115,6 +121,14 @@
 
 :root {
   --background: oklch(0.965 0 0); /* off-white; pure #fff was too glaring */
+  /* 窗口级背景图（.dark 也有，见下）——与暗色同一条「紫→蓝」色相弧的
+     极浅版（紫调白 → 蓝调白），明暗镜像。只作用于「整窗画布」表面
+     （body / .bg-app），组件面不参与。 */
+  --background-image: linear-gradient(
+    to bottom right,
+    rgb(242, 240, 247),
+    rgb(224, 230, 243)
+  );
   --foreground: oklch(0.145 0 0);
   --card: oklch(1 0 0);
   --card-foreground: oklch(0.145 0 0);
@@ -137,8 +151,6 @@
   --muted: oklch(0.94 0 0);
   /* Deepened from 0.556 — light-mode secondary text & icons read too pale. */
   --muted-foreground: oklch(0.42 0 0);
-  --accent: oklch(0.94 0 0);
-  --accent-foreground: oklch(0.205 0 0);
   --destructive: oklch(0.577 0.245 27.325);
   --border: oklch(0.922 0 0);
   --input: oklch(0.922 0 0);
@@ -168,6 +180,10 @@
   --accent-brand: var(--brand);
   --accent-brand-strong: var(--brand-strong);
   --accent-tint: color-mix(in srgb, var(--brand) 10%, transparent);
+  /* INTERACTION RULE (see header comment): --hover = transient hover fill,
+     mode-scoped — light darkens (grey on white cards), dark lightens.
+     Selected state rides --accent-tint; --muted stays container/track. */
+  --hover: oklch(0.92 0 0);
   /* stop_reason semantic aliases (see .sem-chip). Default to the chart buckets
      by hue family; a skin may override any --sr-* to recolor chips alone. */
   --sr-success: var(--chart-cache-read);
@@ -184,7 +200,6 @@
      sage 是橙、azure 是黄绿，借它当分类色换肤即漂移。分类语义色固定，皮肤
      不覆盖。 */
   --cat-official: #2563eb;
-  --row-hover: #ededed;
   --row-hover-shadow: 0 4px 12px -4px rgba(0, 0, 0, 0.15);
   /* Scrollbar — thin, no arrows (Windows WebView2). Flat semi-transparent
      thumb over a transparent track, darkens on hover. */
@@ -211,13 +226,23 @@
 
 .dark {
   /* 底/面对换（用户决策 2026-08）：暗色从「深底浅面」翻转为「浅底深面」。
-     明暗三档阶梯（用户决策 2026-08-14「色差增大」）：页面灰 #2c2c2e →
-     弹层/下拉中灰 #26262a → 输入框最深 #0d0d0f；卡片 #1c1c1e 居中。
-     弹层内三层（弹层底 → 分组弱化块 → 输入框）相邻色差 ~8–10%，
-     不再糊成一团（原 popover/input 挤在 #14–#1c 区间）。 */
-  --background: #2c2c2e;
+     明暗阶梯（用户决策 2026-08-14）：页面 #1c1c1e → 菜单栏/面板 --card
+     压到最深 #0d0d0f → 弹层/下拉中灰 #26262a 独占「浮起位」（页面若保持
+     原灰 #2c2c2e，弹层与之同处中灰区、浮在页面上看不出边界——压深页面
+     后弹层才立得住）→ 交互面 hover/tooltip 提亮。input 与面板同深
+     (#0d0d0f)，控件凹面靠边框与图标区分。 */
+  --background: #1c1c1e;
+  /* 窗口背景渐变（用户决策 2026-08-14）：左上深紫灰 rgb(44,37,54) →
+     右下蓝灰 rgb(58,70,92)，与亮色的紫调白→蓝调白同一条色相弧（明暗
+     镜像）。--background 纯色作兜底（fixed 锚定窗口，不随滚动）；组件
+     面不参与，只在整窗画布（body / .bg-app）上呈现。 */
+  --background-image: linear-gradient(
+    to bottom right,
+    rgb(44, 37, 54),
+    rgb(58, 70, 92)
+  );
   --foreground: #ffffff;
-  --card: #1c1c1e;
+  --card: #0d0d0f;
   --card-foreground: #ffffff;
   /* 弹层/下拉面板 — 中灰，浮于页面浅灰与黑卡之间（比 card 浅一档 =
      浮起感，像 macOS 面板）。Tooltip 更浅 (#3a3a3c) 保持最顶层。 */
@@ -237,20 +262,17 @@
   --btn-fg-dark: oklch(0.2 0 0);
   --brand: oklch(0.72 0 0);
   --brand-strong: oklch(0.9 0 0);
-  /* 次面/输入/选中块同镜像：muted → 最深面 (#141416)，在黑卡上做
-     hover/选中「按深」反馈（原 #3a3a3c 在灰底上是提亮，镜像后反转为
-     下压——方向变了，可辨度相当）。bg-muted/40 半透明叠灰底仍可见。 */
+  /* 容器/轨道面 — muted 只管「弱化容器」本分（骨架、轨道、弱化块、分组
+     行底），不再兼 hover：交互悬浮走 --hover（提亮），选中走 --accent-tint
+     （品牌浅色）——方向统一为「暗色提亮、亮色加深」。 */
   --secondary: #141416;
   --secondary-foreground: #ffffff;
   --muted: #141416;
   --muted-foreground: rgba(235, 235, 245, 0.6);
-  --accent: #141416;
-  --accent-foreground: #ffffff;
   --destructive: #f87171;
   --border: rgba(255, 255, 255, 0.08);
-  /* 输入框 — 三档最深处，弹层 (#26262a) / 分组块 (≈#1d1d1f) 之上
-     明确的黑；与 muted (#141416) 分离后 hover:bg-muted 在输入框上
-     恢复「提亮」反馈（先前同色时 hover 无感）。 */
+  /* 输入框 — 四档最深处（与页面底 #0d0d0f 同深），叠黑卡 (#1c1c1e) 上
+     呈明确凹面；hover 走 --hover 提亮，不再依赖 muted。 */
   --input: #0d0d0f;
   --ring: var(--brand);
   /* B-tier data palette — default skin (Neutral), DARK values. The light
@@ -265,7 +287,7 @@
   --chart-cache-create: #5685dc; /* 缓存创建 — 亮蓝 (4.7:1) */
   --chart-cache-read: #61b356; /* 缓存命中 — 亮绿 (6.6:1) */
   --metric-cost: #cd424d; /* 成本 — 朱红，比 output 深一档同 hue 区分 (3.6:1, KPI 大字) */
-  --sidebar: #1c1c1e;
+  --sidebar: #0d0d0f;
   --sidebar-foreground: #ffffff;
   --sidebar-primary: var(--brand);
   --sidebar-primary-foreground: var(--btn-fg-dark);
@@ -278,8 +300,12 @@
      reads on the dark tint fill. Light mode uses --brand-strong (deep) on the
      pale tint — see :root. Same var name, swapped source per mode. */
   --accent-brand-strong: var(--brand);
-  --accent-tint: color-mix(in srgb, var(--brand) 12%, transparent);
-  --row-hover: rgba(255, 255, 255, 0.06);
+  /* INTERACTION RULE: --hover lifts off every dark surface (card #0d0d0f,
+     popover #26262a, background #1c1c1e) — one lighter step, below tooltip
+     (#3a3a3c). Selected tint bumped 12% → 16% so the brand fill reads on the
+     black card instead of vanishing. */
+  --accent-tint: color-mix(in srgb, var(--brand) 16%, transparent);
+  --hover: #343438;
   --row-hover-shadow: 0 4px 12px -4px rgba(0, 0, 0, 0.5);
   --scrollbar-thumb: rgba(255, 255, 255, 0.16);
   --scrollbar-thumb-hover: rgba(255, 255, 255, 0.28);
@@ -459,6 +485,10 @@
   }
   body {
     @apply bg-background text-foreground overflow-hidden;
+    /* 暗色窗口渐变（--background-image）——body 是轻量窗口等无根容器的
+       兜底画布；主窗口由 shell 根容器 (.bg-app) 绘制同一渐变。 */
+    background-image: var(--background-image);
+    background-attachment: fixed;
   }
   html {
     @apply font-sans overflow-hidden;
@@ -467,6 +497,33 @@
   [role="button"]:not(:disabled) {
     cursor: pointer;
   }
+}
+
+/* 窗口级表面（窗口根 / 会话详情面板等整窗画布）：--background 纯色兜底 +
+   暗色渐变 --background-image。fixed 让渐变锚定窗口而非随内容滚动。
+   组件面（按钮/输入/开关滑块/图例框）保持纯色，不参与渐变。 */
+.bg-app {
+  background-color: var(--background);
+  background-image: var(--background-image);
+  background-attachment: fixed;
+}
+
+/* Sheet 弹层控件面（用户决策 2026-08-14 重调）：弹层宿主是 --popover
+   （亮 #fff / 暗 #26262a），bg-card 控件（Input/Select 触发器/outline 按钮）
+   亮色下与弹层同为白色、暗色下与弹层同族深色——控件立不起来。把 --card
+   在弹层作用域内重映射为 --input（亮浅灰 / 暗最深黑凹面），bg-card 控件
+   自动成立；弹层内若放 bg-card 的内容元素（气泡等）须改用其它面。
+   Textarea 亮色透明底 / CodeEditor 亮色透明（透出宿主）暗色 oneDark 面板
+   ——弹层内统一显式给 --input 面（gutter 一并盖回，token 色保留）。 */
+[data-slot="sheet-content"] {
+  --card: var(--input);
+}
+[data-slot="sheet-content"] [data-slot="textarea"] {
+  background-color: var(--input);
+}
+[data-slot="sheet-content"] .cm-editor,
+[data-slot="sheet-content"] .cm-gutters {
+  background-color: var(--input);
 }
 
 /* Scrollable region without a visible scrollbar — used by the sidebar nav

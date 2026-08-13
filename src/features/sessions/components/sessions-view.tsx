@@ -325,7 +325,7 @@ function SessionsTable({
               <TableRow
                 key={favKey(s)}
                 // Selected row keeps its tint on hover too — the default
-                // hover:bg-muted/50 would otherwise flash grey over it.
+                // hover:bg-hover would otherwise flash grey over it.
                 className={cn(open && "bg-accent-tint hover:bg-accent-tint")}
               >
                 <TableCell>

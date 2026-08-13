@@ -9,14 +9,15 @@ const buttonVariants = cva(
     variants: {
       variant: {
         default: "bg-primary text-primary-foreground hover:bg-primary/80",
-        // 暗色 outline = 纯 --input 黑面 (主面不用 alpha, 见 index.css 顶部
-        // 注释), hover 提亮一档到 bg-card。light 的 bg-background 灰底不动。
+        // outline 面 = bg-card (亮白 / 暗黑, 与 Input/Select 触发器同面;
+        // 主面不用 alpha, 见 index.css 顶部注释)。暗色深链用 dark:bg-input
+        // (纯 --input 黑面) 区分; hover 统一交互面 --hover (亮加深/暗提亮)。
         outline:
-          "border-border bg-background shadow-xs hover:bg-muted hover:text-foreground aria-expanded:bg-muted aria-expanded:text-foreground dark:border-input dark:bg-input dark:hover:bg-card",
+          "border-border bg-card shadow-xs hover:bg-hover hover:text-foreground aria-expanded:bg-hover aria-expanded:text-foreground dark:border-input dark:bg-input",
         secondary:
           "bg-secondary text-secondary-foreground hover:bg-[color-mix(in_oklch,var(--secondary),var(--foreground)_5%)] aria-expanded:bg-secondary aria-expanded:text-secondary-foreground",
         ghost:
-          "hover:bg-muted hover:text-foreground aria-expanded:bg-muted aria-expanded:text-foreground dark:hover:bg-muted/50",
+          "hover:bg-hover hover:text-foreground aria-expanded:bg-hover aria-expanded:text-foreground",
         destructive:
           "bg-destructive/10 text-destructive hover:bg-destructive/20 focus-visible:border-destructive/40 focus-visible:ring-destructive/20 dark:bg-destructive/20 dark:hover:bg-destructive/30 dark:focus-visible:ring-destructive/40",
         link: "text-primary underline-offset-4 hover:underline",

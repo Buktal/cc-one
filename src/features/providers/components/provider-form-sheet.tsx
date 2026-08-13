@@ -23,7 +23,7 @@
 // verbatim.
 
 import { RefreshCw, Wand2 } from "lucide-react"
-import { useEffect, useMemo, useState } from "react"
+import { Fragment, useEffect, useMemo, useState } from "react"
 import { useTranslation } from "react-i18next"
 import { toast } from "sonner"
 import {
@@ -545,13 +545,17 @@ export function ProviderFormSheet({
 
   return (
     <Sheet open={open} onOpenChange={onOpenChange}>
-      {/* 宽度：双栏（新建 + 有内置预设）80vw 容下左预设栏与右表单；单栏 60vw。
-          p-0 让左栏贴边、表单与头/脚各自 px-6 自管 padding（双栏时左栏 border-r
-          分隔）。 */}
+      {/* 弹层面 = --popover（亮 #fff / 暗 #26262a 中灰）——暗色三档阶梯里
+          popover 独占「弹层浮起位」，与页面 #1c1c1e 立得开；亮色纯白浮在
+          页面浅渐变上。不用 bg-app：那是整窗画布面（页面灰 + 紫→蓝渐变），
+          弹层带渐变显脏、暗色下与页面同色浮不起来（用户决策 2026-08-14
+          重调）。宽度用 min() 收敛：双栏（新建 + 有内置预设）72rem 封顶
+          防大窗失控，单栏 42rem；窄窗下 84vw 防挤压。p-0 让左栏贴边、
+          表单与头/脚各自 px-6 自管 padding。 */}
       <SheetContent
         className={cn(
-          "sm:max-w-none p-0",
-          showPicker ? "w-[80vw]" : "w-[60vw]",
+          "sm:max-w-none bg-popover p-0",
+          showPicker ? "w-[min(84vw,72rem)]" : "w-[min(84vw,42rem)]",
         )}
       >
         <SheetHeader className="px-6 pt-6">
@@ -590,6 +594,10 @@ export function ProviderFormSheet({
           ) : null}
         </SheetHeader>
 
+        {/* 双栏单面结构：左预设栏与右表单共享弹层面（--popover），中间
+            border-r hairline 分隔——不再各自成卡（暗色下 card #0d0d0f 比
+            弹层更深，卡片呈凹洞状；亮色下卡在渐变上靠阴影勉强浮）。减线
+            语言：线条只做结构分隔，控件边框才是边框。 */}
         <div className="flex min-h-0 flex-1">
           {showPicker ? (
             <PresetPicker
@@ -603,18 +611,21 @@ export function ProviderFormSheet({
               }}
             />
           ) : null}
-          <div className="flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto px-6">
+          {/* 表单流：px-6 与头/脚对齐，py-3 上下呼吸。不再有卡片面——
+              分区靠 SectionHeader 小标题 + 间距，不靠盒子。 */}
+          <div className="flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto px-6 py-3">
             {effectiveApp === "claude" && templateVarNames.length > 0 ? (
-              /* 灰底块（bg-muted/40）而非边框盒子——减线语言：组边界靠表面
-                 明暗，线条留给控件边框。 */
-              <div className="bg-muted/40 rounded-md p-3">
-                <p className="mb-1 text-xs font-medium">
+              /* 与其他分区同一语言：SectionHeader 小标题 + 说明文字，不套
+                 盒子（分区靠间距与字号，不靠底块——与模型映射一致）。变量
+                 多时 2 列网格紧凑排列。 */
+              <>
+                <SectionHeader className="mt-0">
                   {t("providers.form.templateVars")}
-                </p>
-                <p className="text-muted-foreground mb-2 text-xs">
+                </SectionHeader>
+                <p className="text-muted-foreground -mt-1.5 text-xs">
                   {t("providers.form.templateVarsHint")}
                 </p>
-                <div className="flex flex-col gap-2">
+                <div className="grid grid-cols-2 gap-x-3 gap-y-2">
                   {templateVarNames.map((name) => (
                     <Field key={name} label={name}>
                       <Input
@@ -627,7 +638,7 @@ export function ProviderFormSheet({
                     </Field>
                   ))}
                 </div>
-              </div>
+              </>
             ) : null}
             <SectionHeader>{t("providers.form.section.basic")}</SectionHeader>
             <Field label={t("providers.form.name")}>
@@ -817,7 +828,7 @@ export function ProviderFormSheet({
             {effectiveApp === "claude" ? (
               <>
                 {/* 分区标题与操作按钮同处一行（SectionHeader 的 action 槽），
-                  box 只承担字段分组——与「基本信息 / 高级配置」同一分区语言。 */}
+                  与「基本信息 / 高级配置」同一分区语言。 */}
                 <SectionHeader
                   action={
                     <div className="flex items-center gap-2">
@@ -862,90 +873,93 @@ export function ProviderFormSheet({
                 >
                   {t("providers.form.modelMapping")}
                 </SectionHeader>
-                <div className="bg-muted/40 rounded-md p-3">
-                  <p className="mb-2 text-xs text-muted-foreground">
-                    {t("providers.form.modelMappingHint")}
-                  </p>
-                  {fetchedModels.length > 0 ? (
-                    <div className="mb-2">
-                      <Select
-                        onValueChange={(model) => {
-                          if (typeof model === "string") onPickModel(model)
-                        }}
+                <p className="text-muted-foreground -mt-1.5 text-xs">
+                  {t("providers.form.modelMappingHint")}
+                </p>
+                {fetchedModels.length > 0 ? (
+                  <div className="max-w-sm">
+                    <Select
+                      onValueChange={(model) => {
+                        if (typeof model === "string") onPickModel(model)
+                      }}
+                    >
+                      <SelectTrigger
+                        className="font-mono text-xs"
+                        aria-label={t("providers.form.fetchModels.placeholder")}
                       >
-                        <SelectTrigger
-                          className="font-mono text-xs"
-                          aria-label={t(
+                        <SelectValue
+                          placeholder={t(
                             "providers.form.fetchModels.placeholder",
                           )}
-                        >
-                          <SelectValue
-                            placeholder={t(
-                              "providers.form.fetchModels.placeholder",
-                            )}
-                          />
-                        </SelectTrigger>
-                        <SelectContent>
-                          {fetchedModels.map((model) => (
-                            <SelectItem
-                              key={model}
-                              value={model}
-                              className="font-mono text-xs"
-                            >
-                              {model}
-                            </SelectItem>
-                          ))}
-                        </SelectContent>
-                      </Select>
-                    </div>
-                  ) : null}
-                  <div className="space-y-2">
-                    {roleRows.map(({ role, fields }) => (
-                      <div key={role.id} className="space-y-1">
-                        <div className="flex items-center justify-between">
-                          <Label className="text-muted-foreground text-xs">
-                            {t(`providers.form.role.${role.id}`)}
-                          </Label>
-                          {role.supportsOneM ? (
-                            <label
-                              htmlFor={`model-role-one-m-${role.id}`}
-                              className="flex cursor-pointer items-center gap-1.5 text-xs text-muted-foreground"
-                            >
-                              <Checkbox
-                                id={`model-role-one-m-${role.id}`}
-                                checked={fields.oneM}
-                                onCheckedChange={(checked) =>
-                                  onRoleOneMChange(role.id, checked)
-                                }
-                              />
-                              {t("providers.form.oneM")}
-                            </label>
-                          ) : null}
-                        </div>
-                        <div className="grid grid-cols-2 gap-2">
-                          <Field label={t("providers.form.displayName")}>
-                            <Input
-                              value={fields.name}
-                              onChange={(e) =>
-                                onRoleNameChange(role.id, e.target.value)
-                              }
-                              placeholder={stripOneM(fields.model)}
-                              spellCheck={false}
-                            />
-                          </Field>
-                          <Field label={t("providers.form.requestModel")}>
-                            <Input
-                              value={fields.model}
-                              onChange={(e) =>
-                                onRoleModelChange(role.id, e.target.value)
-                              }
-                              spellCheck={false}
-                            />
-                          </Field>
-                        </div>
-                      </div>
-                    ))}
+                        />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {fetchedModels.map((model) => (
+                          <SelectItem
+                            key={model}
+                            value={model}
+                            className="font-mono text-xs"
+                          >
+                            {model}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
                   </div>
+                ) : null}
+                {/* 角色表：列头 + 一行一角色（角色名+1M | 显示名 | 请求
+                    模型）。表格形而非灰盒子——列对齐让 5 行角色可纵向扫读，
+                    行距压缩一半（原每角色占两行）；不加行分隔线（减线）。
+                    列头与分区标题同尺度（11px semibold muted）。 */}
+                <div className="grid grid-cols-[minmax(8rem,9.5rem)_1fr_1fr] items-center gap-x-3 gap-y-2">
+                  <div className="text-muted-foreground text-[11px] font-semibold">
+                    {t("providers.form.role")}
+                  </div>
+                  <div className="text-muted-foreground text-[11px] font-semibold">
+                    {t("providers.form.displayName")}
+                  </div>
+                  <div className="text-muted-foreground text-[11px] font-semibold">
+                    {t("providers.form.requestModel")}
+                  </div>
+                  {roleRows.map(({ role, fields }) => (
+                    <Fragment key={role.id}>
+                      <div className="flex h-8 items-center justify-between gap-1">
+                        <span className="text-muted-foreground text-xs">
+                          {t(`providers.form.role.${role.id}`)}
+                        </span>
+                        {role.supportsOneM ? (
+                          <label
+                            htmlFor={`model-role-one-m-${role.id}`}
+                            className="flex cursor-pointer items-center gap-1 text-xs text-muted-foreground"
+                          >
+                            <Checkbox
+                              id={`model-role-one-m-${role.id}`}
+                              checked={fields.oneM}
+                              onCheckedChange={(checked) =>
+                                onRoleOneMChange(role.id, checked)
+                              }
+                            />
+                            {t("providers.form.oneM")}
+                          </label>
+                        ) : null}
+                      </div>
+                      <Input
+                        value={fields.name}
+                        onChange={(e) =>
+                          onRoleNameChange(role.id, e.target.value)
+                        }
+                        placeholder={stripOneM(fields.model)}
+                        spellCheck={false}
+                      />
+                      <Input
+                        value={fields.model}
+                        onChange={(e) =>
+                          onRoleModelChange(role.id, e.target.value)
+                        }
+                        spellCheck={false}
+                      />
+                    </Fragment>
+                  ))}
                 </div>
               </>
             ) : null}

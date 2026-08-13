@@ -93,7 +93,7 @@ export function ModelDistribution({
                   onClick={() => setMetric(m)}
                   className={`rounded-[5px] px-2 py-0.5 text-xs font-medium transition-colors outline-none focus-visible:ring-2 focus-visible:ring-ring/40 ${
                     metric === m
-                      ? "bg-background text-foreground shadow-sm"
+                      ? "bg-accent-tint text-accent-brand-strong shadow-sm"
                       : "text-muted-foreground hover:text-foreground"
                   }`}
                 >
@@ -126,7 +126,7 @@ export function ModelDistribution({
                 onClick={() => it.model && onPickModel(it.model)}
                 className={cn(
                   "group -mx-2 flex flex-col gap-1 rounded-md px-2 py-1.5 text-left disabled:cursor-default",
-                  selected ? "bg-accent-tint" : it.model && "hover:bg-muted/50",
+                  selected ? "bg-accent-tint" : it.model && "hover:bg-hover",
                 )}
               >
                 <div className="flex items-center justify-between gap-2 text-xs">

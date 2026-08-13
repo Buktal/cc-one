@@ -99,7 +99,7 @@ export function DateRangeChip({
         render={
           <button
             type="button"
-            className="border-border bg-card hover:bg-muted/60 flex h-8 max-w-full min-w-0 items-center gap-1.5 rounded-md border px-3 text-sm whitespace-nowrap"
+            className="border-border bg-card hover:bg-hover flex h-8 max-w-full min-w-0 items-center gap-1.5 rounded-md border px-3 text-sm whitespace-nowrap"
           >
             <CalendarRange className="text-muted-foreground size-3.5 shrink-0" />
             <span className="min-w-0 truncate">{label}</span>
@@ -117,7 +117,7 @@ export function DateRangeChip({
                 "focus-visible:ring-ring/40 rounded-[5px] px-2.5 py-1 text-xs font-medium transition-colors outline-none focus-visible:ring-2",
                 preset === p.value
                   ? "bg-accent-tint text-accent-brand-strong"
-                  : "text-muted-foreground hover:bg-muted/60 hover:text-foreground",
+                  : "text-muted-foreground hover:bg-hover hover:text-foreground",
               )}
             >
               {t(p.key)}
