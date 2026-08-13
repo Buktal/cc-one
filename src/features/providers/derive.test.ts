@@ -721,19 +721,36 @@ describe("withAllRolesFromFirstInText", () => {
     })
   })
 
-  it("propagates the 1M marker to capable roles and strips it for haiku", () => {
+  it("does not propagate the picked model's 1M marker — each role keeps its own 1M state", () => {
+    // 源模型带 [1M]：opus 自己勾着 → 保留标记；其余角色原本无标记 → 裸名。
     const next = withAllRolesFromFirstInText(
       configWith({ ANTHROPIC_DEFAULT_OPUS_MODEL: "glm-5.1[1M]" }),
     )
     const env = envOf(next)
-    expect(env.ANTHROPIC_DEFAULT_SONNET_MODEL).toBe("glm-5.1[1M]")
     expect(env.ANTHROPIC_DEFAULT_OPUS_MODEL).toBe("glm-5.1[1M]")
+    // fable 无自有值、经回填链（→ OPUS）读到 [1M]，视为已勾 1M 保留标记。
     expect(env.ANTHROPIC_DEFAULT_FABLE_MODEL).toBe("glm-5.1[1M]")
-    expect(env.ANTHROPIC_DEFAULT_SUBAGENT_MODEL).toBe("glm-5.1[1M]")
+    expect(env.ANTHROPIC_DEFAULT_SONNET_MODEL).toBe("glm-5.1")
+    expect(env.ANTHROPIC_DEFAULT_SUBAGENT_MODEL).toBe("glm-5.1")
     expect(env.ANTHROPIC_DEFAULT_HAIKU_MODEL).toBe("glm-5.1")
     // 显示名一律不带标记。
     expect(env.ANTHROPIC_DEFAULT_SONNET_MODEL_NAME).toBe("glm-5.1")
     expect(env.ANTHROPIC_DEFAULT_HAIKU_MODEL_NAME).toBe("glm-5.1")
+  })
+
+  it("keeps a role's own 1M marker when the primary model is marker-free（一键设置不清掉已勾的 1M）", () => {
+    // 用户 bug 场景：主模型无标记 + sonnet 已勾 1M → 一键设置统一模型名，
+    // sonnet 的 [1M] 保留。
+    const next = withAllRolesFromFirstInText(
+      configWith({
+        ANTHROPIC_MODEL: "glm-5.1",
+        ANTHROPIC_DEFAULT_SONNET_MODEL: "glm-5.1[1M]",
+      }),
+    )
+    const env = envOf(next)
+    expect(env.ANTHROPIC_DEFAULT_SONNET_MODEL).toBe("glm-5.1[1M]")
+    expect(env.ANTHROPIC_DEFAULT_OPUS_MODEL).toBe("glm-5.1")
+    expect(env.ANTHROPIC_DEFAULT_HAIKU_MODEL).toBe("glm-5.1")
   })
 
   it("picks the first filled role when the primary model is absent", () => {
@@ -799,17 +816,29 @@ describe("withAllRolesFromFirstInText", () => {
 })
 
 describe("withAllRolesInText", () => {
-  it("writes the given model to every role with display-name sync", () => {
+  it("writes the bare model to every role — the input's marker never propagates", () => {
+    // 传入模型带 [1M] 但目标角色原本无勾选 → 全部写裸名（标记归各角色
+    // checkbox 自持，不随传播值走）。Haiku 本来就不带标记。
     const next = withAllRolesInText(configWith({}), "my-model[1M]")
     const env = envOf(next)
-    expect(env.ANTHROPIC_DEFAULT_SONNET_MODEL).toBe("my-model[1M]")
-    expect(env.ANTHROPIC_DEFAULT_OPUS_MODEL).toBe("my-model[1M]")
-    expect(env.ANTHROPIC_DEFAULT_FABLE_MODEL).toBe("my-model[1M]")
-    expect(env.ANTHROPIC_DEFAULT_SUBAGENT_MODEL).toBe("my-model[1M]")
-    // Haiku 不支持 1M 标记，写入时剥离；显示名一律不带标记。
+    expect(env.ANTHROPIC_DEFAULT_SONNET_MODEL).toBe("my-model")
+    expect(env.ANTHROPIC_DEFAULT_OPUS_MODEL).toBe("my-model")
+    expect(env.ANTHROPIC_DEFAULT_FABLE_MODEL).toBe("my-model")
+    expect(env.ANTHROPIC_DEFAULT_SUBAGENT_MODEL).toBe("my-model")
     expect(env.ANTHROPIC_DEFAULT_HAIKU_MODEL).toBe("my-model")
+    // 显示名一律不带标记。
     expect(env.ANTHROPIC_DEFAULT_SONNET_MODEL_NAME).toBe("my-model")
     expect(env.ANTHROPIC_DEFAULT_HAIKU_MODEL_NAME).toBe("my-model")
+  })
+
+  it("keeps a role's own 1M marker while unify the model name", () => {
+    const next = withAllRolesInText(
+      configWith({ ANTHROPIC_DEFAULT_SONNET_MODEL: "old[1M]" }),
+      "new-model",
+    )
+    const env = envOf(next)
+    expect(env.ANTHROPIC_DEFAULT_SONNET_MODEL).toBe("new-model[1M]")
+    expect(env.ANTHROPIC_DEFAULT_OPUS_MODEL).toBe("new-model")
   })
 
   it("preserves a hand-set display name that differs from the model", () => {

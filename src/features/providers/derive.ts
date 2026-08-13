@@ -410,13 +410,25 @@ export function withRoleOneMInText(
 }
 
 /** Write one model to every role — the shared engine behind the one-click
- *  apply and the fetched-model picker refill. Same per-role semantics as a
- *  typed model (display-name sync, Haiku marker strip, small-fast key
- *  deletion), so the two entry points can never drift apart. */
+ *  apply, the fetched-model picker refill and the auto-sync toggle. The
+ *  propagated value is the bare model name: each role's OWN 1M checkbox state
+ *  decides the marker (a role that currently carries `[1M]` keeps it, one
+ *  that doesn't stays bare) — unify the model, never the toggle. Otherwise a
+ *  marker-free primary model (the first candidate) would wipe every role's 1M.
+ *  Haiku never takes the marker. Same per-role semantics as a typed model
+ *  (display-name sync, small-fast key deletion), so the entry points can't
+ *  drift apart. */
 export function withAllRolesInText(configText: string, model: string): string {
+  const bare = stripOneM(model).trim()
   let next = configText
   for (const def of MODEL_ROLES) {
-    next = withRoleModelInText(next, def.id, model)
+    if (!bare) {
+      next = withRoleModelInText(next, def.id, "")
+      continue
+    }
+    const roleHasOneM =
+      def.supportsOneM && hasOneM(configRoleModel(configText, def.id))
+    next = withRoleModelInText(next, def.id, roleHasOneM ? `${bare}[1M]` : bare)
   }
   return next
 }
@@ -424,10 +436,9 @@ export function withAllRolesInText(configText: string, model: string): string {
 /**
  * One-click apply: take the first filled model — the primary model, then the
  * roles in display order — and write it to every role via
- * `withAllRolesInText`, syncing display names (marker-free) and stripping the
- * marker for Haiku. A picked model that carries `[1M]` propagates the marker
- * to the roles that support it. Returns null when no model is filled anywhere
- * (callers disable the button).
+ * `withAllRolesInText`, syncing display names (marker-free). The marker
+ * follows each role's own 1M checkbox state, never the picked model's.
+ * Returns null when no model is filled anywhere (callers disable the button).
  */
 export function withAllRolesFromFirstInText(configText: string): string | null {
   const env = parseSettingsConfig(configText).env ?? {}
