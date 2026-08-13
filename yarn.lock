@@ -532,6 +532,15 @@ __metadata:
   languageName: node
   linkType: hard
 
+"@codemirror/legacy-modes@npm:^6.5.3":
+  version: 6.5.3
+  resolution: "@codemirror/legacy-modes@npm:6.5.3"
+  dependencies:
+    "@codemirror/language": "npm:^6.0.0"
+  checksum: 10c0/ec962723422039a3e5ecbcfc1b661201e6e5b10918e821b90c12fac385ead8f61925e464adab6b8d6465fc6dbefc0a64bd3130d0dae6ba7d053ad785dd08eebe
+  languageName: node
+  linkType: hard
+
 "@codemirror/lint@npm:^6.0.0, @codemirror/lint@npm:^6.9.7":
   version: 6.9.7
   resolution: "@codemirror/lint@npm:6.9.7"
@@ -2313,6 +2322,7 @@ __metadata:
     "@base-ui/react": "npm:^1.6.0"
     "@biomejs/biome": "npm:^2.5.4"
     "@codemirror/lang-json": "npm:^6.0.2"
+    "@codemirror/legacy-modes": "npm:^6.5.3"
     "@codemirror/lint": "npm:^6.9.7"
     "@codemirror/state": "npm:^6.7.1"
     "@codemirror/theme-one-dark": "npm:^6.1.3"

@@ -402,11 +402,14 @@ export function ProvidersView() {
         </CardContent>
       </Card>
 
-      {/* 通用配置片段：切换写盘时合并进受控字段。后端目前只有 Claude 在切换时
-          真正合并片段（codex/gemini/grok 的合并语义待实现），卡片只对 Claude
-          显示——不给其它应用展示「配了不生效」的控件（见 issues: codex/gemini
-          合并语义）。opencode 附加模式无「切换」概念，本来就不显示。 */}
-      {app === "claude" ? <CommonConfigSnippetCard app={app} /> : null}
+      {/* 通用配置片段：按应用分派合并层（ADR-0010）——claude 在 settings_config 层
+          并入、codex 在写盘层补缺失进 live 文件。卡片只对「切换时真正合并片段」
+          的应用显示（#47 原则：不给配了不生效的应用展示控件）；gemini 的卡片随 #50
+          （settings_config 层接线）、grok 的随 #51（写盘层接线）各自放开。opencode
+          附加模式无「切换」概念，不显示。 */}
+      {app === "claude" || app === "codex" ? (
+        <CommonConfigSnippetCard app={app} />
+      ) : null}
 
       <ProviderFormSheet
         open={sheetOpen}

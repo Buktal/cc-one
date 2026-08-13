@@ -945,13 +945,17 @@ pub fn reorder_providers_cmd(
 }
 
 /// 切换供应商（核心动作）：按 (app, id) 查 provider → 按应用分派写盘 →
-/// 记该应用的激活状态。写盘分派 `write_live(app, provider)`：claude 走 JSON
-/// 受控合并进 `~/.claude/settings.json`（合并前先叠该应用的通用片段、拦截
-/// 未物化模板变量），codex 走 TOML 受控合并 + auth.json，gemini 走 env 整块
-/// 替换 + settings.json 受控合并。各分支语义一致：只替换受控字段、非受控
-/// 字段（hooks / MCP / permissions / model / mcp_servers 等）从 live 原地
-/// 保留，不整文件覆盖、不做 Backfill。「保存」只写 DB（save_provider_cmd），
-/// 本命令才真正写盘。
+/// 记该应用的激活状态。写盘分派 `write_live(app, provider, snippet)`：claude
+/// 走 JSON 受控合并进 `~/.claude/settings.json`，codex 走 TOML 受控合并 +
+/// auth.json，gemini 走 env 整块替换 + settings.json 受控合并。各分支语义
+/// 一致：只替换受控字段、非受控字段（hooks / MCP / permissions / model /
+/// mcp_servers 等）从 live 原地保留，不整文件覆盖、不做 Backfill。
+///
+/// 通用片段按应用分派合并层（ADR-0010）：claude 在 settings_config 层并入
+/// （合并前先叠片段、拦截未物化模板变量）；codex/grok 在写盘层补缺失（片段
+/// 随 `snippet` 传给 `write_live`，受控合并后补进 live 文件——否则被白名单
+/// 滤掉→零效果）；gemini 的 settings_config 层片段见 #50。「保存」只写 DB
+/// （save_provider_cmd），本命令才真正写盘。
 #[tauri::command]
 #[specta::specta]
 pub async fn switch_provider_cmd(
@@ -972,17 +976,17 @@ pub async fn switch_provider_cmd(
         if app.is_additive_mode() {
             return ensure_opencode_in_live(&store, provider);
         }
-        // 单激活：claude 侧先叠该应用的通用片段（片段按 provider 归属的应用读取
-        // ——claude 池读 claude 片段，存量迁移后即原全局片段，行为不变）并拦截未
-        // 物化模板变量，再受控写盘；codex/gemini/grok 直接写 provider 配置。各分支
-        // 写盘语义一致——只替换受控字段、非受控字段从 live 原地保留。
+        // 单激活：按应用分派片段合并层（ADR-0010）——claude/gemini = settings_config
+        // 层（片段先并入供应商配置、再随受控写盘落地）；codex/grok = 写盘层（受控
+        // 合并之后、片段补缺失进 live 文件——否则被写盘白名单滤掉→片段零效果）。
+        // 片段按 provider 归属的应用读取（claude 池读 claude 片段，存量迁移后即原
+        // 全局片段，行为不变）。snippet_for 返回 owned，读 guard 随语句结束释放。
+        let snippet_record = config.get().snippet_for(app);
         let write_provider = if app == App::Claude {
-            let cfg = config.get();
-            let snippet = cfg.snippet_for(provider.app);
             let settings_config = crate::provider::snippet::apply_snippet(
                 &provider.settings_config,
-                &snippet.content,
-                snippet.enabled,
+                &snippet_record.content,
+                snippet_record.enabled,
             )?;
             // 字面量 `${VAR}` 写进 live 文件等于写一份废配置。
             crate::provider::live::validate_no_unfilled_template_vars(&settings_config)?;
@@ -991,9 +995,19 @@ pub async fn switch_provider_cmd(
                 ..provider.clone()
             }
         } else {
+            // codex 走写盘层（片段随 write_snippet 传给 write_live，受控合并后补
+            // 缺失进 live 文件）；gemini 的 settings_config 层片段见 #50；grok 的
+            // 写盘层片段见 #51（届时 switch_grok_live 加 snippet 参数）。
             provider.clone()
         };
-        crate::provider::live::write_live(app, &write_provider)?;
+        // 写盘层片段（codex；grok 见 #51）：启用 → 片段内容，否则空串
+        // （switch_codex_live 空串即无操作）。其余应用一律空串（其片段已在
+        // settings_config 层处理或尚未接通）。
+        let write_snippet = match app {
+            App::Codex if snippet_record.enabled => snippet_record.content.clone(),
+            _ => String::new(),
+        };
+        crate::provider::live::write_live(app, &write_provider, &write_snippet)?;
         config.update(|c| c.set_active_provider(app, &id))?;
         Ok(provider)
     })
@@ -1041,7 +1055,7 @@ pub fn set_common_config_snippet_cmd(
     json: String,
     enabled: bool,
 ) -> AppResult<CommonConfigSnippet> {
-    crate::provider::snippet::validate_snippet(&json)?;
+    crate::provider::snippet::validate_snippet(app, &json)?;
     let snippet = CommonConfigSnippet {
         enabled,
         content: json,

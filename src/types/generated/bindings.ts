@@ -222,13 +222,17 @@ export const commands = {
 	reorderProvidersCmd: (app: App, orderedIds: string[]) => typedError<null, AppError>(__TAURI_INVOKE("reorder_providers_cmd", { app, orderedIds })),
 	/**
 	 *  切换供应商（核心动作）：按 (app, id) 查 provider → 按应用分派写盘 →
-	 *  记该应用的激活状态。写盘分派 `write_live(app, provider)`：claude 走 JSON
-	 *  受控合并进 `~/.claude/settings.json`（合并前先叠该应用的通用片段、拦截
-	 *  未物化模板变量），codex 走 TOML 受控合并 + auth.json，gemini 走 env 整块
-	 *  替换 + settings.json 受控合并。各分支语义一致：只替换受控字段、非受控
-	 *  字段（hooks / MCP / permissions / model / mcp_servers 等）从 live 原地
-	 *  保留，不整文件覆盖、不做 Backfill。「保存」只写 DB（save_provider_cmd），
-	 *  本命令才真正写盘。
+	 *  记该应用的激活状态。写盘分派 `write_live(app, provider, snippet)`：claude
+	 *  走 JSON 受控合并进 `~/.claude/settings.json`，codex 走 TOML 受控合并 +
+	 *  auth.json，gemini 走 env 整块替换 + settings.json 受控合并。各分支语义
+	 *  一致：只替换受控字段、非受控字段（hooks / MCP / permissions / model /
+	 *  mcp_servers 等）从 live 原地保留，不整文件覆盖、不做 Backfill。
+	 * 
+	 *  通用片段按应用分派合并层（ADR-0010）：claude 在 settings_config 层并入
+	 *  （合并前先叠片段、拦截未物化模板变量）；codex/grok 在写盘层补缺失（片段
+	 *  随 `snippet` 传给 `write_live`，受控合并后补进 live 文件——否则被白名单
+	 *  滤掉→零效果）；gemini 的 settings_config 层片段见 #50。「保存」只写 DB
+	 *  （save_provider_cmd），本命令才真正写盘。
 	 */
 	switchProviderCmd: (app: App, id: string) => typedError<Provider, AppError>(__TAURI_INVOKE("switch_provider_cmd", { app, id })),
 	/**

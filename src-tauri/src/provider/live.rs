@@ -29,7 +29,7 @@ use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 
-use toml_edit::DocumentMut;
+use toml_edit::{DocumentMut, Table};
 
 use crate::error::{AppError, AppResult};
 use crate::model::{App, Provider};
@@ -180,17 +180,25 @@ pub(crate) fn atomic_write_file(path: &Path, content: &str) -> AppResult<()> {
     Ok(())
 }
 
-/// 写盘分派（`write_live(app, provider)`）：按应用选择写盘实现，各自保持
+/// 写盘分派（`write_live(app, provider, snippet)`）：按应用选择写盘实现，各自保持
 /// 「只合并受控字段、非受控原地保留、写前备份、原子写」——
-/// - claude：JSON 受控合并进 `~/.claude/settings.json`（本模块）。
+/// - claude：JSON 受控合并进 `~/.claude/settings.json`（本模块）。片段已在
+///   调用方（`switch_provider_cmd`）的 settings_config 层并入，此处 `snippet`
+///   不用。
 /// - codex：TOML 受控合并进 `~/.codex/config.toml` + 受控写
-///   `~/.codex/auth.json`（`live_codex` 模块）。
+///   `~/.codex/auth.json`（`live_codex` 模块）。片段在**写盘层**补缺失
+///   （merge 只搬身份键、丢弃其余，settings_config 层合会被滤掉→零效果，
+///   见 ADR-0010），故 `snippet` 透传给 `switch_codex_live`。
 /// - gemini：`.env` 整块替换 + `settings.json` 受控合并
-///   （`live_gemini` 模块，含 `selectedType` 认证标记）。
+///   （`live_gemini` 模块，含 `selectedType` 认证标记）。片段走 settings_config
+///   层（#50），此处 `snippet` 暂不用。
 /// - grok：TOML 受控合并进 `~/.grok/config.toml`（`live_grok` 模块，
 ///   单文件无 auth；cc one 固定写 `[model."cc-one"]` profile + 设
-///   `models.default`，用户其它 profile / mcp_servers 原样保留）。
-pub fn write_live(app: App, provider: &Provider) -> AppResult<()> {
+///   `models.default`，用户其它 profile / mcp_servers 原样保留）。片段在写盘
+///   层补缺失（#51），此处 `snippet` 暂不用。
+///
+/// `snippet` 为写盘层片段内容（codex/grok），空串即无操作；非写盘层应用忽略。
+pub fn write_live(app: App, provider: &Provider, snippet: &str) -> AppResult<()> {
     match app {
         App::Claude => {
             let path = claude_settings_path()?;
@@ -203,6 +211,7 @@ pub fn write_live(app: App, provider: &Provider) -> AppResult<()> {
                 &config_path,
                 &auth_path,
                 &provider.settings_config,
+                snippet,
             )
         }
         App::Gemini => crate::provider::live_gemini::write_gemini_live(&provider.settings_config),
@@ -310,6 +319,26 @@ pub(crate) fn parse_toml_or_empty(text: &str, what: &str) -> AppResult<DocumentM
     }
     text.parse::<DocumentMut>()
         .map_err(|e| AppError::Config(format!("{what} is not valid TOML: {e}")))
+}
+
+/// 递归表级补缺失：`source` 的键 `target` 没有 → 插入；双方都是 table → 递归
+/// 合并子键；其余（target 已有非 table、或类型不一致）→ target 赢，跳过。codex
+/// / grok 的写盘层片段补缺失共用（单一事实来源）——保证片段的 `[mcp_servers.a]`
+/// 与 live 的 `[mcp_servers.b]` 并存、同子键 live 已有则不覆盖（见 ADR-0010）。
+pub(crate) fn fill_missing_table(target: &mut Table, source: &Table) {
+    for (key, item) in source.iter() {
+        let existing_is_table = target.get(key).is_some_and(|e| e.is_table());
+        if existing_is_table && item.is_table() {
+            let t = target
+                .get_mut(key)
+                .and_then(|e| e.as_table_mut())
+                .expect("checked table");
+            let s = item.as_table().expect("checked table");
+            fill_missing_table(t, s);
+        } else if target.get(key).is_none() {
+            target.insert(key, item.clone());
+        }
+    }
 }
 
 /// 解析供应商 settingsConfig JSON 文本为「剥过内部 meta 键的对象」：空串/

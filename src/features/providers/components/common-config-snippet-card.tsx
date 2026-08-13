@@ -1,9 +1,13 @@
-// 通用配置片段卡片（供应商视图页脚）：全局一条、跨供应商共享的
-// settings.json 片段 + 启用开关。保存走 set_common_config_snippet_cmd
-// （后端校验 JSON 合法）；切换写盘时由 switch_provider_cmd 把启用的片段
-// 合并进受控字段（供应商显式配置优先，非受控键忽略）。卡片底部的提示用
-// snippetMissingKeys 对「当前激活供应商」做子集判定——告诉用户这次切换
-// 片段实际会补上什么（或已全部覆盖）。
+// 通用配置片段卡片（供应商视图页脚）：按应用独立一份、跨该应用供应商共享
+// 的默认配置 + 启用开关。保存走 set_common_config_snippet_cmd（后端按应用校
+// 验）；切换写盘时由 switch_provider_cmd 按应用分派合并层（ADR-0010）——
+// claude/gemini 在 settings_config 层并入、codex/grok 在写盘层补缺失进 live
+// 文件。供应商显式配置优先，片段只补缺失键。
+//
+// 编辑器按应用切换语言：claude/gemini 用 JSON（客户端 JSON 校验 + 格式化），
+// codex/grok 用 TOML（仅高亮，合法性 + 身份键由后端校验）。卡片底部的提示按
+// 应用给不同信息——claude 对当前激活供应商做片段子集判定，codex/grok 列禁
+// 身份键。
 
 import { useEffect, useState } from "react"
 import { useTranslation } from "react-i18next"
@@ -13,7 +17,7 @@ import {
   useGetCommonConfigSnippetQuery,
   useSetCommonConfigSnippetMutation,
 } from "@/app/store/api"
-import { JsonEditor } from "@/components/json-editor"
+import { CodeEditor } from "@/components/code-editor"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Label } from "@/components/ui/label"
@@ -24,9 +28,15 @@ import { formatJson, parseJsonObject } from "@/lib/json"
 
 import type { App, CommonConfigSnippet } from "@/types/generated/bindings"
 
+/** codex/grok 片段写 TOML（写盘层补缺失进 config.toml）；claude/gemini 写 JSON。 */
+function isTomlApp(app: App): boolean {
+  return app === "codex" || app === "grok"
+}
+
 export function CommonConfigSnippetCard({ app }: { app: App }) {
   const { t } = useTranslation()
-  // 通用配置片段按应用独立：claude / codex / gemini 各一份。
+  const isToml = isTomlApp(app)
+  // 通用配置片段按应用独立：claude / codex / gemini / grok 各一份。
   const { data: snippet, isLoading } = useGetCommonConfigSnippetQuery(app)
   const { data: activeProvider } = useGetActiveProviderQuery(app)
   const [save, { isLoading: saving }] = useSetCommonConfigSnippetMutation()
@@ -43,30 +53,30 @@ export function CommonConfigSnippetCard({ app }: { app: App }) {
     setContent(snippet.content)
   }, [snippet])
 
-  // 保存（内容 / 开关共用）：**保存前格式化为多行展开**——后端存展开版，
-  // 回读时天然展开。否则手输 / 编辑的单行紧凑 JSON 保存后重开时，编辑器
-  // 文档恰好等于后端返回的同一份单行文本，JsonEditor 的「外部值进入才展开」
-  // 会被 `cur === value` 提前跳过，紧凑单行就永远留着（加载路径只覆盖从未
-  // 编辑过的内容）。校验失败返回 false（调用方决定回滚）。
+  // 保存（内容 / 开关共用）：JSON 应用保存前格式化为多行展开（后端存展开版，
+  // 回读时天然展开）；TOML 应用发原文（无客户端格式化，合法性交后端）。JSON
+  // 校验失败返回 false（调用方决定回滚）。
   async function persist(next: {
     enabled: boolean
     content: string
   }): Promise<boolean> {
-    const parsed = parseJsonObject(next.content)
-    if (!parsed.ok) {
-      toast.error(t("providers.snippet.invalidJson"), {
-        description: parsed.error,
-      })
-      return false
+    if (!isToml) {
+      const parsed = parseJsonObject(next.content)
+      if (!parsed.ok) {
+        toast.error(t("providers.snippet.invalidJson"), {
+          description: parsed.error,
+        })
+        return false
+      }
     }
-    const formatted = formatJson(next.content)
+    const payload = isToml ? next.content : formatJson(next.content)
     return await runWithToast(
       save,
       {
         app,
         snippet: {
           enabled: next.enabled,
-          content: formatted,
+          content: payload,
         } satisfies CommonConfigSnippet,
       },
       {
@@ -78,7 +88,8 @@ export function CommonConfigSnippetCard({ app }: { app: App }) {
 
   async function onSave() {
     const ok = await persist({ enabled, content })
-    if (ok) setContent(formatJson(content))
+    // JSON 应用：保存后把草稿同步成展开版（与后端回读一致）；TOML 不格式化。
+    if (ok && !isToml) setContent(formatJson(content))
   }
 
   // 开关翻转即写盘：启用状态是「生效」开关（切换供应商时后端按它决定是否
@@ -91,10 +102,24 @@ export function CommonConfigSnippetCard({ app }: { app: App }) {
     if (!ok) setEnabled(!checked)
   }
 
-  // 子集判定提示：对当前激活供应商，片段会补上什么。
-  const missingKeys = activeProvider
-    ? snippetMissingKeys(activeProvider.settingsConfig, content)
-    : []
+  // 子集判定提示：claude 专用（snippetMissingKeys 镜像 claude 受控字段）。
+  const missingKeys =
+    app === "claude" && activeProvider
+      ? snippetMissingKeys(activeProvider.settingsConfig, content)
+      : []
+
+  // 底部提示按应用：claude 子集判定；codex/grok 列禁身份键；gemini 见 #50。
+  const bottomHint = (() => {
+    if (app === "codex") return t("providers.snippet.codexIdentityHint")
+    if (app === "grok") return t("providers.snippet.grokIdentityHint")
+    if (app === "claude") {
+      if (!activeProvider) return t("providers.snippet.noActiveHint")
+      return missingKeys.length > 0
+        ? t("providers.snippet.deltaHint", { keys: missingKeys.join(", ") })
+        : t("providers.snippet.coveredHint")
+    }
+    return ""
+  })()
 
   return (
     <Card>
@@ -121,21 +146,20 @@ export function CommonConfigSnippetCard({ app }: { app: App }) {
         <p className="text-muted-foreground text-xs">
           {t("providers.snippet.enabledHint")}
         </p>
-        <JsonEditor
+        <CodeEditor
+          language={isToml ? "toml" : "json"}
           value={content}
           onChange={setContent}
-          placeholder={t("providers.snippet.jsonPlaceholder")}
+          placeholder={t(
+            isToml
+              ? "providers.snippet.tomlPlaceholder"
+              : "providers.snippet.jsonPlaceholder",
+          )}
           className="h-40"
         />
         <div className="flex items-center justify-between gap-2">
           <span className="text-muted-foreground truncate text-xs">
-            {activeProvider
-              ? missingKeys.length > 0
-                ? t("providers.snippet.deltaHint", {
-                    keys: missingKeys.join(", "),
-                  })
-                : t("providers.snippet.coveredHint")
-              : t("providers.snippet.noActiveHint")}
+            {bottomHint}
           </span>
           <Button size="sm" disabled={saving || isLoading} onClick={onSave}>
             {saving ? t("common.saving") : t("providers.snippet.save")}

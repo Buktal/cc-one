@@ -117,6 +117,55 @@ pub fn merge_grok_config(live: &str, target: &str) -> AppResult<String> {
     Ok(doc.to_string())
 }
 
+/// 写盘层片段补缺失纯函数：在 `merge_grok_config` 产出的合并结果上，把片段的
+/// 非受控键补进去（live 已有则保留、递归进子表）。身份键（`[model."cc-one"]`
+/// profile 块 + `models.default` 指针）归 cc one，片段不得携带 → `Err`（与
+/// [`validate_grok_snippet`] 同款拒绝，set 命令提前拦 + 合并纯函数兜底）。为什么
+/// 在写盘层：同 codex（见 ADR-0010）。`mcp_servers` 含凭据允许（不经 LLM 端点）。
+///
+/// 边界：`snippet` 空串/纯空白 → 空文档（无操作）；非空非法 TOML → `Err`；
+/// 含身份键 → `Err`。
+// 暂未被生产路径调用——`switch_grok_live` 接 snippet 参数在 #51 完成（与 codex
+// 同构）。校验侧 `validate_grok_snippet` 已接进 `validate_snippet`，此处保留。
+#[allow(dead_code)]
+pub fn merge_grok_snippet(merged: &str, snippet: &str) -> AppResult<String> {
+    let mut doc = crate::provider::live::parse_toml_or_empty(merged, "merged config.toml")?;
+    let snippet_doc = crate::provider::live::parse_toml_or_empty(snippet, "grok snippet")?;
+    if snippet_has_identity(&snippet_doc) {
+        return Err(AppError::Config(
+            "grok 通用片段不得包含受控身份键（[model.\"cc-one\"] 块 / models.default）".into(),
+        ));
+    }
+    crate::provider::live::fill_missing_table(doc.as_table_mut(), snippet_doc.as_table());
+    Ok(doc.to_string())
+}
+
+/// grok 片段校验（set 命令用）：合法 TOML；不得含受控身份键。凭据键不禁
+/// （grok 片段写 `mcp_servers` 等、不经 LLM 端点，见 ADR-0010）。
+pub fn validate_grok_snippet(snippet: &str) -> AppResult<()> {
+    let doc = crate::provider::live::parse_toml_or_empty(snippet, "grok snippet")?;
+    if snippet_has_identity(&doc) {
+        return Err(AppError::Config(
+            "grok 通用片段不得包含受控身份键（[model.\"cc-one\"] 块 / models.default）".into(),
+        ));
+    }
+    Ok(())
+}
+
+/// 片段是否携带 grok 受控身份键：`[model."cc-one"]` profile 块 或 `models.default`
+/// 指针。用户自建的 `[model.<其它>]` profile 不是身份键（允许进片段）。
+fn snippet_has_identity(doc: &DocumentMut) -> bool {
+    let has_cc_one = doc
+        .get(MODEL_TABLE)
+        .and_then(|t| t.get(CC_ONE_PROFILE))
+        .is_some();
+    let has_default = doc
+        .get(MODELS_TABLE)
+        .and_then(|t| t.get("default"))
+        .is_some();
+    has_cc_one || has_default
+}
+
 /// 取 doc 里某顶层表的可变引用；不存在（或不是表）则替换为空表后返回。
 /// 非 table 项（如用户写坏 `model = "x"`）被空表顶替——那本就不是合法 grok
 /// 配置，顶替比 panic 更稳。
@@ -557,5 +606,102 @@ command = "npx"
             grok_config_path().unwrap(),
             home.join(".grok").join("config.toml")
         );
+    }
+
+    #[test]
+    fn snippet_fills_missing_mcp_servers() {
+        // merged（merge_grok_config 产物，含 cc-one profile）没有 mcp_servers，
+        // 片段补上。
+        let merged = r#"[model.cc-one]
+model = "grok-4.5"
+"#;
+        let snippet = r#"[mcp_servers.github]
+command = "npx"
+"#;
+        let out = merge_grok_snippet(merged, snippet).unwrap();
+        assert_eq!(
+            get_str(&out, &["model", "cc-one", "model"]).as_deref(),
+            Some("grok-4.5")
+        );
+        assert_eq!(
+            get_str(&out, &["mcp_servers", "github", "command"]).as_deref(),
+            Some("npx")
+        );
+    }
+
+    #[test]
+    fn snippet_live_wins_on_shared_mcp_server() {
+        let merged = r#"[mcp_servers.shared]
+command = "live"
+"#;
+        let snippet = r#"[mcp_servers.shared]
+command = "snippet"
+extra = "from-snippet"
+"#;
+        let out = merge_grok_snippet(merged, snippet).unwrap();
+        assert_eq!(
+            get_str(&out, &["mcp_servers", "shared", "command"]).as_deref(),
+            Some("live"),
+            "同 server 键 live 已有 → 不覆盖"
+        );
+        assert_eq!(
+            get_str(&out, &["mcp_servers", "shared", "extra"]).as_deref(),
+            Some("from-snippet"),
+            "递归补缺失：片段独有子键补上"
+        );
+    }
+
+    #[test]
+    fn snippet_with_identity_key_is_rejected() {
+        // cc-one profile 块 / models.default 是身份键 → 拒。
+        assert!(merge_grok_snippet("", "[model.cc-one]\nmodel = \"x\"\n").is_err());
+        assert!(merge_grok_snippet("", "[models]\ndefault = \"cc-one\"\n").is_err());
+        // 用户自建 profile（非 cc-one）不是身份键 → 允许。
+        assert!(merge_grok_snippet("", "[model.my-custom]\nmodel = \"x\"\n").is_ok());
+    }
+
+    #[test]
+    fn empty_snippet_is_noop_for_grok_merge() {
+        let merged = "[model.cc-one]\nmodel = \"grok-4.5\"\n";
+        for empty in ["", "   ", "\n"] {
+            let out = merge_grok_snippet(merged, empty).unwrap();
+            assert_eq!(
+                get_str(&out, &["model", "cc-one", "model"]).as_deref(),
+                Some("grok-4.5")
+            );
+        }
+    }
+
+    #[test]
+    fn invalid_grok_snippet_toml_is_error() {
+        assert!(merge_grok_snippet("[model.cc-one]\nmodel=\"m\"", "not toml {").is_err());
+    }
+
+    #[test]
+    fn grok_snippet_fill_missing_is_idempotent() {
+        let merged = "[model.cc-one]\nmodel = \"grok-4.5\"\n";
+        let snippet = "[mcp_servers.github]\ncommand = \"npx\"\n";
+        let once = merge_grok_snippet(merged, snippet).unwrap();
+        let twice = merge_grok_snippet(&once, snippet).unwrap();
+        assert_eq!(once, twice);
+        assert_eq!(
+            get_str(&twice, &["mcp_servers", "github", "command"]).as_deref(),
+            Some("npx")
+        );
+    }
+
+    #[test]
+    fn validate_grok_snippet_accepts_shared_and_rejects_identity() {
+        // 合法：mcp_servers（含凭据）+ 用户自建 profile。
+        assert!(validate_grok_snippet(
+            "[mcp_servers.github]\ncommand = \"npx\"\nenv = { GITHUB_PERSONAL_ACCESS_TOKEN = \"ghp_x\" }\n"
+        )
+        .is_ok());
+        assert!(validate_grok_snippet("[model.my-custom]\nmodel = \"x\"\n").is_ok());
+        assert!(validate_grok_snippet("").is_ok());
+        // 拒绝：身份键。
+        assert!(validate_grok_snippet("[model.cc-one]\nmodel = \"x\"\n").is_err());
+        assert!(validate_grok_snippet("[models]\ndefault = \"cc-one\"\n").is_err());
+        assert!(validate_grok_snippet("not toml {").is_err());
     }
 }
