@@ -272,6 +272,12 @@ pub(super) fn collect_jsonl_incremental(
     // files_scanned stays "discovered count" — do not redefine to "parsed count".
     // session_ids come from the FILES, not the parsed sessions — the mtime gate
     // would otherwise empty them on a no-change collect (see the field docs).
+    // The seen set is order-free for reconcile (membership only), but sort it
+    // anyway — discover's walkdir order is platform-dependent, and a
+    // deterministic order keeps collected results stable (same spirit as
+    // `order_results` above).
+    let mut session_ids = parser.session_ids_seen(&files);
+    session_ids.sort_unstable();
     let result = CollectResult {
         source: parser.name().to_string(),
         events,
@@ -280,7 +286,7 @@ pub(super) fn collect_jsonl_incremental(
         messages,
         files_scanned: files.len() as u32,
         lines_skipped: skipped,
-        session_ids: parser.session_ids_seen(&files),
+        session_ids,
     };
     Ok((result, delta))
 }
@@ -329,6 +335,8 @@ pub(super) fn parse_jsonl_full(
         skipped += outcome.skipped;
     }
     order_results(&mut events, &mut sessions);
+    let mut session_ids = parser.session_ids_seen(files);
+    session_ids.sort_unstable();
     Ok(CollectResult {
         source: parser.name().to_string(),
         events,
@@ -337,7 +345,7 @@ pub(super) fn parse_jsonl_full(
         messages,
         files_scanned: files.len() as u32,
         lines_skipped: skipped,
-        session_ids: parser.session_ids_seen(files),
+        session_ids,
     })
 }
 
