@@ -505,7 +505,7 @@
   "theme.tooltip": "主题 · {{current}}",
   "titlebar.close": "关闭",
   "titlebar.lightweight": "速览卡片",
-  "titlebar.lightweightSmall": "小窗口",
+  "titlebar.lightweightSmall": "悬浮窗口",
   "titlebar.maximize": "最大化",
   "titlebar.minimize": "最小化",
   "update.available.aria": "有新版本可用",

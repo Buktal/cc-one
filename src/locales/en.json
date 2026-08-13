@@ -507,7 +507,7 @@
   "theme.tooltip": "Theme · {{current}}",
   "titlebar.close": "Close",
   "titlebar.lightweight": "Glance card",
-  "titlebar.lightweightSmall": "Mini bar",
+  "titlebar.lightweightSmall": "Floating window",
   "titlebar.maximize": "Maximize",
   "titlebar.minimize": "Minimize",
   "update.available.aria": "New version available",

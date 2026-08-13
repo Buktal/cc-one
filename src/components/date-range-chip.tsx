@@ -107,7 +107,7 @@ export function DateRangeChip({
         }
       />
       <PopoverContent align={align} className="w-auto p-3">
-        <div className="bg-muted/60 mb-1 inline-flex items-center gap-0.5 rounded-md p-0.5">
+        <div className="bg-muted mb-1 inline-flex items-center gap-0.5 rounded-md p-0.5">
           {presets.map((p) => (
             <button
               key={p.value}

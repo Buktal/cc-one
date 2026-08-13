@@ -491,7 +491,7 @@
   "theme.tooltip": "テーマ · {{current}}",
   "titlebar.close": "閉じる",
   "titlebar.lightweight": "速報カード",
-  "titlebar.lightweightSmall": "ミニバー",
+  "titlebar.lightweightSmall": "フローティングウィンドウ",
   "titlebar.maximize": "最大化",
   "titlebar.minimize": "最小化",
   "update.available.aria": "新バージョンがあります",

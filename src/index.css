@@ -35,6 +35,9 @@
   --color-primary: var(--primary);
   --color-popover-foreground: var(--popover-foreground);
   --color-popover: var(--popover);
+  --color-tooltip-foreground: var(--tooltip-foreground);
+  --color-tooltip: var(--tooltip);
+  --color-tooltip-border: var(--tooltip-border);
   --color-card-foreground: var(--card-foreground);
   --color-card: var(--card);
   --color-foreground: var(--foreground);
@@ -71,6 +74,19 @@
  *        --metric-cost
  *        (--sr-success/tool/warn/error, optionally, to recolor stop-reason
  *         chips independently of the chart — otherwise they alias the chart)
+ *   Skin values are written TWICE: [data-skin] = light canvas values,
+ *   .dark[data-skin] = the same hue families restated for #1C1C1E (see the
+ *   dark palette section below for the why). Neutral's two palettes live in
+ *   :root / .dark.
+ *
+ *   SURFACE RULE (anti-fork): a 主面 — button fill, input fill, tab /
+ *   chip selected state — must be a PURE token (bg-card / bg-input / …),
+ *   never an alpha mix (bg-input/30, bg-muted/40). Alpha blends re-derive a
+ *   different color on every host surface (a /30 over a black card reads as
+ *   muddy grey, over grey as dark grey — the exact fork that made the same
+ *   control look different across views). Alpha stays legal ONLY for
+ *   transient feedback (hover) and intentionally weakened layers (subtle
+ *   banners, track backgrounds).
  *
  * BUTTON RULE (skin-agnostic, defined once here, every skin inherits it):
  *     light  --primary = --brand-strong   --primary-foreground = --btn-fg
@@ -98,6 +114,13 @@
   --card-foreground: oklch(0.145 0 0);
   --popover: oklch(1 0 0);
   --popover-foreground: oklch(0.145 0 0);
+  /* Tooltip — 瞬时提示的「最浮层」：不与 popover 家族同面（弹层面常与
+     card 同色，tooltip 浮在其上会隐身）。亮色用浅灰底深字——几乎与
+     off-white 背景同档（0.96，用户一路调浅至此），区分靠边框 + 投影；
+     与暗色的 #3a3a3c 灰面同族（明暗翻转）。 */
+  --tooltip: oklch(0.96 0 0);
+  --tooltip-foreground: oklch(0.145 0 0);
+  --tooltip-border: rgba(0, 0, 0, 0.16);
   /* Button surface follows the brand (BUTTON RULE above). Neutral's
      --brand-strong is near-black ⇒ black button; --btn-fg is its pair color. */
   --primary: var(--brand-strong);
@@ -119,9 +142,9 @@
      four chromatic skins override --brand / --brand-strong / --btn-fg. */
   --brand: oklch(0.45 0 0);
   --brand-strong: oklch(0.205 0 0);
-  --chart-input: #d89744; /* 输入 input_tokens — 青 */
-  --chart-output: #cb3d49; /* 输出 output_tokens — 金 */
-  --chart-cache-create: #2e59a7; /* 缓存创建 cache_creation — 珊瑚红 */
+  --chart-input: #d89744; /* 输入 input_tokens — 琥珀 */
+  --chart-output: #cb3d49; /* 输出 output_tokens — 珊瑚红 */
+  --chart-cache-create: #2e59a7; /* 缓存创建 cache_creation — 深蓝 */
   --chart-cache-read: #4c8045; /* 缓存命中 cache_read — 鼠尾草绿 */
   --metric-cost: #9d2932; /* 成本 USD — 朱红（独立「钱」维度，非四桶）*/
   --radius: 0.45rem;
@@ -181,12 +204,21 @@
 }
 
 .dark {
-  --background: #1c1c1e;
+  /* 底/面对换（用户决策 2026-08）：暗色从「深底浅面」翻转为「浅底深面」——
+     背景灰 (#2c2c2e, 原 card 值)、卡片/弹层黑 (#1c1c1e, 原 background 值)。
+     侧栏走 bg-card 因此自动变黑; hover/次面 muted 保持浅灰在深面上提亮。 */
+  --background: #2c2c2e;
   --foreground: #ffffff;
-  --card: #2c2c2e;
+  --card: #1c1c1e;
   --card-foreground: #ffffff;
-  --popover: #2c2c2e;
+  --popover: #1c1c1e;
   --popover-foreground: #ffffff;
+  /* Tooltip — 暗色走「提亮」而非跟 card 的按深链：比灰底 (#2c2c2e) 亮一档，
+     在黑卡 (#1c1c1e) 上亮两档——两种表面都立得住（若用 #1c1c1e 会和
+     card 同色隐身）。 */
+  --tooltip: #3a3a3c;
+  --tooltip-foreground: #ffffff;
+  --tooltip-border: rgba(255, 255, 255, 0.14);
   /* BUTTON RULE: dark --primary is the brand's LIGHT shade; --btn-fg-dark is
      its pair color. Neutral's --brand is a light grey ⇒ light-grey button with
      dark text (near-white, easier on the eye than pure #fff on #1C1C1E). */
@@ -195,28 +227,36 @@
   --btn-fg-dark: oklch(0.2 0 0);
   --brand: oklch(0.72 0 0);
   --brand-strong: oklch(0.9 0 0);
-  --secondary: #3a3a3c;
+  /* 次面/输入/选中块同镜像：muted → 最深面 (#141416)，在黑卡上做
+     hover/选中「按深」反馈（原 #3a3a3c 在灰底上是提亮，镜像后反转为
+     下压——方向变了，可辨度相当）。bg-muted/40 半透明叠灰底仍可见。 */
+  --secondary: #141416;
   --secondary-foreground: #ffffff;
-  --muted: #3a3a3c;
+  --muted: #141416;
   --muted-foreground: rgba(235, 235, 245, 0.6);
-  --accent: #3a3a3c;
+  --accent: #141416;
   --accent-foreground: #ffffff;
   --destructive: #f87171;
   --border: rgba(255, 255, 255, 0.08);
-  --input: #3a3a3c;
+  --input: #141416;
   --ring: var(--brand);
-  /* B-tier data palette — default skin (Neutral). Dark shades: vivid for pop
-     on #1C1C1E; each pairs to its light counterpart by hue. */
-  --chart-input: #d89744;
-  --chart-output: #cb3d49;
-  --chart-cache-create: #2e59a7;
-  --chart-cache-read: #4c8045;
-  --metric-cost: #cb3d49;
+  /* B-tier data palette — default skin (Neutral), DARK values. The light
+     palette's mid-depth shades die on #1C1C1E (deep blue #2e59a7 ≈ 2.5:1,
+     deep green #4c8045 ≈ 3.6:1), so every bucket is restated in its own hue
+     family at a brighter stop — same hue, same meaning, either mode. Tuned
+     to the quietest stop that still passes: saturation pulled back so the
+     dark canvas reads calm, not neon (reds cap ≈4.5:1 before they glare).
+     (Chromatic skins restate theirs in the .dark[data-skin] blocks below.) */
+  --chart-input: #d49c54; /* 输入 — 琥珀 (7.0:1) */
+  --chart-output: #de545f; /* 输出 — 珊瑚红 (4.5:1) */
+  --chart-cache-create: #5685dc; /* 缓存创建 — 亮蓝 (4.7:1) */
+  --chart-cache-read: #61b356; /* 缓存命中 — 亮绿 (6.6:1) */
+  --metric-cost: #cd424d; /* 成本 — 朱红，比 output 深一档同 hue 区分 (3.6:1, KPI 大字) */
   --sidebar: #1c1c1e;
   --sidebar-foreground: #ffffff;
   --sidebar-primary: var(--brand);
   --sidebar-primary-foreground: var(--btn-fg-dark);
-  --sidebar-accent: #3a3a3c;
+  --sidebar-accent: #141416;
   --sidebar-accent-foreground: #ffffff;
   --sidebar-border: rgba(255, 255, 255, 0.08);
   --sidebar-ring: var(--brand);
@@ -307,6 +347,59 @@
   --chart-cache-create: #e5ca00;
   --chart-cache-read: #494166;
   --metric-cost: #494166;
+}
+
+/* ─────────────────────────────────────────────────────────────────────────
+ * DARK skin palettes — the [data-skin] blocks above state LIGHT values, and
+ * on a #1C1C1E canvas those go wrong two ways: mid-depth shades (deep blue /
+ * deep green / deep red, ≈1.8–3.6:1) vanish, and the pale brands are so
+ * desaturated they read as grey, not brand (sage 30% sat, mauve 22% — the
+ * "washed-out" feel). Each skin restates the failing stops here in the SAME
+ * hue families at brighter stops — saturation held at the quietest level
+ * that still reads (a skin block may be tuned back further, but the ratio
+ * floor for the chart text chips is ≈4.5:1). Buckets that already pop on
+ * dark (yellow / orange / light-blue outputs, ≥7:1) are left to inherit from
+ * the light block. --btn-fg-dark pairs unchanged (crimson still wants white;
+ * the lifted sage/azure/mauve still want dark text). Neutral needs no block —
+ * .dark above carries its dark palette.
+ * ───────────────────────────────────────────────────────────────────────── */
+
+/* Sage — brand from 30% to 42% saturation: the pale green finally reads as
+   green on dark instead of grey. Blue input + green cache-read lifted. */
+.dark[data-skin="sage"] {
+  --brand: #93d08b;
+  --chart-input: #5683d7;
+  --chart-cache-read: #61b356;
+  --metric-cost: #61b356;
+}
+
+/* Azure — brand saturated a touch (57%→56%, slightly deeper); red input +
+   blue cache-read lifted (the light blue cache-read #2e59a7 was 2.5:1,
+   invisible). */
+.dark[data-skin="azure"] {
+  --brand: #7497d8;
+  --chart-input: #de545f;
+  --chart-cache-read: #5685dc;
+  --metric-cost: #5685dc;
+}
+
+/* Crimson — brand lifted from a muddy #bc313d (2.9:1 on dark) to a quieter
+   carmine; white button text still passes (~4:1, large solid button). Green
+   input + red cache-read lifted. */
+.dark[data-skin="crimson"] {
+  --brand: #d2565e;
+  --chart-input: #61b356;
+  --chart-cache-read: #d85a62;
+  --metric-cost: #d85a62;
+}
+
+/* Mauve — brand from 22% to 34% saturation: smoky violet instead of pale
+   grey. Green output + violet cache-read lifted (cache-read was 1.8:1). */
+.dark[data-skin="mauve"] {
+  --brand: #9c8ec7;
+  --chart-output: #61b356;
+  --chart-cache-read: #8773c9;
+  --metric-cost: #8773c9;
 }
 
 @layer base {
