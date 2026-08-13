@@ -22,6 +22,7 @@ import {
   geminiSnippetMissingKeys,
   grokConfigToml,
   groupSnippetCandidates,
+  pairModelNameKeys,
   hasOneM,
   isSensitiveConfigKey,
   metaTemplateValues,
@@ -2097,5 +2098,49 @@ describe("groupSnippetCandidates", () => {
       model: [],
       behavior: [],
     })
+  })
+})
+
+describe("pairModelNameKeys", () => {
+  it("把 *_MODEL 与对应 *_MODEL_NAME 配对相邻（MODEL 在前），无配对键保序", () => {
+    expect(
+      pairModelNameKeys([
+        "ANTHROPIC_DEFAULT_SONNET_MODEL",
+        "ANTHROPIC_DEFAULT_FABLE_MODEL",
+        "ANTHROPIC_MODEL",
+        "ANTHROPIC_DEFAULT_FABLE_MODEL_NAME",
+        "CLAUDE_CODE_SUBAGENT_MODEL",
+      ]),
+    ).toEqual([
+      "ANTHROPIC_DEFAULT_SONNET_MODEL",
+      "ANTHROPIC_DEFAULT_FABLE_MODEL",
+      "ANTHROPIC_DEFAULT_FABLE_MODEL_NAME",
+      "ANTHROPIC_MODEL",
+      "CLAUDE_CODE_SUBAGENT_MODEL",
+    ])
+  })
+
+  it("NAME 在 MODEL 前出现时仍配对（挪到 MODEL 后）", () => {
+    expect(
+      pairModelNameKeys([
+        "ANTHROPIC_DEFAULT_HAIKU_MODEL_NAME",
+        "ANTHROPIC_DEFAULT_HAIKU_MODEL",
+        "ANTHROPIC_MODEL",
+      ]),
+    ).toEqual([
+      "ANTHROPIC_DEFAULT_HAIKU_MODEL",
+      "ANTHROPIC_DEFAULT_HAIKU_MODEL_NAME",
+      "ANTHROPIC_MODEL",
+    ])
+  })
+
+  it("孤儿 _MODEL_NAME（无对应 _MODEL）原样保留", () => {
+    expect(pairModelNameKeys(["ANTHROPIC_DEFAULT_FABLE_MODEL_NAME"])).toEqual([
+      "ANTHROPIC_DEFAULT_FABLE_MODEL_NAME",
+    ])
+  })
+
+  it("空数组 → 空", () => {
+    expect(pairModelNameKeys([])).toEqual([])
   })
 })

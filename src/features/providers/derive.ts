@@ -851,6 +851,35 @@ export function groupSnippetCandidates(keys: string[]): {
   return { endpoint, model, behavior }
 }
 
+/** 模型组候选的展示排序：把 `X_MODEL` 与其 `X_MODEL_NAME` 配成对、MODEL 在前
+ *  NAME 紧随（等宽字体下前缀对齐，用户一眼认出「几个角色的默认模型与显示名」）。
+ *  无配对的键（如 ANTHROPIC_MODEL、CLAUDE_CODE_SUBAGENT_MODEL）保留原相对
+ *  位置。NAME 先于 MODEL 出现时也把 NAME 挪到 MODEL 后配对。 */
+export function pairModelNameKeys(keys: string[]): string[] {
+  // X_MODEL → X_MODEL_NAME 的形态配对（只对真存在配对的键登记）。
+  const nameOf = new Map<string, string>()
+  for (const k of keys) {
+    if (!k.endsWith("_MODEL_NAME")) continue
+    const modelKey = k.slice(0, -"_NAME".length)
+    if (keys.includes(modelKey)) nameOf.set(modelKey, k)
+  }
+  const out: string[] = []
+  const emitted = new Set<string>()
+  // 配对 NAME 遇到即跳过（由 MODEL 处输出）——NAME 先于 MODEL 出现也成立。
+  const pairedNames = new Set(nameOf.values())
+  for (const k of keys) {
+    if (emitted.has(k) || pairedNames.has(k)) continue
+    const nameKey = nameOf.get(k)
+    if (nameKey) {
+      out.push(k, nameKey)
+      emitted.add(nameKey)
+    } else {
+      out.push(k)
+    }
+  }
+  return out
+}
+
 // ---- 通用片段凭据键判定（claude / gemini 共用）----
 //
 // TS 镜像后端 `provider::snippet::is_sensitive_config_key`，**逐字一致**

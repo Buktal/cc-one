@@ -50,6 +50,7 @@ import {
 import { Input } from "@/components/ui/input"
 import {
   groupSnippetCandidates,
+  pairModelNameKeys,
   snippetCoveredKeys,
 } from "@/features/providers/derive"
 import { toStructuredError } from "@/lib/error"
@@ -391,7 +392,7 @@ function EntryRow({
   }
 
   return (
-    <div className="group/item flex items-start justify-between gap-3 border-b border-border py-1.5 text-sm last:border-b-0">
+    <div className="flex items-start justify-between gap-3 border-b border-border py-1.5 text-sm last:border-b-0">
       <div className="min-w-0 flex-1">
         {editing ? (
           <Input
