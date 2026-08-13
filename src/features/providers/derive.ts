@@ -462,13 +462,13 @@ export function emptyProvider(app: App = "claude"): Provider {
   }
 }
 
-/** Build the "new provider" draft from a built-in preset: category goes to
- *  `custom` (a preset is the starting point, customization is the end — the
- *  saved row is a user provider, not a preset), `id` stays empty so
- *  `save_provider_cmd` allocates a fresh one. The preset's settingsConfig
- *  snapshot is copied verbatim (its `${VAR}` placeholders stay until the
- *  template-variable step); the preset constant itself is never mutated.
- *  `app` defaults to claude — the preset arrays are app-scoped (see
+/** Build the "new provider" draft from a built-in preset: category keeps the
+ *  preset's own (`cloud_provider` / `aggregator` stay 云厂商 / 聚合——列表分类
+ *  与切换检查按它区分，抹成 custom 会让云端供应商被误要求填端点/key), `id`
+ *  stays empty so `save_provider_cmd` allocates a fresh one. The preset's
+ *  settingsConfig snapshot is copied verbatim (its `${VAR}` placeholders stay
+ *  until the template-variable step); the preset constant itself is never
+ *  mutated. `app` defaults to claude — the preset arrays are app-scoped (see
  *  `presetsForApp`), so the caller knows which pool the preset came from. */
 export function providerFromPreset(
   preset: ProviderPreset,
@@ -478,7 +478,7 @@ export function providerFromPreset(
     id: "",
     name: preset.name,
     websiteUrl: preset.websiteUrl,
-    category: "custom",
+    category: preset.category,
     app,
     icon: preset.icon,
     iconColor: preset.iconColor,

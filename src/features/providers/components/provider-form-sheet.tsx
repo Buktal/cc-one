@@ -51,6 +51,7 @@ import {
   SheetHeader,
   SheetTitle,
 } from "@/components/ui/sheet"
+import { Switch } from "@/components/ui/switch"
 import { Textarea } from "@/components/ui/textarea"
 import { OpenCodeFormFields } from "@/features/providers/components/opencode-form-fields"
 import { PresetPicker } from "@/features/providers/components/preset-picker"
@@ -117,6 +118,7 @@ export function ProviderFormSheet({
   editing,
   app,
   onSaved,
+  onResetEditing,
 }: {
   open: boolean
   onOpenChange: (open: boolean) => void
@@ -126,17 +128,20 @@ export function ProviderFormSheet({
    *  claude（原有池）。 */
   app?: App
   onSaved: () => void
+  /** 复制态（editing 是 id 空的副本）下点选预设 = 放弃副本改用预设草稿：
+   *  通知父组件清掉 editing。 */
+  onResetEditing: () => void
 }) {
   const { t } = useTranslation()
   // effective app：编辑态供应商的 app 优先，其次调用方传入的新建 app，最后 claude。
   const effectiveApp: App = editing?.app ?? app ?? "claude"
-  // 预设选择内聚进 Sheet（原由 ProvidersView 经 prop 注入）：新建态下用户在
-  // 左栏 PresetPicker 点选即预填，可连续切换覆盖；编辑态不挂 picker。每次
-  // 打开新建清空，避免上次会话选过的预设带到本次新建。
+  // 预设选择内聚进 Sheet（原由 ProvidersView 经 prop 注入）：新建 / 复制态
+  // 下用户在左栏 PresetPicker 点选即预填，可连续切换覆盖；编辑已有供应商
+  // 不挂 picker。每次打开都清空选中，避免上次会话选过的预设带过来。
   const [preset, setPreset] = useState<ProviderPreset | null>(null)
   useEffect(() => {
-    if (open && !editing) setPreset(null)
-  }, [open, editing])
+    if (open) setPreset(null)
+  }, [open])
   const base =
     editing ??
     (preset
@@ -152,6 +157,9 @@ export function ProviderFormSheet({
   const [templateValues, setTemplateValues] = useState<Record<string, string>>(
     metaTemplateValues(base.meta),
   )
+  // 自动应用开关（模型区）：开着时编辑任一角色模型自动同步全部角色。默认值
+  // 在 open effect 里按新建/复制 vs 编辑设置。
+  const [autoSync, setAutoSync] = useState(false)
   const [save, { isLoading: saving }] = useSaveProviderMutation()
   const [fetchModels, { isLoading: fetching }] = useFetchModelsMutation()
   const [fetchedModels, setFetchedModels] = useState<string[]>([])
@@ -168,15 +176,28 @@ export function ProviderFormSheet({
     // 已被物化，先把这些值还原回占位符，重编体验与从预设新建一致。
     const values = metaTemplateValues(b.meta)
     setName(b.name)
-    setConfigText(
+    // 真·新建（非复制）默认 1M：对支持 1M 的角色模型加 [1M] 标记（空模型无
+    // 标记可加，跳过）；编辑/复制保留既有配置原样。
+    const baseText =
       Object.keys(values).length > 0
         ? restoreTemplatePlaceholders(b.settingsConfig, values)
-        : b.settingsConfig,
+        : b.settingsConfig
+    setConfigText(
+      editing
+        ? baseText
+        : MODEL_ROLES.reduce(
+            (text, def) =>
+              def.supportsOneM ? withRoleOneMInText(text, def.id, true) : text,
+            baseText,
+          ),
     )
     setEndpoint(providerEndpoint(b))
     setApiKey(providerApiKey(b))
     setAuthField(configAuthField(b.settingsConfig))
     setTemplateValues(values)
+    // 自动应用开关：新建/复制默认开（编辑任一模型同步全部角色），编辑已有
+    // 供应商默认关（不动用户配置）。
+    setAutoSync(!editing?.id)
     // 上次会话拉到的模型列表属于旧表单状态，重开时清掉。
     setFetchedModels([])
   }, [editing, preset, open, effectiveApp])
@@ -236,9 +257,14 @@ export function ProviderFormSheet({
   }
 
   function onRoleModelChange(role: ModelRoleId, value: string) {
-    if (parseJsonObject(configText).ok) {
-      setConfigText((prev) => withRoleModelInText(prev, role, value))
-    }
+    if (!parseJsonObject(configText).ok) return
+    // 自动应用开关开着时：编辑任一角色模型 → 同步全部角色（withAllRolesInText
+    // 处理 Haiku 去标记、显示名跟随）。关着则只改当前角色。
+    setConfigText((prev) =>
+      autoSync
+        ? withAllRolesInText(prev, value)
+        : withRoleModelInText(prev, role, value),
+    )
   }
 
   function onRoleNameChange(role: ModelRoleId, value: string) {
@@ -379,11 +405,11 @@ export function ProviderFormSheet({
   }
 
   function onTemplateVarChange(name: string, value: string) {
-    const next = { ...templateValues, [name]: value }
-    setTemplateValues(next)
-    if (parseJsonObject(configText).ok) {
-      setConfigText((prev) => replaceTemplateVarsInText(prev, next))
-    }
+    // 只更新内存值，不实时物化 configText：物化会让占位符从 configText 消失，
+    // templateVarNames（extractTemplateVars(configText) 的投影）随之缩水/重排
+    // ——输入框跳位，半截值还会污染快照。物化只在保存时做
+    // （replaceTemplateVarsInText + 残留校验）。
+    setTemplateValues((prev) => ({ ...prev, [name]: value }))
   }
 
   // Codex / Gemini 字段直写 configText（与 Claude 的 onEndpointChange 同一模式：
@@ -503,16 +529,19 @@ export function ProviderFormSheet({
     ]),
   )
   // key 输入区显示条件：快照带模板变量（云厂商的认证走模板变量）或分类为官方
-  // /云厂商预设时隐藏，普通供应商照常显示。草稿分类恒为 custom，故官方预设须
-  // 看 preset 自身的分类。
-  const category = preset?.category ?? base.category
+  // /云厂商时隐藏，普通供应商照常显示。草稿分类继承预设（providerFromPreset），
+  // 编辑态 base.category 即已存分类——无需再回看 preset。
+  const category = base.category
   const showKeyFields =
     templateVarNames.length === 0 &&
     category !== "official" &&
     category !== "cloud_provider"
-  // 双栏左栏（预设选择器）只在新建态 + 该 app 有内置预设时挂载：编辑已有
-  // 供应商不挂；opencode 附加模式 presetsForApp 返回空也不挂。
-  const showPicker = !editing && presetsForApp(effectiveApp).length > 0
+  // 双栏左栏（预设选择器）只在新建 / 复制态 + 该 app 有内置预设时挂载：编辑
+  // 已有供应商（id 非空）不挂；opencode 附加模式 presetsForApp 返回空也不挂。
+  // 复制态点选预设 = 用预设草稿替换副本（base 优先级：editing 先于 preset，
+  // 故 onSelect 里把副本 editing 清掉，见下）。
+  const showPicker =
+    (!editing || editing.id === "") && presetsForApp(effectiveApp).length > 0
 
   return (
     <Sheet open={open} onOpenChange={onOpenChange}>
@@ -528,7 +557,8 @@ export function ProviderFormSheet({
         <SheetHeader className="px-6 pt-6">
           <div className="flex items-center gap-2">
             <SheetTitle>
-              {editing
+              {/* 复制走 editing 通道但 id 清空（新建语义）：id 非空才是编辑。 */}
+              {editing?.id
                 ? t("providers.form.editTitle")
                 : preset
                   ? t("providers.form.presetTitle")
@@ -541,7 +571,8 @@ export function ProviderFormSheet({
             >
               {t(`providers.app.${effectiveApp}`)}
             </Badge>
-            {editing &&
+            {/* 复制草稿（id 空）未加入 live，不显示「已加入」徽标。 */}
+            {editing?.id &&
             effectiveApp === "opencode" &&
             providerLiveManaged(editing) ? (
               <Badge
@@ -564,12 +595,19 @@ export function ProviderFormSheet({
             <PresetPicker
               app={effectiveApp}
               selected={preset}
-              onSelect={setPreset}
+              onSelect={(p) => {
+                // 复制态（editing 是 id 空的副本）点预设 = 放弃副本改用预设
+                // 草稿——base 计算 editing 优先，必须把副本清掉才生效。
+                onResetEditing()
+                setPreset(p)
+              }}
             />
           ) : null}
           <div className="flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto px-6">
             {effectiveApp === "claude" && templateVarNames.length > 0 ? (
-              <div className="rounded-md border p-3">
+              /* 灰底块（bg-muted/40）而非边框盒子——减线语言：组边界靠表面
+                 明暗，线条留给控件边框。 */
+              <div className="bg-muted/40 rounded-md p-3">
                 <p className="mb-1 text-xs font-medium">
                   {t("providers.form.templateVars")}
                 </p>
@@ -783,6 +821,20 @@ export function ProviderFormSheet({
                 <SectionHeader
                   action={
                     <div className="flex items-center gap-2">
+                      {/* 自动应用开关：开着时编辑任一角色模型自动同步全部角色
+                        （新建/复制默认开，编辑默认关）。与「一键设置」并存——
+                        开关管持续行为，按钮管一次性统一。 */}
+                      <label
+                        htmlFor="model-auto-sync"
+                        className="flex cursor-pointer items-center gap-1.5 text-xs text-muted-foreground"
+                      >
+                        <Switch
+                          id="model-auto-sync"
+                          checked={autoSync}
+                          onCheckedChange={setAutoSync}
+                        />
+                        {t("providers.form.autoSync")}
+                      </label>
                       <Button
                         variant="outline"
                         size="sm"
@@ -810,7 +862,7 @@ export function ProviderFormSheet({
                 >
                   {t("providers.form.modelMapping")}
                 </SectionHeader>
-                <div className="rounded-md border p-3">
+                <div className="bg-muted/40 rounded-md p-3">
                   <p className="mb-2 text-xs text-muted-foreground">
                     {t("providers.form.modelMappingHint")}
                   </p>

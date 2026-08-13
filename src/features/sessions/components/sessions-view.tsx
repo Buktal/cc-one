@@ -392,22 +392,27 @@ function SessionsTable({
                 <TableCell>
                   {(() => {
                     const kind = sessionAgentKind(s.agent_type)
-                    // Every non-main row is a subagent, so the badge shows the
+                    // Every non-main row is a subagent, so the chip shows the
                     // bare agent type (e.g. Explore) — no "subagent" prefix.
-                    // Long types truncate within the w-40 column instead of
-                    // overflowing into the Project column.
+                    // Color mirrors the request-log stop-reason palette:
+                    // main = 常规主会话绿 (success), subagent = 派生工具活动
+                    // 琥珀 (tool) — a glance tells the two apart in a mixed
+                    // list. Long types truncate within the w-40 column instead
+                    // of overflowing into the Project column.
                     const label =
                       kind.kind === "main" ? t("sessions.type.main") : kind.type
                     return (
                       <Tooltip>
                         <TooltipTrigger
                           render={
-                            <Badge
-                              variant="outline"
-                              className="max-w-full overflow-hidden font-normal"
+                            <span
+                              className={cn(
+                                "sem-chip max-w-full",
+                                kind.kind === "main" ? "type-main" : "type-sub",
+                              )}
                             >
                               <span className="min-w-0 truncate">{label}</span>
-                            </Badge>
+                            </span>
                           }
                         />
                         <TooltipContent>{label}</TooltipContent>

@@ -60,8 +60,11 @@ export function PresetPicker({
   }, [query, app])
 
   return (
-    <aside className="border-border flex w-72 shrink-0 flex-col border-r">
-      <div className="border-border px-3 border-b py-2 text-sm font-medium">
+    // 左栏与右表单靠底色分层（灰面板 vs 白底）而不是 border-r 分隔——减线
+    // 语言：分组边界用表面明暗，线条留给控件边框。圆角让灰面板在白底上呈
+    // 独立的卡片感（而非贴边直角块）。
+    <aside className="bg-muted/40 flex w-72 shrink-0 flex-col rounded-lg">
+      <div className="px-3 py-2 text-sm font-medium">
         {t("providers.presets.title")}
       </div>
       <div className="relative px-3 pt-2">
@@ -92,17 +95,17 @@ export function PresetPicker({
                     <Button
                       key={preset.name}
                       type="button"
-                      variant="outline"
+                      variant="ghost"
                       size="sm"
                       onClick={() => onSelect(preset)}
                       aria-pressed={isSelected}
                       className={cn(
                         "justify-start",
                         // 选中态与 OptionCards 决策卡同一套视觉语言：inset shadow
-                        // 描边 + 淡色底，字体颜色保持不动（border-* 自定义色会被
-                        // outline variant 的 border-border 覆盖，见 option-cards）。
+                        // 描边 + 淡色底，字体颜色保持不动。ghost 无边框——预设
+                        // 芯片的常态是「无框文字」，选中才有色（减线语言）。
                         isSelected &&
-                          "border-transparent bg-accent-tint shadow-[inset_0_0_0_1px_var(--accent-brand)] dark:border-transparent dark:bg-accent-tint",
+                          "bg-accent-tint shadow-[inset_0_0_0_1px_var(--accent-brand)]",
                       )}
                     >
                       {preset.iconColor ? (

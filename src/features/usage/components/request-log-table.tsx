@@ -239,7 +239,7 @@ function StopReasonCell({ value }: { value: string }) {
       <span className="text-muted-foreground font-mono text-xs">{value}</span>
     )
   return (
-    <span title={value} className={cn("sr-chip font-mono", `sr-${tone}`)}>
+    <span title={value} className={cn("sem-chip font-mono", `sr-${tone}`)}>
       {t(labelKey)}
     </span>
   )

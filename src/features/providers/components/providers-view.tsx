@@ -14,6 +14,7 @@ import {
 import { useSortable } from "@dnd-kit/react/sortable"
 import {
   AlertTriangle,
+  Copy,
   Database,
   Download,
   Info,
@@ -64,7 +65,11 @@ import { useMutateWithToast } from "@/hooks/use-toast-mutation"
 import { usePersistedState } from "@/lib/persistence"
 import { cn } from "@/lib/utils"
 
-import type { App, Provider } from "@/types/generated/bindings"
+import type {
+  App,
+  Provider,
+  ProviderCategory,
+} from "@/types/generated/bindings"
 import { CcSwitchImportDialog } from "./cc-switch-import-dialog"
 import { CommonConfigSnippetCard } from "./common-config-snippet-card"
 import { ImportSourceDialog } from "./import-source-dialog"
@@ -155,6 +160,16 @@ export function ProvidersView() {
   }
   function openEdit(p: Provider) {
     setEditing(p)
+    setSheetOpen(true)
+  }
+  /** 复制：副本走编辑通道但 id 清空（保存即新建），名称带「副本」后缀。
+   *  快照/meta 原样复制——模板变量值（meta 里）随之带进副本表单。 */
+  function openDuplicate(p: Provider) {
+    setEditing({
+      ...p,
+      id: "",
+      name: `${p.name}${t("providers.copyNameSuffix")}`,
+    })
     setSheetOpen(true)
   }
   // 返回成功与否：删除确认框保持打开直到成功（成功才关），失败留在框内重试。
@@ -367,6 +382,7 @@ export function ProvidersView() {
                     isActive={activeProvider?.id === p.id}
                     liveManaged={providerLiveManaged(p)}
                     onEdit={() => openEdit(p)}
+                    onDuplicate={() => openDuplicate(p)}
                     onDelete={() => setDeleting(p)}
                     onSwitch={() => onSwitch(p)}
                     onAddToLive={() => void onAddToLive(p)}
@@ -396,6 +412,7 @@ export function ProvidersView() {
         editing={editing}
         app={app}
         onSaved={() => setSheetOpen(false)}
+        onResetEditing={() => setEditing(null)}
       />
       <Dialog
         open={confirmSwitch !== null}
@@ -474,6 +491,34 @@ export function ProvidersView() {
   )
 }
 
+/** 分类 → 色变量名。官方用固定语义蓝（--cat-official，不随皮肤漂移——chart
+ *  四桶是数据语义色，crimson/sage 等皮肤里 cache-create 是淡蓝/橙/黄，借它
+ *  当「官方」换肤即变色甚至发白）；其余三色沿用 chart 色跟随皮肤。
+ *  official 与 cn_official 同文案同色。 */
+const CATEGORY_COLOR: Record<ProviderCategory, string> = {
+  official: "cat-official",
+  cn_official: "cat-official",
+  aggregator: "chart-cache-read",
+  cloud_provider: "chart-input",
+  custom: "chart-output",
+}
+
+/** 分类徽标样式：分类色 tint 底 + 边框（内联 style 保证覆盖 outline variant
+ *  的 border-border——tailwind 类冲突时谁后生成不可靠）。官方固定蓝饱和度
+ *  高，背景 20% 即「淡蓝透白」的轻底，边框 60% 保证 hover 行上可辨；其余
+ *  分类 18%/40% 保持既有观感。深色模式下 tint 混暗底自然压深，两种模式都
+ *  成立。 */
+function categoryBadgeStyle(category: ProviderCategory) {
+  const isOfficial = category === "official" || category === "cn_official"
+  const color = CATEGORY_COLOR[category]
+  const strength = isOfficial ? 20 : 18
+  const border = isOfficial ? 60 : 40
+  return {
+    backgroundColor: `color-mix(in srgb, var(--${color}) ${strength}%, transparent)`,
+    borderColor: `color-mix(in srgb, var(--${color}) ${border}%, transparent)`,
+  }
+}
+
 function ProviderRow({
   provider: p,
   index,
@@ -481,6 +526,7 @@ function ProviderRow({
   isActive,
   liveManaged,
   onEdit,
+  onDuplicate,
   onDelete,
   onSwitch,
   onAddToLive,
@@ -494,6 +540,7 @@ function ProviderRow({
   /** 附加模式：该供应商是否已写进 opencode.json（meta.liveManaged）。 */
   liveManaged: boolean
   onEdit: () => void
+  onDuplicate: () => void
   onDelete: () => void
   onSwitch: () => void
   onAddToLive: () => void
@@ -512,8 +559,9 @@ function ProviderRow({
       ref={ref}
       className={cn(
         // 与列头模板一致（分类 8rem / 操作 10rem 固定）：行是独立 grid 容器，
-        // 任何 auto 列都会让列宽逐行漂移——见列头注释。
-        "grid grid-cols-[minmax(10rem,1.2fr)_8rem_minmax(0,1.4fr)_minmax(0,1fr)_10rem] items-center gap-3 rounded-lg px-4 py-2 transition-colors",
+        // 任何 auto 列都会让列宽逐行漂移——见列头注释。group 供行 hover 时给
+        // 操作按钮浮出白底（见操作区注释）。
+        "group grid grid-cols-[minmax(10rem,1.2fr)_8rem_minmax(0,1.4fr)_minmax(0,1fr)_10rem] items-center gap-3 rounded-lg px-4 py-2 transition-colors",
         // 当前使用：品牌色背景 + 左侧色条，作为列表的视觉锚点（取代旧的独立
         // 「当前使用」卡片）。不置顶——保留用户拖拽自定义的顺序。
         isActive
@@ -523,24 +571,9 @@ function ProviderRow({
       )}
     >
       <span className="flex min-w-0 items-center gap-2">
-        {p.iconColor ? (
-          <span
-            aria-hidden
-            className="size-2 shrink-0 rounded-full"
-            style={{ backgroundColor: p.iconColor }}
-          />
-        ) : null}
-        <span className="truncate font-medium">{p.name}</span>
-        {additive && liveManaged ? (
-          /* 「已加入 live」状态徽标放名字旁而非操作区：操作列固定 10rem，
-             徽标若留在按钮组会把操作列撑宽、列宽逐行漂移（见列头注释）。 */
-          <Badge
-            variant="outline"
-            className="h-5 shrink-0 px-1.5 text-[11px] font-normal"
-          >
-            {t("providers.live.enabled")}
-          </Badge>
-        ) : null}
+        {/* 缺必填项（端点/key/模板变量）提醒放名称最左，缺了才显示；hover 列
+            明细。official / cloud_provider 不要求端点/key（见
+            providerMissingRequired），它们不显示此图标。 */}
         {missingRequired.length > 0 ? (
           <Tooltip>
             <TooltipTrigger
@@ -557,8 +590,36 @@ function ProviderRow({
             </TooltipContent>
           </Tooltip>
         ) : null}
+        <span className="truncate font-medium">{p.name}</span>
+        {additive && liveManaged ? (
+          /* 「已加入 live」状态徽标放名字旁而非操作区：操作列固定 10rem，
+             徽标若留在按钮组会把操作列撑宽、列宽逐行漂移（见列头注释）。 */
+          <Badge
+            variant="outline"
+            className="h-5 shrink-0 px-1.5 text-[11px] font-normal"
+          >
+            {t("providers.live.enabled")}
+          </Badge>
+        ) : null}
       </span>
-      <Badge variant="secondary">{t(`providers.category.${p.category}`)}</Badge>
+      {/* 分类徽标按分类固定四色（chart 数据色：差异大、非黑白灰、换肤跟随）：
+          行 hover 用 bg-muted，灰底 secondary 徽标会融进行背景消失；分类色的
+          12% tint 底 + 边框在 hover 下依然可辨。official 与 cn_official 同文案
+          同色。色点从行首移进徽标——色点在名字前只是装饰，进徽标才绑定语义。 */}
+      <Badge
+        variant="outline"
+        className="h-5 shrink-0 gap-1 px-1.5 font-normal text-[11px]"
+        style={categoryBadgeStyle(p.category)}
+      >
+        <span
+          aria-hidden
+          className="size-1.5 shrink-0 rounded-full"
+          style={{
+            backgroundColor: `var(--${CATEGORY_COLOR[p.category]})`,
+          }}
+        />
+        {t(`providers.category.${p.category}`)}
+      </Badge>
       <span
         className="text-muted-foreground truncate font-mono text-xs"
         title={endpoint}
@@ -568,10 +629,11 @@ function ProviderRow({
       <span className="text-muted-foreground truncate text-xs">
         {model || "—"}
       </span>
-      {/* 行内按钮 hover 用 hover:!bg-accent-brand/25（主题色，比 accent-tint
-          浓——accent-tint 只有品牌色 10-12% 透明，肉眼近于无）覆盖 Button
-          默认的 hover:bg-muted：整行 hover 也是 bg-muted，按钮的 hover 反馈
-          会被行吞掉（深浅主题都成立），! 确保覆盖。 */}
+      {/* 行内按钮：行 hover（bg-muted）时灰边框会融进行背景只剩文字——switch
+          按钮（行内主操作）行 hover 时边框换 accent 色保持可辨，编辑/删除是
+          ghost 图标按钮，融入可接受。按钮自身 hover 用 hover:!bg-accent-brand/25
+          （主题色，比 accent-tint 浓——accent-tint 只有品牌色 10-12% 透明，肉
+          眼近于无），! 确保覆盖 Button 默认的 hover:bg-muted。 */}
       <div className="flex justify-end gap-1">
         {additive ? (
           // 附加模式（opencode）：按 liveManaged 显示「移出」或「加入」，不走
@@ -581,7 +643,7 @@ function ProviderRow({
               variant="outline"
               size="sm"
               onClick={onRemoveFromLive}
-              className="shrink-0 hover:!bg-accent-brand/25"
+              className="shrink-0 group-hover:border-accent-brand/60 hover:!bg-accent-brand/25"
             >
               {t("providers.live.disable")}
             </Button>
@@ -590,7 +652,7 @@ function ProviderRow({
               variant="outline"
               size="sm"
               onClick={onAddToLive}
-              className="shrink-0 hover:!bg-accent-brand/25"
+              className="shrink-0 group-hover:border-accent-brand/60 hover:!bg-accent-brand/25"
             >
               {t("providers.live.enable")}
             </Button>
@@ -611,7 +673,7 @@ function ProviderRow({
             variant="outline"
             size="sm"
             onClick={onSwitch}
-            className="shrink-0 hover:!bg-accent-brand/25"
+            className="shrink-0 group-hover:border-accent-brand/60 hover:!bg-accent-brand/25"
           >
             {t("providers.switch")}
           </Button>
@@ -631,6 +693,22 @@ function ProviderRow({
             <Pencil />
           </TooltipTrigger>
           <TooltipContent>{t("common.edit")}</TooltipContent>
+        </Tooltip>
+        <Tooltip>
+          <TooltipTrigger
+            render={
+              <Button
+                variant="ghost"
+                size="icon-sm"
+                onClick={onDuplicate}
+                aria-label={t("common.copy")}
+                className="hover:!bg-accent-brand/25"
+              />
+            }
+          >
+            <Copy />
+          </TooltipTrigger>
+          <TooltipContent>{t("common.copy")}</TooltipContent>
         </Tooltip>
         <Tooltip>
           <TooltipTrigger

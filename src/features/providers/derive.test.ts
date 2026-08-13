@@ -22,7 +22,6 @@ import {
   geminiSnippetMissingKeys,
   grokConfigToml,
   groupSnippetCandidates,
-  pairModelNameKeys,
   hasOneM,
   isSensitiveConfigKey,
   metaTemplateValues,
@@ -31,6 +30,7 @@ import {
   openCodeHeaders,
   openCodeModels,
   openCodeNpm,
+  pairModelNameKeys,
   parseCodexConfig,
   parseGeminiConfig,
   parseGrokConfig,
@@ -292,19 +292,29 @@ describe("withBasicFieldsInText", () => {
 })
 
 describe("providerFromPreset", () => {
-  it("builds a custom-category draft that copies the preset snapshot verbatim", () => {
+  it("inherits the preset's category and copies the preset snapshot verbatim", () => {
     const kimi = PROVIDER_PRESETS.find((p) => p.name === "Kimi")
     expect(kimi).toBeDefined()
     const draft = providerFromPreset(kimi!)
-    // 预设是起点、定制是终点：落表单的草稿归 custom，id 留空让 save 分配。
+    // 草稿继承预设分类（cn_official 保持国内官方），id 留空让 save 分配。
     expect(draft.id).toBe("")
-    expect(draft.category).toBe("custom")
+    expect(draft.category).toBe("cn_official")
     expect(draft.name).toBe("Kimi")
     expect(draft.settingsConfig).toBe(kimi!.settingsConfig)
     // derive 读函数直接回填表单字段，无需另起一套解析。
     expect(providerEndpoint(draft)).toBe("https://api.moonshot.cn/anthropic")
     expect(providerModel(draft)).toBe("kimi-k2.7-code")
     expect(providerApiKey(draft)).toBe("")
+  })
+
+  it("keeps a cloud_provider preset's category（列表分类与切换检查按它区分）", () => {
+    const bedrock = PROVIDER_PRESETS.find(
+      (p) => p.name === "AWS Bedrock (AKSK)",
+    )
+    expect(bedrock).toBeDefined()
+    const draft = providerFromPreset(bedrock!)
+    expect(draft.category).toBe("cloud_provider")
+    expect(draft.settingsConfig).toBe(bedrock!.settingsConfig)
   })
 
   it("keeps the preset's model mapping after withBasicFields writes the form fields", () => {
@@ -1443,7 +1453,8 @@ describe("emptyProvider / providerFromPreset app 参数", () => {
     const draft = providerFromPreset(codexKimi!, "codex")
     expect(draft.app).toBe("codex")
     expect(draft.name).toBe("Kimi")
-    expect(draft.category).toBe("custom")
+    // 草稿继承预设分类（Kimi 预设是 cn_official，不再抹成 custom）。
+    expect(draft.category).toBe("cn_official")
     expect(draft.settingsConfig).toBe(codexKimi!.settingsConfig)
     expect(codexApiKey(draft.settingsConfig)).toBe("")
     expect(codexConfigToml(draft.settingsConfig)).toContain("kimi-k2.7-code")

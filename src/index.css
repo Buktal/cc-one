@@ -139,12 +139,22 @@
   --accent-brand: var(--brand);
   --accent-brand-strong: var(--brand-strong);
   --accent-tint: color-mix(in srgb, var(--brand) 10%, transparent);
-  /* stop_reason semantic aliases (see .sr-chip). Default to the chart buckets
+  /* stop_reason semantic aliases (see .sem-chip). Default to the chart buckets
      by hue family; a skin may override any --sr-* to recolor chips alone. */
   --sr-success: var(--chart-cache-read);
   --sr-tool: var(--chart-input);
   --sr-warn: var(--chart-output);
   --sr-error: var(--destructive);
+  /* 会话类型 semantic aliases (see .sem-chip): main = 常规主会话 → success 绿,
+     subagent = 派生的工具性活动 → tool 琥珀 — 与请求日志的结局色板同源, 扫一
+     眼即对应. 与 --sr-* 平行: 皮肤可覆盖任一 --type-* 单独重色. */
+  --type-main: var(--sr-success);
+  --type-sub: var(--sr-tool);
+  /* 分类徽标语义色（providers 列表）：官方固定蓝。chart 四桶是数据语义
+     （input/output/cache-*），皮肤会重映射——crimson 的 cache-create 是淡蓝、
+     sage 是橙、azure 是黄绿，借它当分类色换肤即漂移。分类语义色固定，皮肤
+     不覆盖。 */
+  --cat-official: #2563eb;
   --row-hover: #ededed;
   --row-hover-shadow: 0 4px 12px -4px rgba(0, 0, 0, 0.15);
   /* Scrollbar — thin, no arrows (Windows WebView2). Flat semi-transparent
@@ -369,12 +379,13 @@
 }
 
 /*
- * stop_reason semantic chip — recolors with the theme via the --sr-* aliases
- * (which default to the chart palette in :root). Tinted via color-mix
- * (Chromium 111+ / Safari 16.2+, both within Tauri's webview floor). Used by
- * the request-log table.
+ * Semantic chip — shared shape for status-like tags carrying a semantic color
+ * via a --sr-* / --type-* alias (defaults to the chart palette in :root).
+ * Tinted via color-mix (Chromium 111+ / Safari 16.2+, both within Tauri's
+ * webview floor). Used by the request-log table (stop_reason) and the
+ * sessions type column (main / subagent).
  */
-.sr-chip {
+.sem-chip {
   display: inline-flex;
   align-items: center;
   border-radius: 6px;
@@ -399,6 +410,14 @@
 .sr-error {
   color: var(--sr-error);
   background: color-mix(in srgb, var(--sr-error) 16%, transparent);
+}
+.type-main {
+  color: var(--type-main);
+  background: color-mix(in srgb, var(--type-main) 16%, transparent);
+}
+.type-sub {
+  color: var(--type-sub);
+  background: color-mix(in srgb, var(--type-sub) 16%, transparent);
 }
 
 /*
