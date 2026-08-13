@@ -1182,19 +1182,32 @@ fn remove_opencode_from_live(store: &Store, provider: Provider) -> AppResult<Pro
 
 /// 附加模式「从配置文件导入」：把 opencode.json 的 `provider.<key>` 反向导入 DB。
 /// 读盘薄壳——核心逻辑在 [`import_opencode_from_live_text`]（可测，不碰文件系统）。
-fn import_opencode_from_live(store: &Store, app: App) -> AppResult<u32> {
+fn import_opencode_from_live(
+    store: &Store,
+    app: App,
+    name_overrides: &HashMap<String, String>,
+) -> AppResult<u32> {
     let path = live_opencode::opencode_config_path()?;
     let live_text = live::read_live_settings(&path)?;
-    import_opencode_from_live_text(store, app, &live_text)
+    import_opencode_from_live_text(store, app, &live_text, name_overrides)
 }
 
 /// 单激活应用「从 live 配置文件导入」（ADR-0012 泛化）：读该应用的 live 文件(s)
 /// 反向解析为快照（至多 1 个），upsert 进库（按 name 去重）。opencode 走
-/// [`import_opencode_from_live`]。返回写入条数。
-fn import_single_activate_from_live(store: &Store, app: App) -> AppResult<u32> {
+/// [`import_opencode_from_live`]。返回写入条数。`name_overrides` = 预览列表里
+/// 用户行内改过的名字（key → name；单激活 key == name）。
+fn import_single_activate_from_live(
+    store: &Store,
+    app: App,
+    name_overrides: &HashMap<String, String>,
+) -> AppResult<u32> {
     let Some(snap) = read_live_snapshot(app)? else {
         return Ok(0);
     };
+    let mut snap = snap;
+    if let Some(name) = name_overrides.get(&snap.name) {
+        snap.name = name.clone();
+    }
     import_live::upsert_by_name(store, app, &snap, &crate::time::now_iso())
 }
 
@@ -1267,7 +1280,12 @@ fn preview_single_activate(store: &Store, app: App) -> AppResult<LiveImportPrevi
 /// name（保留 id/展示字段）；否则新建（空 id 交 save_provider 自动生成 hex id +
 /// sort_index + updated_at）。反复 import 按 liveKey 去重，不产生重复。返回导入/
 /// 更新条数。
-fn import_opencode_from_live_text(store: &Store, app: App, live_text: &str) -> AppResult<u32> {
+fn import_opencode_from_live_text(
+    store: &Store,
+    app: App,
+    live_text: &str,
+    name_overrides: &HashMap<String, String>,
+) -> AppResult<u32> {
     let entries = live_opencode::provider_entries(live_text);
     if entries.is_empty() {
         return Ok(0);
@@ -1282,11 +1300,17 @@ fn import_opencode_from_live_text(store: &Store, app: App, live_text: &str) -> A
     let mut count = 0u32;
     for (key, entry) in entries {
         let settings_config = serde_json::to_string(&entry)?;
-        let display_name = entry
-            .get("name")
-            .and_then(|v| v.as_str())
-            .unwrap_or(&key)
-            .to_string();
+        // 预览列表的行内改名优先（key → name 覆盖），否则 entry.name，缺 → key。
+        let display_name = name_overrides
+            .get(&key)
+            .cloned()
+            .unwrap_or_else(|| {
+                entry
+                    .get("name")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or(&key)
+                    .to_string()
+            });
         let provider = match by_live_key.get(&key) {
             Some(existing) => Provider {
                 name: display_name,
@@ -1369,14 +1393,15 @@ pub async fn import_providers_from_live_cmd(
     state: State<'_, AppState>,
     app_handle: tauri::AppHandle,
     app: App,
+    name_overrides: HashMap<String, String>,
 ) -> AppResult<u32> {
     let store = state.store.clone();
     let count = tauri::async_runtime::spawn_blocking(move || -> AppResult<u32> {
         // opencode 附加模式多条目共存；单激活应用一份 live → 至多一个快照。
         if app == App::OpenCode {
-            import_opencode_from_live(&store, app)
+            import_opencode_from_live(&store, app, &name_overrides)
         } else {
-            import_single_activate_from_live(&store, app)
+            import_single_activate_from_live(&store, app, &name_overrides)
         }
     })
     .await
@@ -1682,7 +1707,13 @@ mod tests {
     #[test]
     fn import_creates_providers_with_live_key_and_managed_flag() {
         let s = mem();
-        let n = import_opencode_from_live_text(&s, App::OpenCode, opencode_live_json()).unwrap();
+        let n = import_opencode_from_live_text(
+            &s,
+            App::OpenCode,
+            opencode_live_json(),
+            &HashMap::new(),
+        )
+        .unwrap();
         assert_eq!(n, 2);
         let providers = s.list_providers_for(App::OpenCode).unwrap();
         assert_eq!(providers.len(), 2);
@@ -1714,8 +1745,10 @@ mod tests {
     #[test]
     fn import_updates_existing_same_live_key_no_duplicate() {
         let s = mem();
-        import_opencode_from_live_text(&s, App::OpenCode, opencode_live_json()).unwrap();
-        let n = import_opencode_from_live_text(&s, App::OpenCode, opencode_live_json()).unwrap();
+        import_opencode_from_live_text(&s, App::OpenCode, opencode_live_json(), &HashMap::new())
+            .unwrap();
+        let n = import_opencode_from_live_text(&s, App::OpenCode, opencode_live_json(), &HashMap::new())
+            .unwrap();
         assert_eq!(n, 2, "第二次仍处理 2 条（按 liveKey 更新）");
         assert_eq!(
             s.list_providers_for(App::OpenCode).unwrap().len(),
@@ -1724,11 +1757,35 @@ mod tests {
         );
     }
 
+    /// 行内改名覆盖：nameOverrides（key → name）优先于 entry.name / key。
+    #[test]
+    fn import_respects_name_overrides() {
+        let s = mem();
+        let overrides = HashMap::from([("deepseek".to_string(), "DS 直连".to_string())]);
+        let n = import_opencode_from_live_text(&s, App::OpenCode, opencode_live_json(), &overrides)
+            .unwrap();
+        assert_eq!(n, 2);
+        let providers = s.list_providers_for(App::OpenCode).unwrap();
+        let ds = providers
+            .iter()
+            .find(|p| live_opencode::meta_live_key(&p.meta).as_deref() == Some("deepseek"))
+            .expect("deepseek 存在");
+        assert_eq!(ds.name, "DS 直连", "覆盖名优先于 entry.name");
+        // 未被覆盖的 key 仍走 entry.name / key 规则。
+        let kimi = providers
+            .iter()
+            .find(|p| live_opencode::meta_live_key(&p.meta).as_deref() == Some("kimi"))
+            .expect("kimi 存在");
+        assert_eq!(kimi.name, "kimi");
+    }
+
     /// 无 provider 段 → 0 条（顶层用户字段 model 等被忽略，不报错）。
     #[test]
     fn import_empty_providers_section_is_zero() {
         let s = mem();
-        let n = import_opencode_from_live_text(&s, App::OpenCode, r#"{"model":"x"}"#).unwrap();
+        let n =
+            import_opencode_from_live_text(&s, App::OpenCode, r#"{"model":"x"}"#, &HashMap::new())
+                .unwrap();
         assert_eq!(n, 0);
         assert!(s.list_providers_for(App::OpenCode).unwrap().is_empty());
     }
@@ -1748,7 +1805,7 @@ mod tests {
         assert_eq!(n, 1);
         let providers = s.list_providers_for(App::Claude).unwrap();
         assert_eq!(providers.len(), 1);
-        assert_eq!(providers[0].name, "api.moonshot.cn");
+        assert_eq!(providers[0].name, "moonshot", "注册域去 TLD（host_of 规则）");
         let sc: serde_json::Value = serde_json::from_str(&providers[0].settings_config).unwrap();
         assert_eq!(sc["env"]["ANTHROPIC_MODEL"], "kimi");
     }

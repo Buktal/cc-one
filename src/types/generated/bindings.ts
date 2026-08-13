@@ -321,7 +321,7 @@ export const commands = {
 	 *  附加模式「从配置文件导入」按钮：把现有 opencode.json 的 `provider.*` 反向拉进
 	 *  cc one DB。返回导入/更新条数。
 	 */
-	importProvidersFromLiveCmd: (app: App) => typedError<number, AppError>(__TAURI_INVOKE("import_providers_from_live_cmd", { app })),
+	importProvidersFromLiveCmd: (app: App, nameOverrides: { [key in string]: string }) => typedError<number, AppError>(__TAURI_INVOKE("import_providers_from_live_cmd", { app, nameOverrides })),
 	/**
 	 *  「从本机配置文件导入」预览：只读命令，按 app 分派（opencode 走读盘 +
 	 *  Missing 状态；单激活应用走快照解析），返回将导入的供应商（名称/端点/是否

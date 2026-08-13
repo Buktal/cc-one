@@ -21,6 +21,7 @@ import {
   geminiSnippetIssue,
   geminiSnippetMissingKeys,
   grokConfigToml,
+  groupSnippetCandidates,
   hasOneM,
   isSensitiveConfigKey,
   metaTemplateValues,
@@ -2069,6 +2070,32 @@ describe("withOpenCode* 写入器", () => {
     expect(openCodeModels(next)).toEqual({
       "deepseek-chat": { name: "DeepSeek Chat" },
       "deepseek-reasoner": { name: "DeepSeek Reasoner" },
+    })
+  })
+})
+
+describe("groupSnippetCandidates", () => {
+  it("把候选按 端点 / 模型 / 行为开关 三组归类，组内保序", () => {
+    expect(
+      groupSnippetCandidates([
+        "ANTHROPIC_BASE_URL",
+        "ANTHROPIC_DEFAULT_FABLE_MODEL",
+        "includeCoAuthoredBy",
+        "CLAUDE_CODE_SUBAGENT_MODEL",
+        "effortLevel",
+      ]),
+    ).toEqual({
+      endpoint: ["ANTHROPIC_BASE_URL"],
+      model: ["ANTHROPIC_DEFAULT_FABLE_MODEL", "CLAUDE_CODE_SUBAGENT_MODEL"],
+      behavior: ["includeCoAuthoredBy", "effortLevel"],
+    })
+  })
+
+  it("空候选 → 三组皆空", () => {
+    expect(groupSnippetCandidates([])).toEqual({
+      endpoint: [],
+      model: [],
+      behavior: [],
     })
   })
 })

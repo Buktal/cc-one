@@ -75,7 +75,6 @@ export function PricingView() {
     totalPages,
     paged,
     goToPage,
-    setRemoving,
   } = usePricingTable()
 
   const [editing, setEditing] = useState<PricingEntry | null>(null)
@@ -376,13 +375,10 @@ export function PricingView() {
       <ConfirmDialog
         open={deleting !== null}
         onOpenChange={(o) => {
-          if (!o) {
-            setDeleting(null)
-            // Any close path (cancel, backdrop, or success — success leaves
-            // busy true to skip the spinner flash-back) must release busy so
-            // the next dialog opens with a live button.
-            setRemoving(false)
-          }
+          // busy 由 usePricingTable 的 remove 在成功/失败路径自行重置（prop
+          // 驱动的关闭不触发本回调）；用户取消时 busy 恒为 false（删除中按钮
+          // 已 disabled），无需在此清理。
+          if (!o) setDeleting(null)
         }}
         title={t("confirm.deleteTitle", { name: deleting?.model_key ?? "" })}
         description={t("pricing.confirm.deleteDesc", {

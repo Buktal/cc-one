@@ -3,8 +3,13 @@
 // 新建或更新），确认后才执行导入，完成后内联展示结果报告（取代原来的直接执行
 // + toast）。opencode 是 provider.<key> map（多条）；单激活应用一份 live → 至多
 // 一条（claude/codex/gemini/grok）。自包含：内部调 previewLiveImport /
-// importProvidersFromLive 两个 mutation，`!open` 直接 unmount 重置状态（与
-// cc-switch-import-dialog 同一生命周期）。
+// importProvidersFromLive 两个 mutation。对话框常驻挂载（providers-view 固定
+// 渲染），`!open` 只 return null 不卸载——故预览 effect 依赖 `open`：关闭再
+// 打开会重新读盘，不残留上一次的旧结果。
+//
+// 命名时刻（signature）：导入名默认取 base_url 的注册域（后端 host_of），每条
+// 目下方展示推导理由「名取自 <url> 的主机名」；行内点击名字即可改名，改后由
+// 用户接管（理由行消失），确认导入时通过 nameOverrides 传给后端覆盖推导名。
 //
 // 视图状态机：loading → missing（文件不存在，带路径）/ error（红块）/ ready 空态
 // （无可导入）→ ready 预览（摘要 + 条目列表 + 确认）→ result（成功块 + 列表）。
@@ -15,7 +20,9 @@ import {
   AlertCircle,
   CheckCircle2,
   FileJson,
+  FileQuestion,
   Loader2,
+  Pencil,
   Upload,
 } from "lucide-react"
 import { useEffect, useState } from "react"
@@ -38,7 +45,11 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog"
-import { snippetCoveredKeys } from "@/features/providers/derive"
+import { Input } from "@/components/ui/input"
+import {
+  groupSnippetCandidates,
+  snippetCoveredKeys,
+} from "@/features/providers/derive"
 import { toStructuredError } from "@/lib/error"
 
 import type { App, LiveImportPreviewEntry } from "@/types/generated/bindings"
@@ -83,6 +94,9 @@ export function LiveImportDialog({
   const [extractSnippet, { isLoading: extracting }] =
     useExtractSnippetFromLiveMutation()
   const [phase, setPhase] = useState<Phase>({ kind: "loading" })
+  // 预览列表里行内改过的名字（key → name），确认导入时传给后端覆盖推导名
+  // （单激活 key == name；opencode key = provider.<key>）。
+  const [nameOverrides, setNameOverrides] = useState<Record<string, string>>({})
   // 现有片段（T6 候选过滤用：「片段缺」才提示，ADR-0012）。
   const { data: snippet } = useGetCommonConfigSnippetQuery(app)
   // 导入完成后仍未被现有片段覆盖的候选键。提取只补缺失（ADR-0010），已覆盖
@@ -94,11 +108,13 @@ export function LiveImportDialog({
         )
       : []
 
-  // 打开 → 立即预览（mutation 无缓存，每次打开都是新读盘；`!open` 时组件已
-  // unmount，本 effect 只在挂载后跑一次）。preview trigger 引用跨渲染稳定，
-  // 加进依赖数组无副作用（RTK Query 保证）。
+  // 打开 → 立即预览（mutation 无缓存，每次打开都是新读盘）。组件常驻挂载，
+  // 依赖 `open` 让关闭再打开重新读盘、并清掉上一次的行内改名。preview trigger
+  // 引用跨渲染稳定，加进依赖数组无副作用（RTK Query 保证）。
   useEffect(() => {
+    if (!open) return
     setPhase({ kind: "loading" })
+    setNameOverrides({})
     void (async () => {
       const result = await preview(app)
       if (result.error) {
@@ -111,11 +127,11 @@ export function LiveImportDialog({
       }
       setPhase({ kind: "ready", entries: result.data.entries })
     })()
-  }, [app, preview])
+  }, [open, app, preview])
 
   async function onConfirm() {
     if (phase.kind !== "ready") return
-    const result = await importFromLive(app)
+    const result = await importFromLive({ app, nameOverrides })
     if (result.error) {
       setPhase({ kind: "error", message: errorMessage(result.error) })
       return
@@ -166,8 +182,8 @@ export function LiveImportDialog({
             {t("common.loading")}
           </div>
         ) : phase.kind === "missing" ? (
-          <p className="bg-destructive/10 text-destructive flex items-start gap-1.5 rounded-md px-3 py-2 text-xs">
-            <AlertCircle className="mt-0.5 size-3.5 shrink-0" />
+          <p className="bg-muted/50 text-muted-foreground flex items-start gap-1.5 rounded-md px-3 py-2 text-xs">
+            <FileQuestion className="mt-0.5 size-3.5 shrink-0" />
             <span>
               {t("providers.liveImport.missing", { path: phase.path })}
             </span>
@@ -187,7 +203,14 @@ export function LiveImportDialog({
             <p className="text-muted-foreground text-xs">
               {t("providers.liveImport.summary", { created, updated })}
             </p>
-            <ImportPreviewList entries={phase.entries} preview />
+            <ImportPreviewList
+              entries={phase.entries}
+              preview
+              overrides={nameOverrides}
+              onRename={(key, name) =>
+                setNameOverrides((prev) => ({ ...prev, [key]: name }))
+              }
+            />
           </div>
         ) : (
           <div className="flex flex-col gap-3">
@@ -199,27 +222,34 @@ export function LiveImportDialog({
                 })}
               </span>
             </div>
-            <ImportPreviewList entries={phase.entries} preview={false} />
+            <ImportPreviewList
+              entries={phase.entries}
+              preview={false}
+              overrides={nameOverrides}
+            />
             {/* T6：单激活应用导入后检测到可共享键（且片段缺该键）→ 非静默提示
                 「提取为通用片段」。用户确认才提取（ADR-0012）。opencode 无候选
-                → 不显示。 */}
+                → 不显示。候选按「端点 / 模型 / 行为开关」人话分组展示。 */}
             {pendingCandidates.length > 0 ? (
-              <div className="bg-muted/40 flex items-center justify-between gap-2 rounded-md border border-border p-2.5">
-                <span className="text-muted-foreground text-xs">
-                  {t("providers.liveImport.extractHint", {
-                    keys: pendingCandidates.join(", "),
-                  })}
-                </span>
-                <Button
-                  size="sm"
-                  variant="outline"
-                  onClick={() => void onExtract()}
-                  disabled={extracting}
-                  className="shrink-0"
-                >
-                  {extracting ? <Loader2 className="animate-spin" /> : null}
-                  {t("providers.liveImport.extract")}
-                </Button>
+              <div className="bg-muted/40 rounded-md border border-border p-2.5">
+                <div className="flex items-start justify-between gap-2">
+                  <span className="text-muted-foreground text-xs">
+                    {t("providers.liveImport.extractHint", {
+                      count: pendingCandidates.length,
+                    })}
+                  </span>
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    onClick={() => void onExtract()}
+                    disabled={extracting}
+                    className="shrink-0"
+                  >
+                    {extracting ? <Loader2 className="animate-spin" /> : null}
+                    {t("providers.liveImport.extract")}
+                  </Button>
+                </div>
+                <CandidateGroups keys={pendingCandidates} />
               </div>
             ) : null}
           </div>
@@ -245,55 +275,157 @@ export function LiveImportDialog({
   )
 }
 
-/** 条目列表：名称 + 端点（mono 截断）+ 徽标组。preview=true 时额外显示
- *  「含密钥/无密钥」与「新建/更新」徽标；结果视图只留名称与端点（密钥信息
- *  在预览环节已完成告知，结果页保持干净）。 */
+/** 可共享配置候选的三组人话分组（端点 / 模型 / 行为开关）。分组只改展示
+ *  结构，提取时仍提取全部候选（后端过滤凭据）。 */
+function CandidateGroups({ keys }: { keys: string[] }) {
+  const { t } = useTranslation()
+  const groups = groupSnippetCandidates(keys)
+  const rows: Array<[string, string[]]> = []
+  if (groups.endpoint.length > 0) {
+    rows.push([t("providers.liveImport.extractGroups.endpoint"), groups.endpoint])
+  }
+  if (groups.model.length > 0) {
+    rows.push([t("providers.liveImport.extractGroups.model"), groups.model])
+  }
+  if (groups.behavior.length > 0) {
+    rows.push([t("providers.liveImport.extractGroups.behavior"), groups.behavior])
+  }
+  return (
+    <div className="mt-1.5 flex flex-col gap-0.5">
+      {rows.map(([label, ks]) => (
+        <div key={label} className="flex items-baseline gap-1.5 text-xs">
+          <span className="text-muted-foreground shrink-0">{label}</span>
+          <span className="min-w-0 truncate font-mono">{ks.join(", ")}</span>
+        </div>
+      ))}
+    </div>
+  )
+}
+
+/** 条目行：名字（可点击改名）+ 推导理由行（等宽、截断）+ 徽标组。preview=true
+ *  时显示「含密钥/无密钥」与「新建/更新」徽标且名字可改；结果视图只读（密钥
+ *  信息在预览环节已完成告知，结果页保持干净，名字已按覆盖值落库）。行内改名后
+ *  理由行消失——名字由用户接管，不再需要解释它的来处。 */
+function EntryRow({
+  entry: e,
+  preview,
+  name,
+  renamed,
+  onRename,
+}: {
+  entry: LiveImportPreviewEntry
+  preview: boolean
+  /** 显示名 = 行内覆盖名，未改过则是后端推导名。 */
+  name: string
+  /** 名字是否被用户行内改过（overrides 里有此 key）。 */
+  renamed: boolean
+  onRename: (name: string) => void
+}) {
+  const { t } = useTranslation()
+  const [editing, setEditing] = useState(false)
+  const [draft, setDraft] = useState("")
+
+  function commit() {
+    const trimmed = draft.trim()
+    if (trimmed) onRename(trimmed)
+    setEditing(false)
+  }
+
+  return (
+    <div className="group/item flex items-start justify-between gap-3 border-b border-border py-1.5 text-sm last:border-b-0">
+      <div className="min-w-0 flex-1">
+        {editing ? (
+          <Input
+            value={draft}
+            autoFocus
+            onFocus={(ev) => ev.currentTarget.select()}
+            onChange={(ev) => setDraft(ev.target.value)}
+            onBlur={commit}
+            onKeyDown={(ev) => {
+              if (ev.key === "Enter") {
+                ev.preventDefault()
+                commit()
+              } else if (ev.key === "Escape") {
+                // 清空 draft：Escape 后 input 卸载，若随后 blur 派发，commit
+                // 读到空值 → 只退出编辑不改名（放弃本次修改）。
+                setEditing(false)
+                setDraft("")
+              }
+            }}
+            className="h-6 text-xs"
+            aria-label={t("providers.liveImport.col.name")}
+          />
+        ) : (
+          <button
+            type="button"
+            onClick={() => {
+              setDraft(name)
+              setEditing(true)
+            }}
+            disabled={!preview}
+            className="text-foreground flex max-w-full items-center gap-1 truncate rounded-sm font-medium outline-none hover:underline focus-visible:ring-2 focus-visible:ring-ring disabled:cursor-default disabled:hover:no-underline"
+            title={preview ? t("providers.liveImport.renameHint") : undefined}
+          >
+            {name}
+            <Pencil className="text-muted-foreground size-3 shrink-0 opacity-0 transition-opacity group-hover/item:opacity-100" />
+          </button>
+        )}
+        {!editing && !renamed && e.baseUrl ? (
+          <div className="text-muted-foreground truncate font-mono text-xs">
+            {t("providers.liveImport.nameFrom", { url: e.baseUrl })}
+          </div>
+        ) : null}
+      </div>
+      <span className="flex shrink-0 items-center gap-1.5 pt-0.5">
+        {preview ? (
+          <>
+            <Badge
+              variant={e.hasSecret ? "secondary" : "outline"}
+              className="h-5 shrink-0 px-1.5 font-normal text-[11px]"
+            >
+              {e.hasSecret
+                ? t("providers.liveImport.hasSecret")
+                : t("providers.liveImport.noSecret")}
+            </Badge>
+            <Badge
+              variant="outline"
+              className="h-5 shrink-0 px-1.5 font-normal text-[11px]"
+            >
+              {e.isNew
+                ? t("providers.liveImport.badge.new")
+                : t("providers.liveImport.badge.update")}
+            </Badge>
+          </>
+        ) : null}
+      </span>
+    </div>
+  )
+}
+
+/** 条目列表：名称（行内可改名）+ 推导理由行 + 徽标组。overrides = 预览阶段
+ *  行内改过的名字（key → name）；结果视图沿用（导入已按覆盖后的名字落库）。 */
 function ImportPreviewList({
   entries,
   preview,
+  overrides,
+  onRename,
 }: {
   entries: LiveImportPreviewEntry[]
   preview: boolean
+  overrides: Record<string, string>
+  onRename?: (key: string, name: string) => void
 }) {
-  const { t } = useTranslation()
   return (
     <div className="flex flex-col">
       {entries.map((e) => (
-        <div
+        <EntryRow
           key={e.key}
-          className="flex items-center justify-between gap-3 border-b border-border py-1.5 text-sm last:border-b-0"
-        >
-          <span className="min-w-0">
-            <span className="truncate font-medium">{e.name}</span>
-            {e.baseUrl ? (
-              <span className="text-muted-foreground ml-2 truncate font-mono text-xs">
-                {e.baseUrl}
-              </span>
-            ) : null}
-          </span>
-          <span className="flex shrink-0 items-center gap-1.5">
-            {preview ? (
-              <>
-                <Badge
-                  variant={e.hasSecret ? "secondary" : "outline"}
-                  className="h-5 shrink-0 px-1.5 font-normal text-[11px]"
-                >
-                  {e.hasSecret
-                    ? t("providers.liveImport.hasSecret")
-                    : t("providers.liveImport.noSecret")}
-                </Badge>
-                <Badge
-                  variant="outline"
-                  className="h-5 shrink-0 px-1.5 font-normal text-[11px]"
-                >
-                  {e.isNew
-                    ? t("providers.liveImport.badge.new")
-                    : t("providers.liveImport.badge.update")}
-                </Badge>
-              </>
-            ) : null}
-          </span>
-        </div>
+          entry={e}
+          preview={preview}
+          name={overrides[e.key] ?? e.name}
+          renamed={overrides[e.key] !== undefined}
+          onRename={(name) => onRename?.(e.key, name)}
+        />
       ))}
     </div>
   )

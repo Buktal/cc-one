@@ -504,9 +504,14 @@ export const vaultApi = createApi({
       invalidatesTags: ["Providers"],
     }),
     /** 附加模式（opencode）：把现有 opencode.json 的 `provider.*` 反向导入 DB。
-     *  返回导入/更新条数。 */
-    importProvidersFromLive: b.mutation<number, App>({
-      queryFn: async (app) => run(commands.importProvidersFromLiveCmd(app)),
+     *  返回导入/更新条数。`nameOverrides` = 预览列表里行内改过的名字
+     *  （key → name，导入时优先于 host 推导 / entry.name）。 */
+    importProvidersFromLive: b.mutation<
+      number,
+      { app: App; nameOverrides: Record<string, string> }
+    >({
+      queryFn: async ({ app, nameOverrides }) =>
+        run(commands.importProvidersFromLiveCmd(app, nameOverrides)),
       invalidatesTags: ["Providers"],
     }),
     /** 附加模式（opencode）「从 opencode.json 导入」预览：只读，返回将导入的

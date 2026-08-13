@@ -14,14 +14,11 @@ import {
 import { useSortable } from "@dnd-kit/react/sortable"
 import {
   AlertTriangle,
-  ArrowRightLeft,
-  ChevronDown,
   Database,
   Download,
   Info,
   Pencil,
   Plus,
-  RefreshCw,
   Search,
   Trash2,
   Upload,
@@ -49,12 +46,6 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog"
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuTrigger,
-} from "@/components/ui/dropdown-menu"
 import { Input } from "@/components/ui/input"
 import {
   Tooltip,
@@ -76,6 +67,7 @@ import { cn } from "@/lib/utils"
 import type { App, Provider } from "@/types/generated/bindings"
 import { CcSwitchImportDialog } from "./cc-switch-import-dialog"
 import { CommonConfigSnippetCard } from "./common-config-snippet-card"
+import { ImportSourceDialog } from "./import-source-dialog"
 import { LiveImportDialog } from "./live-import-dialog"
 import { ProviderFormSheet } from "./provider-form-sheet"
 import {
@@ -116,20 +108,20 @@ export function ProvidersView() {
   async function onConfirmDelete() {
     if (!deleting) return
     setDeletingBusy(true)
-    // Busy stays true on success: the dialog closes on the same tick, so its
-    // closing frame replaces the button — resetting here would flash the
-    // spinner back to the label for one frame. Failure resets it for a retry;
-    // any close path (cancel / backdrop) resets it in onOpenChange below.
-    if (await onDelete(deleting)) {
-      setDeleting(null)
-    } else {
-      setDeletingBusy(false)
-    }
+    const ok = await onDelete(deleting)
+    // 成功也重置 busy：关闭由 prop（setDeleting(null)）驱动，不触发
+    // onOpenChange（Radix 只在用户交互时回调）——保持 true 会让下次打开
+    // 弹窗时按钮一直转圈。关闭动画里闪回一帧按钮文案无关紧要。
+    setDeletingBusy(false)
+    if (ok) setDeleting(null)
   }
   const [transfer, setTransfer] = useState<TransferKind | null>(null)
   const [ccswitchOpen, setCcswitchOpen] = useState(false)
   // 「从本机配置文件导入」预览弹窗（全部应用，ADR-0012）。
   const [liveImportOpen, setLiveImportOpen] = useState(false)
+  // 「导入」来源选择弹窗：CC-Switch / 本机配置 / CC One 备份，点卡片进入对应
+  // 流程（全部导入来源收进一个入口，来源不用展开菜单就一眼可见）。
+  const [importSourceOpen, setImportSourceOpen] = useState(false)
   const [query, setQuery] = useState("")
   // 切换确认对话框：切到缺必填项（端点/key/模板变量）的供应商前先问一句，
   // 用户确认后照切不误（「我已经知道它缺东西，就是要切」）。
@@ -267,48 +259,25 @@ export function ProvidersView() {
           ))}
         </fieldset>
         <div className="ml-auto flex gap-2">
-          {/* 数据菜单 = cc one 自有备份（导出/导入 cc one 格式）；外部来源导入
-              独立成「导入」按钮（跟数据菜单并排）：从 CC-Switch 迁移 / 从本机
-              配置文件导入（泛化到全部应用，见 ADR-0012）。主操作「新增」仍为
-              primary。 */}
-          <DropdownMenu>
-            <DropdownMenuTrigger
-              render={<Button variant="outline" size="sm" />}
-            >
-              <Database />
-              {t("providers.dataMenu.label")}
-              <ChevronDown />
-            </DropdownMenuTrigger>
-            <DropdownMenuContent align="end" className="w-max">
-              <DropdownMenuItem onClick={() => setTransfer("export")}>
-                <Download />
-                {t("providers.transfer.export")}
-              </DropdownMenuItem>
-              <DropdownMenuItem onClick={() => setTransfer("import")}>
-                <Upload />
-                {t("providers.transfer.import")}
-              </DropdownMenuItem>
-            </DropdownMenuContent>
-          </DropdownMenu>
-          <DropdownMenu>
-            <DropdownMenuTrigger
-              render={<Button variant="outline" size="sm" />}
-            >
-              <ArrowRightLeft />
-              {t("providers.importMenu.label")}
-              <ChevronDown />
-            </DropdownMenuTrigger>
-            <DropdownMenuContent align="end" className="w-max">
-              <DropdownMenuItem onClick={() => setCcswitchOpen(true)}>
-                <RefreshCw />
-                {t("providers.ccswitch.button")}
-              </DropdownMenuItem>
-              <DropdownMenuItem onClick={() => setLiveImportOpen(true)}>
-                <Upload />
-                {t("providers.live.import")}
-              </DropdownMenuItem>
-            </DropdownMenuContent>
-          </DropdownMenu>
+          {/* 按方向分类：「导入」弹来源选择框（CC-Switch 迁移 / 本机配置文件 /
+              CC One 备份恢复一眼可见，点卡片进入对应流程），「导出」是单一
+              动作直接按钮。主操作「新增」仍为 primary。 */}
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => setImportSourceOpen(true)}
+          >
+            <Upload />
+            {t("providers.importMenu.label")}
+          </Button>
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => setTransfer("export")}
+          >
+            <Download />
+            {t("providers.exportMenu.label")}
+          </Button>
           <Button size="sm" onClick={openNew}>
             <Plus />
             {t("providers.add")}
@@ -477,16 +446,21 @@ export function ProvidersView() {
         onOpenChange={setLiveImportOpen}
         app={app}
       />
+      <ImportSourceDialog
+        open={importSourceOpen}
+        onOpenChange={setImportSourceOpen}
+        onImportCcSwitch={() => setCcswitchOpen(true)}
+        onImportLive={() => setLiveImportOpen(true)}
+        onImportBackup={() => setTransfer("import")}
+      />
 
       <ConfirmDialog
         open={deleting !== null}
         onOpenChange={(open) => {
-          if (!open) {
-            setDeleting(null)
-            // Success leaves busy true (see onConfirmDelete) — release it on
-            // every close path so the next dialog opens with a live button.
-            setDeletingBusy(false)
-          }
+          // busy 由 onConfirmDelete 在成功/失败路径自行重置（prop 驱动的
+          // 关闭不触发本回调）；用户取消时 busy 恒为 false（删除中按钮已
+          // disabled），无需在此清理。
+          if (!open) setDeleting(null)
         }}
         title={t("confirm.deleteTitle", { name: deleting?.name ?? "" })}
         description={t("providers.confirm.deleteDesc", {

@@ -831,6 +831,26 @@ export function snippetCoveredKeys(app: App, snippetText: string): Set<string> {
   return covered
 }
 
+/** 可共享配置候选的三组人话分组（导入后「提取为通用片段」提示用，前端展示
+ *  只影响文案结构、不改变提取内容）：含 BASE_URL 的键 → 端点组；含 MODEL 的
+ *  键 → 模型组；其余 → 行为开关组。组内保持原候选顺序。 */
+export function groupSnippetCandidates(keys: string[]): {
+  endpoint: string[]
+  model: string[]
+  behavior: string[]
+} {
+  const endpoint: string[] = []
+  const model: string[] = []
+  const behavior: string[] = []
+  for (const k of keys) {
+    const upper = k.toUpperCase()
+    if (upper.includes("BASE_URL")) endpoint.push(k)
+    else if (upper.includes("MODEL")) model.push(k)
+    else behavior.push(k)
+  }
+  return { endpoint, model, behavior }
+}
+
 // ---- 通用片段凭据键判定（claude / gemini 共用）----
 //
 // TS 镜像后端 `provider::snippet::is_sensitive_config_key`，**逐字一致**

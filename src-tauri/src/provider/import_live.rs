@@ -20,8 +20,8 @@
 //! 去重：单激活应用 meta 无 opencode 的 liveKey（`live_opencode::meta_live_key`
 //! 是 opencode 专属），按 **name** 去重——同 app 同 name → 更新
 //! settings_config（保留 id / 展示字段），否则新建。name = live 里 base_url 的
-//! host（用户认得出是哪个供应商），无 base_url → 应用名（"Claude" 等，数据
-//! 非 i18n）。
+//! 注册域（去常见 TLD，用户认得出是哪个供应商），无 base_url → 应用名
+//! （"Claude" 等，数据非 i18n）。
 //!
 //! 所有转换函数是纯函数（测试接缝）：live 文本 → 快照，不碰文件系统 / DB；
 //! 文件 IO 与 store 写库在命令层薄壳（`commands.rs`）。
@@ -52,14 +52,30 @@ pub struct LiveImportSnapshot {
     pub snippet_candidates: Vec<String>,
 }
 
-/// base_url → host（name 推导用）。`https://api.moonshot.cn/anthropic` →
-/// `api.moonshot.cn`；无协议 / 空 → `None`。
+/// 常见顶级域（gTLD + 常用 ccTLD），命名规则「去 TLD 取注册域」用：host 的
+/// 最后一段命中此表 → 名字取倒数第二段（`opencode.ai` → `opencode`、
+/// `api.anthropic.com` → `anthropic`）；否则 host 原样（localhost / IP /
+/// 复合后缀不猜——名字在导入对话框里可改，表够用即可，不追求全量）。
+const COMMON_TLDS: &[&str] = &[
+    "com", "net", "org", "io", "ai", "dev", "app", "co", "uk", "us", "jp", "cn",
+    "de", "fr", "ru", "in", "xyz", "me", "gg", "sh", "to", "tv", "cc", "biz",
+    "info", "tech",
+];
+
+/// base_url → 名字（name 推导用）。`https://api.moonshot.cn/anthropic` →
+/// `moonshot`；无协议 / 空 → `None`。
 fn host_of(url: &str) -> Option<String> {
     let rest = url.split("://").nth(1)?;
-    rest.split(['/', '?', '#'])
+    let host = rest
+        .split(['/', '?', '#'])
         .next()
-        .filter(|s| !s.is_empty())
-        .map(str::to_string)
+        .filter(|s| !s.is_empty())?;
+    let labels: Vec<&str> = host.split('.').collect();
+    if labels.len() >= 2 && COMMON_TLDS.contains(&labels[labels.len() - 1]) {
+        Some(labels[labels.len() - 2].to_string())
+    } else {
+        Some(host.to_string())
+    }
 }
 
 /// `.env` 文本 → 键值对（纯函数，gemini 反向解析；对齐
@@ -486,7 +502,7 @@ mod tests {
             "mcpServers": {"filesystem": {"command": "npx"}}
         }"#;
         let snap = claude_live_to_snapshot(live).expect("有受控内容");
-        assert_eq!(snap.name, "api.moonshot.cn");
+        assert_eq!(snap.name, "moonshot");
         assert!(snap.has_secret, "env 含 ANTHROPIC_AUTH_TOKEN（凭据）");
         let sc: Value = serde_json::from_str(&snap.settings_config).unwrap();
         let sc_obj = sc.as_object().unwrap();
@@ -543,7 +559,7 @@ command = "npx"
 "#;
         let auth = r#"{"OPENAI_API_KEY": "sk-codex", "tokens": {"access": "x"}}"#;
         let snap = codex_live_to_snapshot(config, auth).expect("有受控内容");
-        assert_eq!(snap.name, "api.openai.com");
+        assert_eq!(snap.name, "openai");
         assert!(snap.has_secret);
         let sc: Value = serde_json::from_str(&snap.settings_config).unwrap();
         assert_eq!(sc["auth"]["OPENAI_API_KEY"], "sk-codex");
@@ -575,7 +591,7 @@ command = "npx""#;
     fn gemini_extracts_env_and_config() {
         let settings = r#"{"mcpServers": {"fs": {"command": "npx"}}, "security": {"auth": {"selectedType": "gemini-api-key"}}}"#;
         let snap = gemini_live_to_snapshot(ENV, settings).expect("有 env");
-        assert_eq!(snap.name, "generativelanguage.googleapis.com");
+        assert_eq!(snap.name, "googleapis");
         assert!(snap.has_secret, "env 含 GEMINI_API_KEY");
         let sc: Value = serde_json::from_str(&snap.settings_config).unwrap();
         assert_eq!(sc["env"]["GEMINI_MODEL"], "gemini-2.5-flash");
@@ -630,7 +646,7 @@ model = "other"
 command = "npx"
 "#;
         let snap = grok_live_to_snapshot(config).expect("有 cc-one profile");
-        assert_eq!(snap.name, "api.x.ai");
+        assert_eq!(snap.name, "x");
         assert!(snap.has_secret);
         let sc: Value = serde_json::from_str(&snap.settings_config).unwrap();
         let out_config = sc["config"].as_str().unwrap();
@@ -659,14 +675,27 @@ default = "xai""#
 
     #[test]
     fn host_of_parses_urls() {
+        // 注册域规则：去常见 TLD 取倒数第二段。
         assert_eq!(
             host_of("https://api.moonshot.cn/anthropic").as_deref(),
-            Some("api.moonshot.cn")
+            Some("moonshot")
         );
         assert_eq!(
-            host_of("https://generativelanguage.googleapis.com/v1beta").as_deref(),
-            Some("generativelanguage.googleapis.com")
+            host_of("https://opencode.ai/zen/go").as_deref(),
+            Some("opencode")
         );
+        assert_eq!(
+            host_of("https://api.anthropic.com").as_deref(),
+            Some("anthropic")
+        );
+        // 未命中 TLD 表 → host 原样（localhost / IP / 内网域名不猜）。
+        assert_eq!(
+            host_of("https://generativelanguage.googleapis.com/v1beta").as_deref(),
+            Some("googleapis")
+        );
+        assert_eq!(host_of("https://nas.local/x").as_deref(), Some("nas.local"));
+        assert_eq!(host_of("https://localhost:3000/x").as_deref(), Some("localhost:3000"));
+        assert_eq!(host_of("https://127.0.0.1/x").as_deref(), Some("127.0.0.1"));
         assert_eq!(host_of("").as_deref(), None);
         assert_eq!(host_of("no-protocol").as_deref(), None);
     }
