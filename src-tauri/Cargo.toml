@@ -1,6 +1,6 @@
 [package]
 name = "cc-one"
-version = "1.8.0"
+version = "2.0.0"
 description = "cc one — local LLM usage dashboard with optional GitHub-repo multi-device sync."
 authors = ["cc one"]
 edition = "2021"

@@ -5,11 +5,48 @@ All notable changes to cc one are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [2.0.0] - 2026-08-14
+
+### Added
+
+- **Apps & Providers leaves beta** — the nav entry drops its beta flag and every AI CLI gains a real app dimension: per-app presets, per-app form fields (Claude Code / Codex / Gemini CLI / Grok CLI / OpenCode), and live write into each CLI's genuine configuration files. Switching a provider now writes Codex's `config.toml` + `auth.json` via a controlled TOML merge, Gemini CLI's `settings.json` merge plus a wholesale `env` update with an OAuth marker, Grok's `config.toml` live merge, and OpenCode's `opencode.json` additive mode with secrets redacted. Each app's provider list syncs per device, byte-stable — API keys never leave your machine.
+- **Import from CC-Switch** — the provider list imports directly from a CC-Switch export, and a unified import dialog treats your local config files, a CC-Switch file, and a CC One backup as equal sources (ADR-0011/0012). Live imports are generalized across every app, and an opencode.json import previews its changes before committing.
+- **Native model fetching for Gemini** — the vendor's `/v1beta/models` endpoint joins the OpenAI-compatible fetch; one click fills all five model roles.
+- **Common config snippets for Codex, Gemini, and Grok** — a provider-independent snippet (default: hide attribution) merges into controlled fields only, on every switch; toggling it applies immediately without waiting for a save.
+- **Transcripts render as markdown** — code blocks and JSON are syntax-highlighted and themed inside every session.
+- **Search within a session** — hit-highlighting and jump-to-message navigation across the full transcript, with a numbered turn panel on the side and a ring flash marking the landing spot.
+- **Subagent sessions** — Claude Code subagent runs surface as their own rows with an agent-type badge.
+- **Token-first model distribution** — the usage chart ranks models by tokens and adds a per-model cache-hit rate.
+- **Expandable request-log rows** — click any row to unfold its full details (token/cost breakdown, service tier); all four tables share one pagination bar at 20 rows per page.
+- **shadcn calendar date picker** — the native date input is replaced by a proper calendar.
+- **Provider-row polish** — semantic category colors, copy-provider, default 1M on create, and an "apply to all" that never clobbers your per-role 1M checks.
+- **Theme system** — dark mode gains a three-tier surface ladder (page / modal / input), dedicated tooltip surface tokens, and a brand gradient on the glance card.
+- **Rebrand: VaultOne → cc one (归一)** — the app, repo, and packages are now `cc-one`; old config directories migrate automatically on first launch.
 
 ### Changed
 
-- **Renamed from VaultOne to cc one** — the app, repo, and packages are now `cc-one`, with the Chinese name 归一 (all AI CLIs converge into one hub). Old config directories are migrated automatically on first launch.
+- **Sidebar restructured** — navigation groups (Observe / Manage), smooth collapse animation, a lighter footer, and group counts that ignore the selected-group filter.
+- **Time-range filter rebuilt** — the cross-midnight patch is deleted; the query derives live from the filter (ADR-0008).
+- **Session-detail sheet** — header split into identity and stats, prev/next session navigation, bulk collapse, row selection, per-tab empty states, and a two-row toolbar.
+- **Modal interactions** — delete confirms get a success-path polish, export options become decision cards, and the pricing editor is matrix-shaped.
+- **Narrow-window layout** — filter rows fold via container queries and the pagination bar holds a single line.
+- **Tooltips and labels** — 30 native `title` attributes become themed custom tooltips with accessible names; glance-mode copy is standardized across languages.
+
+### Fixed
+
+- **Modal close flicker** — a stray implicit transition polluted Tailwind v4's duration token and flashed one frame on close; the popup no longer carries its own duration.
+- **Codex "unknown model" lag** — model context no longer lags token events.
+- **Turn-jump highlight drift** — long Virtuoso jumps no longer snap the highlight back one row; a pure turn-nav reducer pins the target (regression-tested).
+- **Dashboard refresh after collection** — aggregate store tags invalidate in one place (ADR-0009).
+- **Rename no longer resizes columns** — `table-fixed` keeps the name column stable.
+- **Delete-confirm busy state** — prop-driven close no longer leaves the button loading.
+- **Narrow-window overlap** — the sessions table scrolls horizontally instead of squashing the title column.
+
+### Internal
+
+- **ADR-0008 / 0009 / 0011 / 0012** — time-range derivation, store-tag invalidation, standalone import entry, live-import generalization.
+- **One shared TOML parse/cleanup** — the codex/grok live-write duplication collapses into shared helpers.
+- **Pure functions with tests** — the turn-nav reducer, transcript highlight extraction (single source of truth), and import text extraction (`extractTitle` / `pairModelNameKeys`) all live in `derive` with tests.
 
 ## [1.8.0] - 2026-08-07
 
@@ -219,7 +256,10 @@ First public, open-source release.
 - **macOS**: Apple Silicon (arm64) only; builds are unsigned — right-click → **Open** on first launch (or `xattr -dr com.apple.quarantine /Applications/cc one.app`). Intel Mac users can build from source.
 - **Providers**: Claude Code only; additional providers (Codex, Cursor, …) are planned.
 
+[2.0.0]: https://github.com/Buktal/cc-one/releases/tag/v2.0.0
 [1.8.0]: https://github.com/Buktal/cc-one/releases/tag/v1.8.0
+[1.7.1]: https://github.com/Buktal/cc-one/releases/tag/v1.7.1
+[1.7.0]: https://github.com/Buktal/cc-one/releases/tag/v1.7.0
 [1.6.0]: https://github.com/Buktal/cc-one/releases/tag/v1.6.0
 [1.5.1]: https://github.com/Buktal/cc-one/releases/tag/v1.5.1
 [1.5.0]: https://github.com/Buktal/cc-one/releases/tag/v1.5.0

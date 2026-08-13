@@ -17,10 +17,12 @@
 
 Every time you work with an AI CLI — **Claude Code, Codex, Gemini CLI, Grok CLI, OpenCode** — it writes a session log to disk. Tokens in, tokens out, cache hits and misses, money spent: it all sits in plain text on your machine, unread. cc one reads those logs and turns them into a clear picture: **what you spent, what you got, and where your tokens went.**
 
+And when you switch between AI CLIs — or switch providers behind them — cc one manages that too, writing the exact config file each CLI reads.
+
 Two stances shape the whole product:
 
 - **Local-first.** The full dashboard works with zero network. The logs are already on your disk — that's all it needs.
-- **Read-only.** cc one only ever *reads* session logs. It never modifies them and never touches the tools' behavior. They keep running exactly as before.
+- **Read-only toward your logs.** cc one only ever *reads* session logs. It never modifies them and never touches the tools' behavior — they keep running exactly as before. The one exception: switching a provider writes the config your CLI reads, and it's always your explicit action, backed up before the write.
 
 Multi-device sync is a purely **opt-in** layer on top — never a precondition.
 
@@ -34,19 +36,31 @@ Multi-device sync is a purely **opt-in** layer on top — never a precondition.
 
 ## Features
 
+### Providers
+
+- **All five AI CLIs, one config hub** — Claude Code, Codex, Gemini CLI, Grok CLI, and OpenCode each get their own provider list: name, category, endpoint, and auth. Switching a provider writes the *real* config file that CLI reads — Codex's `config.toml` + `auth.json`, Gemini CLI's `settings.json` + env, Grok's `config.toml`, OpenCode's `opencode.json` — merging only controlled fields and backing up the previous file first.
+- **18 built-in presets** — Claude official + AWS Bedrock, eleven domestic vendors (Kimi, DeepSeek, GLM, Volcengine, DouBao, Baidu, Alibaba, StepFun, MiniMax, MiMo …), and four popular aggregators (SiliconFlow, OpenRouter, ModelScope, Novita). Pick one, drop in your key, switch.
+- **Raw settings editor** — every provider carries its full settings snapshot. A built-in JSON editor shows the whole thing, formats on demand, and flags parse errors instead of silently discarding them.
+- **Model role mapping** — five roles (Sonnet / Opus / Fable / Haiku / Subagent), each with its own model and a 1M-context toggle. One click fetches the vendor's model list; "apply to all" spreads one model across every role.
+- **Import from anywhere** — bring providers in from a CC-Switch export, your local config files, or a CC One backup — three sources treated as equals, with an opencode.json import previewing its changes before landing. Export your whole list as JSON anytime.
+- **Provider structure syncs, keys don't** — the provider list rides your sync repo per device, byte-stable; API keys are stripped from anything that leaves your machine.
+
 ### Dashboard
 
 - **Four-bucket token economics** — input, output, cache creation, and cache read, normalized from each CLI's native semantics (e.g. Codex's cache-inclusive input) into one consistent model that matches your bill.
 - **Cache-hit rate** — `cache_read / (input + cache_creation + cache_read)`, aligned with how upstream usage is counted.
+- **Token-first model distribution** — the usage breakdown ranks models by tokens, each with its own cache-hit rate.
 - **Requests & cost** — total request count and total cost (USD), frozen at collection time.
-- **Usage trends** — multi-line token-vs-cost chart over time, one series per metric.
-- **Per-call request log** — source, model, token breakdown, cost, turn duration, and `stop_reason` / `service_tier` chips.
+- **Usage trends** — multi-line token-vs-cost chart over time, one series per metric, with a today-vs-yesterday delta.
+- **Per-call request log** — source, model, token breakdown, cost, turn duration, and `stop_reason` / `service_tier` chips; click any row to unfold its full details.
 - **Per-turn view** — whole-turn cost and wall-clock duration, separate from single-call timing.
 
 ### Sessions
 
 - **A browsable history of every conversation** — every session your AI CLIs ran, grouped under its project directory, with full-text search across titles and paths. Filter by time range, source, model, and device.
-- **Full transcripts, instantly** — every session's conversation is stored in the local database at collect time, so any session — favorited or not — opens its complete transcript with color-coded roles, without re-reading a log file that may still be mid-write.
+- **Full transcripts, instantly** — every session's conversation is stored in the local database at collect time, so any session — favorited or not — opens its complete transcript without re-reading a log file that may still be mid-write.
+- **Transcripts render as markdown** — code blocks and JSON are syntax-highlighted and themed; Claude Code subagent runs appear as their own sessions with an agent-type badge.
+- **Search and jump inside a session** — find text across the transcript with hit-highlighting, then jump straight to the message via the numbered turn panel beside it.
 - **Two tabs, two ways to organize** — a **Local** tab for everything collected on this machine, sorted into private groups that never leave it; a **Favorites** tab for the sessions you starred across all devices, sorted into synced groups, each entry marked with its source device.
 - **Favorites sync across devices** — star a session once and its transcript travels through your sync repo to every other device; unstar it and it disappears everywhere. Only favorited sessions ever leave your machine.
 - **Per-session economics** — each session shows its request count, token breakdown, and cost, computed live from the usage records — never double-stored.
@@ -78,7 +92,7 @@ Multi-device sync is a purely **opt-in** layer on top — never a precondition.
 ### Experience
 
 - **Lightweight glance mode** — tuck a mini-bar to the screen edge that always shows today's total, or expand it into a floating card mirroring the dashboard. Full ⇄ expanded ⇄ tucked, each shape remembering its own placement.
-- **Multi-skin theming** — five accent and chart palettes (Neutral, Sage, Azure, Crimson, Mauve), recolor the whole app without touching content.
+- **Multi-skin theming** — five accent and chart palettes (Neutral, Sage, Azure, Crimson, Mauve) recolor the whole app without touching content; dark mode gets a three-tier surface ladder so pages, modals, and inputs read at the right depth.
 - **Tray-resident background collection** — an incremental scanner keeps the dashboard fresh (5s–60s intervals), no window needed.
 - **Auto-update & three languages** — signed updates straight from GitHub Releases; UI in English, 简体中文, or 日本語.
 
@@ -88,6 +102,7 @@ Multi-device sync is a purely **opt-in** layer on top — never a precondition.
 | --- | --- | --- |
 | Usage, cost, trends, request log | Local only | Syncs across devices |
 | Session transcripts & favorites | Local only | Favorited sessions sync; the rest stay local |
+| Provider structure | Local only | Syncs per device — API keys never sync |
 | Library files | Local only | Syncs across devices |
 | Settings, skins, pricing overrides, local groups | Local | Local — never written to the repo |
 
@@ -112,7 +127,7 @@ Nothing leaves your machine unless you bind a repo and enable sync. The access t
       Other devices
 ```
 
-A [Tauri 2](https://tauri.app/) app: a Rust backend handles collection, the local store, and optional Git-repo sync; a React frontend renders the dashboard through generated, type-safe IPC bindings. The collector is a pluggable provider model (Claude Code, Codex, Gemini CLI, Grok CLI, OpenCode), the local store is the single source of truth, and sync is an opt-in projection of that store into plain-text artifacts.
+A [Tauri 2](https://tauri.app/) app: a Rust backend handles collection, the local store, provider config writes, and optional Git-repo sync; a React frontend renders the dashboard through generated, type-safe IPC bindings. The collector is a pluggable provider model (Claude Code, Codex, Gemini CLI, Grok CLI, OpenCode), the local store is the single source of truth, and sync is an opt-in projection of that store into plain-text artifacts.
 
 ## Quick start
 
@@ -154,7 +169,7 @@ yarn test        # run the test suite
 
 **Does it need an API key or a proxy?** No. cc one parses the log files your AI CLIs already write; it never calls the model providers.
 
-**Does it modify my logs?** Never. cc one is strictly read-only with respect to session logs and AI tool configuration.
+**Does it modify my logs?** Never. cc one is strictly read-only with respect to session logs. Switching a provider is the only action that writes a config file — always on your explicit click, always backed up first.
 
 **Which AI CLIs are supported?** Claude Code, Codex, Gemini CLI, Grok CLI, and OpenCode — each parsed from its native log format (JSONL, JSON, or SQLite), with token semantics normalized into one model.
 
@@ -169,4 +184,3 @@ Issues and suggestions are welcome. Before a PR, run `yarn check` and `yarn test
 [MIT](./LICENSE) © cc one Contributors
 
 [![LINUX DO](https://img.shields.io/badge/LINUX%20DO-Recognized%20Community-blue?style=flat-square&logo=linux)](https://linux.do)
-

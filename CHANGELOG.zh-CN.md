@@ -4,14 +4,76 @@ cc one 的所有显著变更记录于此。
 
 格式基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，并遵循[语义化版本](https://semver.org/lang/zh-CN/)。
 
-## [Unreleased]
+## [2.0.0] - 2026-08-14
+
+### 新增
+
+- **Apps & Providers 转正** —— 导航入口移除 beta 标志，每个 AI CLI 都获得真正的应用维度：按应用的预设、按应用的表单字段（Claude Code / Codex / Gemini CLI / Grok CLI / OpenCode），以及写入各 CLI 真实配置文件的 live 切换。切换供应商时，现在会写 Codex 的 `config.toml` + `auth.json`（受控 TOML 合并）、Gemini CLI 的 `settings.json` 合并 + 全量 `env` 更新（带 OAuth 标记）、Grok 的 `config.toml` live 合并、OpenCode 的 `opencode.json` 增量模式（敏感信息脱敏）。每个应用的供应商列表按设备字节稳定地同步——API 密钥绝不离开你的机器。
+- **从 CC-Switch 导入** —— 供应商列表可直接从 CC-Switch 导出导入；统一的导入对话框把本机配置文件、CC-Switch 文件与 CC One 备份视为同等来源（ADR-0011/0012）。live 导入泛化到全部应用，opencode.json 导入在落地前先预览。
+- **Gemini 原生模型拉取** —— 厂商 `/v1beta/models` 接口加入 OpenAI 兼容拉取；一键填满全部五个模型角色。
+- **Codex、Gemini、Grok 通用配置片段** —— 与供应商无关的片段（默认隐藏 attribution）每次切换时只并入受控字段；开关翻转即生效，不必等保存。
+- **会话原文按 markdown 渲染** —— 代码块与 JSON 语法高亮、跟随主题。
+- **会话内搜索** —— 全文命中高亮与跳转到消息，侧边配编号轮次面板，落点处环形闪烁提示。
+- **Subagent 会话** —— Claude Code 子代理运行以独立行呈现，带 agent 类型徽标。
+- **token-first 模型分布** —— 用量图表按 token 排序模型，并增加每模型缓存命中率。
+- **请求日志可展开行** —— 点击任意行展开完整详情（token/成本明细、服务层级）；四张表共享同一分页条，每页 20 行。
+- **shadcn 日历日期选择** —— 替换原生 date input。
+- **供应商行打磨** —— 分类语义色、复制供应商、新建默认 1M、「应用到全部」不再冲掉各角色已勾的 1M。
+- **主题体系** —— 暗色三档明暗阶梯（页面/弹层/输入框）、tooltip 专用表面变量、速览卡品牌渐变。
+- **品牌重塑：VaultOne → cc one（归一）** —— 应用、仓库、安装包统一为 `cc-one`；旧配置目录首次启动时自动迁移。
 
 ### 变更
 
-- **从 VaultOne 更名为 cc one** —— 应用、仓库、安装包统一为 `cc-one`，中文名「归一」（所有 AI CLI 归于一个中枢）；旧配置目录首次启动时自动迁移。
+- **侧栏重构** —— 导航分组（观察/管理）、平滑折叠动画、footer 减负、分组计数不再受选中分组过滤。
+- **时间范围筛选重构** —— 删除跨午夜补丁；查询从筛选条件实时派生（ADR-0008）。
+- **会话详情面板** —— 头部档案分身份/统计两层、上一/下一会话导航、批量折叠、行选中态、各 tab 空态、两行式工具栏。
+- **弹窗交互** —— 删除确认成功路径打磨、导出选项决策卡化、定价编辑器矩阵化。
+- **窄窗口布局** —— 筛选栏经容器查询折叠为两行，分页栏保持单行。
+- **tooltip 与文案** —— 30 处原生 `title` 换成带无障碍名的主题化自定义 Tooltip；悬浮窗文案三语统一。
 
 ### 修复
 
+- **弹窗关闭闪烁** —— 弹层上单独的 duration-* 在 Tailwind v4 下生成隐式 transition 并污染动画时长 token，关闭时闪回一帧；弹层不再自带 duration。
+- **Codex「unknown model」滞后** —— 模型上下文不再滞后于 token 事件。
+- **轮次导航跳转高亮错位** —— Virtuoso 长跳转不再把高亮弹回上一行；纯 reducer turn-nav 钉住目标（含回归测试）。
+- **采集后看板统一刷新** —— 聚合 Store tag 一处失效（ADR-0009）。
+- **重命名不再改变列宽** —— `table-fixed` 保持名称列稳定。
+- **删除确认 busy 不释放** —— 属性驱动的关闭不再让按钮卡 loading。
+- **窄窗口重叠** —— 会话表横向滚动而非压扁标题列。
+
+### 内部
+
+- **ADR-0008 / 0009 / 0011 / 0012** —— 时间范围派生、Store tag 失效、导入入口独立、live 导入泛化。
+- **共享 TOML 解析/清洗** —— codex/grok live 写盘重复消除，收敛为公共函数。
+- **带测试的纯函数** —— turn-nav reducer、会话高亮提取（单一事实来源）、导入文本提取（`extractTitle` / `pairModelNameKeys`）均入 `derive` 并带测试。
+
+## [1.8.0] - 2026-08-07
+
+### 新增
+
+- **供应商管理：供应商列表 + 增删改** —— 全新的「供应商」顶级视图列出所有已保存的供应商（名称/分类/端点/模型），支持拖拽排序；空态指向即将到来的预设选择器。通过侧边面板（名称/端点/API key）创建、编辑、删除自定义供应商；API key 与端点存放在该供应商的 `settingsConfig` 快照里，表单逐字段原样保留。数据暂存本地 SQLite `provider` 表——切换（live 写入）、预设、同步、模型映射与 JSON 编辑将在后续版本落地。
+- **切换供应商即写入 live 配置** —— 供应商视图新增「当前使用」卡片（激活供应商 + 端点 + 模型）与每行「切换」按钮。切换把供应商快照合并进 `~/.claude/settings.json` 的*受控字段*（`env` + `includeCoAuthoredBy`/`attribution`/`effortLevel`/`enabledPlugins`/`skipWebFetchPreflight`），其余一切——hooks、MCP 服务器、权限、插件、模型——在磁盘上原封不动；写入前旧 live 文件备份为 `settings.json.bak`（单文件覆盖），经原子临时文件重命名。激活的供应商记在本地 `config.json`，重启后保持。
+- **18 个内置供应商预设** —— 供应商视图新增预设选择器（可搜索、按分类分组），内置 18 个模板：Claude 官方 + AWS Bedrock ×2、十一家国内厂商（Kimi、DeepSeek、GLM、火山引擎、豆包、百度、阿里、阶跃、MiniMax、MiMo 等）与四家常用聚合（SiliconFlow、OpenRouter、ModelScope、Novita）。选中即预填新建表单的端点/认证/模型映射；预设本身永不被修改，可以编辑后另存为自定义供应商。预设随应用分发——绝不参与同步。
+- **供应商表单内的原始 settings.json 编辑器** —— 表单末尾是覆盖完整快照的 CodeMirror 6 JSON 编辑器：语法高亮、解析错误或非对象顶层红色下划线、格式化按钮（2 空格）、明暗主题跟随。JSON 是唯一事实来源——编辑它反向推导表单的端点/API key，编辑字段合并回去，非法快照阻止保存而不是静默丢弃你的编辑。
+- **供应商结构跨设备同步** —— 供应商列表搭现有 push/pull 编排，以每设备 `providers.json` 存于 `repo/data/<deviceId>/`：每次 push 从本地数据库物化本设备文件（字节稳定，未变更则不 push），每次 pull 按 id 合并所有对端文件，最新 `updated_at` 胜出。API 密钥绝不进入同步文件——四个密钥 env（`ANTHROPIC_AUTH_TOKEN`/`ANTHROPIC_API_KEY`/AWS 密钥对）写入前剥离，每台设备本地填自己的密钥；导入对端脱敏副本时合并本地行的密钥，无密钥副本永远覆盖不了有密钥的行。激活的供应商留在本地 `config.json`——激活永不同步。
+- **模型角色映射 + 1M 标记** —— 供应商表单新增五角色模型映射（Sonnet/Opus/Fable/Haiku/Subagent），每角色有显示名、请求模型与 1M 上下文勾选（Haiku 自动去标记——不支持 1M）。供应商配置缺失的角色在加载时回填，「应用到全部」一键把已填模型铺满所有角色。
+- **拉取模型列表** —— 模型映射区的「拉取模型」按钮由后端调用厂商 OpenAI 兼容 `/v1/models` 接口（webview 的 fetch 会撞 CORS）：显式 `modelsUrl` 覆盖优先，以版本段结尾的 base URL 追加 `/models` 而非第二个 `/v1`，已知 Anthropic 兼容子路径剔除，候选去重后最多按序尝试三个。返回的模型 id 一键填满五个角色；失败按桶化 toast 提示（认证失败/端点关闭/超时/格式不支持）。
+- **通用配置片段** —— 与供应商无关的配置片段（默认 `{"includeCoAuthoredBy": false}` 隐藏 attribution）置于供应商表单：手写、勾选启用，每次切换只并入受控字段——`env` 按 key 深度合并（供应商值优先），其他受控开关仅在供应商未设置时填充，非受控字段永不触碰。
+- **认证字段切换 + 模板变量** —— 表单认证字段在 `ANTHROPIC_AUTH_TOKEN` 与 `ANTHROPIC_API_KEY` 间切换，切换时值随之搬移。Bedrock 预设额外提供模板变量（region/access key/secret key），保存前递归替换进 `${VAR}` 占位符；未填变量阻止保存而非写出坏配置。
+- **导出/导入供应商** —— 完整供应商列表可导出为一份 JSON（可选含 API 密钥），任意设备可导入：合并模式按 id 去重不动已有行，覆盖模式让导入副本胜出。纯手工迁移路径——导入只进本地数据库，绝不经过 git 同步。
+- **用户轮次间跳转** —— 打开会话时，原文旁新增窄面板列出每条用户消息（约 16 个汉字宽，溢出省略号）。点击行直接跳到该消息，正在阅读的消息行保持高亮，悬停任意行显示全文。两面板同开同关。
+- **跳转闪烁目标** —— 点击导航面板的轮次，落点消息以主题色光环连闪三下，眼睛随滚动精准到位。
+
+### 变更
+
+- **SourceParser 更名** —— 日志解析模块（`providers/`）改名 `source_parser/`，把 "Provider" 一词让给即将到来的厂商管理功能。纯改名，无行为变化。
+- **请求日志表移除重复的 Source 列** —— 两列同源自 `source` 字段（带过时 "(Session)" 后缀的可读名 + 原始 tag），合并为一列：可读名 + 悬停显示原始 tag。误导性后缀消失——每行是一次 API 调用，不是会话。
+- **长会话秒开** —— 原文改经虚拟化列表（react-virtuoso）渲染，只保留视口附近消息的 DOM。数千条消息的会话不再卡顿，滚动始终流畅。
+- **消息头行干净镜像** —— 助理与用户两种声音下，工具栏（折叠箭头 + 复制）与时间/模型块分别钉在气泡两端，短用户消息不再把两者挤到边缘。
+
+### 修复
+
+- **轮次跳转不再过冲** —— 跳转此前平滑滚动越过目标到估算位置再滑回，肉眼可见跑到原文底部再弹回消息；现在瞬间落点，光环闪烁承担反馈。
 - **840×600 最小窗口现在真正生效** —— 轻量模式恢复时会用旧的 720×520 底值重新 `set_min_size`，悄悄盖掉提高后的最小尺寸；从速览卡片切回完整看板后不再缩回欠小的尺寸。
 - **窄窗口下会话表格不再重叠** —— 七个固定列把标题列挤到 0，表头文字溢到「项目」列；表格现在保持可读宽度，超出部分横向滚动。
 
@@ -192,7 +254,10 @@ cc one 的所有显著变更记录于此。
 - **macOS**：仅 Apple Silicon（arm64）；构建未签名——首次启动右键 →「打开」（或 `xattr -dr com.apple.quarantine /Applications/cc one.app`）。Intel Mac 用户可从源码构建。
 - **Provider**：当前仅 Claude Code；更多 provider（Codex、Cursor 等）规划中。
 
-[Unreleased]: https://github.com/Buktal/cc-one/compare/v1.7.1...HEAD
+[2.0.0]: https://github.com/Buktal/cc-one/releases/tag/v2.0.0
+[1.8.0]: https://github.com/Buktal/cc-one/releases/tag/v1.8.0
+[1.7.1]: https://github.com/Buktal/cc-one/releases/tag/v1.7.1
+[1.7.0]: https://github.com/Buktal/cc-one/releases/tag/v1.7.0
 [1.6.0]: https://github.com/Buktal/cc-one/releases/tag/v1.6.0
 [1.5.1]: https://github.com/Buktal/cc-one/releases/tag/v1.5.1
 [1.5.0]: https://github.com/Buktal/cc-one/releases/tag/v1.5.0

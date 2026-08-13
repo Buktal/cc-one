@@ -17,10 +17,12 @@
 
 每次你用 AI CLI——**Claude Code、Codex、Gemini CLI、Grok CLI、OpenCode**——它都会在磁盘上写下一份会话日志。输入 token、输出 token、缓存命中与未命中、花掉的钱：全都以纯文本躺在你的机器上，无人问津。cc one 读取这些日志，把它们变成清晰的图景：**你花了多少、换来了什么、token 用在了哪里。**
 
+而当你在不同的 AI CLI 之间切换——或切换它们背后的供应商——cc one 同样代劳，写出每个 CLI 真正读取的那份配置。
+
 整个产品由两点立场所塑造：
 
 - **本地优先。** 完整看板在零网络环境下即可工作。日志本来就在你的磁盘上——有它就够了。
-- **只读。** cc one 只*读取*会话日志，绝不修改，也绝不干预这些工具的行为。它们照常运行，一如往常。
+- **对你的日志严格只读。** cc one 只*读取*会话日志，绝不修改，也绝不干预这些工具的行为——它们照常运行，一如往常。唯一的例外：切换供应商会写出 CLI 读取的配置，而这永远是你的主动操作，写入前先备份。
 
 多设备同步纯粹是一层 **opt-in** 的叠加能力，绝非使用本应用的前提。
 
@@ -34,19 +36,31 @@
 
 ## 功能
 
+### 供应商
+
+- **五个 AI CLI，一个配置中枢** —— Claude Code、Codex、Gemini CLI、Grok CLI 与 OpenCode 各有自己的供应商列表：名称、分类、端点与认证。切换供应商会写入该 CLI *真正读取*的配置文件——Codex 的 `config.toml` + `auth.json`、Gemini CLI 的 `settings.json` + env、Grok 的 `config.toml`、OpenCode 的 `opencode.json`——只合并受控字段，写入前先备份原文件。
+- **18 个内置预设** —— Claude 官方 + AWS Bedrock、十一家国内厂商（Kimi、DeepSeek、GLM、火山引擎、豆包、百度、阿里、阶跃、MiniMax、MiMo 等）与四家常用聚合（SiliconFlow、OpenRouter、ModelScope、Novita）。挑一个、填上密钥、切换，完事。
+- **原始配置编辑器** —— 每个供应商都携带完整的 settings 快照。内置 JSON 编辑器展示全部内容，随时一键格式化，解析错误直接标红提示，绝不静默丢弃。
+- **模型角色映射** —— 五个角色（Sonnet / Opus / Fable / Haiku / Subagent），各配模型与 1M 上下文开关。一键拉取厂商模型列表；「应用到全部」把单个模型铺满所有角色。
+- **从任何地方导入** —— 从 CC-Switch 导出、本机配置文件或 CC One 备份导入供应商——三个来源平级对待，opencode.json 导入在落地前先预览。完整列表随时可导出为 JSON。
+- **供应商结构同步，密钥永不同步** —— 供应商列表经你的同步仓库按设备字节稳定地同步；任何离开你机器的内容都会先剥离 API 密钥。
+
 ### 看板
 
 - **四桶 token 口径** —— input / output / cache creation / cache read，把各 CLI 的原生语义（如 Codex 含缓存的 input）归一成一套贴合真实计费的一致模型。
 - **缓存命中率** —— `cache_read / (input + cache_creation + cache_read)`，与上游用量口径对齐。
+- **token-first 模型分布** —— 用量分布按 token 排序模型，每个模型附自己的缓存命中率。
 - **请求数与成本** —— 请求总数与总成本（USD），在采集入库时冻结。
-- **用量趋势** —— 多线 token-vs-cost 时间图，每个指标一条序列。
-- **逐调用请求日志** —— 来源、模型、token 明细、成本、回合时长，以及 `stop_reason` / `service_tier` 徽标。
+- **用量趋势** —— 多线 token-vs-cost 时间图，每个指标一条序列，附今日对比昨日的增量。
+- **逐调用请求日志** —— 来源、模型、token 明细、成本、回合时长，以及 `stop_reason` / `service_tier` 徽标；点击任意行展开完整详情。
 - **逐回合视图** —— 整个回合的成本与墙钟时长，与单次调用计时分开。
 
 ### 会话
 
 - **每一次对话都可浏览的历史** —— AI CLI 跑过的每个会话，按项目目录归类，支持标题与路径的全文搜索；按时间范围、来源、模型、设备筛选。
 - **完整原文，即时可看** —— 每个会话的对话在采集时写入本地数据库，因此任何会话——无论是否收藏——都能打开按角色着色的完整原文，不再重读可能正在写入的日志文件。
+- **原文按 markdown 渲染** —— 代码块与 JSON 语法高亮、跟随主题；Claude Code 子代理运行以独立会话呈现，带 agent 类型徽标。
+- **会话内搜索与跳转** —— 全文命中高亮，再经侧边编号轮次面板一键跳到目标消息。
 - **双 tab、两套组织方式** —— **本地** tab 罗列本机采集的全部会话，归入绝不离开本机的私有分组；**收藏** tab 罗列跨设备收藏的会话，归入全局一致的收藏分组，每个条目带来源设备标记。
 - **收藏跨设备同步** —— 点一次星标，该会话的原文就经你的同步仓库到达所有设备；取消收藏，处处消失。只有收藏的会话才会离开你的机器。
 - **逐会话经济账** —— 每个会话展示请求数、token 明细与成本，从用量记录现场求和——从不重复存储。
@@ -78,7 +92,7 @@
 ### 体验
 
 - **轻量速览模式** —— 贴边迷你条常驻显示今日总数，或展开为复用看板的悬浮卡；full ⇄ expanded ⇄ tucked 三形态任意互切，每形态各自记忆位置。
-- **多皮肤主题** —— 五套强调色与图表配色（Neutral / Sage / Azure / Crimson / Mauve），整体换肤不动内容。
+- **多皮肤主题** —— 五套强调色与图表配色（Neutral / Sage / Azure / Crimson / Mauve），整体换肤不动内容；暗色下页面、弹层、输入框三档明暗分明，层次清晰。
 - **托盘常驻、后台采集** —— 增量扫描器以 5s–60s 间隔保持看板新鲜，无需保留窗口。
 - **自动更新 + 三语言** —— 直接从 GitHub Releases 安装签名更新；界面支持 English、简体中文、日本語。
 
@@ -88,6 +102,7 @@
 | --- | --- | --- |
 | 用量、成本、趋势、请求日志 | 仅本地 | 跨设备同步 |
 | 会话原文与收藏 | 仅本地 | 收藏的会话同步；其余留在本地 |
+| 供应商结构 | 仅本地 | 按设备同步——API 密钥永不参与 |
 | 库文件 | 仅本地 | 跨设备同步 |
 | 设置、皮肤、定价覆盖、本地分组 | 本地 | 本地——绝不写入仓库 |
 
@@ -112,7 +127,7 @@
        其他设备
 ```
 
-一个 [Tauri 2](https://tauri.app/) 应用：Rust 后端负责采集、本地存储与可选的 Git 仓库同步；React 前端通过生成的类型安全 IPC 绑定渲染看板。采集器是插件化的 provider 模型（Claude Code、Codex、Gemini CLI、Grok CLI、OpenCode），本地存储是唯一事实来源，同步是把该存储投影为纯文本产物的可选层。
+一个 [Tauri 2](https://tauri.app/) 应用：Rust 后端负责采集、本地存储、供应商配置写入与可选的 Git 仓库同步；React 前端通过生成的类型安全 IPC 绑定渲染看板。采集器是插件化的 provider 模型（Claude Code、Codex、Gemini CLI、Grok CLI、OpenCode），本地存储是唯一事实来源，同步是把该存储投影为纯文本产物的可选层。
 
 ## 快速开始
 
@@ -154,7 +169,7 @@ yarn test        # 运行测试套件
 
 **需要 API key 或代理吗？** 不需要。cc one 解析你的 AI CLI 已经写下的日志文件，从不调用模型供应商。
 
-**它会修改我的日志吗？** 绝不会。cc one 对会话日志与 AI 工具配置严格只读。
+**它会修改我的日志吗？** 绝不会。cc one 对会话日志严格只读。切换供应商是唯一会写出配置文件的操作——永远由你主动点击，永远先备份。
 
 **支持哪些 AI CLI？** Claude Code、Codex、Gemini CLI、Grok CLI 与 OpenCode——各自以原生日志格式（JSONL、JSON 或 SQLite）解析，token 语义归一为同一套模型。
 
@@ -168,173 +183,4 @@ yarn test        # 运行测试套件
 
 [MIT](./LICENSE) © cc one Contributors
 
-# cc one
-
-> **Your AI CLI usage, owned by you.** cc one reads the session logs your AI CLIs already write and turns them into tokens, cost, cache efficiency, and trends — a local-first dashboard with optional multi-device sync through a GitHub repo you control.
-
-[![Version](https://img.shields.io/github/v/release/Buktal/cc-one?color=blue&label=version)](https://github.com/Buktal/cc-one/releases)
-[![Platforms](https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux-lightgrey.svg)](https://github.com/Buktal/cc-one/releases)
-[![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](./LICENSE)
-[![Built with Tauri](https://img.shields.io/badge/built%20with-Tauri%202-orange.svg)](https://tauri.app/)
-
-**English** | [简体中文](./README.zh-CN.md) | [日本語](./README.ja-JP.md) | [Changelog](./CHANGELOG.md)
-
-<img src="./docs/images/ad-en.png" alt="cc one dashboard" width="800">
-
----
-
-## The problem
-
-Every time you work with an AI CLI — **Claude Code, Codex, Gemini CLI, Grok CLI, OpenCode** — it writes a session log to disk. Tokens in, tokens out, cache hits and misses, money spent: it all sits in plain text on your machine, unread. cc one reads those logs and turns them into a clear picture: **what you spent, what you got, and where your tokens went.**
-
-Two stances shape the whole product:
-
-- **Local-first.** The full dashboard works with zero network. The logs are already on your disk — that's all it needs.
-- **Read-only.** cc one only ever *reads* session logs. It never modifies them and never touches the tools' behavior. They keep running exactly as before.
-
-Multi-device sync is a purely **opt-in** layer on top — never a precondition.
-
-## Screenshots
-
-| | Light | Dark |
-| --- | --- | --- |
-| **Dashboard** | <img src="./docs/images/light-usage.png" alt="Dashboard (light)" width="320"> | <img src="./docs/images/dark-usage.png" alt="Dashboard (dark)" width="320"> |
-| **Consumption** | <img src="./docs/images/light-consumption.png" alt="Consumption (light)" width="320"> | <img src="./docs/images/dark-consumption.png" alt="Consumption (dark)" width="320"> |
-| **Glance mode** | <img src="./docs/images/light-floating-card.png" alt="Glance mode (light)" width="320"> | <img src="./docs/images/dark-floating-card.png" alt="Glance mode (dark)" width="320"> |
-
-## Features
-
-### Dashboard
-
-- **Four-bucket token economics** — input, output, cache creation, and cache read, normalized from each CLI's native semantics (e.g. Codex's cache-inclusive input) into one consistent model that matches your bill.
-- **Cache-hit rate** — `cache_read / (input + cache_creation + cache_read)`, aligned with how upstream usage is counted.
-- **Requests & cost** — total request count and total cost (USD), frozen at collection time.
-- **Usage trends** — multi-line token-vs-cost chart over time, one series per metric.
-- **Per-call request log** — source, model, token breakdown, cost, turn duration, and `stop_reason` / `service_tier` chips.
-- **Per-turn view** — whole-turn cost and wall-clock duration, separate from single-call timing.
-
-### Sessions
-
-- **A browsable history of every conversation** — every session your AI CLIs ran, grouped under its project directory, with full-text search across titles and paths. Filter by time range, source, model, and device.
-- **Full transcripts, instantly** — every session's conversation is stored in the local database at collect time, so any session — favorited or not — opens its complete transcript with color-coded roles, without re-reading a log file that may still be mid-write.
-- **Two tabs, two ways to organize** — a **Local** tab for everything collected on this machine, sorted into private groups that never leave it; a **Favorites** tab for the sessions you starred across all devices, sorted into synced groups, each entry marked with its source device.
-- **Favorites sync across devices** — star a session once and its transcript travels through your sync repo to every other device; unstar it and it disappears everywhere. Only favorited sessions ever leave your machine.
-- **Per-session economics** — each session shows its request count, token breakdown, and cost, computed live from the usage records — never double-stored.
-
-### Sync (optional)
-
-- **Standalone or Synced** — run fully offline, or bind a GitHub repo you own to align data across devices.
-- **Your own repo, plain-text artifacts** — usage is projected into human-readable, per-device, per-day JSONL (`data/<device>/usage-YYYY-MM-DD.jsonl`) in a repo you control. No third-party server in the middle.
-- **Device-isolated, conflict-free** — each device writes its own `data/<device>/` subtree, so concurrent pushes never collide. If a device loses a push race, the next sync rebases its local commits onto the remote tip and self-heals.
-- **Deterministic artifacts** — collection writes the local store only; a push regenerates each changed day's artifact byte-for-byte from the store, so two devices can never disagree on a file's content.
-- **System-proxy aware** — push/fetch follows the OS proxy (Clash/Mihomo, corporate gateways), so Synced mode just works behind one.
-- **Device-scoped views** — filter the dashboard, the glance card, and the tucked bar to a single device; forget a peer locally, and stale peers auto-clear.
-
-### Library
-
-- **Drag-to-relay upload** — drop a file or directory onto the window to push it through your sync repo into that device's subtree; nested directories work at every depth.
-- **In-app preview** — images fit-to-width with ctrl+wheel zoom; text and JSON render themed and pretty-printed; everything else loads in a sandboxed iframe.
-- **Manual export** — save an entry to a path you choose; cc one never learns the target path and never writes into an AI tool's config dir.
-- **Safe overwrites** — same-name same-kind overwrites (git history is the safety net); same-name different-kind is rejected.
-- **Per-device, zero conflict** — each device holds its own subtree; forgetting a peer offers to migrate its files into yours (`from-<peer>/`) or delete them.
-
-### Cost & pricing
-
-- **Editable per-model pricing** — override seed prices; cc one uses your numbers.
-- **Pull from LiteLLM** — fetch the latest model cost map with one click.
-- **Rebill** — backfill records that had no price when collected, without re-costing existing history.
-- **Portable pricing book** — import and export your pricing table as JSON.
-
-### Experience
-
-- **Lightweight glance mode** — tuck a mini-bar to the screen edge that always shows today's total, or expand it into a floating card mirroring the dashboard. Full ⇄ expanded ⇄ tucked, each shape remembering its own placement.
-- **Multi-skin theming** — five accent and chart palettes (Neutral, Sage, Azure, Crimson, Mauve), recolor the whole app without touching content.
-- **Tray-resident background collection** — an incremental scanner keeps the dashboard fresh (5s–60s intervals), no window needed.
-- **Auto-update & three languages** — signed updates straight from GitHub Releases; UI in English, 简体中文, or 日本語.
-
-## What stays local, what syncs
-
-| | Standalone | Synced (repo bound) |
-| --- | --- | --- |
-| Usage, cost, trends, request log | Local only | Syncs across devices |
-| Session transcripts & favorites | Local only | Favorited sessions sync; the rest stay local |
-| Library files | Local only | Syncs across devices |
-| Settings, skins, pricing overrides, local groups | Local | Local — never written to the repo |
-
-Nothing leaves your machine unless you bind a repo and enable sync. The access token you use stays on your machine and is never written to the repo.
-
-## How it works
-
-```
-  AI CLI session logs
-  (Claude Code · Codex · Gemini CLI · Grok CLI · OpenCode)
-          │  (read-only)
-          ▼
-       Collect ──────▶ Local store (SQLite) ──────▶ Dashboard & Sessions
-          │
-          │  (optional · Synced mode)
-          ▼
-   Artifacts (plain text, per device + date)
-          │
-    push / pull via your GitHub repo
-          │
-          ▼
-      Other devices
-```
-
-A [Tauri 2](https://tauri.app/) app: a Rust backend handles collection, the local store, and optional Git-repo sync; a React frontend renders the dashboard through generated, type-safe IPC bindings. The collector is a pluggable provider model (Claude Code, Codex, Gemini CLI, Grok CLI, OpenCode), the local store is the single source of truth, and sync is an opt-in projection of that store into plain-text artifacts.
-
-## Quick start
-
-Grab the installer for your OS from the **[Releases](https://github.com/Buktal/cc-one/releases)** page.
-
-| OS | Installer |
-| --- | --- |
-| **Windows** | `.msi` or `.exe` (NSIS) setup |
-| **macOS** | `.dmg` (Apple Silicon, arm64) |
-| **Linux** | `.deb`, `.AppImage` (`.rpm` where available) |
-
-**First run:** launch cc one — it scans your local AI CLI session logs and the dashboard fills in. No account, no sign-in, no network. To see usage across machines, enable sync in **Settings** and point cc one at a GitHub repo you control.
-
-> **macOS note:** builds are currently unsigned. On first launch, right-click the app → **Open**, or strip the quarantine attribute:
-> ```bash
-> xattr -dr com.apple.quarantine /Applications/cc one.app
-> ```
-
-## Build from source
-
-**Prerequisites:** [Node.js](https://nodejs.org/) 20+ LTS + [Yarn 4](https://yarnpkg.com/) (via [Corepack](https://nodejs.org/api/corepack.html)), and [Rust](https://www.rust-lang.org/) stable with the [Tauri prerequisites](https://tauri.app/start/prerequisites/) for your OS.
-
-```bash
-corepack enable  # activate the Yarn version pinned in package.json
-yarn install     # install dependencies
-yarn dev         # run the desktop app in development
-yarn dist        # build a release binary
-yarn check       # static checks (Biome + tsc + Rust fmt/clippy) — same gates as CI
-yarn test        # run the test suite
-```
-
-**Tech stack:** [Tauri 2](https://tauri.app/) (Rust) · [React 19](https://react.dev/) · [TypeScript](https://www.typescriptlang.org/) · [Vite](https://vite.dev/) · [Tailwind CSS v4](https://tailwindcss.com/) · [shadcn/ui](https://ui.shadcn.com/) · [Redux Toolkit](https://redux-toolkit.js.org/) · [Recharts](https://recharts.org/)
-
-## FAQ
-
-**Does cc one send my data anywhere?** No. Everything is read from local logs and stored locally. The only way data leaves your machine is if you opt into sync — and then it goes to a GitHub repo *you* own, as plain text.
-
-**Does it need an API key or a proxy?** No. cc one parses the log files your AI CLIs already write; it never calls the model providers.
-
-**Does it modify my logs?** Never. cc one is strictly read-only with respect to session logs and AI tool configuration.
-
-**Which AI CLIs are supported?** Claude Code, Codex, Gemini CLI, Grok CLI, and OpenCode — each parsed from its native log format (JSONL, JSON, or SQLite), with token semantics normalized into one model.
-
-**Why a GitHub repo for sync?** Because you already have one, it's free, and it keeps your data in your hands — plain-text artifacts in a repo you control, no third-party service. Device isolation plus self-healing rebases keep concurrent multi-device sync conflict-free.
-
-## Contributing
-
-Issues and suggestions are welcome. Before a PR, run `yarn check` and `yarn test`. For larger features, open an issue to discuss the approach first.
-
-## License
-
-[MIT](./LICENSE) © cc one Contributors
-
 [![LINUX DO](https://img.shields.io/badge/LINUX%20DO-%E7%A4%BE%E5%8C%BA%E8%AE%A4%E5%8F%AF-blue?style=flat-square&logo=linux)](https://linux.do)
-  
