@@ -183,13 +183,13 @@ export function LightweightCard() {
             hoverTimer.current = null
           }
         }}
-        className="bg-card flex h-screen w-screen flex-col animate-in fade-in slide-in-from-right-2 cursor-grab overflow-hidden duration-150 motion-reduce:animate-none"
+        className="bg-glance flex h-screen w-screen flex-col animate-in fade-in slide-in-from-right-2 cursor-grab overflow-hidden duration-150 motion-reduce:animate-none"
       >
         {/* h-10 = TUCKED_HEIGHT (40px): 固定占满 tucked 高度 + items-center 让
-            数字/→大 垂直居中 (不再置顶)。显式 bg-card 满铺数字条, 不靠
-            外层透出。悬浮窗本体作为「内容面」参与暗色对换 (黑面), 仅
+            数字/→大 垂直居中 (不再置顶)。数字条透明透出外层渐变 (用户决策
+            2026-08-14: 速览卡片背景换渐变)——不再显式 bg-card 截断渐变。
             hover 展开的设备列表 drawer 保持 bg-background (灰浮层)。 */}
-        <div className="bg-card relative z-10 flex h-10 shrink-0 items-center gap-1 px-1">
+        <div className="relative z-10 flex h-10 shrink-0 items-center gap-1 px-1">
           <button
             type="button"
             onMouseEnter={
@@ -294,7 +294,7 @@ export function LightweightCard() {
       ref={rootRef}
       role="dialog"
       aria-label={t("usage.lightweight.todayGlance")}
-      className="bg-card text-foreground lw-reveal-in flex w-screen flex-col overflow-hidden"
+      className="bg-glance text-foreground lw-reveal-in flex w-screen flex-col overflow-hidden"
     >
       {/* Drag region + two actions, ordered 大→小 (biggest target first): expand
           to full, then shrink to tucked. The buttons have no

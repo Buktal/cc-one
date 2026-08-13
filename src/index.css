@@ -129,6 +129,14 @@
     rgb(242, 240, 247),
     rgb(224, 230, 243)
   );
+  /* 速览卡片渐变（悬浮窗 .bg-glance）——与窗口渐变同一条「紫→蓝」色相弧，
+     但比窗口画布多一档饱和：悬浮窗是「今日快照」的聚焦内容，渐变得看得见
+     （窗口档太淡，暗色下几乎是灰）。明暗镜像见 .dark。 */
+  --glance-image: linear-gradient(
+    to bottom right,
+    rgb(233, 226, 247),
+    rgb(208, 220, 243)
+  );
   --foreground: oklch(0.145 0 0);
   --card: oklch(1 0 0);
   --card-foreground: oklch(0.145 0 0);
@@ -240,6 +248,13 @@
     to bottom right,
     rgb(44, 37, 54),
     rgb(58, 70, 92)
+  );
+  /* 速览卡片渐变（暗色）：同色相弧提亮一档——深紫罗兰 → 蓝灰，暗色下
+     看得出紫蓝过渡（窗口档 rgb(44,37,54)→rgb(58,70,92) 太接近灰）。 */
+  --glance-image: linear-gradient(
+    to bottom right,
+    rgb(52, 43, 68),
+    rgb(68, 82, 108)
   );
   --foreground: #ffffff;
   --card: #0d0d0f;
@@ -506,6 +521,15 @@
   background-color: var(--background);
   background-image: var(--background-image);
   background-attachment: fixed;
+}
+
+/* 速览卡片画布（轻量模式悬浮窗 .bg-glance）：--card 纯色兜底 + 专属
+   紫→蓝渐变 --glance-image。悬浮窗全屏内容面用渐变（用户决策 2026-08-14：
+   速览卡片背景换成渐变色），内部卡片（TokenHero 等）保持 bg-card 浮在
+   渐变上——与 dashboard 的「右中卡在窗口渐变画布上」同一结构。 */
+.bg-glance {
+  background-color: var(--card);
+  background-image: var(--glance-image);
 }
 
 /* Sheet 弹层控件面（用户决策 2026-08-14 重调）：弹层宿主是 --popover
