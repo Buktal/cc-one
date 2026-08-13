@@ -27,7 +27,9 @@ use crate::model::{
 };
 use crate::pricing;
 use crate::provider::export_import::{self, ProviderImportMode, ProviderImportReport};
-use crate::provider::{import_ccswitch, live, live_opencode};
+use crate::provider::{
+    import_ccswitch, import_live, live, live_codex, live_gemini, live_grok, live_opencode,
+};
 use crate::sessions;
 use crate::sync::VerifyReport;
 
@@ -1067,6 +1069,16 @@ pub fn set_common_config_snippet_cmd(
     Ok(state.config.get().snippet_for(app))
 }
 
+/// TOML 片段整理（「整理」按钮）：taplo 保留注释地格式化（codex/grok 片段）。
+/// 纯展示操作，不落盘、不校验身份键——只把文本排版成可读多行。
+#[tauri::command]
+#[specta::specta]
+pub async fn format_toml_cmd(text: String) -> AppResult<String> {
+    tauri::async_runtime::spawn_blocking(move || Ok(crate::provider::snippet::format_toml(&text)))
+        .await
+        .map_err(|e| AppError::Internal(format!("format_toml task failed: {e}")))?
+}
+
 /// 导出全部供应商为 JSON 文档，写入 `target_path`（前端 save 对话框选的位置）。
 /// `include_keys=false` 时剔除 settingsConfig env 里的密钥键。换设备迁移 /
 /// 留档用，不经过 git 同步。返回文档里的 provider 数量。
@@ -1174,6 +1186,80 @@ fn import_opencode_from_live(store: &Store, app: App) -> AppResult<u32> {
     let path = live_opencode::opencode_config_path()?;
     let live_text = live::read_live_settings(&path)?;
     import_opencode_from_live_text(store, app, &live_text)
+}
+
+/// 单激活应用「从 live 配置文件导入」（ADR-0012 泛化）：读该应用的 live 文件(s)
+/// 反向解析为快照（至多 1 个），upsert 进库（按 name 去重）。opencode 走
+/// [`import_opencode_from_live`]。返回写入条数。
+fn import_single_activate_from_live(store: &Store, app: App) -> AppResult<u32> {
+    let Some(snap) = read_live_snapshot(app)? else {
+        return Ok(0);
+    };
+    import_live::upsert_by_name(store, app, &snap, &crate::time::now_iso())
+}
+
+/// 按 app 读 live 文件文本（顺序固定：claude=[settings.json]，codex=[config.toml,
+/// auth.json]，gemini=[.env, settings.json]，grok=[config.toml]）。opencode 无单份
+/// live 配置概念 → `None`。路径解析错误 → `Err`（与既有读盘语义一致）。快照与
+/// 片段提取共用这一份「app → 路径」映射（单一事实来源）。
+fn read_live_texts(app: App) -> AppResult<Option<Vec<String>>> {
+    let paths: Vec<AppResult<PathBuf>> = match app {
+        App::Claude => vec![live::claude_settings_path()],
+        App::Codex => vec![
+            live_codex::codex_config_path(),
+            live_codex::codex_auth_path(),
+        ],
+        App::Gemini => vec![
+            live_gemini::gemini_env_path(),
+            live_gemini::gemini_settings_path(),
+        ],
+        App::Grok => vec![live_grok::grok_config_path()],
+        App::OpenCode => return Ok(None),
+    };
+    let mut texts = Vec::with_capacity(paths.len());
+    for p in paths {
+        texts.push(live::read_live_settings(&p?)?);
+    }
+    Ok(Some(texts))
+}
+
+/// 按 app 读 live 文件(s) + 反向解析为快照。opencode → `unreachable`（走
+/// opencode 专属路径）。
+fn read_live_snapshot(app: App) -> AppResult<Option<import_live::LiveImportSnapshot>> {
+    let Some(texts) = read_live_texts(app)? else {
+        return Ok(None);
+    };
+    Ok(match app {
+        App::Claude => import_live::claude_live_to_snapshot(&texts[0]),
+        App::Codex => import_live::codex_live_to_snapshot(&texts[0], &texts[1]),
+        App::Gemini => import_live::gemini_live_to_snapshot(&texts[0], &texts[1]),
+        App::Grok => import_live::grok_live_to_snapshot(&texts[0]),
+        App::OpenCode => unreachable!("opencode 走 import_opencode_from_live"),
+    })
+}
+
+/// 单激活应用「从 live 导入」预览：快照 → 0/1 条 entry（key = name，is_new 按
+/// name 是否已存在）。文件缺失/无可导入 → Ready 空（与 opencode 的空 provider
+/// 段同语义；opencode 的 Missing 状态保留给它的路径不存在场景）。
+fn preview_single_activate(store: &Store, app: App) -> AppResult<LiveImportPreview> {
+    let existing_names: HashSet<String> = store
+        .list_providers_for(app)?
+        .into_iter()
+        .map(|p| p.name)
+        .collect();
+    let Some(snap) = read_live_snapshot(app)? else {
+        return Ok(LiveImportPreview::Ready { entries: vec![] });
+    };
+    Ok(LiveImportPreview::Ready {
+        entries: vec![LiveImportPreviewEntry {
+            key: snap.name.clone(),
+            name: snap.name.clone(),
+            base_url: snap.base_url.clone(),
+            has_secret: snap.has_secret,
+            is_new: !existing_names.contains(&snap.name),
+            snippet_candidates: snap.snippet_candidates,
+        }],
+    })
 }
 
 /// import 的核心逻辑（可测）：给定 opencode.json 文本，把 `provider.<key>` 反向
@@ -1286,7 +1372,12 @@ pub async fn import_providers_from_live_cmd(
 ) -> AppResult<u32> {
     let store = state.store.clone();
     let count = tauri::async_runtime::spawn_blocking(move || -> AppResult<u32> {
-        import_opencode_from_live(&store, app)
+        // opencode 附加模式多条目共存；单激活应用一份 live → 至多一个快照。
+        if app == App::OpenCode {
+            import_opencode_from_live(&store, app)
+        } else {
+            import_single_activate_from_live(&store, app)
+        }
     })
     .await
     .map_err(|e| AppError::Internal(format!("import_providers_from_live task failed: {e}")))??;
@@ -1296,16 +1387,17 @@ pub async fn import_providers_from_live_cmd(
 
 // ---------------- 附加模式（OpenCode）导入预览 ----------------
 
-/// 「从 opencode.json 导入」的预览载荷。文件不存在 → `Missing`（带完整路径，
-/// 前端展示）；存在 → 将导入的条目列表（空 = 无 provider 段）。
+/// 「从 live 配置导入」的预览载荷（opencode 与单激活应用共用，ADR-0012）。
+/// 文件不存在 → `Missing`（带完整路径，前端展示，仅 opencode 路径）；存在 →
+/// 将导入的条目列表（空 = 无 provider 段 / 无可导入）。
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, specta::Type)]
 #[serde(tag = "kind", rename_all = "camelCase")]
-pub enum OpenCodeImportPreview {
+pub enum LiveImportPreview {
     Missing {
         path: String,
     },
     Ready {
-        entries: Vec<OpenCodeImportPreviewEntry>,
+        entries: Vec<LiveImportPreviewEntry>,
     },
 }
 
@@ -1313,29 +1405,28 @@ pub enum OpenCodeImportPreview {
 /// `has_secret`，apiKey / headers 值不跨边界（见 `secret_in_entry`）。
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, specta::Type)]
 #[serde(rename_all = "camelCase")]
-pub struct OpenCodeImportPreviewEntry {
-    /// `provider.<key>`，即导入后的 liveKey。
+pub struct LiveImportPreviewEntry {
+    /// `provider.<key>`（opencode）或 name（单激活应用），即导入后的去重键。
     pub key: String,
     /// entry.name 优先，缺 → key（与导入的 display_name 规则一致）。
     pub name: String,
-    /// options.baseURL，缺 → ""。
+    /// options.baseURL（opencode）或 live 里 base_url（单激活），缺 → ""。
     pub base_url: String,
-    /// options.apiKey 或 options.headers 任一值非空。
+    /// options.apiKey / options.headers（opencode）或 settingsConfig 携带凭据
+    /// （单激活）任一非空。
     pub has_secret: bool,
-    /// DB 无此 liveKey → 新建；有 → 更新（与导入的判定一致）。
+    /// DB 无此 key → 新建；有 → 更新（与导入的判定一致）。
     pub is_new: bool,
+    /// 可共享键候选（单激活应用导入后可提取为通用片段；opencode 无此概念 → 空）。
+    pub snippet_candidates: Vec<String>,
 }
 
 /// 预览「从 opencode.json 导入」：读盘薄壳——核心逻辑在
 /// [`preview_opencode_import_text`]（可测，不碰文件系统/DB）。文件不存在 →
 /// `Missing`（不报错：与导入命令「空文件 → 0 条」同属正常路径）。
-fn preview_opencode_import(
-    store: &Store,
-    app: App,
-    path: &Path,
-) -> AppResult<OpenCodeImportPreview> {
+fn preview_opencode_import(store: &Store, app: App, path: &Path) -> AppResult<LiveImportPreview> {
     if !path.exists() {
-        return Ok(OpenCodeImportPreview::Missing {
+        return Ok(LiveImportPreview::Missing {
             path: path.display().to_string(),
         });
     }
@@ -1345,7 +1436,7 @@ fn preview_opencode_import(
         .iter()
         .filter_map(|p| live_opencode::meta_live_key(&p.meta))
         .collect();
-    Ok(OpenCodeImportPreview::Ready {
+    Ok(LiveImportPreview::Ready {
         entries: preview_opencode_import_text(&live_text, &existing_keys),
     })
 }
@@ -1356,10 +1447,10 @@ fn preview_opencode_import(
 fn preview_opencode_import_text(
     live_text: &str,
     existing_keys: &HashSet<String>,
-) -> Vec<OpenCodeImportPreviewEntry> {
+) -> Vec<LiveImportPreviewEntry> {
     live_opencode::provider_entries(live_text)
         .into_iter()
-        .map(|(key, entry)| OpenCodeImportPreviewEntry {
+        .map(|(key, entry)| LiveImportPreviewEntry {
             key: key.clone(),
             name: entry
                 .get("name")
@@ -1374,6 +1465,7 @@ fn preview_opencode_import_text(
                 .to_string(),
             has_secret: secret_in_entry(&entry),
             is_new: !existing_keys.contains(&key),
+            snippet_candidates: vec![],
         })
         .collect()
 }
@@ -1397,22 +1489,70 @@ fn secret_in_entry(entry: &serde_json::Value) -> bool {
         })
 }
 
-/// 附加模式「从 opencode.json 导入」预览按钮：只读命令，返回将导入的供应商
-/// （名称/端点/是否含密钥/新建或更新）；文件不存在 → Missing（带路径）。确认
-/// 导入仍走 import_providers_from_live_cmd。不 emit、不失效任何 tag。
+/// 「从本机配置文件导入」预览：只读命令，按 app 分派（opencode 走读盘 +
+/// Missing 状态；单激活应用走快照解析），返回将导入的供应商（名称/端点/是否
+/// 含密钥/新建或更新/片段候选）。确认导入仍走 import_providers_from_live_cmd。
+/// 不 emit、不失效任何 tag。
 #[tauri::command]
 #[specta::specta]
-pub async fn preview_opencode_import_cmd(
+pub async fn preview_live_import_cmd(
     state: State<'_, AppState>,
     app: App,
-) -> AppResult<OpenCodeImportPreview> {
+) -> AppResult<LiveImportPreview> {
     let store = state.store.clone();
     tauri::async_runtime::spawn_blocking(move || {
-        let path = live_opencode::opencode_config_path()?;
-        preview_opencode_import(&store, app, &path)
+        // opencode 走读盘 + Missing 状态；单激活应用走快照解析（无 Missing——
+        // 文件缺失即无可导入，Ready 空）。
+        if app == App::OpenCode {
+            let path = live_opencode::opencode_config_path()?;
+            preview_opencode_import(&store, app, &path)
+        } else {
+            preview_single_activate(&store, app)
+        }
     })
     .await
     .map_err(|e| AppError::Internal(format!("preview_opencode_import task failed: {e}")))?
+}
+
+// ---------------- 导入后提取通用配置片段（T6）----------------
+
+/// 按 app 读 live 文件(s)，提取「可共享键」为片段内容（无可提取 → None）。
+/// opencode 无片段概念 → None。gemini 只需 env（settings.json 的非受控键进片段
+/// 零效果，见 `gemini_extract_snippet`）。
+fn read_live_snippet_extract(app: App) -> AppResult<Option<String>> {
+    let Some(texts) = read_live_texts(app)? else {
+        return Ok(None);
+    };
+    Ok(match app {
+        App::Claude => import_live::claude_extract_snippet(&texts[0]),
+        App::Gemini => import_live::gemini_extract_snippet(&texts[0]),
+        App::Codex => import_live::codex_extract_snippet(&texts[0]),
+        App::Grok => import_live::grok_extract_snippet(&texts[0]),
+        App::OpenCode => unreachable!("opencode 无片段概念（read_live_texts 已返回 None）"),
+    })
+}
+
+/// 导入后「提取为通用片段」（T6，ADR-0012）：读该应用 live 配置的可共享键，
+/// 合并进现有片段（已有键不覆盖，沿用 ADR-0010 只补缺失），启用片段。无可
+/// 提取 → 现有片段原样（enabled 不变，不碰用户停用状态）。非静默——前端先检测
+/// 候选、用户确认才调本命令。返回更新后的片段。
+#[tauri::command]
+#[specta::specta]
+pub fn extract_snippet_from_live_cmd(
+    state: State<'_, AppState>,
+    app: App,
+) -> AppResult<CommonConfigSnippet> {
+    let current = state.config.get().snippet_for(app);
+    let Some(extracted) = read_live_snippet_extract(app)? else {
+        return Ok(current);
+    };
+    let content = import_live::merge_extracted_snippet(app, &current.content, &extracted)?;
+    let snippet = CommonConfigSnippet {
+        enabled: true,
+        content,
+    };
+    state.config.update(|c| c.set_snippet(app, snippet))?;
+    Ok(state.config.get().snippet_for(app))
 }
 
 // ---------------- 从 CC-Switch 导入供应商 ----------------
@@ -1477,13 +1617,16 @@ fn read_ccswitch_source(
 }
 
 /// 「从 CC-Switch 导入」按钮：定位本机 CC-Switch 配置 → 读 + 转换供应商 → 复用
-/// `apply_import`（merge / overwrite）写本机库。代理 / OAuth / 不支持应用的供应商
-/// 跳过并进报告明细。找不到配置 → 明确错误（前端展示友好提示）。
+/// `apply_import`（merge / overwrite）写本机库。**单应用语境**：`app` 是当前
+/// 视图的应用，只搬该应用的供应商（claude 视图不冒出 codex 供应商，见
+/// ADR-0012）。代理 / OAuth / 不支持应用的供应商跳过并进报告明细。找不到配置
+/// → 明确错误（前端展示友好提示）。
 #[tauri::command]
 #[specta::specta]
 pub async fn import_from_ccswitch_cmd(
     state: State<'_, AppState>,
     app_handle: tauri::AppHandle,
+    app: App,
     mode: ProviderImportMode,
     db_path: Option<String>,
 ) -> AppResult<import_ccswitch::CcSwitchImportReport> {
@@ -1493,7 +1636,7 @@ pub async fn import_from_ccswitch_cmd(
             let now = crate::time::now_iso();
             let (providers, universals) = read_ccswitch_source(&db_path)?;
             let (imported, skipped) =
-                import_ccswitch::collect_ccswitch_imports(&providers, &universals, &now);
+                import_ccswitch::collect_ccswitch_imports(&providers, &universals, app, &now);
             // 复用 export_import 的写库路径：序列化成导出文档喂 apply_import（不新造
             // 冲突逻辑——冲突键 (app, id)、只写本机 DB 由它守住）。
             let doc = export_import::export_document(&imported, true, &now)?;
@@ -1590,6 +1733,50 @@ mod tests {
         assert!(s.list_providers_for(App::OpenCode).unwrap().is_empty());
     }
 
+    // ---------------- 单激活应用「从 live 导入」（ADR-0012 泛化）----------------
+
+    /// claude live → 快照 → upsert：按 name（base_url host）新建 Provider。
+    #[test]
+    fn single_activate_import_claude_live_creates_provider() {
+        let s = mem();
+        let snap = import_live::claude_live_to_snapshot(
+            r#"{"env":{"ANTHROPIC_BASE_URL":"https://api.moonshot.cn/anthropic","ANTHROPIC_AUTH_TOKEN":"sk-x","ANTHROPIC_MODEL":"kimi"}}"#,
+        )
+        .unwrap();
+        let n =
+            import_live::upsert_by_name(&s, App::Claude, &snap, "2026-08-13T00:00:00Z").unwrap();
+        assert_eq!(n, 1);
+        let providers = s.list_providers_for(App::Claude).unwrap();
+        assert_eq!(providers.len(), 1);
+        assert_eq!(providers[0].name, "api.moonshot.cn");
+        let sc: serde_json::Value = serde_json::from_str(&providers[0].settings_config).unwrap();
+        assert_eq!(sc["env"]["ANTHROPIC_MODEL"], "kimi");
+    }
+
+    /// 反复导入同 name → 更新不重复（单激活的 liveKey 替代：按 name 去重）。
+    #[test]
+    fn single_activate_import_dedupes_by_name() {
+        let s = mem();
+        let snap =
+            import_live::claude_live_to_snapshot(r#"{"env":{"ANTHROPIC_MODEL":"m1"}}"#).unwrap();
+        import_live::upsert_by_name(&s, App::Claude, &snap, "t1").unwrap();
+        import_live::upsert_by_name(&s, App::Claude, &snap, "t2").unwrap();
+        assert_eq!(
+            s.list_providers_for(App::Claude).unwrap().len(),
+            1,
+            "同 name 不产生重复"
+        );
+    }
+
+    /// 无可导入内容（无受控键）→ 0 条。
+    #[test]
+    fn single_activate_import_empty_live_is_zero() {
+        let s = mem();
+        let snap = import_live::claude_live_to_snapshot(r#"{"permissions":{"allow":["Bash"]}}"#);
+        assert!(snap.is_none(), "无受控内容 → 无可导入");
+        assert!(s.list_providers_for(App::Claude).unwrap().is_empty());
+    }
+
     // ---------------- 导入预览 ----------------
 
     /// 预览提取 name / endpoint / 密钥布尔：带 name 用 name，缺 name 用 key；
@@ -1662,10 +1849,10 @@ mod tests {
         let tmp = tempfile::tempdir().expect("tempdir");
         let path = tmp.path().join("opencode.json");
         match preview_opencode_import(&s, App::OpenCode, &path).expect("missing is Ok") {
-            OpenCodeImportPreview::Missing { path: shown } => {
+            LiveImportPreview::Missing { path: shown } => {
                 assert_eq!(shown, path.display().to_string());
             }
-            OpenCodeImportPreview::Ready { .. } => panic!("缺文件应 Missing"),
+            LiveImportPreview::Ready { .. } => panic!("缺文件应 Missing"),
         }
     }
 
@@ -1677,11 +1864,11 @@ mod tests {
         let path = tmp.path().join("opencode.json");
         std::fs::write(&path, opencode_live_json()).expect("write live file");
         match preview_opencode_import(&s, App::OpenCode, &path).expect("ready is Ok") {
-            OpenCodeImportPreview::Ready { entries } => {
+            LiveImportPreview::Ready { entries } => {
                 assert_eq!(entries.len(), 2);
                 assert!(entries.iter().all(|e| e.is_new), "空 DB → 全部新建");
             }
-            OpenCodeImportPreview::Missing { .. } => panic!("文件存在应 Ready"),
+            LiveImportPreview::Missing { .. } => panic!("文件存在应 Ready"),
         }
     }
 }

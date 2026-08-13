@@ -24,10 +24,11 @@ import { Label } from "@/components/ui/label"
 import { Switch } from "@/components/ui/switch"
 import {
   geminiSnippetIssue,
+  geminiSnippetMissingKeys,
   snippetMissingKeys,
 } from "@/features/providers/derive"
 import { useMutateWithToast } from "@/hooks/use-toast-mutation"
-import { formatJson, parseJsonObject } from "@/lib/json"
+import { parseJsonObject, tidyJson } from "@/lib/json"
 
 import type { App, CommonConfigSnippet } from "@/types/generated/bindings"
 
@@ -72,7 +73,7 @@ export function CommonConfigSnippetCard({ app }: { app: App }) {
         return false
       }
     }
-    const payload = isToml ? next.content : formatJson(next.content)
+    const payload = isToml ? next.content : tidyJson(next.content)
     return await runWithToast(
       save,
       {
@@ -91,8 +92,9 @@ export function CommonConfigSnippetCard({ app }: { app: App }) {
 
   async function onSave() {
     const ok = await persist({ enabled, content })
-    // JSON 应用：保存后把草稿同步成展开版（与后端回读一致）；TOML 不格式化。
-    if (ok && !isToml) setContent(formatJson(content))
+    // JSON 应用：保存后把草稿同步成展开+排序版（与后端回读一致）；TOML 不整理
+    //（整理走「整理」按钮，异步 command）。
+    if (ok && !isToml) setContent(tidyJson(content))
   }
 
   // 开关翻转即写盘：启用状态是「生效」开关（切换供应商时后端按它决定是否
@@ -105,11 +107,16 @@ export function CommonConfigSnippetCard({ app }: { app: App }) {
     if (!ok) setEnabled(!checked)
   }
 
-  // 子集判定提示：claude 专用（snippetMissingKeys 镜像 claude 受控字段）。
+  // 子集判定提示：claude / gemini 在 settings_config 层合并（可键级判定，
+  // 镜像各自受控字段语义）；codex / grok 在写盘层补 live 非受控键——前端没有
+  // live 全文，settings_config 只存受控部分，无法键级判定，不做（US 19 仅对
+  // settings_config 层应用成立）。
   const missingKeys =
     app === "claude" && activeProvider
       ? snippetMissingKeys(activeProvider.settingsConfig, content)
-      : []
+      : app === "gemini" && activeProvider
+        ? geminiSnippetMissingKeys(activeProvider.settingsConfig, content)
+        : []
 
   // 底部提示按应用：claude 子集判定；codex/grok 列禁身份键；gemini 动态检测
   // 凭据/端点键（TS 镜像后端 is_sensitive_config_key，ADR-0010）——有则警告该键
@@ -119,9 +126,14 @@ export function CommonConfigSnippetCard({ app }: { app: App }) {
     if (app === "grok") return t("providers.snippet.grokIdentityHint")
     if (app === "gemini") {
       const issue = geminiSnippetIssue(content)
-      return issue
-        ? t("providers.snippet.geminiCredentialWarn", { key: issue })
-        : t("providers.snippet.geminiCredentialHint")
+      if (issue) {
+        return t("providers.snippet.geminiCredentialWarn", { key: issue })
+      }
+      // 无凭据问题时与 claude 同款子集提示（片段 env 键将补进激活供应商）。
+      if (!activeProvider) return t("providers.snippet.noActiveHint")
+      return missingKeys.length > 0
+        ? t("providers.snippet.deltaHint", { keys: missingKeys.join(", ") })
+        : t("providers.snippet.coveredHint")
     }
     if (app === "claude") {
       if (!activeProvider) return t("providers.snippet.noActiveHint")

@@ -76,7 +76,7 @@ import { cn } from "@/lib/utils"
 import type { App, Provider } from "@/types/generated/bindings"
 import { CcSwitchImportDialog } from "./cc-switch-import-dialog"
 import { CommonConfigSnippetCard } from "./common-config-snippet-card"
-import { OpencodeImportDialog } from "./opencode-import-dialog"
+import { LiveImportDialog } from "./live-import-dialog"
 import { ProviderFormSheet } from "./provider-form-sheet"
 import {
   ProviderTransferDialog,
@@ -103,7 +103,7 @@ export function ProvidersView() {
   const [remove] = useDeleteProviderMutation()
   const [switchProvider] = useSwitchProviderMutation()
   // opencode 附加模式：加入 / 移出 live 配置（opencode.json）。单激活四 app
-  // 不用这两个。「从 opencode.json 导入」走 OpencodeImportDialog（预览式弹窗）。
+  // 不用这两个。「从本机配置文件导入」走 LiveImportDialog（预览式弹窗）。
   const [addProviderToLive] = useAddProviderToLiveMutation()
   const [removeProviderFromLive] = useRemoveProviderFromLiveMutation()
   const runWithToast = useMutateWithToast()
@@ -128,8 +128,8 @@ export function ProvidersView() {
   }
   const [transfer, setTransfer] = useState<TransferKind | null>(null)
   const [ccswitchOpen, setCcswitchOpen] = useState(false)
-  // opencode 附加模式「从 opencode.json 导入」预览弹窗。
-  const [opencodeImportOpen, setOpencodeImportOpen] = useState(false)
+  // 「从本机配置文件导入」预览弹窗（全部应用，ADR-0012）。
+  const [liveImportOpen, setLiveImportOpen] = useState(false)
   const [query, setQuery] = useState("")
   // 切换确认对话框：切到缺必填项（端点/key/模板变量）的供应商前先问一句，
   // 用户确认后照切不误（「我已经知道它缺东西，就是要切」）。
@@ -215,8 +215,8 @@ export function ProvidersView() {
       addProviderToLive,
       { app, id: p.id },
       {
-        success: { key: "providers.toast.addedToLive", vars: { name: p.name } },
-        failed: { key: "providers.toast.addToLiveFailed" },
+        success: { key: "providers.toast.enabledIn", vars: { name: p.name } },
+        failed: { key: "providers.toast.enableFailed" },
       },
     )
   }
@@ -226,10 +226,10 @@ export function ProvidersView() {
       { app, id: p.id },
       {
         success: {
-          key: "providers.toast.removedFromLive",
+          key: "providers.toast.disabledIn",
           vars: { name: p.name },
         },
-        failed: { key: "providers.toast.removeFromLiveFailed" },
+        failed: { key: "providers.toast.disableFailed" },
       },
     )
   }
@@ -267,11 +267,10 @@ export function ProvidersView() {
           ))}
         </fieldset>
         <div className="ml-auto flex gap-2">
-          {/* 数据迁移类操作收进菜单：常规的导出 / 导入 / CC-Switch 导入在前，
-              附加模式 (opencode) 特有的「从 opencode.json 导入」沉底——它是
-              少数派路径，不挡常规入口。主操作「新增」独立为 primary。
-              w-max: 菜单按内容宽度展开（共享组件默认菜单宽=触发器宽，而
-              「从 opencode.json 导入」等长文案会把菜单撑得换行）。 */}
+          {/* 数据菜单 = cc one 自有备份（导出/导入 cc one 格式）；外部来源导入
+              独立成「导入」按钮（跟数据菜单并排）：从 CC-Switch 迁移 / 从本机
+              配置文件导入（泛化到全部应用，见 ADR-0012）。主操作「新增」仍为
+              primary。 */}
           <DropdownMenu>
             <DropdownMenuTrigger
               render={<Button variant="outline" size="sm" />}
@@ -289,16 +288,25 @@ export function ProvidersView() {
                 <Upload />
                 {t("providers.transfer.import")}
               </DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
+          <DropdownMenu>
+            <DropdownMenuTrigger
+              render={<Button variant="outline" size="sm" />}
+            >
+              <ArrowRightLeft />
+              {t("providers.importMenu.label")}
+              <ChevronDown />
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end" className="w-max">
               <DropdownMenuItem onClick={() => setCcswitchOpen(true)}>
-                <ArrowRightLeft />
+                <RefreshCw />
                 {t("providers.ccswitch.button")}
               </DropdownMenuItem>
-              {isAdditive ? (
-                <DropdownMenuItem onClick={() => setOpencodeImportOpen(true)}>
-                  <RefreshCw />
-                  {t("providers.live.import")}
-                </DropdownMenuItem>
-              ) : null}
+              <DropdownMenuItem onClick={() => setLiveImportOpen(true)}>
+                <Upload />
+                {t("providers.live.import")}
+              </DropdownMenuItem>
             </DropdownMenuContent>
           </DropdownMenu>
           <Button size="sm" onClick={openNew}>
@@ -309,7 +317,7 @@ export function ProvidersView() {
       </div>
 
       {isAdditive && !bannerDismissed ? (
-        // opencode 附加模式说明：多供应商共存，加入 live 即生效，无需切换。
+        // opencode 附加模式说明：多供应商可同时启用，启用即生效，无需切换。
         // 与 AppMark 描边方块呼应，让附加模式与单激活的差异在顶栏就可预期。
         <div className="bg-muted/40 flex items-center gap-2 rounded-lg px-3 py-2 text-xs">
           <Info className="text-muted-foreground size-3.5 shrink-0" />
@@ -462,10 +470,11 @@ export function ProvidersView() {
       <CcSwitchImportDialog
         open={ccswitchOpen}
         onOpenChange={setCcswitchOpen}
+        app={app}
       />
-      <OpencodeImportDialog
-        open={opencodeImportOpen}
-        onOpenChange={setOpencodeImportOpen}
+      <LiveImportDialog
+        open={liveImportOpen}
+        onOpenChange={setLiveImportOpen}
         app={app}
       />
 
@@ -555,7 +564,7 @@ function ProviderRow({
             variant="outline"
             className="h-5 shrink-0 px-1.5 text-[11px] font-normal"
           >
-            {t("providers.live.added")}
+            {t("providers.live.enabled")}
           </Badge>
         ) : null}
         {missingRequired.length > 0 ? (
@@ -600,7 +609,7 @@ function ProviderRow({
               onClick={onRemoveFromLive}
               className="shrink-0 hover:!bg-accent-brand/25"
             >
-              {t("providers.live.remove")}
+              {t("providers.live.disable")}
             </Button>
           ) : (
             <Button
@@ -609,7 +618,7 @@ function ProviderRow({
               onClick={onAddToLive}
               className="shrink-0 hover:!bg-accent-brand/25"
             >
-              {t("providers.live.add")}
+              {t("providers.live.enable")}
             </Button>
           )
         ) : isActive ? (

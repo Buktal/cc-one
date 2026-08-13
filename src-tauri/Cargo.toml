@@ -49,6 +49,10 @@ ureq = "2"
 # Codex config.toml 受控合并（写盘）：编辑型 TOML 解析器，保留未改动部分的
 # 注释与格式；只读型 `toml` 重写会丢注释，故不用。
 toml_edit = "0.22"
+# TOML 格式化（「整理」按钮）：Taplo 是保留注释的规范 formatter（VS Code
+# Even Better TOML 底层同引擎）。toml_edit 是保格式编辑器、不能展开压缩文本，
+# 前端生态唯一能保注释的是 @taplo/lib wasm（代价过重）——故走后端 command。
+taplo = "0.14"
 # OpenCode opencode.json 读写（live_opencode）：读用 json5 容忍用户手写的
 # 注释/尾逗号；写用 serde_json pretty（字母序）。JSON5 round-trip 会重排键序、
 # 丢注释，是固有限制（grok 的 toml_edit 能逐字节保留，OpenCode 不能）。

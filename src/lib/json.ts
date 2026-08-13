@@ -45,3 +45,36 @@ export function formatJson(text: string): string {
   const edits = format(trimmed, undefined, { tabSize: 2, insertSpaces: true })
   return applyEdits(trimmed, edits)
 }
+
+/** 把对象键按字母序重排（就地返回新对象，不改原值）。只排顶层 + env 内键
+ *  （ADR-0011：「JSON 片段按顶层 + env 内键排序」）——env 是设置键的扁平 map，
+ *  排序有意义；更深的嵌套对象（如 mcpServers 配置）键序保持用户原样，不递归
+ *  重排。数组元素保持原序。 */
+function sortKeysShallow(value: unknown): unknown {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    return value
+  }
+  const out: Record<string, unknown> = {}
+  for (const key of Object.keys(value).sort()) {
+    let v = (value as Record<string, unknown>)[key]
+    if (key === "env") {
+      v = sortKeysShallow(v)
+    }
+    out[key] = v
+  }
+  return out
+}
+
+/** 整理 JSON 片段（「整理」按钮）：格式化 + 键字母序排序（顶层 + env 内键，
+ *  ADR-0011）。先容错排版（jsonc-parser，输入可能是 jsonc / 尾逗号），再尝试
+ *  严格解析——若合法则排序键 + stringify；若非法（含注释等）回退到 formatJson
+ *  结果（只排版不排序，绝不因排序失败而抛错）。幂等。 */
+export function tidyJson(text: string): string {
+  const formatted = formatJson(text)
+  try {
+    const parsed: unknown = JSON.parse(formatted)
+    return JSON.stringify(sortKeysShallow(parsed), null, 2)
+  } catch {
+    return formatted
+  }
+}

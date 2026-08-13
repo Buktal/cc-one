@@ -19,6 +19,7 @@ import {
   geminiBaseUrl,
   geminiModel,
   geminiSnippetIssue,
+  geminiSnippetMissingKeys,
   grokConfigToml,
   hasOneM,
   isSensitiveConfigKey,
@@ -42,6 +43,7 @@ import {
   replaceTemplateVarsInText,
   restoreTemplatePlaceholders,
   setModelOneM,
+  snippetCoveredKeys,
   snippetMissingKeys,
   stripOneM,
   switchAuthField,
@@ -1255,6 +1257,63 @@ describe("geminiSnippetIssue", () => {
     // 空 / 垃圾草稿 → null（不误导）。
     expect(geminiSnippetIssue("")).toBeNull()
     expect(geminiSnippetIssue("{nope")).toBeNull()
+  })
+})
+
+describe("geminiSnippetMissingKeys", () => {
+  const cfg = '{"env": {"GEMINI_MODEL": "gemini-2.5-flash"}}'
+
+  it("reports snippet env keys missing from the config env", () => {
+    const snippet =
+      '{"env": {"GEMINI_MODEL": "x", "GEMINI_TEMPERATURE": "0.7"}}'
+    expect(geminiSnippetMissingKeys(cfg, snippet)).toEqual([
+      "GEMINI_TEMPERATURE",
+    ])
+  })
+
+  it("returns [] when the config already covers the snippet", () => {
+    expect(
+      geminiSnippetMissingKeys(cfg, '{"env": {"GEMINI_MODEL": "x"}}'),
+    ).toEqual([])
+  })
+
+  it("ignores non-env snippet keys (only env is merged at the settings layer)", () => {
+    const snippet = '{"env": {"GEMINI_MODEL": "x"}, "mcpServers": {}}'
+    expect(geminiSnippetMissingKeys(cfg, snippet)).toEqual([])
+  })
+
+  it("is conservative on unparseable input", () => {
+    expect(geminiSnippetMissingKeys("", "")).toEqual([])
+    expect(geminiSnippetMissingKeys("{nope", '{"env": {"A": "1"}}')).toEqual([])
+    expect(geminiSnippetMissingKeys(cfg, "{nope")).toEqual([])
+  })
+})
+
+describe("snippetCoveredKeys", () => {
+  it("collects top-level and env keys for JSON apps", () => {
+    const covered = snippetCoveredKeys(
+      "claude",
+      '{"env": {"ANTHROPIC_MODEL": "m"}, "includeCoAuthoredBy": false}',
+    )
+    expect(covered.has("env")).toBe(true)
+    expect(covered.has("ANTHROPIC_MODEL")).toBe(true)
+    expect(covered.has("includeCoAuthoredBy")).toBe(true)
+  })
+
+  it("collects top-level tables and scalar keys for TOML apps", () => {
+    const covered = snippetCoveredKeys(
+      "grok",
+      '[tui]\ntheme = "dark"\n\n[mcp_servers.github]\ncommand = "npx"',
+    )
+    expect(covered.has("tui")).toBe(true)
+    expect(covered.has("mcp_servers")).toBe(true)
+    // 表内标量不算顶层键（T6 候选是顶层键）。
+    expect(covered.has("theme")).toBe(false)
+  })
+
+  it("returns an empty set for empty / unparseable snippets", () => {
+    expect(snippetCoveredKeys("codex", "")).toEqual(new Set())
+    expect(snippetCoveredKeys("claude", "{nope")).toEqual(new Set())
   })
 })
 

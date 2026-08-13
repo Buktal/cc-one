@@ -3,8 +3,10 @@
 // editable compartments — lives here once. JSON mode adds the rich layer
 // (`@codemirror/lang-json` syntax + lint, paste→format expand, format button,
 // object validation strip); TOML mode is highlight-only (`@codemirror/legacy-
-// modes` StreamLanguage) — no client-side TOML parser, so format / validation
-// are JSON-only and TOML validity is checked by the backend.
+// modes` StreamLanguage) — no client-side TOML parser, so client-side format /
+// validation are JSON-only and TOML validity is checked by the backend. TOML
+// 的整理走后端 taplo（ADR-0011）：粘贴 / 外部值进入 / 「整理」按钮都调
+// format_toml_cmd（保注释、容错，失败保持原文）。
 //
 // `JsonEditor` is a thin `language="json"` wrapper over this (unchanged API for
 // existing consumers); the snippet card uses `language="toml"` for codex/grok.
@@ -22,8 +24,9 @@ import { useTheme } from "next-themes"
 import { useEffect, useMemo, useRef, useState } from "react"
 import { useTranslation } from "react-i18next"
 
+import { useFormatTomlMutation } from "@/app/store/api"
 import { Button } from "@/components/ui/button"
-import { formatJson, parseJsonObject } from "@/lib/json"
+import { parseJsonObject, tidyJson } from "@/lib/json"
 import { cn } from "@/lib/utils"
 
 export type CodeLanguage = "json" | "toml"
@@ -128,8 +131,13 @@ export function CodeEditor({
   // dark, so a dark-first render avoids flashing the light editor.
   const isDark = (resolvedTheme ?? "dark") === "dark"
   // JSON gets the rich layer; TOML is highlight-only (no client parser → no
-  // format / paste-expand / validation strip, see file header).
+  // format / paste-expand / validation strip, see file header). TOML 的整理走
+  // 后端 taplo（ADR-0011）：ref 保存 mutation trigger（每次渲染可能换引用），
+  // 供 mount-once 的 updateListener / effects 闭包安全调用。
   const isJson = language === "json"
+  const [formatToml] = useFormatTomlMutation()
+  const formatTomlRef = useRef(formatToml)
+  formatTomlRef.current = formatToml
 
   const containerRef = useRef<HTMLDivElement>(null)
   const viewRef = useRef<EditorView | null>(null)
@@ -186,18 +194,19 @@ export function CodeEditor({
           ),
           EditorView.updateListener.of((update) => {
             if (!update.docChanged || pushingRef.current) return
-            // 粘贴（含「全部替换」式插入）即自动展开（JSON only）：与外部值进入
-            // 同一规则（formatJson 容错，语法错误 / 尾逗号等无效 JSON 也展开成
-            // 可读结构，字符串字面量不受影响）。先 dispatch 再回传格式化结果，
-            // 父级状态一次到位，不会闪过原文。错误位置由 jsonParseLinter 的
-            // 红线标记，这里只负责排版。TOML 无客户端格式化，粘贴原文照传。
-            if (isJson) {
-              const pasted = update.transactions.some((tr) =>
-                tr.isUserEvent("input.paste"),
-              )
-              if (pasted) {
-                const text = update.view.state.doc.toString()
-                const formatted = formatJson(text)
+            // 粘贴（含「全部替换」式插入）即自动展开：与外部值进入同一规则。
+            // JSON 本地整理（formatJson 容错，语法错误 / 尾逗号等无效 JSON 也
+            // 展开成可读结构，字符串字面量不受影响）；TOML 调后端 taplo
+            // （ADR-0011「输入后自动触发」，保注释、容错）。先 dispatch 再回传
+            // 格式化结果，父级状态一次到位，不会闪过原文。TOML 异步整理回调时
+            // 若用户已继续编辑（doc 不再等于粘贴快照）不强推，只回传当前内容。
+            // 错误位置由 jsonParseLinter 的红线标记，这里只负责排版。
+            if (
+              update.transactions.some((tr) => tr.isUserEvent("input.paste"))
+            ) {
+              const text = update.view.state.doc.toString()
+              if (isJson) {
+                const formatted = tidyJson(text)
                 if (formatted !== text) {
                   pushingRef.current = true
                   try {
@@ -211,6 +220,29 @@ export function CodeEditor({
                 onChangeRef.current(formatted)
                 return
               }
+              void formatTomlRef.current(text).then((res) => {
+                const formatted = res.error ? text : res.data
+                if (formatted === text) {
+                  onChangeRef.current(text)
+                  return
+                }
+                const view = viewRef.current
+                if (!view || view.state.doc.toString() !== text) {
+                  // 用户已继续编辑：不覆盖，只保证父级拿到粘贴原文。
+                  onChangeRef.current(text)
+                  return
+                }
+                pushingRef.current = true
+                try {
+                  view.dispatch({
+                    changes: { from: 0, to: text.length, insert: formatted },
+                  })
+                } finally {
+                  pushingRef.current = false
+                }
+                onChangeRef.current(formatted)
+              })
+              return
             }
             onChangeRef.current(update.state.doc.toString())
           }),
@@ -230,26 +262,46 @@ export function CodeEditor({
   // through the parent). A compact JSON external value is expanded to multi-line
   // on the way in (JSON only) — opening the form shows a readable structure
   // instead of a single compressed line. formatJson is lenient (jsonc-parser):
-  // even broken JSON spreads into an outline, never throws. TOML values pass
-  // through raw (no client formatter). The editor's own edits never reach this
-  // path (cur === value).
+  // even broken JSON spreads into an outline, never throws. TOML external values
+  // go through the backend taplo formatter (ADR-0011 auto-trigger) — async, so
+  // the callback skips if the user already edited (doc no longer matches the
+  // snapshot) and never overwrites their typing. The editor's own edits never
+  // reach this path (cur === value).
   useEffect(() => {
     const view = viewRef.current
     if (!view) return
     const cur = view.state.doc.toString()
     if (cur === value) return
-    let insert = value
-    if (isJson && !pushingRef.current) {
-      const formatted = formatJson(value)
-      if (formatted !== value) insert = formatted
+    if (isJson) {
+      let insert = value
+      if (!pushingRef.current) {
+        const formatted = tidyJson(value)
+        if (formatted !== value) insert = formatted
+      }
+      pushingRef.current = true
+      try {
+        view.dispatch({ changes: { from: 0, to: cur.length, insert } })
+      } finally {
+        pushingRef.current = false
+      }
+      if (insert !== value) onChangeRef.current(insert)
+      return
     }
-    pushingRef.current = true
-    try {
-      view.dispatch({ changes: { from: 0, to: cur.length, insert } })
-    } finally {
-      pushingRef.current = false
-    }
-    if (insert !== value) onChangeRef.current(insert)
+    // TOML：外部值进入（打开表单 / 保存回读 / T6 提取后）即调后端整理。容错：
+    // 失败保持原文；回调时 doc 已不等于进入时的快照 → 用户编辑过，不强推。
+    void formatTomlRef.current(value).then((res) => {
+      const formatted = res.error ? value : res.data
+      const v = viewRef.current
+      if (!v || v.state.doc.toString() !== cur) return
+      if (formatted === value) return
+      pushingRef.current = true
+      try {
+        v.dispatch({ changes: { from: 0, to: cur.length, insert: formatted } })
+      } finally {
+        pushingRef.current = false
+      }
+      onChangeRef.current(formatted)
+    })
   }, [value, isJson])
 
   // Refresh the validation strip whenever the controlled text changes (JSON
@@ -299,14 +351,16 @@ export function CodeEditor({
     })
   }, [placeholderText, placeholderCompartment])
 
+  /** 统一「整理」：按语言分派——JSON 本地 tidyJson（格式化+排序）；TOML 调
+   *  后端 format_toml_cmd（taplo 保注释格式化，见 ADR-0011）。TOML 是异步：
+   *  dispatch 结果时用 pushingRef 防回声。 */
   function handleFormat() {
     const view = viewRef.current
     if (!view) return
     const text = view.state.doc.toString()
     if (!text.trim()) return
-    // Lenient (jsonc-parser): never throws, broken JSON spreads too.
-    const formatted = formatJson(text)
-    if (formatted !== text) {
+    const apply = (formatted: string) => {
+      if (formatted === text) return
       pushingRef.current = true
       try {
         view.dispatch({
@@ -315,8 +369,16 @@ export function CodeEditor({
       } finally {
         pushingRef.current = false
       }
+      onChange(formatted)
     }
-    onChange(formatted)
+    if (isJson) {
+      apply(tidyJson(text))
+    } else {
+      void formatTomlRef.current(text).then((res) => {
+        // mutation 容错（run 归一）：失败保持原文（整理是容错的，不弹错）。
+        if (!res.error) apply(res.data)
+      })
+    }
   }
 
   return (
@@ -331,21 +393,19 @@ export function CodeEditor({
           <span>{validationError}</span>
         </p>
       ) : null}
-      {isJson ? (
-        <div className="flex items-center gap-2">
-          <Button
-            type="button"
-            variant="outline"
-            size="xs"
-            disabled={disabled}
-            onClick={handleFormat}
-            title={t("jsonEditor.formatHint")}
-          >
-            <Wand2 />
-            {t("jsonEditor.format")}
-          </Button>
-        </div>
-      ) : null}
+      <div className="flex items-center gap-2">
+        <Button
+          type="button"
+          variant="outline"
+          size="xs"
+          disabled={disabled}
+          onClick={handleFormat}
+          title={t("jsonEditor.formatHint")}
+        >
+          <Wand2 />
+          {t("jsonEditor.format")}
+        </Button>
+      </div>
     </div>
   )
 }

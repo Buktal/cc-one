@@ -272,6 +272,18 @@ export const commands = {
 	 */
 	setCommonConfigSnippetCmd: (app: App, json: string, enabled: boolean) => typedError<CommonConfigSnippet, AppError>(__TAURI_INVOKE("set_common_config_snippet_cmd", { app, json, enabled })),
 	/**
+	 *  TOML 片段整理（「整理」按钮）：taplo 保留注释地格式化（codex/grok 片段）。
+	 *  纯展示操作，不落盘、不校验身份键——只把文本排版成可读多行。
+	 */
+	formatTomlCmd: (text: string) => typedError<string, AppError>(__TAURI_INVOKE("format_toml_cmd", { text })),
+	/**
+	 *  导入后「提取为通用片段」（T6，ADR-0012）：读该应用 live 配置的可共享键，
+	 *  合并进现有片段（已有键不覆盖，沿用 ADR-0010 只补缺失），启用片段。无可
+	 *  提取 → 现有片段原样（enabled 不变，不碰用户停用状态）。非静默——前端先检测
+	 *  候选、用户确认才调本命令。返回更新后的片段。
+	 */
+	extractSnippetFromLiveCmd: (app: App) => typedError<CommonConfigSnippet, AppError>(__TAURI_INVOKE("extract_snippet_from_live_cmd", { app })),
+	/**
 	 *  导出全部供应商为 JSON 文档，写入 `target_path`（前端 save 对话框选的位置）。
 	 *  `include_keys=false` 时剔除 settingsConfig env 里的密钥键。换设备迁移 /
 	 *  留档用，不经过 git 同步。返回文档里的 provider 数量。
@@ -311,17 +323,20 @@ export const commands = {
 	 */
 	importProvidersFromLiveCmd: (app: App) => typedError<number, AppError>(__TAURI_INVOKE("import_providers_from_live_cmd", { app })),
 	/**
-	 *  附加模式「从 opencode.json 导入」预览按钮：只读命令，返回将导入的供应商
-	 *  （名称/端点/是否含密钥/新建或更新）；文件不存在 → Missing（带路径）。确认
-	 *  导入仍走 import_providers_from_live_cmd。不 emit、不失效任何 tag。
+	 *  「从本机配置文件导入」预览：只读命令，按 app 分派（opencode 走读盘 +
+	 *  Missing 状态；单激活应用走快照解析），返回将导入的供应商（名称/端点/是否
+	 *  含密钥/新建或更新/片段候选）。确认导入仍走 import_providers_from_live_cmd。
+	 *  不 emit、不失效任何 tag。
 	 */
-	previewOpencodeImportCmd: (app: App) => typedError<OpenCodeImportPreview, AppError>(__TAURI_INVOKE("preview_opencode_import_cmd", { app })),
+	previewLiveImportCmd: (app: App) => typedError<LiveImportPreview, AppError>(__TAURI_INVOKE("preview_live_import_cmd", { app })),
 	/**
 	 *  「从 CC-Switch 导入」按钮：定位本机 CC-Switch 配置 → 读 + 转换供应商 → 复用
-	 *  `apply_import`（merge / overwrite）写本机库。代理 / OAuth / 不支持应用的供应商
-	 *  跳过并进报告明细。找不到配置 → 明确错误（前端展示友好提示）。
+	 *  `apply_import`（merge / overwrite）写本机库。**单应用语境**：`app` 是当前
+	 *  视图的应用，只搬该应用的供应商（claude 视图不冒出 codex 供应商，见
+	 *  ADR-0012）。代理 / OAuth / 不支持应用的供应商跳过并进报告明细。找不到配置
+	 *  → 明确错误（前端展示友好提示）。
 	 */
-	importFromCcswitchCmd: (mode: ProviderImportMode, dbPath: string | null) => typedError<CcSwitchImportReport, AppError>(__TAURI_INVOKE("import_from_ccswitch_cmd", { mode, dbPath })),
+	importFromCcswitchCmd: (app: App, mode: ProviderImportMode, dbPath: string | null) => typedError<CcSwitchImportReport, AppError>(__TAURI_INVOKE("import_from_ccswitch_cmd", { app, mode, dbPath })),
 	/**
 	 *  Dock the given window against the right edge of its current monitor.
 	 * 
@@ -561,6 +576,35 @@ export type LightweightExpand =
 /**  Hover the half-icon to expand. */
 "hover";
 
+/**
+ *  「从 live 配置导入」的预览载荷（opencode 与单激活应用共用，ADR-0012）。
+ *  文件不存在 → `Missing`（带完整路径，前端展示，仅 opencode 路径）；存在 →
+ *  将导入的条目列表（空 = 无 provider 段 / 无可导入）。
+ */
+export type LiveImportPreview = { kind: "missing"; path: string } | { kind: "ready"; entries: LiveImportPreviewEntry[] };
+
+/**
+ *  一条将导入的供应商预览。**密钥绝不进预览载荷**——只有布尔
+ *  `has_secret`，apiKey / headers 值不跨边界（见 `secret_in_entry`）。
+ */
+export type LiveImportPreviewEntry = {
+	/**  `provider.<key>`（opencode）或 name（单激活应用），即导入后的去重键。 */
+	key: string,
+	/**  entry.name 优先，缺 → key（与导入的 display_name 规则一致）。 */
+	name: string,
+	/**  options.baseURL（opencode）或 live 里 base_url（单激活），缺 → ""。 */
+	baseUrl: string,
+	/**
+	 *  options.apiKey / options.headers（opencode）或 settingsConfig 携带凭据
+	 *  （单激活）任一非空。
+	 */
+	hasSecret: boolean,
+	/**  DB 无此 key → 新建；有 → 更新（与导入的判定一致）。 */
+	isNew: boolean,
+	/**  可共享键候选（单激活应用导入后可提取为通用片段；opencode 无此概念 → 空）。 */
+	snippetCandidates: string[],
+};
+
 /**  A local group row (SQLite `local_groups`; device-private, never enters git). */
 export type LocalGroup = {
 	id: string,
@@ -603,29 +647,6 @@ export type ModelStatsRow = {
 	 *  (`TokenCounts::cache_hit_rate`, computed at query time).
 	 */
 	cache_hit_rate: number | null,
-};
-
-/**
- *  「从 opencode.json 导入」的预览载荷。文件不存在 → `Missing`（带完整路径，
- *  前端展示）；存在 → 将导入的条目列表（空 = 无 provider 段）。
- */
-export type OpenCodeImportPreview = { kind: "missing"; path: string } | { kind: "ready"; entries: OpenCodeImportPreviewEntry[] };
-
-/**
- *  一条将导入的供应商预览。**密钥绝不进预览载荷**——只有布尔
- *  `has_secret`，apiKey / headers 值不跨边界（见 `secret_in_entry`）。
- */
-export type OpenCodeImportPreviewEntry = {
-	/**  `provider.<key>`，即导入后的 liveKey。 */
-	key: string,
-	/**  entry.name 优先，缺 → key（与导入的 display_name 规则一致）。 */
-	name: string,
-	/**  options.baseURL，缺 → ""。 */
-	baseUrl: string,
-	/**  options.apiKey 或 options.headers 任一值非空。 */
-	hasSecret: boolean,
-	/**  DB 无此 liveKey → 新建；有 → 更新（与导入的判定一致）。 */
-	isNew: boolean,
 };
 
 /**  User-tunable preferences surfaced in the Settings「通用」card. */

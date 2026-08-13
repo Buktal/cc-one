@@ -2,7 +2,7 @@
 // provider form sheet's settingsConfig sync (lib/json.ts).
 
 import { describe, expect, it } from "vitest"
-import { formatJson, parseJsonObject } from "@/lib/json"
+import { formatJson, parseJsonObject, tidyJson } from "@/lib/json"
 
 describe("parseJsonObject", () => {
   it("parses a plain object", () => {
@@ -60,5 +60,34 @@ describe("formatJson", () => {
 
   it("returns empty string for empty input", () => {
     expect(formatJson("")).toBe("")
+  })
+})
+
+describe("tidyJson", () => {
+  it("sorts top-level keys and env keys alphabetically (ADR-0011)", () => {
+    expect(
+      tidyJson(
+        '{"includeCoAuthoredBy":false,"env":{"GEMINI_MODEL":"m","GEMINI_API_KEY":"k"}}',
+      ),
+    ).toBe(
+      '{\n  "env": {\n    "GEMINI_API_KEY": "k",\n    "GEMINI_MODEL": "m"\n  },\n  "includeCoAuthoredBy": false\n}',
+    )
+  })
+
+  it("does not reorder deeper nested objects (only top level + env)", () => {
+    // ADR-0011 只排「顶层 + env 内键」——深层对象键序保持用户原样。
+    const text = '{"mcpServers":{"z":{"command":"npx"},"a":{"command":"ls"}}}'
+    expect(tidyJson(text)).toContain(
+      '"mcpServers": {\n    "z": {\n      "command": "npx"\n    },\n    "a": {',
+    )
+  })
+
+  it("falls back to layout-only for invalid JSON (never throws)", () => {
+    expect(tidyJson('{"a":1,')).toBe('{\n  "a": 1,')
+  })
+
+  it("is idempotent", () => {
+    const once = tidyJson('{"b":1,"a":2}')
+    expect(tidyJson(once)).toBe(once)
   })
 })

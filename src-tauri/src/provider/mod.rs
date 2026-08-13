@@ -14,6 +14,7 @@
 
 pub mod export_import;
 pub mod import_ccswitch;
+pub mod import_live;
 pub mod live;
 pub mod live_codex;
 pub mod live_gemini;

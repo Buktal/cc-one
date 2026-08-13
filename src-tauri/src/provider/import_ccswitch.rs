@@ -193,11 +193,16 @@ pub fn convert_ccswitch_provider(p: &CcSwitchProvider, now_iso: &str) -> Convert
 }
 
 /// 展开一个统一供应商为 claude / codex / gemini 各自的独立子 Provider。
-/// `apps` 哪个为 true 就产出哪个应用的子 Provider；id 前缀 `universal-<app>-`，
-/// category = `Aggregator`，name 沿用统一供应商名。展开前对统一供应商本身过一遍
-/// 跳过判定（provider_type OAuth 类，或 base_url 命中 OAuth 端点）——newapi / custom
-/// 直通聚合网关，展开；命中则整组跳过。
-pub fn expand_universal(u: &UniversalProvider, now_iso: &str) -> Vec<ConvertOutcome> {
+/// `apps` 哪个为 true 就产出哪个应用的子 Provider；`target_app` 只产出该应用
+/// 的子（单应用语境导入——claude 视图只搬 claude 部分）。id 前缀
+/// `universal-<app>-`，category = `Aggregator`，name 沿用统一供应商名。展开前
+/// 对统一供应商本身过一遍跳过判定（provider_type OAuth 类，或 base_url 命中
+/// OAuth 端点）——newapi / custom 直通聚合网关，展开；命中则整组跳过。
+pub fn expand_universal(
+    u: &UniversalProvider,
+    target_app: App,
+    now_iso: &str,
+) -> Vec<ConvertOutcome> {
     if is_oauth_provider_type(&u.provider_type)
         || u.base_url.contains("githubcopilot.com")
         || u.base_url.contains("chatgpt.com/backend-api/codex")
@@ -208,7 +213,7 @@ pub fn expand_universal(u: &UniversalProvider, now_iso: &str) -> Vec<ConvertOutc
         }];
     }
     let mut out = Vec::new();
-    if u.apps.claude {
+    if App::Claude == target_app && u.apps.claude {
         out.push(ConvertOutcome::Imported(universal_child(
             App::Claude,
             &u.id,
@@ -218,7 +223,7 @@ pub fn expand_universal(u: &UniversalProvider, now_iso: &str) -> Vec<ConvertOutc
             now_iso,
         )));
     }
-    if u.apps.codex {
+    if App::Codex == target_app && u.apps.codex {
         out.push(ConvertOutcome::Imported(universal_child(
             App::Codex,
             &u.id,
@@ -228,7 +233,7 @@ pub fn expand_universal(u: &UniversalProvider, now_iso: &str) -> Vec<ConvertOutc
             now_iso,
         )));
     }
-    if u.apps.gemini {
+    if App::Gemini == target_app && u.apps.gemini {
         out.push(ConvertOutcome::Imported(universal_child(
             App::Gemini,
             &u.id,
@@ -407,18 +412,24 @@ fn universal_child(
 pub fn collect_ccswitch_imports(
     providers: &[CcSwitchProvider],
     universals: &[UniversalProvider],
+    target_app: App,
     now_iso: &str,
 ) -> (Vec<Provider>, Vec<SkipDetail>) {
     let mut imported = Vec::new();
     let mut skipped = Vec::new();
     for p in providers {
         match convert_ccswitch_provider(p, now_iso) {
-            ConvertOutcome::Imported(provider) => imported.push(provider),
+            ConvertOutcome::Imported(provider) => {
+                // 单应用语境：只搬当前应用的部分（claude 视图不冒出 codex 供应商）。
+                if provider.app == target_app {
+                    imported.push(provider);
+                }
+            }
             ConvertOutcome::Skipped { name, reason } => skipped.push(SkipDetail { name, reason }),
         }
     }
     for u in universals {
-        for outcome in expand_universal(u, now_iso) {
+        for outcome in expand_universal(u, target_app, now_iso) {
             match outcome {
                 ConvertOutcome::Imported(provider) => imported.push(provider),
                 ConvertOutcome::Skipped { name, reason } => {
@@ -790,17 +801,19 @@ mod tests {
             icon: None,
             icon_color: None,
         };
-        let outcomes = expand_universal(&u, NOW);
-        assert_eq!(outcomes.len(), 2, "claude + codex 两个，gemini 关");
-        let apps: Vec<App> = outcomes
-            .iter()
-            .map(|o| match o {
-                ConvertOutcome::Imported(p) => p.app,
-                _ => panic!("应 Imported"),
-            })
-            .collect();
-        assert!(apps.contains(&App::Claude));
-        assert!(apps.contains(&App::Codex));
+        // 单应用语境：target_app 是 claude → 只产 claude 子（codex 的 apps 虽开
+        // 但不产）。
+        let outcomes = expand_universal(&u, App::Claude, NOW);
+        assert_eq!(
+            outcomes.len(),
+            1,
+            "只产 target_app（claude），codex/gemini 不产"
+        );
+        let ConvertOutcome::Imported(claude) = &outcomes[0] else {
+            panic!("应 Imported");
+        };
+        assert_eq!(claude.app, App::Claude);
+        assert!(claude.id.starts_with("universal-"));
         // id 前缀 + category。
         for o in &outcomes {
             let ConvertOutcome::Imported(p) = o else {
@@ -837,7 +850,7 @@ mod tests {
             icon: None,
             icon_color: None,
         };
-        assert!(expand_universal(&u, NOW).is_empty());
+        assert!(expand_universal(&u, App::Claude, NOW).is_empty());
     }
 
     #[test]
@@ -885,7 +898,7 @@ mod tests {
             icon: None,
             icon_color: None,
         };
-        let outcomes = expand_universal(&u, NOW);
+        let outcomes = expand_universal(&u, App::Claude, NOW);
         assert_eq!(outcomes.len(), 1);
         assert!(matches!(
             outcomes[0],

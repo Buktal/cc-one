@@ -30,6 +30,14 @@ use crate::error::{AppError, AppResult};
 use crate::model::App;
 use crate::provider::live::{parse_object, CONTROLLED_FIELDS};
 
+/// TOML 片段整理（「整理」按钮）：用 taplo（保留注释的规范 formatter，VS Code
+/// Even Better TOML 同引擎）把压缩文本展开成多行。**保留注释与键序**——默认
+/// `reorder_keys: false`；taplo 解析时跳过语法错误区（不因残片而失败，与 JSON
+/// 侧 formatJson 的容错一致）。薄壳：读入 → taplo 格式化。
+pub fn format_toml(text: &str) -> String {
+    taplo::formatter::format(text, taplo::formatter::Options::default())
+}
+
 /// 写盘入口（纯函数）：片段启用 → 把片段合并进 settingsConfig；未启用 →
 /// 原样返回（不解析片段——停用的片段没有任何效果）。
 pub fn apply_snippet(settings_config: &str, snippet: &str, enabled: bool) -> AppResult<String> {
@@ -171,9 +179,9 @@ fn validate_gemini_extras(obj: &serde_json::Value) -> AppResult<()> {
 ///
 /// Claude / Gemini 片段校验共用——两者都写 env（认证通道），凭据进片段会随请求
 /// 发往供应商端点。codex / grok 片段写的是 `mcp_servers` 等（不经 LLM 端点），
-/// **不**用本函数（允许 `mcp_servers` 含凭据），只禁身份键。仅本模块内调用，
-/// TS 镜像落地前无需对外暴露。
-fn is_sensitive_config_key(name: &str) -> bool {
+/// **不**用本函数（允许 `mcp_servers` 含凭据），只禁身份键。`import_live` 反向
+/// 导入也用它判定「片段候选」里剔除凭据键（前后端各一镜像，ADR-0010）。
+pub(crate) fn is_sensitive_config_key(name: &str) -> bool {
     const EXACT: &[&str] = &[
         "APIKEY",
         "API_KEY",
@@ -539,5 +547,46 @@ command = "npx""#
         assert!(is_sensitive_config_key("anthropic_auth_token"));
         assert!(is_sensitive_config_key("OpenAI_Api_Key"));
         assert!(!is_sensitive_config_key("anthropic_model"));
+    }
+
+    #[test]
+    fn format_toml_expands_compressed_text_to_multiline() {
+        // 压缩成一行/少行的 TOML 展开成多行（taplo 保格式）。
+        let src = r#"[tui]
+theme = "dark""#;
+        let out = format_toml(src);
+        assert!(out.contains("theme = \"dark\""), "展开后保留键值: {out}");
+        assert!(out.lines().count() > 1, "展开成多行: {out}");
+    }
+
+    #[test]
+    fn format_toml_preserves_comments() {
+        // 注释必须保留——这是选 taplo 而非 smol-toml 的原因。
+        let src = r#"[tui]
+# 用户注释
+theme = "dark""#;
+        let out = format_toml(src);
+        assert!(out.contains("# 用户注释"), "注释保留: {out}");
+    }
+
+    #[test]
+    fn format_toml_does_not_reorder_keys() {
+        // TOML 不排序（reorder_keys 默认 false）——与 JSON 排序相反，避免重排
+        // 用户刻意安排的键序。
+        let src = r#"[a]
+z = 1
+m = 2"#;
+        let out = format_toml(src);
+        assert!(
+            out.find("z").unwrap() < out.find("m").unwrap(),
+            "键序保持: {out}"
+        );
+    }
+
+    #[test]
+    fn format_toml_tolerates_syntax_errors() {
+        // taplo「跳过语法错误区」：残片也返回字符串，不抛错（与 formatJson 容错一致）。
+        let out = format_toml("z = [1, 2");
+        assert!(!out.trim().is_empty());
     }
 }

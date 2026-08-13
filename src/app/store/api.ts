@@ -16,9 +16,9 @@ import type {
   DeviceLibrarySummary,
   LibraryEntry,
   LibraryForgetAction,
+  LiveImportPreview,
   LocalGroup,
   ModelStatsRow,
-  OpenCodeImportPreview,
   PricingEntry,
   Provider,
   ProviderImportMode,
@@ -511,8 +511,8 @@ export const vaultApi = createApi({
     }),
     /** 附加模式（opencode）「从 opencode.json 导入」预览：只读，返回将导入的
      *  供应商（名称/端点/是否含密钥/新建或更新）；文件不存在 → Missing。 */
-    previewOpencodeImport: b.mutation<OpenCodeImportPreview, App>({
-      queryFn: async (app) => run(commands.previewOpencodeImportCmd(app)),
+    previewLiveImport: b.mutation<LiveImportPreview, App>({
+      queryFn: async (app) => run(commands.previewLiveImportCmd(app)),
     }),
     /** 某应用的通用配置片段（claude/codex/gemini 各一份）。 */
     getCommonConfigSnippet: b.query<CommonConfigSnippet, App>({
@@ -533,6 +533,18 @@ export const vaultApi = createApi({
           ),
         ),
       invalidatesTags: ["Providers"],
+    }),
+    /** 导入后「提取为通用片段」（T6）：读该应用 live 配置的可共享键，合并进
+     *  现有片段（已有键不覆盖），启用片段。非静默——前端检测到候选先提示、
+     *  用户确认才调。 */
+    extractSnippetFromLive: b.mutation<CommonConfigSnippet, App>({
+      queryFn: async (app) => run(commands.extractSnippetFromLiveCmd(app)),
+      invalidatesTags: ["Providers"],
+    }),
+    /** TOML 片段「整理」（ADR-0011）：后端 taplo 格式化（保留注释与键序）。
+     *  整理是容错的——失败保持原文，调用方不弹错误。 */
+    formatToml: b.mutation<string, string>({
+      queryFn: async (text) => run(commands.formatTomlCmd(text)),
     }),
     /** 导出全部供应商为 JSON 文档（`includeKeys=false` 剔除 API key）到用户
      *  选的路径。手动迁移 / 留档，不走 git 同步。返回文档内供应商数。 */
@@ -557,10 +569,10 @@ export const vaultApi = createApi({
      *  Provider → 复用 apply_import 写库。代理 / OAuth / 不支持应用跳过并进报告。 */
     importFromCcSwitch: b.mutation<
       CcSwitchImportReport,
-      { mode: ProviderImportMode; dbPath: string | null }
+      { app: App; mode: ProviderImportMode; dbPath: string | null }
     >({
-      queryFn: async ({ mode, dbPath }) =>
-        run(commands.importFromCcswitchCmd(mode, dbPath)),
+      queryFn: async ({ app, mode, dbPath }) =>
+        run(commands.importFromCcswitchCmd(app, mode, dbPath)),
       invalidatesTags: ["Providers"],
     }),
     /** 拉取供应商的模型列表（按应用分派端点格式；claude/codex 走 OpenAI
@@ -681,9 +693,11 @@ export const {
   useAddProviderToLiveMutation,
   useRemoveProviderFromLiveMutation,
   useImportProvidersFromLiveMutation,
-  usePreviewOpencodeImportMutation,
+  usePreviewLiveImportMutation,
   useGetCommonConfigSnippetQuery,
   useSetCommonConfigSnippetMutation,
+  useExtractSnippetFromLiveMutation,
+  useFormatTomlMutation,
   useExportProvidersMutation,
   useImportProvidersMutation,
   useImportFromCcSwitchMutation,

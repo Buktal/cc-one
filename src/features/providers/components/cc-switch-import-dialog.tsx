@@ -21,6 +21,7 @@ import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { toStructuredError } from "@/lib/error"
 import type {
+  App,
   CcSwitchImportReport,
   ProviderImportMode,
   SkipReason,
@@ -38,9 +39,12 @@ const SKIP_REASON_LABEL: Record<SkipReason, string> = {
 export function CcSwitchImportDialog({
   open,
   onOpenChange,
+  app,
 }: {
   open: boolean
   onOpenChange: (open: boolean) => void
+  /** 当前视图应用——单应用语境，只导入该应用的供应商（ADR-0012）。 */
+  app: App
 }) {
   const { t } = useTranslation()
   const [mode, setMode] = useState<ProviderImportMode>("merge")
@@ -61,7 +65,7 @@ export function CcSwitchImportDialog({
   async function onConfirm() {
     setError(null)
     setReport(null)
-    const result = await importCc({ mode, dbPath: dbPath.trim() || null })
+    const result = await importCc({ app, mode, dbPath: dbPath.trim() || null })
     if (result.error) {
       const structured = toStructuredError(result.error)
       setError(

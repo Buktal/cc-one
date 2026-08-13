@@ -787,6 +787,50 @@ export function snippetMissingKeys(
   return missing
 }
 
+/** gemini 片段子集判定：片段 env 键 vs 配置 env 键——gemini 的合并层在
+ *  settings_config（片段 env 键级补缺失、供应商赢，ADR-0010），返回片段里有、
+ *  配置里没有的 env 键。与 claude 版同契约：解析不了 / 非对象 → `[]`（不误导）。 */
+export function geminiSnippetMissingKeys(
+  configText: string,
+  snippetText: string,
+): string[] {
+  const config = parseSnippetInput(configText)
+  const snippet = parseSnippetInput(snippetText)
+  if (config === null || snippet === null) return []
+  const configEnv = envRecordOf(config.env)
+  const snippetEnv = envRecordOf(snippet.env)
+  return Object.keys(snippetEnv).filter((k) => !(k in configEnv))
+}
+
+/** 现有片段里已覆盖的键集合（T6「提取为通用片段」候选过滤用，ADR-0012「且片段
+ *  缺」条件）：按应用片段语义解析片段内容——JSON 应用 = 顶层键 + env 内键；
+ *  TOML 应用 = 顶层表 / 顶层标量键（行级容错解析，坏行忽略，能解析多少算多少）。
+ *  解析不了的片段 → 空集（无键被覆盖，候选全保留）。 */
+export function snippetCoveredKeys(app: App, snippetText: string): Set<string> {
+  const covered = new Set<string>()
+  if (app === "codex" || app === "grok") {
+    let inTable = false
+    for (const line of snippetText.split("\n")) {
+      const trimmed = line.trim()
+      if (!trimmed || trimmed.startsWith("#")) continue
+      const table = trimmed.match(/^\[([^.\]]+)(?:\.|\])/)
+      if (table) {
+        inTable = true
+        covered.add(table[1])
+        continue
+      }
+      const keyValue = trimmed.match(/^([A-Za-z0-9_-]+)\s*=/)
+      if (keyValue && !inTable) covered.add(keyValue[1])
+    }
+    return covered
+  }
+  const obj = parseSnippetInput(snippetText)
+  if (!obj) return covered
+  for (const key of Object.keys(obj)) covered.add(key)
+  for (const key of Object.keys(envRecordOf(obj.env))) covered.add(key)
+  return covered
+}
+
 // ---- 通用片段凭据键判定（claude / gemini 共用）----
 //
 // TS 镜像后端 `provider::snippet::is_sensitive_config_key`，**逐字一致**
