@@ -262,10 +262,10 @@ export function ProvidersView() {
               className={cn(
                 "rounded-md",
                 a === app &&
-                  // 激活 = 纯黑面 (bg-card) + 品牌字色。与侧栏 NavItem 的
-                  // tint 底分叉是刻意的: 页面 tab 激活参与暗色「深面」对换
-                  // (透明 tint 叠黑面成透明灰), 侧栏导航选中仍走 tint。
-                  "bg-card text-accent-brand-strong font-medium",
+                  // 激活: 亮色 tint 底 (品牌选中态, SURFACE RULE 豁免),
+                  // 暗色纯黑面 (bg-card) —— 纯白卡叠在灰白亮背景下会隐形,
+                  // 所以亮色保持 tint, 只暗色参与「深面」对换。
+                  "bg-accent-tint text-accent-brand-strong font-medium dark:bg-card",
               )}
             >
               {t(`providers.app.${a}`)}

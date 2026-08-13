@@ -87,6 +87,12 @@
  *   control look different across views). Alpha stays legal ONLY for
  *   transient feedback (hover) and intentionally weakened layers (subtle
  *   banners, track backgrounds).
+ *   EXEMPTION: brand-tint selection fills (--accent-tint: nav active,
+ *   calendar selection) — the tint derives the brand hue on any host, and
+ *   every use is the same token, so there is no cross-view fork to prevent.
+ *   A surface may mix a light tint fill and a dark pure-token fill via
+ *   dark: variants (e.g. providers app-chip active: tint in light, bg-card
+ *   in dark).
  *
  * BUTTON RULE (skin-agnostic, defined once here, every skin inherits it):
  *     light  --primary = --brand-strong   --primary-foreground = --btn-fg
@@ -204,14 +210,18 @@
 }
 
 .dark {
-  /* 底/面对换（用户决策 2026-08）：暗色从「深底浅面」翻转为「浅底深面」——
-     背景灰 (#2c2c2e, 原 card 值)、卡片/弹层黑 (#1c1c1e, 原 background 值)。
-     侧栏走 bg-card 因此自动变黑; hover/次面 muted 保持浅灰在深面上提亮。 */
+  /* 底/面对换（用户决策 2026-08）：暗色从「深底浅面」翻转为「浅底深面」。
+     明暗三档阶梯（用户决策 2026-08-14「色差增大」）：页面灰 #2c2c2e →
+     弹层/下拉中灰 #26262a → 输入框最深 #0d0d0f；卡片 #1c1c1e 居中。
+     弹层内三层（弹层底 → 分组弱化块 → 输入框）相邻色差 ~8–10%，
+     不再糊成一团（原 popover/input 挤在 #14–#1c 区间）。 */
   --background: #2c2c2e;
   --foreground: #ffffff;
   --card: #1c1c1e;
   --card-foreground: #ffffff;
-  --popover: #1c1c1e;
+  /* 弹层/下拉面板 — 中灰，浮于页面浅灰与黑卡之间（比 card 浅一档 =
+     浮起感，像 macOS 面板）。Tooltip 更浅 (#3a3a3c) 保持最顶层。 */
+  --popover: #26262a;
   --popover-foreground: #ffffff;
   /* Tooltip — 暗色走「提亮」而非跟 card 的按深链：比灰底 (#2c2c2e) 亮一档，
      在黑卡 (#1c1c1e) 上亮两档——两种表面都立得住（若用 #1c1c1e 会和
@@ -238,7 +248,10 @@
   --accent-foreground: #ffffff;
   --destructive: #f87171;
   --border: rgba(255, 255, 255, 0.08);
-  --input: #141416;
+  /* 输入框 — 三档最深处，弹层 (#26262a) / 分组块 (≈#1d1d1f) 之上
+     明确的黑；与 muted (#141416) 分离后 hover:bg-muted 在输入框上
+     恢复「提亮」反馈（先前同色时 hover 无感）。 */
+  --input: #0d0d0f;
   --ring: var(--brand);
   /* B-tier data palette — default skin (Neutral), DARK values. The light
      palette's mid-depth shades die on #1C1C1E (deep blue #2e59a7 ≈ 2.5:1,
@@ -373,8 +386,10 @@
   --metric-cost: #61b356;
 }
 
-/* Azure — brand saturated a touch (57%→56%, slightly deeper); red input +
-   blue cache-read lifted (the light blue cache-read #2e59a7 was 2.5:1,
+/* Azure — brand deepened and slightly desaturated (#8ba9df s57% l71% →
+   #7497d8 s55% l65%: darker, so it reads as an accent on dark; saturation
+   pulled back with the rest of the dark palette). Red input + blue
+   cache-read lifted (the light blue cache-read #2e59a7 was 2.5:1,
    invisible). */
 .dark[data-skin="azure"] {
   --brand: #7497d8;
