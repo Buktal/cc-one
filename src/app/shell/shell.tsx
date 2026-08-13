@@ -517,7 +517,15 @@ export function Shell({ children }: { children: React.ReactNode }) {
               <Logo collapsed={collapsed} />
             </div>
 
-            <Separator />
+            {/* mx-3: the logo row's px-4 already insets the icon, but the
+                rule should read as a hairline spanning the padded column,
+                not bleed to the frame — same inset as the footer rules.
+                data-horizontal:w-auto (same variant as the base class's
+                w-full) is required: a bare w-auto loses to the
+                data-horizontal:w-full selector (specificity (0,2,0) vs
+                (0,1,0)), which would leave width:100% + mx-3 overflowing
+                the frame. */}
+            <Separator className="mx-3 data-horizontal:w-auto" />
 
             {/* Nav column scrolls independently (scrollbar hidden) so the
                 footer's controls stay pinned and reachable in short
@@ -526,12 +534,17 @@ export function Shell({ children }: { children: React.ReactNode }) {
               {NAV_GROUPS.map((group, index) => (
                 <div
                   key={group.heading}
-                  // Expanded: the heading's own pt-3 already separates the
-                  // group from the one above — a second mt-3 doubled the gap
-                  // (成本定价 → 管理 read as far apart). Collapsed: no heading
-                  // text exists, so the mt-3 is the only separator between
-                  // the two icon stacks.
-                  className={cn(index > 0 && (collapsed ? "mt-3" : ""))}
+                  // First group: the logo rule above is a hairline, not a
+                  // sibling group — pt-2 doubles the rule-to-heading gap
+                  // (heading's own pt-2 + this pt-2 = 16px); collapsed it
+                  // gives the icon stack the same breathing room below the
+                  // rule.
+                  // Later groups: expanded the gap to the group above stays
+                  // at the heading's pt-1 + nav p-2 = 12px (a second mt-3
+                  // would double it — 成本定价 → 管理 read as far apart);
+                  // collapsed has no heading text, so the mt-3 is the only
+                  // separator between the two icon stacks.
+                  className={cn(index === 0 ? "pt-2" : collapsed ? "mt-3" : "")}
                 >
                   {collapsed ? null : (
                     <div
@@ -539,11 +552,14 @@ export function Shell({ children }: { children: React.ReactNode }) {
                         // Same fade timing as the labels: out on collapse, in
                         // after the slide. Block width follows the aside, so no
                         // width transition needed — overflow-hidden only guards
-                        // long titles. pt-2 (not pt-3): the heading sits below
-                        // the previous group's nav p-2, so 8+8px reads as one
-                        // step up from the in-group gap (6px) instead of a
-                        // doubled gap.
-                        "overflow-hidden px-5 pt-2 pb-1 text-[10px] font-medium tracking-wide text-muted-foreground/60 transition-opacity duration-150",
+                        // long titles. pt-1 (not pt-2): below the previous
+                        // group's nav p-2, 8+4px reads as one step up from the
+                        // in-group gap (6px), mirroring the 12px
+                        // heading→first-item spacing below (pb-1 + nav p-2).
+                        // The first group keeps pt-2 so the logo-rule gap
+                        // holds at 16px.
+                        "overflow-hidden px-5 pb-1 text-[10px] font-medium tracking-wide text-muted-foreground/60 transition-opacity duration-150",
+                        index === 0 ? "pt-2" : "pt-1",
                         collapsed ? "opacity-0" : "opacity-100 delay-200",
                       )}
                     >
@@ -575,10 +591,16 @@ export function Shell({ children }: { children: React.ReactNode }) {
                 navigation from the control deck — same rhythm as the logo and
                 device rules. Collapsed keeps no rule: the icon column already
                 has one below the collect icon, two would sandwich it.
-                mx-3 w-auto: the rule sits inside the deck's 12px padding, so
-                its edges match the collect/footer rule below (which lives
-                inside the p-3 block) instead of bleeding to the frame. */}
-            {collapsed ? null : <Separator className="mx-3 w-auto" />}
+                mx-3 data-horizontal:w-auto: the rule sits inside the deck's
+                12px padding, so its edges match the collect/footer rule below
+                (which lives inside the p-3 block) instead of bleeding to the
+                frame. The data-horizontal: variant is mandatory — a bare
+                w-auto would lose the cascade to the base class's
+                data-horizontal:w-full (specificity (0,2,0) vs (0,1,0)) and
+                width:100% + mx-3 would overflow the frame's right edge. */}
+            {collapsed ? null : (
+              <Separator className="mx-3 data-horizontal:w-auto" />
+            )}
 
             <div className="shrink-0 p-3">
               {collapsed ? (
