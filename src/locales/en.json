@@ -162,7 +162,7 @@
   "providers.liveImport.col.endpoint": "Endpoint",
   "providers.liveImport.hasSecret": "Contains key",
   "providers.liveImport.noSecret": "No key",
-  "providers.liveImport.nameFrom": "Name from the host of {{url}}",
+  "providers.liveImport.nameFrom": "Name from the registration domain of {{url}}",
   "providers.liveImport.renameHint": "Click to rename — used when importing",
   "providers.liveImport.badge.new": "New",
   "providers.liveImport.badge.update": "Update",

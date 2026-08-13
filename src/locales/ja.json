@@ -156,7 +156,7 @@
   "providers.liveImport.col.endpoint": "エンドポイント",
   "providers.liveImport.hasSecret": "キーを含む",
   "providers.liveImport.noSecret": "キーなし",
-  "providers.liveImport.nameFrom": "{{url}} のホスト名から名付け",
+  "providers.liveImport.nameFrom": "{{url}} のドメイン（TLD 除去）から名付け",
   "providers.liveImport.renameHint": "クリックで名前を変更（インポート時に使用）",
   "providers.liveImport.badge.new": "新規",
   "providers.liveImport.badge.update": "更新",

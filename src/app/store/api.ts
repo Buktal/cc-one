@@ -503,9 +503,11 @@ export const vaultApi = createApi({
         run(commands.removeProviderFromLiveCmd(app, id)),
       invalidatesTags: ["Providers"],
     }),
-    /** 附加模式（opencode）：把现有 opencode.json 的 `provider.*` 反向导入 DB。
-     *  返回导入/更新条数。`nameOverrides` = 预览列表里行内改过的名字
-     *  （key → name，导入时优先于 host 推导 / entry.name）。 */
+    /** 从 live 配置文件导入（ADR-0012 泛化，按 app 分派）：opencode 把现有
+     *  opencode.json 的 `provider.*` 反向导入 DB；单激活应用（claude/codex/
+     *  gemini/grok）读各自的 live 配置反向解析。返回导入/更新条数。
+     *  `nameOverrides` = 预览列表里行内改过的名字（key → name，导入时优先于
+     *  注册域推导 / entry.name）。 */
     importProvidersFromLive: b.mutation<
       number,
       { app: App; nameOverrides: Record<string, string> }

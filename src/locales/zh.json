@@ -158,7 +158,7 @@
   "providers.liveImport.col.endpoint": "端点",
   "providers.liveImport.hasSecret": "含密钥",
   "providers.liveImport.noSecret": "无密钥",
-  "providers.liveImport.nameFrom": "名取自 {{url}} 的主机名",
+  "providers.liveImport.nameFrom": "名取自 {{url}} 的注册域",
   "providers.liveImport.renameHint": "点击改名，导入时使用这个名字",
   "providers.liveImport.badge.new": "新建",
   "providers.liveImport.badge.update": "更新",

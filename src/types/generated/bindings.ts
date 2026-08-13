@@ -592,6 +592,12 @@ export type LiveImportPreviewEntry = {
 	key: string,
 	/**  entry.name 优先，缺 → key（与导入的 display_name 规则一致）。 */
 	name: string,
+	/**
+	 *  名字是否由 base_url 的注册域推导（单激活应用，后端 host_of）；opencode
+	 *  的名字来自 entry.name / key，恒 false。前端理由行只在该标志为 true 时
+	 *  显示「名取自 <url>」——否则对用户说谎。
+	 */
+	nameDerivedFromUrl: boolean,
 	/**  options.baseURL（opencode）或 live 里 base_url（单激活），缺 → ""。 */
 	baseUrl: string,
 	/**

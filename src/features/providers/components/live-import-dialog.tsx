@@ -7,9 +7,11 @@
 // 渲染），`!open` 只 return null 不卸载——故预览 effect 依赖 `open`：关闭再
 // 打开会重新读盘，不残留上一次的旧结果。
 //
-// 命名时刻（signature）：导入名默认取 base_url 的注册域（后端 host_of），每条
-// 目下方展示推导理由「名取自 <url> 的主机名」；行内点击名字即可改名，改后由
-// 用户接管（理由行消失），确认导入时通过 nameOverrides 传给后端覆盖推导名。
+// 命名时刻（signature）：单激活应用导入名默认取 base_url 的注册域（后端
+// name_from_base_url），条目下方展示推导理由「名取自 <url> 的注册域」（后端
+// nameDerivedFromUrl 标志；opencode 名字来自 entry.name / key，不显示理由行）；
+// 行内点击名字即可改名，改后由用户接管（理由行消失），确认导入时通过
+// nameOverrides 传给后端覆盖推导名。
 //
 // 视图状态机：loading → missing（文件不存在，带路径）/ error（红块）/ ready 空态
 // （无可导入）→ ready 预览（摘要 + 条目列表 + 确认）→ result（成功块 + 列表）。
@@ -25,7 +27,7 @@ import {
   Pencil,
   Upload,
 } from "lucide-react"
-import { useEffect, useState } from "react"
+import { useEffect, useRef, useState } from "react"
 import { useTranslation } from "react-i18next"
 import { toast } from "sonner"
 import {
@@ -231,26 +233,11 @@ export function LiveImportDialog({
                 「提取为通用片段」。用户确认才提取（ADR-0012）。opencode 无候选
                 → 不显示。候选按「端点 / 模型 / 行为开关」人话分组展示。 */}
             {pendingCandidates.length > 0 ? (
-              <div className="bg-muted/40 rounded-md border border-border p-2.5">
-                <div className="flex items-start justify-between gap-2">
-                  <span className="text-muted-foreground text-xs">
-                    {t("providers.liveImport.extractHint", {
-                      count: pendingCandidates.length,
-                    })}
-                  </span>
-                  <Button
-                    size="sm"
-                    variant="outline"
-                    onClick={() => void onExtract()}
-                    disabled={extracting}
-                    className="shrink-0"
-                  >
-                    {extracting ? <Loader2 className="animate-spin" /> : null}
-                    {t("providers.liveImport.extract")}
-                  </Button>
-                </div>
-                <CandidateGroups keys={pendingCandidates} />
-              </div>
+              <DiscoverPanel
+                keys={pendingCandidates}
+                extracting={extracting}
+                onExtract={() => void onExtract()}
+              />
             ) : null}
           </div>
         )}
@@ -275,29 +262,96 @@ export function LiveImportDialog({
   )
 }
 
-/** 可共享配置候选的三组人话分组（端点 / 模型 / 行为开关）。分组只改展示
- *  结构，提取时仍提取全部候选（后端过滤凭据）。 */
-function CandidateGroups({ keys }: { keys: string[] }) {
+// ---- 「发现可共享配置」面板（导入完成后的 coda）----
+//
+// 呈现为一份 env 检视：区头（标题 + 提取按钮）→ 说明 → 三组小节（端点 / 模型 /
+// 行为开关），键名是主体——等宽、完整、按组排列，等宽字体下天然像检视
+// settings.json 的 env 区块。模型组按键名配对（*_MODEL 紧跟 *_MODEL_NAME，
+// pairModelNameKeys），前缀对齐让「几个角色的默认模型与显示名」一眼可读。
+// 端点组单列全宽（唯一键是这份清单的主角），模型/行为两列网格（长键 truncate，
+// title 兜底完整键名）。三组色点取 chart 色板（数据色——chrome 单色、数据才有
+// 色是项目皮肤铁律，换肤自动跟随）：蓝=端点（连接）、金=模型、绿=行为开关。
+// 分组只改展示结构，提取时仍提取全部候选（后端过滤凭据）。
+
+/** 三组小节配置：展示顺序、组标签 key、色点（chart 数据色类）。 */
+const GROUPS = [
+  { kind: "endpoint", dot: "bg-chart-cache-create" },
+  { kind: "model", dot: "bg-chart-input" },
+  { kind: "behavior", dot: "bg-chart-cache-read" },
+] as const
+
+function DiscoverPanel({
+  keys,
+  extracting,
+  onExtract,
+}: {
+  keys: string[]
+  extracting: boolean
+  onExtract: () => void
+}) {
   const { t } = useTranslation()
   const groups = groupSnippetCandidates(keys)
-  const rows: Array<[string, string[]]> = []
-  if (groups.endpoint.length > 0) {
-    rows.push([t("providers.liveImport.extractGroups.endpoint"), groups.endpoint])
-  }
-  if (groups.model.length > 0) {
-    rows.push([t("providers.liveImport.extractGroups.model"), groups.model])
-  }
-  if (groups.behavior.length > 0) {
-    rows.push([t("providers.liveImport.extractGroups.behavior"), groups.behavior])
-  }
   return (
-    <div className="mt-1.5 flex flex-col gap-0.5">
-      {rows.map(([label, ks]) => (
-        <div key={label} className="flex items-baseline gap-1.5 text-xs">
-          <span className="text-muted-foreground shrink-0">{label}</span>
-          <span className="min-w-0 truncate font-mono">{ks.join(", ")}</span>
-        </div>
-      ))}
+    <div className="rounded-md border border-border">
+      <div className="flex items-center justify-between gap-2 border-b border-border px-2.5 py-2">
+        <span className="text-sm font-medium">
+          {t("providers.liveImport.extractTitle", { count: keys.length })}
+        </span>
+        <Button
+          size="sm"
+          variant="outline"
+          onClick={onExtract}
+          disabled={extracting}
+          className="shrink-0"
+        >
+          {extracting ? <Loader2 className="animate-spin" /> : null}
+          {t("providers.liveImport.extract")}
+        </Button>
+      </div>
+      <p className="text-muted-foreground px-2.5 pt-1.5 pb-0.5 text-xs">
+        {t("providers.liveImport.extractHint")}
+      </p>
+      <div className="flex flex-col pb-1">
+        {GROUPS.map(({ kind, dot }) => {
+          const groupKeys = groups[kind]
+          if (groupKeys.length === 0) return null
+          const ordered =
+            kind === "model" ? pairModelNameKeys(groupKeys) : groupKeys
+          return (
+            <section key={kind}>
+              <div className="flex items-center gap-1.5 px-2.5 pt-1.5 pb-0.5 text-xs">
+                <span
+                  aria-hidden
+                  className={`size-2 shrink-0 rounded-full ${dot}`}
+                />
+                <span className="text-muted-foreground">
+                  {t(`providers.liveImport.extractGroups.${kind}`)}
+                </span>
+                <span className="text-muted-foreground/60 ml-auto font-mono text-[11px] tabular-nums">
+                  {groupKeys.length}
+                </span>
+              </div>
+              <div
+                className={
+                  kind === "endpoint"
+                    ? "flex flex-col px-2.5"
+                    : "grid grid-cols-2 gap-x-3 px-2.5"
+                }
+              >
+                {ordered.map((k) => (
+                  <span
+                    key={k}
+                    title={k}
+                    className="truncate font-mono text-xs leading-6"
+                  >
+                    {k}
+                  </span>
+                ))}
+              </div>
+            </section>
+          )
+        })}
+      </div>
     </div>
   )
 }
@@ -324,8 +378,13 @@ function EntryRow({
   const { t } = useTranslation()
   const [editing, setEditing] = useState(false)
   const [draft, setDraft] = useState("")
+  // Escape 放弃编辑的显式守卫：Escape 置位后，即便 input 卸载前 blur 派发，
+  // commit 也不会把 Escape 前的草稿提交上去（ref 比依赖「卸载后 blur 不冒泡」
+  // 的隐式行为可靠）。
+  const cancelEditRef = useRef(false)
 
   function commit() {
+    if (cancelEditRef.current) return
     const trimmed = draft.trim()
     if (trimmed) onRename(trimmed)
     setEditing(false)
@@ -346,8 +405,8 @@ function EntryRow({
                 ev.preventDefault()
                 commit()
               } else if (ev.key === "Escape") {
-                // 清空 draft：Escape 后 input 卸载，若随后 blur 派发，commit
-                // 读到空值 → 只退出编辑不改名（放弃本次修改）。
+                // 放弃本次编辑：显式置位守卫，后续任何 blur 都不提交。
+                cancelEditRef.current = true
                 setEditing(false)
                 setDraft("")
               }
@@ -359,6 +418,7 @@ function EntryRow({
           <button
             type="button"
             onClick={() => {
+              cancelEditRef.current = false
               setDraft(name)
               setEditing(true)
             }}
@@ -367,10 +427,16 @@ function EntryRow({
             title={preview ? t("providers.liveImport.renameHint") : undefined}
           >
             {name}
-            <Pencil className="text-muted-foreground size-3 shrink-0 opacity-0 transition-opacity group-hover/item:opacity-100" />
+            {/* 编辑图标常显（不 hover 才露）：让「名字可点改名」不需要悬停才发现。
+                结果视图只读（disabled）不显示——不可改名就不画误导性图标。 */}
+            {preview ? (
+              <Pencil className="text-muted-foreground size-3 shrink-0" />
+            ) : null}
           </button>
         )}
-        {!editing && !renamed && e.baseUrl ? (
+        {/* 理由行只在名字确实由 base_url 注册域推导时显示（单激活应用导入）；
+            opencode 的名字来自 entry.name / key，显示「名取自 <url>」是撒谎。 */}
+        {!editing && !renamed && e.nameDerivedFromUrl ? (
           <div className="text-muted-foreground truncate font-mono text-xs">
             {t("providers.liveImport.nameFrom", { url: e.baseUrl })}
           </div>

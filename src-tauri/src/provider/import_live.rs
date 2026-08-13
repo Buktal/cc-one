@@ -40,7 +40,8 @@ use crate::provider::snippet::is_sensitive_config_key;
 
 /// 单激活应用从 live 反向解析出的一个导入快照（至多一个）。
 pub struct LiveImportSnapshot {
-    /// Provider.name（去重键）：base_url 的 host，无 base_url → 应用名。
+    /// Provider.name（去重键）：base_url 的注册域（[`name_from_base_url`]），
+    /// 无 base_url → 应用名。
     pub name: String,
     /// settingsConfig（受控字段子集，写盘方向的反向镜像）。
     pub settings_config: String,
@@ -54,17 +55,19 @@ pub struct LiveImportSnapshot {
 
 /// 常见顶级域（gTLD + 常用 ccTLD），命名规则「去 TLD 取注册域」用：host 的
 /// 最后一段命中此表 → 名字取倒数第二段（`opencode.ai` → `opencode`、
-/// `api.anthropic.com` → `anthropic`）；否则 host 原样（localhost / IP /
-/// 复合后缀不猜——名字在导入对话框里可改，表够用即可，不追求全量）。
+/// `api.anthropic.com` → `anthropic`）。**只按末段判定**：复合后缀（`co.uk`
+/// 类）不在表内，`x.co.uk` 会错取 `co`、大小写敏感、带端口不命中——均低频
+/// 且名字在导入对话框里可改，表够用即可，不追求 public_suffix 全量。
 const COMMON_TLDS: &[&str] = &[
-    "com", "net", "org", "io", "ai", "dev", "app", "co", "uk", "us", "jp", "cn",
-    "de", "fr", "ru", "in", "xyz", "me", "gg", "sh", "to", "tv", "cc", "biz",
-    "info", "tech",
+    "com", "net", "org", "io", "ai", "dev", "app", "co", "uk", "us", "jp", "cn", "de", "fr", "ru",
+    "in", "xyz", "me", "gg", "sh", "to", "tv", "cc", "biz", "info", "tech",
 ];
 
-/// base_url → 名字（name 推导用）。`https://api.moonshot.cn/anthropic` →
-/// `moonshot`；无协议 / 空 → `None`。
-fn host_of(url: &str) -> Option<String> {
+/// base_url → 显示名（name 推导用，单激活应用导入）。末段命中
+/// [`COMMON_TLDS`] → 注册域（`https://api.moonshot.cn/anthropic` →
+/// `moonshot`）；否则 host 原样（localhost / IP / 内网域名不猜）；无协议 /
+/// 空 → `None`。
+fn name_from_base_url(url: &str) -> Option<String> {
     let rest = url.split("://").nth(1)?;
     let host = rest
         .split(['/', '?', '#'])
@@ -140,7 +143,7 @@ pub fn claude_live_to_snapshot(live: &str) -> Option<LiveImportSnapshot> {
         }
     }
     Some(LiveImportSnapshot {
-        name: host_of(&base_url).unwrap_or_else(|| "Claude".to_string()),
+        name: name_from_base_url(&base_url).unwrap_or_else(|| "Claude".to_string()),
         settings_config: serde_json::to_string_pretty(&settings).ok()?,
         base_url,
         has_secret,
@@ -197,7 +200,7 @@ pub fn codex_live_to_snapshot(config_toml: &str, auth_json: &str) -> Option<Live
         .collect();
     let settings = serde_json::json!({ "auth": auth, "config": out.to_string() });
     Some(LiveImportSnapshot {
-        name: host_of(&base_url).unwrap_or_else(|| "Codex".to_string()),
+        name: name_from_base_url(&base_url).unwrap_or_else(|| "Codex".to_string()),
         settings_config: serde_json::to_string_pretty(&settings).ok()?,
         base_url,
         has_secret,
@@ -256,7 +259,7 @@ pub fn gemini_live_to_snapshot(env_text: &str, settings_json: &str) -> Option<Li
         settings.insert("config".to_string(), Value::Object(c));
     }
     Some(LiveImportSnapshot {
-        name: host_of(&base_url).unwrap_or_else(|| "Gemini".to_string()),
+        name: name_from_base_url(&base_url).unwrap_or_else(|| "Gemini".to_string()),
         settings_config: serde_json::to_string_pretty(&settings).ok()?,
         base_url,
         has_secret,
@@ -301,7 +304,7 @@ pub fn grok_live_to_snapshot(config_toml: &str) -> Option<LiveImportSnapshot> {
         .collect();
     let settings = serde_json::json!({ "config": out.to_string() });
     Some(LiveImportSnapshot {
-        name: host_of(&base_url).unwrap_or_else(|| "Grok".to_string()),
+        name: name_from_base_url(&base_url).unwrap_or_else(|| "Grok".to_string()),
         settings_config: serde_json::to_string_pretty(&settings).ok()?,
         base_url,
         has_secret,
@@ -674,30 +677,39 @@ default = "xai""#
     }
 
     #[test]
-    fn host_of_parses_urls() {
+    fn name_from_base_url_derives_registry_domain() {
         // 注册域规则：去常见 TLD 取倒数第二段。
         assert_eq!(
-            host_of("https://api.moonshot.cn/anthropic").as_deref(),
+            name_from_base_url("https://api.moonshot.cn/anthropic").as_deref(),
             Some("moonshot")
         );
         assert_eq!(
-            host_of("https://opencode.ai/zen/go").as_deref(),
+            name_from_base_url("https://opencode.ai/zen/go").as_deref(),
             Some("opencode")
         );
         assert_eq!(
-            host_of("https://api.anthropic.com").as_deref(),
+            name_from_base_url("https://api.anthropic.com").as_deref(),
             Some("anthropic")
         );
         // 未命中 TLD 表 → host 原样（localhost / IP / 内网域名不猜）。
         assert_eq!(
-            host_of("https://generativelanguage.googleapis.com/v1beta").as_deref(),
+            name_from_base_url("https://generativelanguage.googleapis.com/v1beta").as_deref(),
             Some("googleapis")
         );
-        assert_eq!(host_of("https://nas.local/x").as_deref(), Some("nas.local"));
-        assert_eq!(host_of("https://localhost:3000/x").as_deref(), Some("localhost:3000"));
-        assert_eq!(host_of("https://127.0.0.1/x").as_deref(), Some("127.0.0.1"));
-        assert_eq!(host_of("").as_deref(), None);
-        assert_eq!(host_of("no-protocol").as_deref(), None);
+        assert_eq!(
+            name_from_base_url("https://nas.local/x").as_deref(),
+            Some("nas.local")
+        );
+        assert_eq!(
+            name_from_base_url("https://localhost:3000/x").as_deref(),
+            Some("localhost:3000")
+        );
+        assert_eq!(
+            name_from_base_url("https://127.0.0.1/x").as_deref(),
+            Some("127.0.0.1")
+        );
+        assert_eq!(name_from_base_url("").as_deref(), None);
+        assert_eq!(name_from_base_url("no-protocol").as_deref(), None);
     }
 
     // ---- T6 提取「可共享键」为片段 ----

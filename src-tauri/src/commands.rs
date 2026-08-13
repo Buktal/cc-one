@@ -1267,6 +1267,7 @@ fn preview_single_activate(store: &Store, app: App) -> AppResult<LiveImportPrevi
         entries: vec![LiveImportPreviewEntry {
             key: snap.name.clone(),
             name: snap.name.clone(),
+            name_derived_from_url: !snap.base_url.is_empty(),
             base_url: snap.base_url.clone(),
             has_secret: snap.has_secret,
             is_new: !existing_names.contains(&snap.name),
@@ -1301,16 +1302,13 @@ fn import_opencode_from_live_text(
     for (key, entry) in entries {
         let settings_config = serde_json::to_string(&entry)?;
         // 预览列表的行内改名优先（key → name 覆盖），否则 entry.name，缺 → key。
-        let display_name = name_overrides
-            .get(&key)
-            .cloned()
-            .unwrap_or_else(|| {
-                entry
-                    .get("name")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or(&key)
-                    .to_string()
-            });
+        let display_name = name_overrides.get(&key).cloned().unwrap_or_else(|| {
+            entry
+                .get("name")
+                .and_then(|v| v.as_str())
+                .unwrap_or(&key)
+                .to_string()
+        });
         let provider = match by_live_key.get(&key) {
             Some(existing) => Provider {
                 name: display_name,
@@ -1435,6 +1433,10 @@ pub struct LiveImportPreviewEntry {
     pub key: String,
     /// entry.name 优先，缺 → key（与导入的 display_name 规则一致）。
     pub name: String,
+    /// 名字是否由 base_url 的注册域推导（单激活应用，后端 host_of）；opencode
+    /// 的名字来自 entry.name / key，恒 false。前端理由行只在该标志为 true 时
+    /// 显示「名取自 <url>」——否则对用户说谎。
+    pub name_derived_from_url: bool,
     /// options.baseURL（opencode）或 live 里 base_url（单激活），缺 → ""。
     pub base_url: String,
     /// options.apiKey / options.headers（opencode）或 settingsConfig 携带凭据
@@ -1483,6 +1485,7 @@ fn preview_opencode_import_text(
                 .filter(|s| !s.is_empty())
                 .unwrap_or(&key)
                 .to_string(),
+            name_derived_from_url: false,
             base_url: entry
                 .pointer("/options/baseURL")
                 .and_then(|v| v.as_str())
@@ -1747,8 +1750,13 @@ mod tests {
         let s = mem();
         import_opencode_from_live_text(&s, App::OpenCode, opencode_live_json(), &HashMap::new())
             .unwrap();
-        let n = import_opencode_from_live_text(&s, App::OpenCode, opencode_live_json(), &HashMap::new())
-            .unwrap();
+        let n = import_opencode_from_live_text(
+            &s,
+            App::OpenCode,
+            opencode_live_json(),
+            &HashMap::new(),
+        )
+        .unwrap();
         assert_eq!(n, 2, "第二次仍处理 2 条（按 liveKey 更新）");
         assert_eq!(
             s.list_providers_for(App::OpenCode).unwrap().len(),
@@ -1805,7 +1813,10 @@ mod tests {
         assert_eq!(n, 1);
         let providers = s.list_providers_for(App::Claude).unwrap();
         assert_eq!(providers.len(), 1);
-        assert_eq!(providers[0].name, "moonshot", "注册域去 TLD（host_of 规则）");
+        assert_eq!(
+            providers[0].name, "moonshot",
+            "注册域去 TLD（host_of 规则）"
+        );
         let sc: serde_json::Value = serde_json::from_str(&providers[0].settings_config).unwrap();
         assert_eq!(sc["env"]["ANTHROPIC_MODEL"], "kimi");
     }
