@@ -49,6 +49,11 @@ import {
 } from "@/components/ui/dialog"
 import { Input } from "@/components/ui/input"
 import {
+  Tooltip,
+  TooltipContent,
+  TooltipTrigger,
+} from "@/components/ui/tooltip"
+import {
   groupSnippetCandidates,
   pairModelNameKeys,
   snippetCoveredKeys,
@@ -340,13 +345,16 @@ function DiscoverPanel({
                 }
               >
                 {ordered.map((k) => (
-                  <span
-                    key={k}
-                    title={k}
-                    className="truncate font-mono text-xs leading-6"
-                  >
-                    {k}
-                  </span>
+                  <Tooltip key={k}>
+                    <TooltipTrigger
+                      render={
+                        <span className="truncate font-mono text-xs leading-6">
+                          {k}
+                        </span>
+                      }
+                    />
+                    <TooltipContent>{k}</TooltipContent>
+                  </Tooltip>
                 ))}
               </div>
             </section>
@@ -416,24 +424,34 @@ function EntryRow({
             aria-label={t("providers.liveImport.col.name")}
           />
         ) : (
-          <button
-            type="button"
-            onClick={() => {
-              cancelEditRef.current = false
-              setDraft(name)
-              setEditing(true)
-            }}
-            disabled={!preview}
-            className="text-foreground flex max-w-full items-center gap-1 truncate rounded-sm font-medium outline-none hover:underline focus-visible:ring-2 focus-visible:ring-ring disabled:cursor-default disabled:hover:no-underline"
-            title={preview ? t("providers.liveImport.renameHint") : undefined}
-          >
-            {name}
-            {/* 编辑图标常显（不 hover 才露）：让「名字可点改名」不需要悬停才发现。
-                结果视图只读（disabled）不显示——不可改名就不画误导性图标。 */}
+          <Tooltip>
+            <TooltipTrigger
+              render={
+                <button
+                  type="button"
+                  onClick={() => {
+                    cancelEditRef.current = false
+                    setDraft(name)
+                    setEditing(true)
+                  }}
+                  disabled={!preview}
+                  className="text-foreground flex max-w-full items-center gap-1 truncate rounded-sm font-medium outline-none hover:underline focus-visible:ring-2 focus-visible:ring-ring disabled:cursor-default disabled:hover:no-underline"
+                >
+                  {name}
+                  {/* 编辑图标常显（不 hover 才露）：让「名字可点改名」不需要悬停才发现。
+                      结果视图只读（disabled）不显示——不可改名就不画误导性图标。 */}
+                  {preview ? (
+                    <Pencil className="text-muted-foreground size-3 shrink-0" />
+                  ) : null}
+                </button>
+              }
+            />
             {preview ? (
-              <Pencil className="text-muted-foreground size-3 shrink-0" />
+              <TooltipContent>
+                {t("providers.liveImport.renameHint")}
+              </TooltipContent>
             ) : null}
-          </button>
+          </Tooltip>
         )}
         {/* 理由行只在名字确实由 base_url 注册域推导时显示（单激活应用导入）；
             opencode 的名字来自 entry.name / key，显示「名取自 <url>」是撒谎。 */}

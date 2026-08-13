@@ -38,6 +38,11 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select"
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipTrigger,
+} from "@/components/ui/tooltip"
 import { useMutateWithToast } from "@/hooks/use-toast-mutation"
 import { LANGUAGES } from "@/i18n/languages"
 import { describeError } from "@/lib/error"
@@ -136,36 +141,41 @@ export function GeneralCard() {
           {SKINS.map((s) => {
             const selected = prefs?.skin === s.value
             return (
-              <button
-                key={s.value}
-                type="button"
-                title={s.label}
-                aria-label={s.label}
-                aria-pressed={selected}
-                data-skin={s.brand ? undefined : s.value}
-                disabled={savingSkin}
-                onClick={async () => {
-                  await runWithToast(setSkin, s.value, {
-                    failed: { key: "settings.toast.saveFailed" },
-                  })
-                }}
-                className={cn(
-                  "flex h-8 w-8 items-center justify-center rounded-md border-2 transition outline-none focus-visible:ring-2 focus-visible:ring-ring/40",
-                  selected
-                    ? "border-foreground"
-                    : "border-transparent hover:border-border",
-                )}
-                style={{ background: s.brand ?? "var(--brand)" }}
-              >
-                {selected ? (
-                  <Check
-                    className="size-3.5 text-black dark:text-white"
-                    style={{
-                      filter: "drop-shadow(0 0 1px rgba(0, 0, 0, 0.55))",
-                    }}
-                  />
-                ) : null}
-              </button>
+              <Tooltip key={s.value}>
+                <TooltipTrigger
+                  render={
+                    <button
+                      type="button"
+                      aria-label={s.label}
+                      aria-pressed={selected}
+                      data-skin={s.brand ? undefined : s.value}
+                      disabled={savingSkin}
+                      onClick={async () => {
+                        await runWithToast(setSkin, s.value, {
+                          failed: { key: "settings.toast.saveFailed" },
+                        })
+                      }}
+                      className={cn(
+                        "flex h-8 w-8 items-center justify-center rounded-md border-2 transition outline-none focus-visible:ring-2 focus-visible:ring-ring/40",
+                        selected
+                          ? "border-foreground"
+                          : "border-transparent hover:border-border",
+                      )}
+                      style={{ background: s.brand ?? "var(--brand)" }}
+                    />
+                  }
+                >
+                  {selected ? (
+                    <Check
+                      className="size-3.5 text-black dark:text-white"
+                      style={{
+                        filter: "drop-shadow(0 0 1px rgba(0, 0, 0, 0.55))",
+                      }}
+                    />
+                  ) : null}
+                </TooltipTrigger>
+                <TooltipContent>{s.label}</TooltipContent>
+              </Tooltip>
             )
           })}
         </div>

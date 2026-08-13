@@ -29,6 +29,11 @@ import {
   TableRow,
 } from "@/components/ui/table"
 import {
+  Tooltip,
+  TooltipContent,
+  TooltipTrigger,
+} from "@/components/ui/tooltip"
+import {
   classifyStopReason,
   costIsNotable,
   groupRowsByDay,
@@ -195,17 +200,31 @@ function LogRow({
       <TableCell className="tabular-nums whitespace-nowrap">
         {formatTime(r.timestamp)}
       </TableCell>
-      <TableCell title={r.source}>{sourceLabel(r.source) || "—"}</TableCell>
-      <TableCell className="font-mono text-xs" title={r.model}>
-        <span className="inline-block max-w-48 truncate align-bottom">
-          {r.model}
-        </span>
+      <TableCell>
+        <Tooltip>
+          <TooltipTrigger
+            render={<span>{sourceLabel(r.source) || "—"}</span>}
+          />
+          <TooltipContent>{r.source}</TooltipContent>
+        </Tooltip>
       </TableCell>
-      <TableCell
-        className="text-right tabular-nums"
-        title={formatInt(tokenTotal(r))}
-      >
-        {formatTokens(tokenTotal(r))}
+      <TableCell className="font-mono text-xs">
+        <Tooltip>
+          <TooltipTrigger
+            render={
+              <span className="inline-block max-w-48 truncate align-bottom">
+                {r.model}
+              </span>
+            }
+          />
+          <TooltipContent>{r.model}</TooltipContent>
+        </Tooltip>
+      </TableCell>
+      <TableCell className="text-right tabular-nums">
+        <Tooltip>
+          <TooltipTrigger render={<span>{formatTokens(tokenTotal(r))}</span>} />
+          <TooltipContent>{formatInt(tokenTotal(r))}</TooltipContent>
+        </Tooltip>
       </TableCell>
       <TableCell
         className={cn(
@@ -218,13 +237,21 @@ function LogRow({
       <TableCell>
         <StopReasonCell value={r.stop_reason} />
       </TableCell>
-      <TableCell
-        className="text-muted-foreground text-xs"
-        title={r.device_id || undefined}
-      >
-        {r.device_id
-          ? (deviceLabel.get(r.device_id) ?? r.device_id.slice(0, 8))
-          : "—"}
+      <TableCell className="text-muted-foreground text-xs">
+        {r.device_id ? (
+          <Tooltip>
+            <TooltipTrigger
+              render={
+                <span>
+                  {deviceLabel.get(r.device_id) ?? r.device_id.slice(0, 8)}
+                </span>
+              }
+            />
+            <TooltipContent>{r.device_id}</TooltipContent>
+          </Tooltip>
+        ) : (
+          "—"
+        )}
       </TableCell>
     </TableRow>
   )
@@ -239,9 +266,14 @@ function StopReasonCell({ value }: { value: string }) {
       <span className="text-muted-foreground font-mono text-xs">{value}</span>
     )
   return (
-    <span title={value} className={cn("sem-chip font-mono", `sr-${tone}`)}>
-      {t(labelKey)}
-    </span>
+    <Tooltip>
+      <TooltipTrigger
+        render={<span className={cn("sem-chip font-mono", `sr-${tone}`)} />}
+      >
+        {t(labelKey)}
+      </TooltipTrigger>
+      <TooltipContent>{value}</TooltipContent>
+    </Tooltip>
   )
 }
 
@@ -337,9 +369,16 @@ function DetailRow({ r }: { r: UsageLogRow }) {
                   {t("usage.logs.detail.session")}
                 </span>
                 <span className="flex min-w-0 items-center gap-1.5">
-                  <span className="truncate font-mono" title={r.session_id}>
-                    {r.session_id}
-                  </span>
+                  <Tooltip>
+                    <TooltipTrigger
+                      render={
+                        <span className="truncate font-mono">
+                          {r.session_id}
+                        </span>
+                      }
+                    />
+                    <TooltipContent>{r.session_id}</TooltipContent>
+                  </Tooltip>
                   <CopyButton
                     value={r.session_id}
                     label={t("usage.logs.detail.copy")}
@@ -352,9 +391,12 @@ function DetailRow({ r }: { r: UsageLogRow }) {
               {t("usage.logs.detail.requestId")}
             </span>
             <span className="flex min-w-0 items-center gap-1.5">
-              <span className="truncate font-mono" title={r.uuid}>
-                {r.uuid}
-              </span>
+              <Tooltip>
+                <TooltipTrigger
+                  render={<span className="truncate font-mono">{r.uuid}</span>}
+                />
+                <TooltipContent>{r.uuid}</TooltipContent>
+              </Tooltip>
               <CopyButton
                 value={r.uuid}
                 label={t("usage.logs.detail.copy")}
@@ -399,9 +441,16 @@ function DetailRow({ r }: { r: UsageLogRow }) {
                 <span className="font-medium">
                   {t("usage.logs.detail.pricingModel")}
                 </span>
-                <span className="truncate font-mono" title={r.pricing_model}>
-                  {r.pricing_model}
-                </span>
+                <Tooltip>
+                  <TooltipTrigger
+                    render={
+                      <span className="truncate font-mono">
+                        {r.pricing_model}
+                      </span>
+                    }
+                  />
+                  <TooltipContent>{r.pricing_model}</TooltipContent>
+                </Tooltip>
               </>
             ) : null}
           </div>

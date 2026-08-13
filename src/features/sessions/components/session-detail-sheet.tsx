@@ -380,17 +380,25 @@ function SessionHeader({
             </div>
           ) : (
             <SheetTitle className="text-base">
-              <button
-                type="button"
-                onClick={onStartTitle}
-                title={t("sessions.detail.renameHint")}
-                className="hover:text-accent-brand-strong group flex w-fit max-w-full cursor-pointer items-center gap-1.5 rounded-sm outline-none focus-visible:ring-2 focus-visible:ring-ring/40"
-              >
-                <span className="max-w-[24rem] truncate">
-                  {s.title || t("sessions.untitled")}
-                </span>
-                <Pencil className="text-muted-foreground size-3.5 shrink-0 opacity-60 transition-opacity group-hover:opacity-100" />
-              </button>
+              <Tooltip>
+                <TooltipTrigger
+                  render={
+                    <button
+                      type="button"
+                      onClick={onStartTitle}
+                      className="hover:text-accent-brand-strong group flex w-fit max-w-full cursor-pointer items-center gap-1.5 rounded-sm outline-none focus-visible:ring-2 focus-visible:ring-ring/40"
+                    />
+                  }
+                >
+                  <span className="max-w-[24rem] truncate">
+                    {s.title || t("sessions.untitled")}
+                  </span>
+                  <Pencil className="text-muted-foreground size-3.5 shrink-0 opacity-60 transition-opacity group-hover:opacity-100" />
+                </TooltipTrigger>
+                <TooltipContent>
+                  {t("sessions.detail.renameHint")}
+                </TooltipContent>
+              </Tooltip>
             </SheetTitle>
           )}
         </div>
@@ -438,16 +446,22 @@ function SessionHeader({
           {/* Explicit close — the sheet's own close button is disabled
             (showClose={false}), and an auditor opens and closes sessions in
             bursts; Esc / backdrop alone is too hidden. */}
-          <Button
-            variant="ghost"
-            size="icon-sm"
-            aria-label={t("common.close")}
-            title={t("common.close")}
-            onClick={onClose}
-            className="text-muted-foreground"
-          >
-            <X className="size-4" />
-          </Button>
+          <Tooltip>
+            <TooltipTrigger
+              render={
+                <Button
+                  variant="ghost"
+                  size="icon-sm"
+                  aria-label={t("common.close")}
+                  onClick={onClose}
+                  className="text-muted-foreground"
+                />
+              }
+            >
+              <X className="size-4" />
+            </TooltipTrigger>
+            <TooltipContent>{t("common.close")}</TooltipContent>
+          </Tooltip>
         </div>
       </div>
 
@@ -458,9 +472,12 @@ function SessionHeader({
           {deviceLabel(s.device_id)}
         </FlowItem>
         <FlowItem label={t("sessions.detail.project")}>
-          <span className="max-w-56 truncate" title={s.project_dir}>
-            {s.project_dir || "—"}
-          </span>
+          <Tooltip>
+            <TooltipTrigger render={<span className="max-w-56 truncate" />}>
+              {s.project_dir || "—"}
+            </TooltipTrigger>
+            <TooltipContent>{s.project_dir || "—"}</TooltipContent>
+          </Tooltip>
         </FlowItem>
         <FlowItem label={t("sessions.detail.sessionId")}>
           <span className="inline-flex min-w-0 items-center gap-1">
@@ -469,9 +486,20 @@ function SessionHeader({
           </span>
         </FlowItem>
         <FlowItem label={t("sessions.detail.startedAt")}>
-          <span className="tabular-nums" title={s.started_at || undefined}>
-            {formatTime(effectiveStarted)}
-          </span>
+          {s.started_at ? (
+            <Tooltip>
+              <TooltipTrigger
+                render={
+                  <span className="tabular-nums">
+                    {formatTime(effectiveStarted)}
+                  </span>
+                }
+              />
+              <TooltipContent>{s.started_at}</TooltipContent>
+            </Tooltip>
+          ) : (
+            <span className="tabular-nums">{formatTime(effectiveStarted)}</span>
+          )}
         </FlowItem>
       </div>
 
@@ -504,31 +532,39 @@ function SessionHeader({
           <span className="tabular-nums">{spanLabel}</span>
         </FlowItem>
         <FlowItem label={t("sessions.detail.lastActive")}>
-          <span
-            title={
-              s.last_active_at
-                ? dayjs(s.last_active_at).format("YYYY-MM-DD HH:mm")
-                : undefined
-            }
-          >
-            {s.last_active_at ? dayjs(s.last_active_at).fromNow() : "—"}
-          </span>
+          {s.last_active_at ? (
+            <Tooltip>
+              <TooltipTrigger
+                render={<span>{dayjs(s.last_active_at).fromNow()}</span>}
+              />
+              <TooltipContent>
+                {dayjs(s.last_active_at).format("YYYY-MM-DD HH:mm")}
+              </TooltipContent>
+            </Tooltip>
+          ) : (
+            "—"
+          )}
         </FlowItem>
         <FlowItem label={t("sessions.detail.models")}>
           {models.length === 0 ? (
             "—"
           ) : (
-            <span className="flex flex-wrap gap-1.5" title={models.join(" · ")}>
-              {models.map((m) => (
-                <Badge
-                  key={m}
-                  variant="outline"
-                  className="font-mono text-[10px] font-normal"
-                >
-                  {m}
-                </Badge>
-              ))}
-            </span>
+            <Tooltip>
+              <TooltipTrigger
+                render={<span className="flex flex-wrap gap-1.5" />}
+              >
+                {models.map((m) => (
+                  <Badge
+                    key={m}
+                    variant="outline"
+                    className="font-mono text-[10px] font-normal"
+                  >
+                    {m}
+                  </Badge>
+                ))}
+              </TooltipTrigger>
+              <TooltipContent>{models.join(" · ")}</TooltipContent>
+            </Tooltip>
           )}
         </FlowItem>
       </div>
@@ -556,23 +592,33 @@ function CopyIdButton({ id }: { id: string }) {
   const { t } = useTranslation()
   const [copied, setCopied] = useState(false)
   return (
-    <Button
-      variant="ghost"
-      size="icon-xs"
-      aria-label={t("sessions.detail.copySessionId")}
-      title={t("sessions.detail.copySessionId")}
-      onClick={() => {
-        void navigator.clipboard
-          ?.writeText(id)
-          .then(() => {
-            setCopied(true)
-            window.setTimeout(() => setCopied(false), 1500)
-          })
-          .catch(() => {})
-      }}
-    >
-      {copied ? <Check className="size-3.5" /> : <Copy className="size-3.5" />}
-    </Button>
+    <Tooltip>
+      <TooltipTrigger
+        render={
+          <Button
+            variant="ghost"
+            size="icon-xs"
+            aria-label={t("sessions.detail.copySessionId")}
+            onClick={() => {
+              void navigator.clipboard
+                ?.writeText(id)
+                .then(() => {
+                  setCopied(true)
+                  window.setTimeout(() => setCopied(false), 1500)
+                })
+                .catch(() => {})
+            }}
+          >
+            {copied ? (
+              <Check className="size-3.5" />
+            ) : (
+              <Copy className="size-3.5" />
+            )}
+          </Button>
+        }
+      />
+      <TooltipContent>{t("sessions.detail.copySessionId")}</TooltipContent>
+    </Tooltip>
   )
 }
 
@@ -980,19 +1026,27 @@ function TurnNavPanel({
               {query ? (
                 // 清空 = 退出搜索模式：空搜索态没有意义（无命中可看），
                 // 一次点击直接回到干净的轮次索引。
-                <button
-                  type="button"
-                  onClick={() => {
-                    setSearching(false)
-                    setQuery("")
-                    setLastJumped(null)
-                  }}
-                  aria-label={t("sessions.detail.clearSearch")}
-                  title={t("sessions.detail.clearSearch")}
-                  className="text-muted-foreground hover:text-foreground absolute top-1/2 right-1 -translate-y-1/2 rounded p-0.5"
-                >
-                  <X className="size-3" />
-                </button>
+                <Tooltip>
+                  <TooltipTrigger
+                    render={
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setSearching(false)
+                          setQuery("")
+                          setLastJumped(null)
+                        }}
+                        aria-label={t("sessions.detail.clearSearch")}
+                        className="text-muted-foreground hover:text-foreground absolute top-1/2 right-1 -translate-y-1/2 rounded p-0.5"
+                      >
+                        <X className="size-3" />
+                      </button>
+                    }
+                  />
+                  <TooltipContent>
+                    {t("sessions.detail.clearSearch")}
+                  </TooltipContent>
+                </Tooltip>
               ) : null}
             </div>
             {query.trim() ? (
@@ -1035,7 +1089,7 @@ function TurnNavPanel({
                       ref={active ? activeRef : undefined}
                       onClick={() => jumpTo(turn.uuid)}
                       className={cn(
-                        "flex w-full min-w-0 items-center gap-1.5 rounded px-1.5 py-1 text-left text-xs focus-visible:ring-2 focus-visible:ring-ring/40 focus-visible:outline-none",
+                        "flex w-full min-w-0 items-center gap-1.5 rounded py-1 pr-1.5 pl-1 text-left text-xs focus-visible:ring-2 focus-visible:ring-ring/40 focus-visible:outline-none",
                         active
                           ? "bg-accent-tint text-foreground"
                           : "text-muted-foreground hover:bg-muted hover:text-foreground",
@@ -1043,11 +1097,12 @@ function TurnNavPanel({
                     />
                   }
                 >
-                  {/* 轮次编号 — 目录感：等宽右对齐、宽度固定，active 轮次
-                    升为品牌色，指示「你在第几轮」。 */}
+                  {/* 轮次编号 — 目录感：w-4 固定列宽 + 右对齐（个位数与
+                    两位数个位对齐），pl-1 收紧左侧留白。active 轮次升为
+                    品牌色，指示「你在第几轮」。 */}
                   <span
                     className={cn(
-                      "w-5 shrink-0 text-right font-mono text-[10px] tabular-nums",
+                      "w-4 shrink-0 text-right font-mono text-[10px] tabular-nums",
                       active
                         ? "text-accent-brand-strong"
                         : "text-muted-foreground/60",
@@ -1063,9 +1118,7 @@ function TurnNavPanel({
                   side="left"
                   align="start"
                   sideOffset={8}
-                  // Override the shared tooltip's inverted colors — a full-text
-                  // read needs the theme's surface, not a high-contrast chip.
-                  className="max-h-72 max-w-md overflow-y-auto border border-border bg-popover! text-[13px] text-popover-foreground!"
+                  className="max-h-72 max-w-md overflow-y-auto border border-border text-[13px]"
                 >
                   <div className="text-muted-foreground mb-1 text-[10px] tabular-nums">
                     {turn.ts ? dayjs(turn.ts).format("MM/DD HH:mm") : "—"}
@@ -1198,24 +1251,34 @@ function CopyButton({ text }: { text: string }) {
   const { t } = useTranslation()
   const [copied, setCopied] = useState(false)
   return (
-    <button
-      type="button"
-      aria-label={t("sessions.detail.copyMessage")}
-      title={t("sessions.detail.copyMessage")}
-      onClick={(e) => {
-        e.stopPropagation()
-        void navigator.clipboard
-          ?.writeText(text)
-          .then(() => {
-            setCopied(true)
-            window.setTimeout(() => setCopied(false), 1500)
-          })
-          .catch(() => {})
-      }}
-      className="hover:text-foreground rounded p-0.5 opacity-0 transition-opacity group-hover:opacity-100 focus-visible:opacity-100"
-    >
-      {copied ? <Check className="size-3" /> : <Copy className="size-3" />}
-    </button>
+    <Tooltip>
+      <TooltipTrigger
+        render={
+          <button
+            type="button"
+            aria-label={t("sessions.detail.copyMessage")}
+            onClick={(e) => {
+              e.stopPropagation()
+              void navigator.clipboard
+                ?.writeText(text)
+                .then(() => {
+                  setCopied(true)
+                  window.setTimeout(() => setCopied(false), 1500)
+                })
+                .catch(() => {})
+            }}
+            className="hover:text-foreground rounded p-0.5 opacity-0 transition-opacity group-hover:opacity-100 focus-visible:opacity-100"
+          >
+            {copied ? (
+              <Check className="size-3" />
+            ) : (
+              <Copy className="size-3" />
+            )}
+          </button>
+        }
+      />
+      <TooltipContent>{t("sessions.detail.copyMessage")}</TooltipContent>
+    </Tooltip>
   )
 }
 

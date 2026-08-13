@@ -351,9 +351,16 @@ export function LibraryView() {
                               }
                             >
                               <Icon className="size-4 shrink-0" />
-                              <span className="min-w-0 truncate" title={e.name}>
-                                {e.name}
-                              </span>
+                              <Tooltip>
+                                <TooltipTrigger
+                                  render={
+                                    <span className="min-w-0 truncate">
+                                      {e.name}
+                                    </span>
+                                  }
+                                />
+                                <TooltipContent>{e.name}</TooltipContent>
+                              </Tooltip>
                             </button>
                           )}
                         </TableCell>
@@ -363,25 +370,31 @@ export function LibraryView() {
                         <TableCell className="text-muted-foreground text-xs tabular-nums">
                           {formatSize(e.size)}
                         </TableCell>
-                        {/* truncate + title: the device column is fixed at
-                            w-40 under table-fixed — a long device name clips
-                            to the column, title keeps it readable. */}
-                        <TableCell
-                          className="text-muted-foreground text-xs truncate"
-                          title={showDevice ? e.device_name : undefined}
-                        >
+                        {/* Tooltip keeps the clipped device name readable —
+                            the column is fixed at w-40 under table-fixed. */}
+                        <TableCell className="text-muted-foreground text-xs truncate">
                           {showDevice ? (
                             e.is_self ? (
                               t("devices.thisDevice")
                             ) : (
-                              e.device_name
+                              <Tooltip>
+                                <TooltipTrigger
+                                  render={<span>{e.device_name}</span>}
+                                />
+                                <TooltipContent>{e.device_name}</TooltipContent>
+                              </Tooltip>
                             )
                           ) : (
-                            <span
-                              title={dayjs(e.modified_ms).format("MM/DD HH:mm")}
-                            >
-                              {dayjs(e.modified_ms).fromNow()}
-                            </span>
+                            <Tooltip>
+                              <TooltipTrigger
+                                render={
+                                  <span>{dayjs(e.modified_ms).fromNow()}</span>
+                                }
+                              />
+                              <TooltipContent>
+                                {dayjs(e.modified_ms).format("MM/DD HH:mm")}
+                              </TooltipContent>
+                            </Tooltip>
                           )}
                         </TableCell>
                         <TableCell className="text-right">

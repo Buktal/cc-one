@@ -440,11 +440,20 @@ function SessionsTable({
                   </Tooltip>
                 </TableCell>
                 <TableCell className="text-muted-foreground text-xs">
-                  <span
-                    title={dayjs(s.last_active_at).format("YYYY-MM-DD HH:mm")}
-                  >
-                    {s.last_active_at ? dayjs(s.last_active_at).fromNow() : "—"}
-                  </span>
+                  {s.last_active_at ? (
+                    <Tooltip>
+                      <TooltipTrigger
+                        render={
+                          <span>{dayjs(s.last_active_at).fromNow()}</span>
+                        }
+                      />
+                      <TooltipContent>
+                        {dayjs(s.last_active_at).format("YYYY-MM-DD HH:mm")}
+                      </TooltipContent>
+                    </Tooltip>
+                  ) : (
+                    "—"
+                  )}
                 </TableCell>
                 <TableCell className="text-right text-xs tabular-nums">
                   {formatInt(s.request_count)}

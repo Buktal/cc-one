@@ -169,22 +169,34 @@ function NavItem({
       >
         <span className="truncate">{label}</span>
         {item.beta ? (
-          <span
-            className="text-accent-brand/80 text-[9px] font-semibold tracking-wider"
-            title={t("nav.betaTitle")}
-          >
-            BETA
-          </span>
+          <Tooltip>
+            <TooltipTrigger
+              render={
+                <span className="text-accent-brand/80 text-[9px] font-semibold tracking-wider" />
+              }
+            >
+              BETA
+            </TooltipTrigger>
+            <TooltipContent>{t("nav.betaTitle")}</TooltipContent>
+          </Tooltip>
         ) : null}
       </span>
       {collapsed && item.beta ? (
         // Beta dot — the BETA text can't fit an icon-only sidebar; a brand
-        // dot on the icon's corner keeps the flag visible. title carries the
+        // dot on the icon's corner keeps the flag visible. Tooltip carries the
         // same warning as the expanded-state text.
-        <span
-          className="bg-accent-brand absolute top-1 right-1 size-1.5 rounded-full"
-          title={t("nav.betaTitle")}
-        />
+        <Tooltip>
+          <TooltipTrigger
+            render={
+              <span
+                role="img"
+                aria-label={t("nav.betaTitle")}
+                className="bg-accent-brand absolute top-1 right-1 size-1.5 rounded-full"
+              />
+            }
+          />
+          <TooltipContent side="top">{t("nav.betaTitle")}</TooltipContent>
+        </Tooltip>
       ) : null}
     </button>
   )
@@ -344,13 +356,23 @@ function TopNav({
         ))}
       </nav>
       <div className="ml-auto flex items-center gap-1">
-        <span
-          className={cn(
-            "size-2 rounded-full",
-            synced ? "bg-primary" : "bg-muted-foreground/40",
-          )}
-          title={`${modeLabel} · ${deviceName}`}
-        />
+        <Tooltip>
+          <TooltipTrigger
+            render={
+              <span
+                role="img"
+                aria-label={`${modeLabel} · ${deviceName}`}
+                className={cn(
+                  "size-2 rounded-full",
+                  synced ? "bg-primary" : "bg-muted-foreground/40",
+                )}
+              />
+            }
+          />
+          <TooltipContent side="bottom">
+            {`${modeLabel} · ${deviceName}`}
+          </TooltipContent>
+        </Tooltip>
         <CollectIconButton
           label={collectLabel}
           collecting={collecting}
@@ -632,13 +654,23 @@ export function Shell({ children }: { children: React.ReactNode }) {
               <Separator className="mb-3" />
               {collapsed ? (
                 <div className="flex flex-col items-center">
-                  <span
-                    className={cn(
-                      "mb-5 size-2 rounded-full",
-                      synced ? "bg-primary" : "bg-muted-foreground/40",
-                    )}
-                    title={`${modeLabel} · ${deviceName} · ${info?.device_id ?? "—"}`}
-                  />
+                  <Tooltip>
+                    <TooltipTrigger
+                      render={
+                        <span
+                          role="img"
+                          aria-label={`${modeLabel} · ${deviceName} · ${info?.device_id ?? "—"}`}
+                          className={cn(
+                            "mb-5 size-2 rounded-full",
+                            synced ? "bg-primary" : "bg-muted-foreground/40",
+                          )}
+                        />
+                      }
+                    />
+                    <TooltipContent side="right">
+                      {`${modeLabel} · ${deviceName} · ${info?.device_id ?? "—"}`}
+                    </TooltipContent>
+                  </Tooltip>
                   <div className="flex flex-col items-center gap-2">
                     <ThemeToggle />
                     <CollapseButton

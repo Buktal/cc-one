@@ -26,6 +26,11 @@ import { useTranslation } from "react-i18next"
 
 import { useFormatTomlMutation } from "@/app/store/api"
 import { Button } from "@/components/ui/button"
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipTrigger,
+} from "@/components/ui/tooltip"
 import { parseJsonObject, tidyJson } from "@/lib/json"
 import { cn } from "@/lib/utils"
 
@@ -394,17 +399,23 @@ export function CodeEditor({
         </p>
       ) : null}
       <div className="flex items-center gap-2">
-        <Button
-          type="button"
-          variant="outline"
-          size="xs"
-          disabled={disabled}
-          onClick={handleFormat}
-          title={t("jsonEditor.formatHint")}
-        >
-          <Wand2 />
-          {t("jsonEditor.format")}
-        </Button>
+        <Tooltip>
+          <TooltipTrigger
+            render={
+              <Button
+                type="button"
+                variant="outline"
+                size="xs"
+                disabled={disabled}
+                onClick={handleFormat}
+              >
+                <Wand2 />
+                {t("jsonEditor.format")}
+              </Button>
+            }
+          />
+          <TooltipContent>{t("jsonEditor.formatHint")}</TooltipContent>
+        </Tooltip>
       </div>
     </div>
   )

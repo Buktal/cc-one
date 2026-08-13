@@ -262,11 +262,10 @@ export function ProvidersView() {
               className={cn(
                 "rounded-md",
                 a === app &&
-                  // 激活态与侧栏 NavItem 选中同一套（tint 底 + 品牌字色）——单一
-                  // 事实来源。去掉了原先叠加的底部 accent 色条：tint + 字色已够
-                  // 区分，三重装饰显得绚丽。明暗由 --accent-tint /
-                  // --accent-brand-strong 在 :root/.dark 各自定义，都成立。
-                  "bg-accent-tint text-accent-brand-strong font-medium",
+                  // 激活 = 纯黑面 (bg-card) + 品牌字色。与侧栏 NavItem 的
+                  // tint 底分叉是刻意的: 页面 tab 激活参与暗色「深面」对换
+                  // (透明 tint 叠黑面成透明灰), 侧栏导航选中仍走 tint。
+                  "bg-card text-accent-brand-strong font-medium",
               )}
             >
               {t(`providers.app.${a}`)}
@@ -303,7 +302,7 @@ export function ProvidersView() {
       {isAdditive && !bannerDismissed ? (
         // opencode 附加模式说明：多供应商可同时启用，启用即生效，无需切换。
         // 与 AppMark 描边方块呼应，让附加模式与单激活的差异在顶栏就可预期。
-        <div className="bg-muted/40 flex items-center gap-2 rounded-lg px-3 py-2 text-xs">
+        <div className="bg-muted flex items-center gap-2 rounded-lg px-3 py-2 text-xs">
           <Info className="text-muted-foreground size-3.5 shrink-0" />
           <span className="text-muted-foreground flex-1">
             {t("providers.opencode.bannerBody")}
@@ -620,12 +619,22 @@ function ProviderRow({
         />
         {t(`providers.category.${p.category}`)}
       </Badge>
-      <span
-        className="text-muted-foreground truncate font-mono text-xs"
-        title={endpoint}
-      >
-        {endpoint || "—"}
-      </span>
+      {endpoint ? (
+        <Tooltip>
+          <TooltipTrigger
+            render={
+              <span className="text-muted-foreground truncate font-mono text-xs">
+                {endpoint}
+              </span>
+            }
+          />
+          <TooltipContent>{endpoint}</TooltipContent>
+        </Tooltip>
+      ) : (
+        <span className="text-muted-foreground truncate font-mono text-xs">
+          —
+        </span>
+      )}
       <span className="text-muted-foreground truncate text-xs">
         {model || "—"}
       </span>
