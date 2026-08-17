@@ -27,13 +27,11 @@ import dayjs from "dayjs"
 import relativeTime from "dayjs/plugin/relativeTime"
 import {
   Bot,
-  Check,
   ChevronDown,
   ChevronRight,
   ChevronsDownUp,
   ChevronsUpDown,
   ChevronUp,
-  Copy,
   Info,
   Loader2,
   Pencil,
@@ -55,6 +53,7 @@ import {
 } from "react"
 import { useTranslation } from "react-i18next"
 import { Virtuoso, type VirtuosoHandle } from "react-virtuoso"
+import { CopyButton } from "@/components/copy-button"
 import { EmptyState } from "@/components/empty-state"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
@@ -588,34 +587,11 @@ function FlowItem({ label, children }: { label: string; children: ReactNode }) {
  *  hover-only message copy), because the id is the resume handle. */
 function CopyIdButton({ id }: { id: string }) {
   const { t } = useTranslation()
-  const [copied, setCopied] = useState(false)
+  const label = t("sessions.detail.copySessionId")
   return (
     <Tooltip>
-      <TooltipTrigger
-        render={
-          <Button
-            variant="ghost"
-            size="icon-xs"
-            aria-label={t("sessions.detail.copySessionId")}
-            onClick={() => {
-              void navigator.clipboard
-                ?.writeText(id)
-                .then(() => {
-                  setCopied(true)
-                  window.setTimeout(() => setCopied(false), 1500)
-                })
-                .catch(() => {})
-            }}
-          >
-            {copied ? (
-              <Check className="size-3.5" />
-            ) : (
-              <Copy className="size-3.5" />
-            )}
-          </Button>
-        }
-      />
-      <TooltipContent>{t("sessions.detail.copySessionId")}</TooltipContent>
+      <TooltipTrigger render={<CopyButton value={id} label={label} />} />
+      <TooltipContent>{label}</TooltipContent>
     </Tooltip>
   )
 }
@@ -1237,7 +1213,7 @@ function ToolRow({
             open && "rotate-90",
           )}
         />
-        <CopyButton text={m.content} />
+        <MessageCopyButton text={m.content} />
       </div>
       {open ? <ToolContent text={m.content} /> : null}
     </div>
@@ -1245,39 +1221,24 @@ function ToolRow({
 }
 
 /** Copy-to-clipboard for one message. Hidden until the row is hovered (or
- *  focused); shows a check for a moment after copying. Lives inside the
- *  row's collapse trigger, hence stopPropagation on click. */
-function CopyButton({ text }: { text: string }) {
+ *  focused); lives inside the row's collapse trigger, hence stopPropagation
+ *  on click. */
+function MessageCopyButton({ text }: { text: string }) {
   const { t } = useTranslation()
-  const [copied, setCopied] = useState(false)
+  const label = t("sessions.detail.copyMessage")
   return (
     <Tooltip>
       <TooltipTrigger
         render={
-          <button
-            type="button"
-            aria-label={t("sessions.detail.copyMessage")}
-            onClick={(e) => {
-              e.stopPropagation()
-              void navigator.clipboard
-                ?.writeText(text)
-                .then(() => {
-                  setCopied(true)
-                  window.setTimeout(() => setCopied(false), 1500)
-                })
-                .catch(() => {})
-            }}
-            className="hover:text-foreground rounded p-0.5 opacity-0 transition-opacity group-hover:opacity-100 focus-visible:opacity-100"
-          >
-            {copied ? (
-              <Check className="size-3" />
-            ) : (
-              <Copy className="size-3" />
-            )}
-          </button>
+          <CopyButton
+            value={text}
+            label={label}
+            stopPropagation
+            className="opacity-0 transition-opacity group-hover:opacity-100 focus-visible:opacity-100"
+          />
         }
       />
-      <TooltipContent>{t("sessions.detail.copyMessage")}</TooltipContent>
+      <TooltipContent>{label}</TooltipContent>
     </Tooltip>
   )
 }
@@ -1391,7 +1352,7 @@ function BaseRow({
                   !open && "rotate-90",
                 )}
               />
-              <CopyButton text={copyText} />
+              <MessageCopyButton text={copyText} />
             </div>
           </div>
           {children}

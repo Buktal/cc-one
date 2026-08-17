@@ -14,11 +14,15 @@ export function CopyButton({
   value,
   label,
   className,
+  stopPropagation = false,
 }: {
   value: string
   /** Accessible name for the icon button, e.g. "Copy device ID". */
   label: string
   className?: string
+  /** Set when the button sits inside another interactive element (e.g. a
+   *  row's collapse trigger) so the click doesn't also toggle the parent. */
+  stopPropagation?: boolean
 }) {
   const { t } = useTranslation()
   const [copied, setCopied] = useState(false)
@@ -39,7 +43,10 @@ export function CopyButton({
       size="icon-sm"
       className={cn("size-5 shrink-0 text-muted-foreground", className)}
       aria-label={label}
-      onClick={copy}
+      onClick={(e) => {
+        if (stopPropagation) e.stopPropagation()
+        void copy()
+      }}
     >
       {copied ? <Check className="size-3" /> : <Copy className="size-3" />}
     </Button>
