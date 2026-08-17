@@ -269,7 +269,7 @@
   "providers.snippet.noActiveHint": "Applies when switching any provider",
   "providers.snippet.tomlPlaceholder": "[tui]\ntheme = \"dark\"",
   "providers.snippet.codexIdentityHint": "Put preferences and tool setup you want on every provider — UI settings, MCP tools (tokens included). Which service to use and its account belong to each provider, not here (saving intercepts these and names the key).",
-  "providers.snippet.grokIdentityHint": "Put preferences and tool setup you want on every provider — UI settings, MCP tools (tokens included). Which service to use and its account belong to each provider, not here (saving intercepts these and names the key).",
+  "providers.snippet.grokIdentityHint": "Put preferences and tool setup you want on every provider — UI settings, MCP tools (tokens included). Your own custom model profiles are welcome too; they are written along with the snippet when a provider is enabled. Which service to use and its account belong to each provider, not here (saving intercepts these and names the key).",
   "providers.snippet.geminiCredentialWarn": "{{key}} doesn't belong here — it decides which provider to use or is used for auth, and sharing it would clash when switching. Keep it in the provider settings.",
   "providers.title": "Providers",
   "providers.toast.applyAllSuccess": "Applied to all roles",

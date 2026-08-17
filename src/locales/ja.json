@@ -265,7 +265,7 @@
   "providers.snippet.noActiveHint": "任意のプロバイダーへの切り替え時に適用されます",
   "providers.snippet.tomlPlaceholder": "[tui]\ntheme = \"dark\"",
   "providers.snippet.codexIdentityHint": "すべてのプロバイダーで共有したい設定やツール構成（UI 設定、MCP ツール — トークン含む）を置けます。利用するサービスとアカウントは各プロバイダー側で管理するためここには置かないでください（保存時にブロックし、該当キーを示します）。",
-  "providers.snippet.grokIdentityHint": "すべてのプロバイダーで共有したい設定やツール構成（UI 設定、MCP ツール — トークン含む）を置けます。利用するサービスとアカウントは各プロバイダー側で管理するためここには置かないでください（保存時にブロックし、該当キーを示します）。",
+  "providers.snippet.grokIdentityHint": "すべてのプロバイダーで共有したい設定やツール構成（UI 設定、MCP ツール — トークン含む）を置けます。自作のモデル定義もここに置け、プロバイダー有効化時にスニペットと一緒に書き込まれます。利用するサービスとアカウントは各プロバイダー側で管理するためここには置かないでください（保存時にブロックし、該当キーを示します）。",
   "providers.snippet.geminiCredentialWarn": "{{key}} はここに入れるべきではありません。どのプロバイダーを使うかを決める、または認証に使うキーで、共有すると切り替え時に衝突します。プロバイダー設定に置いてください。",
   "providers.title": "プロバイダー",
   "providers.toast.applyAllSuccess": "すべてのロールに適用しました",
