@@ -36,6 +36,7 @@ import {
 import { useAppDispatch, useAppSelector } from "@/app/store/hooks"
 import { type FilterState, patchFilter } from "@/app/store/slices/filterSlice"
 import { setView } from "@/app/store/slices/viewSlice"
+import { deviceOptionLabel } from "@/features/usage/use-device-options"
 import { useDebouncedValue } from "@/hooks/use-debounced-value"
 import { useMutateWithToast } from "@/hooks/use-toast-mutation"
 import { paginate } from "@/lib/pagination"
@@ -387,12 +388,7 @@ export function useSessionsBrowser() {
   const deviceLabel = useMemo(() => {
     const m = new Map<string, string>()
     for (const d of devices) {
-      m.set(
-        d.device_id,
-        d.is_self
-          ? t("devices.thisDevice")
-          : d.display_name || t("common.unnamed"),
-      )
+      m.set(d.device_id, deviceOptionLabel(d, t))
     }
     return m
   }, [devices, t])
@@ -405,9 +401,7 @@ export function useSessionsBrowser() {
         ? []
         : devices.map((d) => ({
             id: d.device_id,
-            label: d.is_self
-              ? t("devices.thisDevice")
-              : d.display_name || t("common.unnamed"),
+            label: deviceOptionLabel(d, t),
           })),
     [devices, t],
   )

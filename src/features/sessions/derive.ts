@@ -6,6 +6,7 @@
 
 import type { FilterState } from "@/app/store/slices/filterSlice"
 import { dayRangeToTs, effectiveDays } from "@/lib/date-range"
+import { ALL_FILTER } from "@/lib/source-tags"
 import type {
   SessionFilter,
   SessionGroup,
@@ -34,7 +35,7 @@ export type GroupTrack = "local" | "synced"
  * `UNGROUPED` renders only those without a group in this track; a real group id
  * filters to that one bucket. Lives here so the view and hook share one definition.
  */
-export const ALL_GROUPS = "__all__"
+export const ALL_GROUPS = ALL_FILTER
 export const UNGROUPED = "__ungrouped__"
 
 /**

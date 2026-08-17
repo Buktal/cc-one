@@ -7,7 +7,9 @@
 // 这里只给"平台名". request-log-table.tsx 的「来源」列复用本表 (原始 tag 放
 // 该列 title 悬停提示), 不在此重抄映射.
 
-const SOURCE_LABELS: Record<string, string> = {
+import type { SourceTag } from "@/lib/source-tags"
+
+const SOURCE_LABELS: Record<SourceTag, string> = {
   claude_code: "Claude Code",
   codex_cli: "Codex",
   gemini_cli: "Gemini CLI",
@@ -17,5 +19,8 @@ const SOURCE_LABELS: Record<string, string> = {
 
 /** 把 source tag 转成展示名, 未知 tag 原样返回. */
 export function sourceLabel(tag: string): string {
-  return SOURCE_LABELS[tag] ?? tag
+  // 查表入口以 string 索引（未知 tag 原样回退）；Record<SourceTag,…> 的键集
+  // 完整性由类型守住——新增 SOURCE_TAGS 而漏译时这里编译失败。
+  const lookup: Partial<Record<string, string>> = SOURCE_LABELS
+  return lookup[tag] ?? tag
 }

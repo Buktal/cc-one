@@ -57,6 +57,7 @@ import {
 import { formatTokens } from "@/lib/format"
 import { cn } from "@/lib/utils"
 
+import { deviceOptionLabel } from "../use-device-options"
 import { DeviceScopeControl } from "./device-scope-control"
 import { TokenHero } from "./token-hero"
 
@@ -162,9 +163,7 @@ export function LightweightCard() {
       { id: "", label: t("usage.control.all") },
       ...devices.map((d) => ({
         id: d.device_id,
-        label: d.is_self
-          ? t("devices.thisDevice")
-          : d.display_name || t("common.unnamed"),
+        label: deviceOptionLabel(d, t),
       })),
     ]
     return (

@@ -44,6 +44,7 @@ import {
   TooltipTrigger,
 } from "@/components/ui/tooltip"
 import { formatCost, formatInt, formatTokens } from "@/lib/format"
+import { ALL_FILTER, SOURCE_TAGS } from "@/lib/source-tags"
 import { cn } from "@/lib/utils"
 import type { SessionRow } from "@/types/generated/bindings"
 import { favKey, type SessionTab } from "../derive"
@@ -475,21 +476,15 @@ function SessionsTable({
 }
 
 /** "All sources" sentinel for the source dropdown. */
-const ALL_SOURCES = "__all__"
+const ALL_SOURCES = ALL_FILTER
 
 /** "All devices" sentinel for the device dropdown. */
-const ALL_DEVICES = "__all__"
+const ALL_DEVICES = ALL_FILTER
 
 /** Fixed source options — the sources sessions are collected from. Brand
  *  names are stable, so they live here rather than in i18n (mirrors the usage
  *  view's source-labels); only the "all" option and labels are localized. */
-const SOURCE_OPTIONS: string[] = [
-  "claude_code",
-  "codex_cli",
-  "gemini_cli",
-  "grok_cli",
-  "opencode",
-]
+const SOURCE_OPTIONS: readonly string[] = SOURCE_TAGS
 
 function SourceSelect({
   value,
@@ -533,7 +528,7 @@ function SourceSelect({
 }
 
 /** "All models" sentinel for the model dropdown. */
-const ALL_MODELS = "__all__"
+const ALL_MODELS = ALL_FILTER
 
 /** Model dropdown — EXISTS semantics (a session that used the model at least
  *  once matches). Options come from the usage distinct-models query narrowed

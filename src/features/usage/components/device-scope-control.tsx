@@ -23,12 +23,13 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select"
+import { ALL_FILTER } from "@/lib/source-tags"
 import { cn } from "@/lib/utils"
 
 import { useDeviceOptions } from "../use-device-options"
 
 /** base-ui Select 不接受空字符串 value，用哨兵代表「全部」。 */
-const ALL = "__all__"
+const ALL = ALL_FILTER
 
 export function DeviceScopeControl({
   compact = false,

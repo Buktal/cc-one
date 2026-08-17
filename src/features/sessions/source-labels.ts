@@ -1,3 +1,5 @@
+import type { SourceTag } from "@/lib/source-tags"
+
 // Session source tag → display label. Single source for the sessions feature so
 // the list table, the detail sheet's source line, and the source-filter dropdown
 // all agree (architecture.md: 单一事实来源 — previously two copies, one in
@@ -10,7 +12,7 @@
 // no extra context to disambiguate. Unknown tags fall through verbatim so a new
 // source shows up before a mapping is added; an empty tag shows "—".
 
-const SESSION_SOURCE_LABELS: Record<string, string> = {
+const SESSION_SOURCE_LABELS: Record<SourceTag, string> = {
   claude_code: "Claude Code",
   codex_cli: "Codex CLI",
   gemini_cli: "Gemini CLI",
@@ -20,7 +22,10 @@ const SESSION_SOURCE_LABELS: Record<string, string> = {
 
 /** Map a session source tag to its display name; unknown tags verbatim, empty → "—". */
 export function sessionSourceLabel(source: string): string {
-  return SESSION_SOURCE_LABELS[source] ?? (source || "—")
+  // 查表入口以 string 索引（未知 tag 原样回退）；Record<SourceTag,…> 的键集
+  // 完整性由类型守住——新增 SOURCE_TAGS 而漏译时这里编译失败。
+  const lookup: Partial<Record<string, string>> = SESSION_SOURCE_LABELS
+  return lookup[source] ?? (source || "—")
 }
 
 // ---- Session type (main vs subagent) ----

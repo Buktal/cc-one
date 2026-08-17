@@ -14,9 +14,25 @@ export interface DeviceOption {
 }
 
 /**
- * Devices as picker options. `is_self` → localized "This device"; a peer → its
- * display name (or "Unnamed"). Returns `[]` when there is ≤1 device, so a
- * single-machine Standalone setup renders no device UI at all.
+ * Device display label — THE single derivation (#72: previously the same
+ * ternary was copied at four call sites and could drift). This device →
+ * localized "This device"; a peer → its display name, falling back to
+ * "Unnamed". Callers keep their own policy for whether to render anything at
+ * all in the single-device case.
+ */
+export function deviceOptionLabel(
+  d: { is_self: boolean; display_name: string },
+  t: (key: string) => string,
+): string {
+  return d.is_self
+    ? t("devices.thisDevice")
+    : d.display_name || t("common.unnamed")
+}
+
+/**
+ * Devices as picker options (labels via [`deviceOptionLabel`]). Returns `[]`
+ * when there is ≤1 device, so a single-machine Standalone setup renders no
+ * device UI at all.
  */
 export function useDeviceOptions(): DeviceOption[] {
   const { t } = useTranslation()
@@ -24,9 +40,7 @@ export function useDeviceOptions(): DeviceOption[] {
   if (devices.length <= 1) return []
   return devices.map((d) => ({
     id: d.device_id,
-    label: d.is_self
-      ? t("devices.thisDevice")
-      : d.display_name || t("common.unnamed"),
+    label: deviceOptionLabel(d, t),
     is_self: d.is_self,
   }))
 }

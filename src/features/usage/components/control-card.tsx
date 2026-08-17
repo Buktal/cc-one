@@ -38,12 +38,13 @@ import {
   SelectValue,
 } from "@/components/ui/select"
 import { usePersistedState } from "@/lib/persistence"
+import { ALL_FILTER } from "@/lib/source-tags"
 import { cn } from "@/lib/utils"
 import { sourceLabel } from "../source-labels"
 import { useDeviceOptions } from "../use-device-options"
 import { DeviceScopeControl } from "./device-scope-control"
 
-const ALL = "__all__"
+const ALL = ALL_FILTER
 
 const CONTROL_COLLAPSE_KEY = "cc-one:control-collapsed"
 

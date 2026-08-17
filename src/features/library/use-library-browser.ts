@@ -19,8 +19,10 @@ import {
   useRenameInLibraryMutation,
   useScanLibraryQuery,
 } from "@/app/store/api"
+import { deviceOptionLabel } from "@/features/usage/use-device-options"
 import { useMutateWithToast } from "@/hooks/use-toast-mutation"
 import { paginate } from "@/lib/pagination"
+import { ALL_FILTER } from "@/lib/source-tags"
 import type { LibraryEntry } from "@/types/generated/bindings"
 import {
   buildBreadcrumb,
@@ -31,7 +33,7 @@ import {
 
 /** Sentinel for the "all devices" scope. Lives here so the component's scope
  *  picker and the hook's scope derivation share one definition. */
-export const ALL = "__all__"
+export const ALL = ALL_FILTER
 
 /** Rows per page — the same density as the request-log and sessions tables.
  *  Exported for the view's paginator (disabled states must agree with the
@@ -136,9 +138,7 @@ export function useLibraryBrowser() {
     () =>
       devices.map((d) => ({
         id: d.device_id,
-        label: d.is_self
-          ? t("devices.thisDevice")
-          : d.display_name || t("common.unnamed"),
+        label: deviceOptionLabel(d, t),
       })),
     [devices, t],
   )
