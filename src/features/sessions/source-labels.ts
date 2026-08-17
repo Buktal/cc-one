@@ -1,4 +1,4 @@
-import type { SourceTag } from "@/lib/source-tags"
+import { type SourceTag, sourceTagLabel } from "@/lib/source-tags"
 
 // Session source tag → display label. Single source for the sessions feature so
 // the list table, the detail sheet's source line, and the source-filter dropdown
@@ -22,10 +22,7 @@ const SESSION_SOURCE_LABELS: Record<SourceTag, string> = {
 
 /** Map a session source tag to its display name; unknown tags verbatim, empty → "—". */
 export function sessionSourceLabel(source: string): string {
-  // 查表入口以 string 索引（未知 tag 原样回退）；Record<SourceTag,…> 的键集
-  // 完整性由类型守住——新增 SOURCE_TAGS 而漏译时这里编译失败。
-  const lookup: Partial<Record<string, string>> = SESSION_SOURCE_LABELS
-  return lookup[source] ?? (source || "—")
+  return sourceTagLabel(SESSION_SOURCE_LABELS, source) || "—"
 }
 
 // ---- Session type (main vs subagent) ----

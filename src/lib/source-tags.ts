@@ -1,4 +1,4 @@
-// 跨视图共享的纯常量：筛选「全部」哨兵 + 来源 tag 清单。
+// 跨视图共享：筛选「全部」哨兵、来源 tag 清单与标签查表。
 
 /** 筛选下拉「全部」选项的哨兵值：各视图（来源 / 设备 / 模型 / 分组 / 库
  *  范围）的「all」选项共用同一哨兵串——value 为它即表示「不约束」（后端
@@ -20,3 +20,15 @@ export const SOURCE_TAGS = [
 ] as const
 
 export type SourceTag = (typeof SOURCE_TAGS)[number]
+
+/** 按运行时的 string tag 查完整标签表：已知 tag 命中表值，未知 tag 原样回退
+ *  （新来源在补映射前也能正常显示）。表的键集完整性由
+ *  Record<SourceTag,…> 类型守住——新增 SOURCE_TAGS 而漏译时编译失败；
+ *  以 string 索引的降级只发生在这一处。 */
+export function sourceTagLabel(
+  labels: Record<SourceTag, string>,
+  tag: string,
+): string {
+  const lookup: Partial<Record<string, string>> = labels
+  return lookup[tag] ?? tag
+}

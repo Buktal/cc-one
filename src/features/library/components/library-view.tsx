@@ -52,6 +52,7 @@ import {
   TooltipContent,
   TooltipTrigger,
 } from "@/components/ui/tooltip"
+import { deviceOptionLabel } from "@/features/usage/use-device-options"
 import { formatSize } from "@/lib/format"
 import { cn } from "@/lib/utils"
 import type { LibraryEntry } from "@/types/generated/bindings"
@@ -291,6 +292,10 @@ export function LibraryView() {
                           ? t("library.kind.dir")
                           : e.name.split(".").pop()?.toUpperCase() ||
                             t("library.kind.file")
+                      const deviceLabel = deviceOptionLabel(
+                        { is_self: e.is_self, display_name: e.device_name },
+                        t,
+                      )
                       return (
                         <TableRow key={e.rel_path}>
                           <TableCell>
@@ -389,15 +394,13 @@ export function LibraryView() {
                           <TableCell className="text-muted-foreground text-xs truncate">
                             {showDevice ? (
                               e.is_self ? (
-                                t("devices.thisDevice")
+                                deviceLabel
                               ) : (
                                 <Tooltip>
                                   <TooltipTrigger
-                                    render={<span>{e.device_name}</span>}
+                                    render={<span>{deviceLabel}</span>}
                                   />
-                                  <TooltipContent>
-                                    {e.device_name}
-                                  </TooltipContent>
+                                  <TooltipContent>{deviceLabel}</TooltipContent>
                                 </Tooltip>
                               )
                             ) : (

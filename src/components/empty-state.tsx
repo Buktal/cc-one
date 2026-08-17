@@ -6,6 +6,13 @@ import type { LucideIcon } from "lucide-react"
 
 import { Button } from "@/components/ui/button"
 
+/** An action button on a state surface (empty / error) — label + handler. */
+export type StateAction = {
+  label: string
+  onClick: () => void
+  disabled?: boolean
+}
+
 export function EmptyState({
   icon: Icon,
   title,
@@ -15,7 +22,7 @@ export function EmptyState({
   icon?: LucideIcon
   title: string
   description?: string
-  action?: { label: string; onClick: () => void; disabled?: boolean }
+  action?: StateAction
 }) {
   return (
     <div className="text-muted-foreground flex flex-col items-center justify-center gap-2 py-12 text-center">

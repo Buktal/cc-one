@@ -5,7 +5,7 @@
 import type { LucideIcon } from "lucide-react"
 import type { ReactNode } from "react"
 import { useTranslation } from "react-i18next"
-import { EmptyState } from "@/components/empty-state"
+import { EmptyState, type StateAction } from "@/components/empty-state"
 import { Button } from "@/components/ui/button"
 import { Skeleton } from "@/components/ui/skeleton"
 import { describeError } from "@/lib/error"
@@ -27,10 +27,10 @@ export function QueryState({
   emptyLabel?: string
   emptyIcon?: LucideIcon
   emptyDescription?: string
-  emptyAction?: { label: string; onClick: () => void; disabled?: boolean }
+  emptyAction?: StateAction
   /** Retry affordance on the error state (e.g. refetch) — a dead-end error
    *  with no way out is worse than the error itself. */
-  errorAction?: { label: string; onClick: () => void; disabled?: boolean }
+  errorAction?: StateAction
   children: ReactNode
 }) {
   const { t } = useTranslation()
