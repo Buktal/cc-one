@@ -144,8 +144,11 @@ export function CommonConfigSnippetCard({ app }: { app: App }) {
     return ""
   })()
 
+  // 卡片填充视口剩余高度（竖屏拉高时编辑器随之外伸，内容超出由 CodeMirror
+  // 内部滚动承担）；横屏内容超高时外层滚动容器撑开，卡片保持自然高度
+  // （min-h-40 保底），不回归。
   return (
-    <Card>
+    <Card className="flex min-h-0 flex-1 flex-col">
       <CardHeader className="flex flex-row items-center justify-between gap-2">
         <CardTitle className="text-sm">
           {t("providers.snippet.title")}
@@ -165,7 +168,7 @@ export function CommonConfigSnippetCard({ app }: { app: App }) {
           />
         </div>
       </CardHeader>
-      <CardContent className="flex flex-col gap-3">
+      <CardContent className="flex min-h-0 flex-1 flex-col gap-3">
         <p className="text-muted-foreground text-xs">
           {t("providers.snippet.enabledHint")}
         </p>
@@ -178,7 +181,7 @@ export function CommonConfigSnippetCard({ app }: { app: App }) {
               ? "providers.snippet.tomlPlaceholder"
               : "providers.snippet.jsonPlaceholder",
           )}
-          className="h-40"
+          className="min-h-40 flex-1"
         />
         <div className="flex items-center justify-between gap-2">
           <span className="text-muted-foreground truncate text-xs">
