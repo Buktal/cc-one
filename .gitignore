@@ -23,26 +23,26 @@ dist-ssr
 *.sln
 *.sw?
 
+# Vite cache
+.vite/
+
+# Yarn runtime state
+.yarn/
+
+# Tauri
+/.tauri/
+/src-tauri/target/
+/src-tauri/resources/npm-cache/
+
 # Local
 .claude/
+.agents/
 docs/adr/
 docs/agents/
-docs/prototype/
 docs/plans/
-docs/research/
-BLUEPRINT.md
+docs/prototype
+docs/research
+AGENTS.md
 CLAUDE.md
 CONTEXT.md
 skills-lock.json
-
-# Yarn 4 (Berry) — node-modules linker, no zero-installs
-.yarn/*
-!.yarn/patches
-!.yarn/plugins
-!.yarn/releases
-!.yarn/sdks
-!.yarn/versions
-
-# MCP servers
-.mcp.json
-/.tauri/
