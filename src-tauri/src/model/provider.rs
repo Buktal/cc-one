@@ -685,8 +685,8 @@ mod tests {
         assert_eq!(v["env"]["ANTHROPIC_BASE_URL"], "https://x");
     }
 
-    /// TEMP-APP-SHIM 语义：无 app 字段的旧同步文件 / 导出文档读为 claude
-    ///（#32 迁移后同样语义）；带 app 字段的新文档按值解析。
+    /// 旧同步文件 / 导出文档无 app 字段 → 读为 claude（向后兼容的永久规则：
+    /// app 维度落地前的数据都在 claude 池）；带 app 字段的新文档按值解析。
     #[test]
     fn provider_app_missing_defaults_to_claude_and_value_roundtrips() {
         let old: Provider = serde_json::from_str(

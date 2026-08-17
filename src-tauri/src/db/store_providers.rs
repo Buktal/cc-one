@@ -121,9 +121,8 @@ impl super::Store {
             id,
             sort_index: sort_index as u32,
             updated_at,
-            // TEMP-APP-SHIM: #32 落地后按 provider.app 落 app 列；shim 期表
-            // 结构没有 app 列，返回值必须与持久化的实际内容一致（Claude）。
-            app: App::Claude,
+            // app 按调用方值原样返回——INSERT 落的正是它（app 列 #32 起就位，
+            // 行读取 row_to_provider 同读真实列）。
             ..provider
         })
     }
@@ -268,6 +267,26 @@ mod tests {
             meta: r#"{}"#.into(),
             updated_at: String::new(),
         }
+    }
+
+    #[test]
+    /// 返回值带真实 app 列（#68：TEMP-APP-SHIM 曾硬编码 Claude，落库真实值
+    /// 与返回值矛盾——codex 保存后返回看是 claude）。
+    #[test]
+    fn save_returns_the_callers_app_not_a_hardcoded_claude() {
+        let s = mem();
+        let mut codex = provider("Kimi", ProviderCategory::CnOfficial);
+        codex.app = App::Codex;
+        let saved = s.save_provider(codex).unwrap();
+        assert_eq!(saved.app, App::Codex, "返回值 = 落库的真实 app");
+        let reloaded = s
+            .list_providers_for(App::Codex)
+            .unwrap()
+            .into_iter()
+            .next()
+            .expect("codex 池能读回");
+        assert_eq!(reloaded.id, saved.id);
+        assert_eq!(reloaded.app, App::Codex);
     }
 
     #[test]
