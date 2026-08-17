@@ -24,7 +24,7 @@
 //! （"Claude" 等，数据非 i18n）。
 //!
 //! 所有转换函数是纯函数（测试接缝）：live 文本 → 快照，不碰文件系统 / DB；
-//! 文件 IO 与 store 写库在命令层薄壳（`commands.rs`）。
+//! 文件 IO 与 store 写库在命令层薄壳（`commands::live_import`）。
 
 use std::collections::HashMap;
 
