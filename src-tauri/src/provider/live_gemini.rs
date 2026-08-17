@@ -7,12 +7,16 @@
 //! - **settings.json 受控合并**：只写受控字段——供应商 `config` 对象里声明
 //!   的顶层字段，以及 `security.auth.selectedType` 认证标记（env 含
 //!   `GEMINI_API_KEY` → `"gemini-api-key"`，否则 → `"oauth"`，两分支即
-//!   API Key 版 / 登录态版）；`mcpServers` 等其余字段从现有文件原样保留，
-//!   绝不整文件覆盖。
+//!   API Key 版 / 登录态版）。顶层身份键（见 [`GEMINI_CONTROLLED_FIELDS`]）
+//!   按「新供应商赢：携带 → 替换，缺失 → 撤除」合并（防旧供应商残留）；
+//!   `mcpServers` 等其余字段从现有文件原样保留，绝不整文件覆盖。
 //! - **登录态版**（env 无 `GEMINI_API_KEY`）：env 写成空 + `selectedType:
 //!   "oauth"`，不破坏用户既有 Google 登录态。
 //! - 清洗：写盘前剥掉 settingsConfig 顶层内部 meta 字段（沿用
 //!   [`live::LIVE_INTERNAL_KEYS`] 语义）。
+//! - 两文件同备份同原子写：`.env.bak` + `settings.json.bak`（单份覆盖），各
+//!   自临时文件 + 改名；合并与校验全部在任何写盘之前完成，settings 写失败
+//!   回滚 .env——任何失败路径不产生半截状态（与 codex 侧同一容错级别）。
 //!
 //! 纯函数（最高价值测试接缝，不碰文件系统）：`parse_gemini_settings`
 //! （settingsConfig 文本 → `{env, config}`，含校验与清洗）、
@@ -37,6 +41,13 @@ pub const GEMINI_API_KEY_ENV: &str = "GEMINI_API_KEY";
 pub const SELECTED_TYPE_API_KEY: &str = "gemini-api-key";
 /// `selectedType` 取值：登录态版（env 无 `GEMINI_API_KEY`，保留 Google 登录）。
 pub const SELECTED_TYPE_OAUTH: &str = "oauth";
+
+/// Gemini settings.json 顶层受控身份键（与 codex 的 `CODEX_CONTROLLED_FIELDS`
+/// 同一语义）：供应商 `config` 携带 → 替换；缺失 → 从 live 撤除（受控轴
+/// 「新供应商赢」——旧供应商的 `model` 残留会让切换静默失效）。env 侧的模型
+/// 选择（`GEMINI_MODEL`）随 `.env` 整块替换，不受此清单管；`mcpServers` 等
+/// 用户手动键是非受控字段，永不被清单撤除。
+pub const GEMINI_CONTROLLED_FIELDS: &[&str] = &["model"];
 
 /// Gemini 配置目录：`~/.gemini`。
 pub fn gemini_dir() -> AppResult<PathBuf> {
@@ -145,8 +156,9 @@ pub fn gemini_selected_type(env: &HashMap<String, String>) -> &'static str {
 /// 语义：
 /// - 现有文本为空串/纯空白 → 视为 `{}`（文件缺失时由 `{}` 新建）；非空但
 ///   非法 JSON 或非对象 → `Err`（解析不了就没法保留用户手动配置，宁可失败）。
-/// - 目标 `config` 的顶层字段合并进结果（供应商显式配置优先）；`config` 为
-///   `None` → 不合并任何字段，现有文件原样保留。
+/// - 目标 `config` 的顶层字段合并进结果（供应商显式配置优先）。
+/// - 顶层身份键（[`GEMINI_CONTROLLED_FIELDS`]）按「新供应商赢」：config 携带
+///   → 替换；config 缺失或不含该键 → 从现有文件撤除（防旧供应商残留）。
 /// - `security.auth.selectedType` 恒按 env 推导写受控标记（两分支见
 ///   [`gemini_selected_type`]）。现有 `security` / `auth` 若存在但非对象 →
 ///   `Err`（标记写不进去，宁可失败）。
@@ -160,6 +172,16 @@ pub fn merge_gemini_settings_json(existing: &str, target: &GeminiSettings) -> Ap
     if let Some(config) = &target.config {
         for (key, value) in config {
             merged_obj.insert(key.clone(), value.clone());
+        }
+    }
+    // 顶层身份键撤除：config 不携带即撤（ADR-0010 受控轴「新供应商赢」）。
+    for key in GEMINI_CONTROLLED_FIELDS {
+        let carried = target
+            .config
+            .as_ref()
+            .is_some_and(|c| c.contains_key(*key));
+        if !carried {
+            merged_obj.remove(*key);
         }
     }
 
@@ -206,23 +228,46 @@ pub fn backup_env_file(env_path: &Path) -> AppResult<()> {
     Ok(())
 }
 
-/// Gemini 写盘全流程（薄壳，按序调用，路径注入便于测试）：解析+清洗（失败
-/// 则什么都不写）→ 备份 `.env.bak` → 原子写 `.env`（整块替换）→ 读现有
-/// settings.json → 受控合并 → 原子写 settings.json。两文件各自临时文件 +
-/// 改名，进程中断不产生半截文件；env 写成功、settings 写失败时不回滚（与
-/// claude 侧单文件流程同一容错级别，两文件间无跨文件事务）。
+/// Gemini 写盘全流程（薄壳，按序调用，路径注入便于测试）：解析+清洗 → 读
+/// 两文件现状 → 受控合并（三步全部在任何写盘/备份之前完成——用户手改坏的
+/// settings.json 在这里失败，两文件同旧）→ 备份并原子写 `.env`（整块替换）→
+/// 备份并原子写 settings.json；settings 一步失败回滚 `.env`——任何失败路径
+/// 不产生半截状态（与 codex 侧同一容错语义）。
 pub fn write_gemini_live_at(
     env_path: &Path,
     settings_path: &Path,
     settings_config: &str,
 ) -> AppResult<()> {
     let target = parse_gemini_settings(settings_config)?;
-    backup_env_file(env_path)?;
-    atomic_write_file(env_path, &serialize_env_file(&target.env))?;
+    let existing_env: Option<String> = match std::fs::read_to_string(env_path) {
+        Ok(s) => Some(s),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
+        Err(e) => return Err(e.into()),
+    };
     let existing = read_live_settings(settings_path)?;
     let merged = merge_gemini_settings_json(&existing, &target)?;
-    atomic_write_file(settings_path, &merged)?;
+
+    backup_env_file(env_path)?;
+    atomic_write_file(env_path, &serialize_env_file(&target.env))?;
+    let settings_write = crate::provider::live::backup_file(settings_path)
+        .and_then(|()| atomic_write_file(settings_path, &merged));
+    if let Err(e) = settings_write {
+        rollback_env_file(env_path, &existing_env);
+        return Err(e);
+    }
     Ok(())
+}
+
+/// 回滚 `.env` 到写盘前状态：写盘前存在则还原原文，原本不存在则删除。回滚
+/// 自身失败只记录不覆盖主错误——主错误（settings 写失败）才要报告。
+fn rollback_env_file(env_path: &Path, existing: &Option<String>) {
+    let result = match existing {
+        Some(text) => atomic_write_file(env_path, text),
+        None => std::fs::remove_file(env_path).map_err(AppError::from),
+    };
+    if let Err(e) = result {
+        eprintln!("[cc-one] gemini settings.json write failed and .env rollback also failed: {e}");
+    }
 }
 
 /// 真实路径入口：写 `~/.gemini/.env` + `~/.gemini/settings.json`。
@@ -427,9 +472,12 @@ mod tests {
         let out = parsed(
             &merge_gemini_settings_json(&existing_settings("gemini-api-key"), &target).unwrap(),
         );
-        // 登录态版：config None → 现有字段原样保留（mcpServers / model 不动），
-        // 只把标记改为 oauth。
-        assert_eq!(out["model"], serde_json::json!("gemini-2.5-pro"));
+        // 登录态版：config None → 顶层身份键撤除（model 不残留），mcpServers
+        // 等非受控字段原样保留，只把标记改为 oauth。
+        assert!(
+            out.get("model").is_none(),
+            "config 缺失的身份键必须撤除，不得残留旧供应商的 model"
+        );
         assert_eq!(
             out["mcpServers"]["filesystem"]["command"],
             serde_json::json!("npx")
@@ -437,6 +485,47 @@ mod tests {
         assert_eq!(
             out["security"]["auth"]["selectedType"],
             serde_json::json!("oauth")
+        );
+    }
+
+    /// 身份键撤除语义：config 携带 → 替换；config 缺失或不携带该键 → 撤除；
+    /// 非受控键不受清单影响。
+    #[test]
+    fn merge_withdraws_identity_keys_not_carried_by_target() {
+        // 目标 config 只带 model → 替换为供应商值。
+        let mut cfg = serde_json::Map::new();
+        cfg.insert(
+            "model".to_string(),
+            serde_json::Value::String("gemini-3-flash".to_string()),
+        );
+        let target = GeminiSettings {
+            env: HashMap::new(),
+            config: Some(cfg),
+        };
+        let out = parsed(
+            &merge_gemini_settings_json(&existing_settings("oauth"), &target).unwrap(),
+        );
+        assert_eq!(out["model"], serde_json::json!("gemini-3-flash"));
+
+        // 目标 config 带其它键但不带 model → model 撤除；mcpServers 保留。
+        let mut cfg2 = serde_json::Map::new();
+        cfg2.insert(
+            "selectedTheme".to_string(),
+            serde_json::Value::String("auto".to_string()),
+        );
+        let target2 = GeminiSettings {
+            env: HashMap::new(),
+            config: Some(cfg2),
+        };
+        let out2 = parsed(
+            &merge_gemini_settings_json(&existing_settings("oauth"), &target2).unwrap(),
+        );
+        assert!(out2.get("model").is_none(), "未携带的身份键撤除");
+        assert_eq!(out2["selectedTheme"], serde_json::json!("auto"));
+        assert_eq!(
+            out2["mcpServers"]["filesystem"]["command"],
+            serde_json::json!("npx"),
+            "非受控键不被清单撤除"
         );
     }
 
@@ -576,10 +665,20 @@ mod tests {
             settings["security"]["auth"]["selectedType"],
             serde_json::json!("oauth")
         );
+        assert!(
+            settings.get("model").is_none(),
+            "登录态版撤除旧供应商的顶层身份键 model"
+        );
         assert_eq!(
             settings["mcpServers"]["filesystem"]["command"],
             serde_json::json!("npx"),
             "登录态版同样保留 mcpServers"
+        );
+        // 备份对称：settings.json 与 .env 同等备份。
+        assert_eq!(
+            fs::read_to_string(tmp.path().join("settings.json.bak")).unwrap(),
+            existing_settings("gemini-api-key"),
+            ".bak 是写盘前的 settings.json"
         );
     }
 
@@ -617,6 +716,82 @@ mod tests {
             r#"{"mcpServers":{}}"#
         );
         assert!(!env_backup_path(&env_path).exists(), "失败路径不产生备份");
+    }
+
+    /// 用户手改坏 settings.json：合并在一切写盘之前失败，两文件终态一致
+    /// （同旧）——.env 不先落半截新值（#59 半截状态）。
+    #[test]
+    fn write_gemini_live_at_fails_before_writing_when_settings_json_is_corrupt() {
+        let tmp = tempfile::tempdir().unwrap();
+        let env_path = tmp.path().join(".env");
+        let settings_path = tmp.path().join("settings.json");
+        fs::write(&env_path, "GEMINI_API_KEY=sk-old\n").unwrap();
+        fs::write(&settings_path, "{oops").unwrap();
+
+        let r = write_gemini_live_at(
+            &env_path,
+            &settings_path,
+            r#"{"env":{"GEMINI_API_KEY":"sk-new"}}"#,
+        );
+        assert!(r.is_err(), "坏 settings.json 必须失败");
+        assert_eq!(
+            fs::read_to_string(&env_path).unwrap(),
+            "GEMINI_API_KEY=sk-old\n",
+            "settings 合并失败不得先写 .env（半截状态）"
+        );
+        assert_eq!(fs::read_to_string(&settings_path).unwrap(), "{oops");
+        assert!(
+            !env_backup_path(&env_path).exists(),
+            "失败路径不得产生备份"
+        );
+    }
+
+    /// settings 写盘一步失败（备份被占成目录）→ 已写的 .env 回滚到写盘前
+    /// 内容；原本不存在的 .env 回滚后被删除。两文件终态一致（#59）。
+    #[test]
+    fn write_gemini_live_at_rolls_back_env_when_settings_step_fails() {
+        let tmp = tempfile::tempdir().unwrap();
+        let env_path = tmp.path().join(".env");
+        let settings_path = tmp.path().join("settings.json");
+        let old_env = "GEMINI_API_KEY=sk-old\n";
+        fs::write(&env_path, old_env).unwrap();
+        fs::write(&settings_path, existing_settings("oauth")).unwrap();
+        // 让 settings 备份一步失败：settings.json.bak 占成目录 → fs::copy 失败。
+        fs::create_dir(tmp.path().join("settings.json.bak")).unwrap();
+
+        let r = write_gemini_live_at(
+            &env_path,
+            &settings_path,
+            r#"{"env":{"GEMINI_API_KEY":"sk-new"}}"#,
+        );
+        assert!(r.is_err(), "settings 步失败必须报错");
+        assert_eq!(
+            fs::read_to_string(&env_path).unwrap(),
+            old_env,
+            ".env 必须回滚到写盘前内容"
+        );
+        assert_eq!(
+            fs::read_to_string(&settings_path).unwrap(),
+            existing_settings("oauth"),
+            "settings 不得留下半截内容"
+        );
+
+        // 原本不存在 .env：回滚后必须删除（不残留新写的空/新文件）。
+        let tmp2 = tempfile::tempdir().unwrap();
+        let env_path2 = tmp2.path().join(".env");
+        let settings_path2 = tmp2.path().join("settings.json");
+        fs::write(&settings_path2, existing_settings("oauth")).unwrap();
+        fs::create_dir(tmp2.path().join("settings.json.bak")).unwrap();
+        let r2 = write_gemini_live_at(
+            &env_path2,
+            &settings_path2,
+            r#"{"env":{"GEMINI_API_KEY":"sk-new"}}"#,
+        );
+        assert!(r2.is_err());
+        assert!(
+            !env_path2.exists(),
+            "原本不存在的 .env 在回滚后必须被删除"
+        );
     }
 
     /// gemini 通用片段经 settings_config 层并入 .env（#50）：apply_snippet 把片段
