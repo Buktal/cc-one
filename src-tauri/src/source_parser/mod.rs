@@ -152,18 +152,31 @@ pub trait SourceParser: Send + Sync {
     }
 }
 
-/// All enabled Source-log parsers, in collection order. A parser whose
-/// source dir is absent simply discovers no files (not an error), so every
-/// parser is always instantiated; the shared `scan_progress` table keys by
-/// file path, which is naturally disjoint across parsers.
+/// All enabled Source-log parsers, in collection order, rooted at the real
+/// home dir. A parser whose source dir is absent simply discovers no files
+/// (not an error), so every parser is always instantiated; the shared
+/// `scan_progress` table keys by file path, which is naturally disjoint across
+/// parsers.
 pub fn all_source_parsers() -> AppResult<Vec<Box<dyn SourceParser>>> {
-    Ok(vec![
-        Box::new(claude::ClaudeCodeSourceParser::new()?),
-        Box::new(codex::CodexSourceParser::new()?),
-        Box::new(gemini::GeminiCliSourceParser::new()?),
-        Box::new(opencode::OpenCodeSourceParser::new()?),
-        Box::new(grok::GrokSourceParser::new()?),
-    ])
+    let home = dirs::home_dir()
+        .ok_or_else(|| crate::error::AppError::SourceParser("cannot resolve home dir".into()))?;
+    Ok(all_source_parsers_at(&home))
+}
+
+/// Root-injection seam for the collect orchestration: every enabled parser
+/// rooted at `home` (production goes through [`all_source_parsers`]; the
+/// collect integration test passes a tempdir fixture). `collect_into_with`
+/// runs its full orchestration against whatever this returns, so the collect
+/// invariants (cursors saved only after all ingests) are testable without a
+/// real `~/.claude`.
+pub fn all_source_parsers_at(home: &Path) -> Vec<Box<dyn SourceParser>> {
+    vec![
+        Box::new(claude::ClaudeCodeSourceParser::new_at(home)),
+        Box::new(codex::CodexSourceParser::new_at(home)),
+        Box::new(gemini::GeminiCliSourceParser::new_at(home)),
+        Box::new(grok::GrokSourceParser::new_at(home)),
+        Box::new(opencode::OpenCodeSourceParser::new_at(home)),
+    ]
 }
 
 /// One JSONL file's parse result. The parser's per-file parser returns this;

@@ -25,6 +25,7 @@ import {
   reorderGroupIds,
   sessionSpan,
   sessionTabFilter,
+  spanLabelKey,
   transcriptMatches,
   tryFormatJson,
   UNGROUPED,
@@ -432,6 +433,32 @@ describe("sessionSpan", () => {
       expect(sessionSpan(c.ms)).toEqual(c.want)
     })
   }
+})
+
+describe("spanLabelKey", () => {
+  it("days win → days+hours label", () => {
+    expect(spanLabelKey({ days: 3, hours: 7, minutes: 0 })).toEqual({
+      key: "sessions.span.daysHours",
+      vars: { d: 3, h: 7 },
+    })
+  })
+  it("hours + minutes → hoursMinutes; hours only → hours", () => {
+    expect(spanLabelKey({ days: 0, hours: 2, minutes: 5 })).toEqual({
+      key: "sessions.span.hoursMinutes",
+      vars: { h: 2, m: 5 },
+    })
+    expect(spanLabelKey({ days: 0, hours: 2, minutes: 0 })).toEqual({
+      key: "sessions.span.hours",
+      vars: { h: 2 },
+    })
+  })
+  it("minutes only → minutes label; null → null (caller renders the dash)", () => {
+    expect(spanLabelKey({ days: 0, hours: 0, minutes: 5 })).toEqual({
+      key: "sessions.span.minutes",
+      vars: { m: 5 },
+    })
+    expect(spanLabelKey(null)).toBeNull()
+  })
 })
 
 describe("modelsUsed", () => {

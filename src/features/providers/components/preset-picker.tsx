@@ -64,7 +64,7 @@ export function PresetPicker({
     // 流分隔（用户决策 2026-08-14 重调：弹层内两栏不再各自成卡，单面结构
     // ——暗色下 card #0d0d0f 比弹层 #26262a 更深，卡片会呈凹洞状）。px-6
     // 与右栏表单对齐。选中 chip 的 tint + 色点语言不变。
-    <aside className="border-border flex w-60 shrink-0 flex-col border-r">
+    <aside className="border-border flex w-72 shrink-0 flex-col border-r">
       <div className="px-6 pt-4 pb-1 text-sm font-medium">
         {t("providers.presets.title")}
       </div>

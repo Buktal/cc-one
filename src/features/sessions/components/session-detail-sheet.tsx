@@ -91,8 +91,10 @@ import {
   isAllCollapsed,
   modelsUsed,
   sessionSpan,
+  spanLabelKey,
   transcriptMatches,
 } from "../derive"
+import { useSessionTitleRename } from "../use-sessions-browser"
 import { highlight } from "../highlight"
 import { sessionSourceLabel } from "../source-labels"
 import { initialTurnNav, reduceTurnNav, turnAnchors } from "../turn-nav"
@@ -127,13 +129,6 @@ export interface SessionDetailSheetProps {
   favorited: boolean
   onClose: () => void
   onToggleFavorite: () => void
-  // title rename
-  editTitle: boolean
-  titleDraft: string
-  onTitleDraft: (v: string) => void
-  onStartTitle: () => void
-  onCancelTitle: () => void
-  onCommitTitle: () => void
   // group assignment
   trackGroups: SessionGroup[]
   currentGroupId: string
@@ -159,12 +154,6 @@ export function SessionDetailSheet(props: SessionDetailSheetProps) {
     favorited,
     onClose,
     onToggleFavorite,
-    editTitle,
-    titleDraft,
-    onTitleDraft,
-    onStartTitle,
-    onCancelTitle,
-    onCommitTitle,
     trackGroups,
     currentGroupId,
     onSetGroup,
@@ -234,12 +223,6 @@ export function SessionDetailSheet(props: SessionDetailSheetProps) {
             session={s}
             favorited={favorited}
             onClose={onClose}
-            editTitle={editTitle}
-            titleDraft={titleDraft}
-            onTitleDraft={onTitleDraft}
-            onStartTitle={onStartTitle}
-            onCancelTitle={onCancelTitle}
-            onCommitTitle={onCommitTitle}
             onToggleFavorite={onToggleFavorite}
             trackGroups={trackGroups}
             currentGroupId={currentGroupId}
@@ -296,12 +279,6 @@ function SessionHeader({
   session: s,
   favorited,
   onClose,
-  editTitle,
-  titleDraft,
-  onTitleDraft,
-  onStartTitle,
-  onCancelTitle,
-  onCommitTitle,
   onToggleFavorite,
   trackGroups,
   currentGroupId,
@@ -313,12 +290,6 @@ function SessionHeader({
   session: SessionRow
   favorited: boolean
   onClose: () => void
-  editTitle: boolean
-  titleDraft: string
-  onTitleDraft: (v: string) => void
-  onStartTitle: () => void
-  onCancelTitle: () => void
-  onCommitTitle: () => void
   onToggleFavorite: () => void
   trackGroups: SessionGroup[]
   currentGroupId: string
@@ -328,6 +299,15 @@ function SessionHeader({
   deviceLabel: (id: string) => string
 }) {
   const { t } = useTranslation()
+  // Title-rename 状态就地管理（useSessionTitleRename——不再经三层 props 传递）。
+  const {
+    editTitle,
+    titleDraft,
+    setTitleDraft,
+    startEditTitle,
+    cancelEditTitle,
+    commitEditTitle,
+  } = useSessionTitleRename(s)
   // 开始时间：sessions 表的 started_at 缺失时（旧会话常在采集时没提取到
   // 起始时间），用对话第一条消息的时间兜底 —— transcript 按 (ts, uuid)
   // 升序，第一条就是事实上的会话起点。加载中 transcript 为空，兜底自然
@@ -339,15 +319,9 @@ function SessionHeader({
       ? dayjs(s.last_active_at).diff(dayjs(effectiveStarted))
       : null,
   )
-  const spanLabel = span
-    ? span.days > 0
-      ? t("sessions.span.daysHours", { d: span.days, h: span.hours })
-      : span.hours > 0
-        ? span.minutes > 0
-          ? t("sessions.span.hoursMinutes", { h: span.hours, m: span.minutes })
-          : t("sessions.span.hours", { h: span.hours })
-        : t("sessions.span.minutes", { m: span.minutes })
-    : "—"
+  // 文案选择规则在 derive（spanLabelKey，可测）；null = 无时长 → 占位符。
+  const spanKey = spanLabelKey(span)
+  const spanLabel = spanKey ? t(spanKey.key, spanKey.vars) : "—"
   const models = modelsUsed(transcript)
 
   return (
@@ -363,17 +337,17 @@ function SessionHeader({
             <div className="flex items-center gap-1">
               <Input
                 value={titleDraft}
-                onChange={(e) => onTitleDraft(e.target.value)}
+                onChange={(e) => setTitleDraft(e.target.value)}
                 onKeyDown={(e) => {
-                  if (e.key === "Enter") onCommitTitle()
-                  if (e.key === "Escape") onCancelTitle()
+                  if (e.key === "Enter") commitEditTitle()
+                  if (e.key === "Escape") cancelEditTitle()
                 }}
                 autoFocus
               />
-              <Button variant="ghost" size="sm" onClick={onCommitTitle}>
+              <Button variant="ghost" size="sm" onClick={commitEditTitle}>
                 {t("common.save")}
               </Button>
-              <Button variant="ghost" size="icon-sm" onClick={onCancelTitle}>
+              <Button variant="ghost" size="icon-sm" onClick={cancelEditTitle}>
                 {t("common.cancel")}
               </Button>
             </div>
@@ -384,7 +358,7 @@ function SessionHeader({
                   render={
                     <button
                       type="button"
-                      onClick={onStartTitle}
+                      onClick={startEditTitle}
                       className="hover:text-accent-brand-strong group flex w-fit max-w-full cursor-pointer items-center gap-1.5 rounded-sm outline-none focus-visible:ring-2 focus-visible:ring-ring/40"
                     />
                   }

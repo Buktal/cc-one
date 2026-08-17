@@ -20,6 +20,7 @@ use self::ingest::IngestReport;
 use crate::config::ConfigStore;
 use crate::db::Store;
 use crate::error::AppResult;
+use crate::source_parser::SourceParser;
 use crate::sync;
 
 /// Parse Source → Local Store (+ JSONL Artifact). No network.
@@ -33,7 +34,21 @@ use crate::sync;
 /// store's primary-key dedup absorbs the re-read). First run / empty table ⇒
 /// full scan.
 pub fn collect_into(store: &Store, config: &ConfigStore) -> AppResult<IngestReport> {
-    let parsers = crate::source_parser::all_source_parsers()?;
+    collect_into_with(store, config, crate::source_parser::all_source_parsers()?)
+}
+
+/// Same orchestration as [`collect_into`], but with an explicit parser set —
+/// the root-injection seam for testing: production reaches it via
+/// [`collect_into`] (real-home parsers); the orchestration test injects
+/// tempdir-rooted parsers (`source_parser::all_source_parsers_at`). Every
+/// invariant below — per-parser incremental collect, cursor deltas merged and
+/// saved AFTER all ingests — runs on the exact production code path, so it is
+/// provable against a fixture dir instead of a real `~/.claude`.
+pub fn collect_into_with(
+    store: &Store,
+    config: &ConfigStore,
+    parsers: Vec<Box<dyn SourceParser>>,
+) -> AppResult<IngestReport> {
     let cfg = config.get();
     let paths = config.paths();
     let progress = store.load_scan_progress()?;
@@ -184,10 +199,141 @@ pub fn align(store: &Store, config: &ConfigStore) -> AlignReport {
 
 #[cfg(test)]
 mod tests {
-    use super::{retry_rounds, SyncRoundOutcome};
+    use super::{collect_into_with, retry_rounds, SyncRoundOutcome};
     use std::cell::{Cell, RefCell};
+    use std::path::{Path, PathBuf};
     use std::rc::Rc;
+    use std::sync::atomic::{AtomicBool, Ordering};
     use std::time::Duration;
+
+    use crate::config::{ConfigData, ConfigStore, Paths};
+    use crate::db::Store;
+    use crate::error::AppResult;
+    use crate::source_parser::{CollectResult, ScanProgress, ScanProgressDelta, SourceParser};
+
+    /// Parser wrapper whose `collect_incremental` fails once on demand — the
+    /// orchestration-failure injector for the cursor-not-advanced invariant.
+    struct FlakyParser {
+        inner: Box<dyn SourceParser>,
+        fail_next: AtomicBool,
+    }
+
+    impl SourceParser for FlakyParser {
+        fn name(&self) -> &'static str {
+            self.inner.name()
+        }
+
+        fn discover(&self) -> AppResult<Vec<PathBuf>> {
+            self.inner.discover()
+        }
+
+        fn parse(&self, files: &[PathBuf]) -> AppResult<CollectResult> {
+            self.inner.parse(files)
+        }
+
+        fn collect_incremental(
+            &self,
+            progress: &ScanProgress,
+        ) -> AppResult<(CollectResult, ScanProgressDelta)> {
+            if self.fail_next.swap(false, Ordering::SeqCst) {
+                return Err(crate::error::AppError::SourceParser("flaky collect".into()));
+            }
+            self.inner.collect_incremental(progress)
+        }
+    }
+
+    /// One Claude JSONL assistant line (the minimal shape the parser needs).
+    fn claude_line(uuid: &str, ts: &str) -> String {
+        format!(
+            r#"{{"type":"assistant","timestamp":"{ts}","uuid":"{uuid}","cwd":"/home/me/proj","summary":"Build a thing","message":{{"id":"msg_{uuid}","model":"glm-5.2","role":"assistant","stop_reason":"end_turn","usage":{{"input_tokens":100,"output_tokens":50}}}}}}"#
+        )
+    }
+
+    /// tempdir home + claude projects fixture + in-memory store + test config —
+    /// the collect-orchestration fixture: production paths (`collect_into`)
+    /// and this test share `collect_into_with`, differing only in the injected
+    /// parser roots (real `~` vs tempdir).
+    fn orchestration_fixture(home: &Path) -> (Store, ConfigStore, PathBuf) {
+        let projects = home.join(".claude").join("projects").join("proj-a");
+        std::fs::create_dir_all(&projects).unwrap();
+        let session_file = projects.join("s-001.jsonl");
+        let body = format!(
+            "{}\n{}\n",
+            claude_line("a1", "2026-08-01T11:00:00Z"),
+            claude_line("a2", "2026-08-01T11:01:00Z")
+        );
+        std::fs::write(&session_file, &body).unwrap();
+
+        let store = Store::open(Path::new(":memory:")).unwrap();
+        let paths = Paths::resolve(home);
+        let data = ConfigData {
+            device_id: "0123456789ab".into(),
+            ..Default::default()
+        };
+        (store, ConfigStore::for_test(paths, data), session_file)
+    }
+
+    /// The full collect chain runs over tempdir-rooted parsers — the seam the
+    /// orchestration invariants were previously untestable at. First pass
+    /// ingests everything; a no-change pass ingests nothing (the saved cursor +
+    /// mtime gate skip unchanged files); an append ingests only the new line.
+    #[test]
+    fn collect_into_with_ingests_incrementally_over_tempdir_parsers() {
+        let tmp = tempfile::tempdir().unwrap();
+        let (store, config, session_file) = orchestration_fixture(tmp.path());
+
+        let parsers = crate::source_parser::all_source_parsers_at(tmp.path());
+        let r1 = collect_into_with(&store, &config, parsers).unwrap();
+        assert_eq!(r1.rows_inserted, 2);
+        assert_eq!(r1.files_scanned, 1);
+        assert_eq!(r1.source, "claude_code");
+
+        let parsers = crate::source_parser::all_source_parsers_at(tmp.path());
+        let r2 = collect_into_with(&store, &config, parsers).unwrap();
+        assert_eq!(
+            r2.rows_inserted, 0,
+            "saved cursor + mtime gate skip the file"
+        );
+        assert_eq!(r2.files_scanned, 1, "discovered, then gated");
+
+        let body = std::fs::read_to_string(&session_file).unwrap();
+        std::fs::write(
+            &session_file,
+            format!("{body}{}\n", claude_line("a3", "2026-08-01T12:00:00Z")),
+        )
+        .unwrap();
+        let parsers = crate::source_parser::all_source_parsers_at(tmp.path());
+        let r3 = collect_into_with(&store, &config, parsers).unwrap();
+        assert_eq!(r3.rows_inserted, 1, "append ingests only the new line");
+    }
+
+    /// A failed collect aborts the orchestration BEFORE any cursor delta is
+    /// saved — the cursor table is written only after all ingests succeed. A
+    /// subsequent healthy collect therefore re-parses in full (a wrongly saved
+    /// cursor would gate the file and ingest zero rows).
+    #[test]
+    fn failed_collect_leaves_no_cursor_advance() {
+        let tmp = tempfile::tempdir().unwrap();
+        let (store, config, _session_file) = orchestration_fixture(tmp.path());
+
+        let flaky = FlakyParser {
+            // First parser in factory order is claude (the fixture's source).
+            inner: crate::source_parser::all_source_parsers_at(tmp.path())
+                .into_iter()
+                .next()
+                .unwrap(),
+            fail_next: AtomicBool::new(true),
+        };
+        let err = collect_into_with(&store, &config, vec![Box::new(flaky)]);
+        assert!(err.is_err(), "a failing parser aborts the orchestration");
+
+        let parsers = crate::source_parser::all_source_parsers_at(tmp.path());
+        let r = collect_into_with(&store, &config, parsers).unwrap();
+        assert_eq!(
+            r.rows_inserted, 2,
+            "failed pass left no cursor → the retry re-parses in full"
+        );
+    }
 
     // Scripted always-errors round; `imported = n` makes aggregation observable.
     fn err_round(n: u32) -> SyncRoundOutcome {

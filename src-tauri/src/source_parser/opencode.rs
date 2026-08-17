@@ -24,12 +24,15 @@ pub struct OpenCodeSourceParser {
 }
 
 impl OpenCodeSourceParser {
-    /// Default parser rooted at the resolved opencode db path (absent ⇒ the
-    /// parser discovers nothing).
-    pub fn new() -> AppResult<Self> {
-        Ok(Self {
-            db_path: opencode_db_path(),
-        })
+    /// Root-injection seam: parser whose db path falls back to
+    /// `home/.local/share/opencode/opencode.db` (env overrides still win). The
+    /// collect orchestration factory (`all_source_parsers_at`) builds every
+    /// parser through this seam, so tests can point the whole chain at a
+    /// tempdir fixture instead of the real `~`.
+    pub(crate) fn new_at(home: &Path) -> Self {
+        Self {
+            db_path: opencode_db_path_at(home),
+        }
     }
 
     /// Test/override constructor with an explicit db path.
@@ -198,8 +201,11 @@ impl SourceParser for OpenCodeSourceParser {
 
 /// Resolve the opencode db path: `OPENCODE_DB` (absolute) > `XDG_DATA_HOME` >
 /// `~/.local/share/opencode/opencode.db`. OpenCode uses xdg-basedir uniformly
-/// across platforms, so this is the same path on Windows as on Linux.
-fn opencode_db_path() -> Option<PathBuf> {
+/// across platforms, so this is the same path on Windows as on Linux. The
+/// home-dir fallback is injected (`home`) — the root-injection seam
+/// (`OpenCodeSourceParser::new_at`) used by the collect orchestration factory;
+/// production resolves the real home.
+fn opencode_db_path_at(home: &Path) -> Option<PathBuf> {
     if let Ok(v) = std::env::var("OPENCODE_DB") {
         let p = PathBuf::from(v);
         if p.is_absolute() {
@@ -212,7 +218,6 @@ fn opencode_db_path() -> Option<PathBuf> {
             return Some(p.join("opencode").join("opencode.db"));
         }
     }
-    let home = dirs::home_dir()?;
     Some(
         home.join(".local")
             .join("share")

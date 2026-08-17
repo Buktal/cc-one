@@ -232,6 +232,33 @@ export function sessionSpan(ms: number | null | undefined): SessionSpan | null {
   }
 }
 
+/** 会话时长的展示文案选择（架构扫描候选⑨c 顺带）：把「有天数 → 天+小时；
+ *  有小时 → 小时+分钟（有分钟时）/ 纯小时；否则纯分钟；无时长 → null」的
+ *  四层嵌套三元收成可测纯函数——只选键与插值变量，文案翻译仍由调用方
+ *  `t()` 完成。null = 无可用时长，调用方渲染占位符（—）。 */
+export function spanLabelKey(span: SessionSpan | null): {
+  key:
+    | "sessions.span.daysHours"
+    | "sessions.span.hoursMinutes"
+    | "sessions.span.hours"
+    | "sessions.span.minutes"
+  vars: Record<string, number>
+} | null {
+  if (!span) return null
+  if (span.days > 0) {
+    return { key: "sessions.span.daysHours", vars: { d: span.days, h: span.hours } }
+  }
+  if (span.hours > 0) {
+    return span.minutes > 0
+      ? {
+          key: "sessions.span.hoursMinutes",
+          vars: { h: span.hours, m: span.minutes },
+        }
+      : { key: "sessions.span.hours", vars: { h: span.hours } }
+  }
+  return { key: "sessions.span.minutes", vars: { m: span.minutes } }
+}
+
 /**
  * Distinct model names used in a transcript, in first-use order (assistant
  * messages carry the model; user/tool/system rows have none). Empty input ⇒

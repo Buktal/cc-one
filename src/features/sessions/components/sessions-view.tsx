@@ -215,12 +215,6 @@ export function SessionsView() {
           favorited={b.effectiveFavorite(preview)}
           onClose={() => b.setPreview(null)}
           onToggleFavorite={() => b.toggleFavorite(preview)}
-          editTitle={b.editTitle}
-          titleDraft={b.titleDraft}
-          onTitleDraft={b.setTitleDraft}
-          onStartTitle={b.startEditTitle}
-          onCancelTitle={b.cancelEditTitle}
-          onCommitTitle={b.commitEditTitle}
           trackGroups={b.trackGroups}
           currentGroupId={
             b.effectiveTrack === "local"

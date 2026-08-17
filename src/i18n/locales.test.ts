@@ -6,6 +6,15 @@
 
 import { describe, expect, it } from "vitest"
 
+import {
+  APP_ERROR_TYPES,
+  APP_KEYS,
+  CATEGORY_KEYS,
+  EXTRACT_GROUP_KINDS,
+  FETCH_MODEL_ERROR_KINDS,
+  MISSING_REQUIRED_FIELDS,
+  ROLE_KEYS,
+} from "@/i18n/dynamic-keys"
 import en from "@/locales/en.json"
 import ja from "@/locales/ja.json"
 import zh from "@/locales/zh.json"
@@ -47,4 +56,34 @@ describe("locale key sets stay identical across zh/en/ja", () => {
       }
     }
   })
+})
+
+/** 动态键护栏（i18n/dynamic-keys.ts 的封闭枚举）：`t(\`prefix.${v}\`)` 的
+ *  每个取值在 zh/en/ja 都必须有键——静态键集比较测不到它们，新增枚举值
+ *  时这套断言是唯一的拦截（漏键的界面表现是裸键名）。 */
+describe("dynamic i18n keys exist in all three locales", () => {
+  const dynamicKeyCases: [string, readonly string[]][] = [
+    ["providers.app", APP_KEYS],
+    ["providers.category", CATEGORY_KEYS],
+    ["providers.form.role", ROLE_KEYS],
+    ["providers.switchConfirm.missing", MISSING_REQUIRED_FIELDS],
+    ["providers.toast.fetchModels", FETCH_MODEL_ERROR_KINDS],
+    ["providers.liveImport.extractGroups", EXTRACT_GROUP_KINDS],
+    ["errors", APP_ERROR_TYPES],
+  ]
+  const locales = { zh, en, ja }
+
+  for (const [prefix, values] of dynamicKeyCases) {
+    for (const value of values) {
+      const key = `${prefix}.${value}`
+      it(`${key} exists in zh/en/ja`, () => {
+        for (const [name, locale] of Object.entries(locales)) {
+          expect(
+            normalizedKeys(locale).has(key),
+            `${key} 缺于 ${name}（动态键 ${prefix}.\${value} 的取值）`,
+          ).toBe(true)
+        }
+      })
+    }
+  }
 })

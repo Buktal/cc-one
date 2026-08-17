@@ -28,7 +28,7 @@
 use std::io::BufRead;
 use std::path::{Path, PathBuf};
 
-use crate::error::{AppError, AppResult};
+use crate::error::AppResult;
 use crate::model::{RawSession, ServerToolUse, SessionMessage, SessionMessageRole, TokenCounts};
 
 use super::{
@@ -54,13 +54,14 @@ pub struct GrokSourceParser {
 }
 
 impl GrokSourceParser {
-    /// Default parser rooted at `~/.grok`.
-    pub fn new() -> AppResult<Self> {
-        let home = dirs::home_dir()
-            .ok_or_else(|| AppError::SourceParser("cannot resolve home dir".into()))?;
-        Ok(Self {
+    /// Root-injection seam: parser rooted at `home/.grok`. The collect
+    /// orchestration factory (`all_source_parsers_at`) builds every parser
+    /// through this seam, so tests can point the whole chain at a tempdir
+    /// fixture instead of the real `~`.
+    pub(crate) fn new_at(home: &Path) -> Self {
+        Self {
             grok_dir: home.join(".grok"),
-        })
+        }
     }
 
     /// Test/override constructor with an explicit Grok dir.

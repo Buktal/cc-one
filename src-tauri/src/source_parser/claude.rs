@@ -2,7 +2,7 @@
 
 use std::path::{Path, PathBuf};
 
-use crate::error::{AppError, AppResult};
+use crate::error::AppResult;
 use crate::model::{RawSession, ServerToolUse, SessionMessage, SessionMessageRole, TokenCounts};
 
 use super::{
@@ -23,13 +23,14 @@ pub struct ClaudeCodeSourceParser {
 }
 
 impl ClaudeCodeSourceParser {
-    /// Default parser rooted at `~/.claude/projects`.
-    pub fn new() -> AppResult<Self> {
-        let home = dirs::home_dir()
-            .ok_or_else(|| AppError::SourceParser("cannot resolve home dir".into()))?;
-        Ok(Self {
+    /// Root-injection seam: parser rooted at `home/.claude/projects`. The
+    /// collect orchestration factory (`all_source_parsers_at`) builds every
+    /// parser through this seam, so tests can point the whole chain at a
+    /// tempdir fixture instead of the real `~`.
+    pub(crate) fn new_at(home: &Path) -> Self {
+        Self {
             projects_dir: home.join(".claude").join("projects"),
-        })
+        }
     }
 
     /// Test/override constructor with an explicit projects dir.
@@ -265,14 +266,6 @@ impl ClaudeCodeSourceParser {
             messages,
             skipped,
         }
-    }
-}
-
-impl Default for ClaudeCodeSourceParser {
-    fn default() -> Self {
-        Self::new().unwrap_or_else(|_| Self {
-            projects_dir: PathBuf::from(".claude/projects"),
-        })
     }
 }
 

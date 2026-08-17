@@ -236,31 +236,36 @@ export function ProviderFormSheet({
     return withAllRolesFromFirstInText(configText) !== null
   }, [configText])
 
+  /** configText 为真相源 + 写回收口（架构扫描候选⑥）：仅当外层 settingsConfig
+   *  JSON 合法时函数式回写（半截 JSON 不会被吞）——所有字段写回经此单一归属，
+   *  handler 不再各自重复 parse 守卫。返回是否真的写了（调用方据此决定
+   *  toast 等副作用）。 */
+  function guardedWrite(update: (prev: string) => string): boolean {
+    if (!parseJsonObject(configText).ok) return false
+    setConfigText((prev) => update(prev))
+    return true
+  }
+
   function onEndpointChange(value: string) {
     setEndpoint(value)
     // 端点变了，旧端点拉到的模型列表不再可靠，清空下拉。
     setFetchedModels([])
-    if (parseJsonObject(configText).ok) {
-      setConfigText((prev) =>
-        withBasicFieldsInText(prev, { endpoint: value, apiKey, authField }),
-      )
-    }
+    guardedWrite((prev) =>
+      withBasicFieldsInText(prev, { endpoint: value, apiKey, authField }),
+    )
   }
 
   function onApiKeyChange(value: string) {
     setApiKey(value)
-    if (parseJsonObject(configText).ok) {
-      setConfigText((prev) =>
-        withBasicFieldsInText(prev, { endpoint, apiKey: value, authField }),
-      )
-    }
+    guardedWrite((prev) =>
+      withBasicFieldsInText(prev, { endpoint, apiKey: value, authField }),
+    )
   }
 
   function onRoleModelChange(role: ModelRoleId, value: string) {
-    if (!parseJsonObject(configText).ok) return
     // 自动应用开关开着时：编辑任一角色模型 → 同步全部角色（withAllRolesInText
     // 处理 Haiku 去标记、显示名跟随）。关着则只改当前角色。
-    setConfigText((prev) =>
+    guardedWrite((prev) =>
       autoSync
         ? withAllRolesInText(prev, value)
         : withRoleModelInText(prev, role, value),
@@ -268,35 +273,35 @@ export function ProviderFormSheet({
   }
 
   function onRoleNameChange(role: ModelRoleId, value: string) {
-    if (parseJsonObject(configText).ok) {
-      setConfigText((prev) => withRoleNameInText(prev, role, value))
-    }
+    guardedWrite((prev) => withRoleNameInText(prev, role, value))
   }
 
   function onRoleOneMChange(role: ModelRoleId, oneM: boolean) {
-    if (parseJsonObject(configText).ok) {
-      setConfigText((prev) => withRoleOneMInText(prev, role, oneM))
-    }
+    guardedWrite((prev) => withRoleOneMInText(prev, role, oneM))
   }
 
   function onApplyAll() {
-    if (!parseJsonObject(configText).ok) return
     const next = withAllRolesFromFirstInText(configText)
     if (next === null) return
-    setConfigText(next)
-    toast.success(t("providers.toast.applyAllSuccess"))
+    if (guardedWrite(() => next)) {
+      toast.success(t("providers.toast.applyAllSuccess"))
+    }
+  }
+
+  /** 一次 fetch_models 调用的完整参数（app + 端点 + 认证 + modelsUrl 覆写）。
+   *  per-app 提取见 fetchModelsArgsFor。 */
+  type FetchModelsArgs = {
+    app: App
+    baseUrl: string
+    apiKey: string
+    modelsUrl: string | null
   }
 
   /** 调 fetchModels mutation 并处理结果（错误分桶 toast、成功填充
    *  fetchedModels）——Claude / Gemini 两条路径同一套错误标签契约，共用这一
    *  份错误渲染，避免分叉漂移。调用方负责各自的前置校验（端点 / key 是否
    *  必填）与参数构造。 */
-  async function runFetchModels(args: {
-    app: App
-    baseUrl: string
-    apiKey: string
-    modelsUrl: string | null
-  }): Promise<void> {
+  async function runFetchModels(args: FetchModelsArgs): Promise<void> {
     const result = await fetchModels(args)
     if (result.error) {
       // RTK unions SerializedError in for internal failures; the repo seam
@@ -322,86 +327,114 @@ export function ProviderFormSheet({
     }
   }
 
-  /** 拉当前 Claude 供应商的模型列表：端点与 key 缺任一 → 对应提示；失败按
-   *  后端错误串分桶提示（认证失败 / 端点未开放 / 超时 / 格式不支持 / 兜底）。 */
-  async function onFetchModels() {
-    if (!endpoint.trim()) {
-      toast.error(t("providers.toast.fetchModels.endpointRequired"))
-      return
+  /** 各 app 拉模型列表的参数提取（per-app 小表——三份 fetch 处理器的差异只
+   *  在这一层：参数来源、前置校验、modelsUrl 覆写；错误分桶与成功填充共用
+   *  runFetchModels）。判别联合：`ok: true` 时 args 必存在、`ok: false` 时
+   *  missing 给出缺的部分（endpoint / key，调用方提示对应文案）——互斥
+   *  不变量在类型里，不用 `!`。codex / grok 无 fetch 入口，不在此表。 */
+  function fetchModelsArgsFor(
+    app: "claude" | "gemini" | "opencode",
+  ):
+    | { ok: true; args: FetchModelsArgs }
+    | { ok: false; missing: "endpoint" | "key" } {
+    switch (app) {
+      case "claude": {
+        const baseUrl = endpoint.trim()
+        const key = apiKey.trim()
+        if (!baseUrl) return { ok: false, missing: "endpoint" }
+        if (!key) return { ok: false, missing: "key" }
+        return {
+          ok: true,
+          args: {
+            app,
+            baseUrl,
+            apiKey: key,
+            // 端点等于某预设默认值时，带上该预设声明的 modelsUrl 覆写（如火山
+            // /api/compatible 拼不出正确候选，必须精确指路）。
+            modelsUrl: presetModelsUrl(baseUrl, PROVIDER_PRESETS),
+          },
+        }
+      }
+      case "gemini": {
+        const key = geminiApiKey(configText).trim()
+        if (!key) return { ok: false, missing: "key" }
+        // Gemini 端点形状固定（GET /v1beta/models），不走 modelsUrl 覆写；
+        // 端点可空（后端 gemini_models_url 处理空→默认 generativelanguage 端点）。
+        return {
+          ok: true,
+          args: {
+            app,
+            baseUrl: geminiBaseUrl(configText).trim(),
+            apiKey: key,
+            modelsUrl: null,
+          },
+        }
+      }
+      case "opencode": {
+        const baseUrl = openCodeBaseUrl(configText).trim()
+        const key = openCodeApiKey(configText).trim()
+        if (!baseUrl) return { ok: false, missing: "endpoint" }
+        if (!key) return { ok: false, missing: "key" }
+        return {
+          ok: true,
+          args: { app, baseUrl, apiKey: key, modelsUrl: null },
+        }
+      }
     }
-    if (!apiKey.trim()) {
-      toast.error(t("providers.toast.fetchModels.keyRequired"))
-      return
-    }
-    await runFetchModels({
-      app: "claude",
-      baseUrl: endpoint.trim(),
-      apiKey: apiKey.trim(),
-      // 端点等于某预设默认值时，带上该预设声明的 modelsUrl 覆写（如火山
-      // /api/compatible 拼不出正确候选，必须精确指路）。
-      modelsUrl: presetModelsUrl(endpoint, PROVIDER_PRESETS),
-    })
   }
 
-  /** 拉 Gemini 模型列表：key 缺失 → 提示；端点可空（后端 gemini_models_url
-   *  处理空→默认 generativelanguage 端点）。失败分桶与 Claude 同一标签契约。 */
-  async function onFetchGeminiModels() {
-    const key = geminiApiKey(configText).trim()
-    if (!key) {
-      toast.error(t("providers.toast.fetchModels.keyRequired"))
+  /** 拉当前供应商的模型列表（统一入口）：参数提取与前置校验按 app 分表
+   *  （fetchModelsArgsFor），失败按后端错误串分桶提示（认证失败 / 端点未开放 /
+   *  超时 / 格式不支持 / 兜底）。 */
+  async function onFetchModelsFor(app: "claude" | "gemini" | "opencode") {
+    const result = fetchModelsArgsFor(app)
+    if (!result.ok) {
+      toast.error(
+        t(
+          result.missing === "endpoint"
+            ? "providers.toast.fetchModels.endpointRequired"
+            : "providers.toast.fetchModels.keyRequired",
+        ),
+      )
       return
     }
-    await runFetchModels({
-      app: "gemini",
-      baseUrl: geminiBaseUrl(configText).trim(),
-      apiKey: key,
-      // Gemini 端点形状固定（GET /v1beta/models），不走 modelsUrl 覆写。
-      modelsUrl: null,
-    })
+    await runFetchModels(result.args)
   }
 
-  /** 拉 OpenCode 模型列表：端点 = options.baseURL、认证 = options.apiKey（OpenAI
-   *  兼容分支——后端对非 Gemini app 统一走 fetch_models）。端点 / key 缺任一 → 提示。 */
-  async function onFetchOpenCodeModels() {
-    const baseUrl = openCodeBaseUrl(configText).trim()
-    const key = openCodeApiKey(configText).trim()
-    if (!baseUrl) {
-      toast.error(t("providers.toast.fetchModels.endpointRequired"))
-      return
-    }
-    if (!key) {
-      toast.error(t("providers.toast.fetchModels.keyRequired"))
-      return
-    }
-    await runFetchModels({
-      app: "opencode",
-      baseUrl,
-      apiKey: key,
-      modelsUrl: null,
-    })
+  /** Claude 区拉模型列表（OpenAI 兼容分支的后端入口是 fetch_models）。 */
+  function onFetchModels() {
+    void onFetchModelsFor("claude")
+  }
+
+  /** Gemini 区拉模型列表。 */
+  function onFetchGeminiModels() {
+    void onFetchModelsFor("gemini")
+  }
+
+  /** OpenCode 区拉模型列表（端点 = options.baseURL、认证 = options.apiKey）。 */
+  function onFetchOpenCodeModels() {
+    void onFetchModelsFor("opencode")
   }
 
   /** Claude 下拉选中一个模型 → 回填五个角色（与「一键设置」同一写入引擎）。 */
   function onPickModel(model: string) {
-    if (!parseJsonObject(configText).ok) return
-    setConfigText((prev) => withAllRolesInText(prev, model))
-    toast.success(t("providers.toast.applyAllSuccess"))
+    if (guardedWrite((prev) => withAllRolesInText(prev, model))) {
+      toast.success(t("providers.toast.applyAllSuccess"))
+    }
   }
 
   /** Gemini 下拉选中一个模型 → 写入 GEMINI_MODEL（Gemini 只有一个模型字段）。 */
   function onPickGeminiModel(model: string) {
-    if (!parseJsonObject(configText).ok) return
-    setConfigText((prev) => withGeminiEnv(prev, { GEMINI_MODEL: model }))
-    toast.success(t("providers.toast.fetchModels.modelSet"))
+    if (guardedWrite((prev) => withGeminiEnv(prev, { GEMINI_MODEL: model }))) {
+      toast.success(t("providers.toast.fetchModels.modelSet"))
+    }
   }
 
   function onAuthFieldChange(to: AuthField) {
     if (to === authField) return
     setAuthField(to)
-    if (parseJsonObject(configText).ok) {
-      // 值搬到新键、旧键删除——切换不丢 key 也不留双拼写。
-      setConfigText((prev) => switchAuthField(prev, authField, to))
-    }
+    // 值搬到新键、旧键删除——切换不丢 key 也不留双拼写。
+    guardedWrite((prev) => switchAuthField(prev, authField, to))
   }
 
   function onTemplateVarChange(name: string, value: string) {
@@ -413,47 +446,36 @@ export function ProviderFormSheet({
   }
 
   // Codex / Gemini 字段直写 configText（与 Claude 的 onEndpointChange 同一模式：
-  // 仅当外层 settingsConfig JSON 合法时回写，半截 JSON 不会被吞）。这两类应用无
-  // 镜像 state——输入框直接读 derive 函数，写回经 derive 写入 configText。
+  // 仅当外层 settingsConfig JSON 合法时回写，半截 JSON 不会被吞——守卫经
+  // guardedWrite 单一归属）。这两类应用无镜像 state——输入框直接读 derive
+  // 函数，写回经 derive 写入 configText。
   function onCodexApiKeyChange(value: string) {
-    if (parseJsonObject(configText).ok) {
-      setConfigText((prev) => withCodexApiKey(prev, value))
-    }
+    guardedWrite((prev) => withCodexApiKey(prev, value))
   }
 
   function onCodexConfigChange(value: string) {
-    if (parseJsonObject(configText).ok) {
-      setConfigText((prev) => withCodexConfigToml(prev, value))
-    }
+    guardedWrite((prev) => withCodexConfigToml(prev, value))
   }
 
   function onGrokConfigChange(value: string) {
-    if (parseJsonObject(configText).ok) {
-      setConfigText((prev) => withGrokConfigToml(prev, value))
-    }
+    guardedWrite((prev) => withGrokConfigToml(prev, value))
   }
 
   function onGeminiApiKeyChange(value: string) {
-    if (parseJsonObject(configText).ok) {
-      setConfigText((prev) => withGeminiEnv(prev, { GEMINI_API_KEY: value }))
-    }
+    guardedWrite((prev) => withGeminiEnv(prev, { GEMINI_API_KEY: value }))
   }
 
   function onGeminiModelChange(value: string) {
-    if (parseJsonObject(configText).ok) {
-      setConfigText((prev) => withGeminiEnv(prev, { GEMINI_MODEL: value }))
-    }
+    guardedWrite((prev) => withGeminiEnv(prev, { GEMINI_MODEL: value }))
   }
 
   function onGeminiBaseUrlChange(value: string) {
     // 端点变了，旧端点拉到的模型列表不再可靠，清空下拉（与 Claude 的
     // onEndpointChange 同一处理）。
     setFetchedModels([])
-    if (parseJsonObject(configText).ok) {
-      setConfigText((prev) =>
-        withGeminiEnv(prev, { GOOGLE_GEMINI_BASE_URL: value }),
-      )
-    }
+    guardedWrite((prev) =>
+      withGeminiEnv(prev, { GOOGLE_GEMINI_BASE_URL: value }),
+    )
   }
 
   async function onSave() {
@@ -910,7 +932,7 @@ export function ProviderFormSheet({
                 {/* 角色表：列头 + 一行一角色（角色名+1M | 显示名 | 请求
                     模型）。表格形而非灰盒子——列对齐让 5 行角色可纵向扫读，
                     行距压缩一半（原每角色占两行）；不加行分隔线（减线）。
-                    列头与分区标题同尺度（11px semibold muted）。 */}
+                    列头保持 11px semibold（表列标签尺度，独立于分区标题）。 */}
                 <div className="grid grid-cols-[minmax(8rem,9.5rem)_1fr_1fr] items-center gap-x-3 gap-y-2">
                   <div className="text-muted-foreground text-[11px] font-semibold">
                     {t("providers.form.role")}

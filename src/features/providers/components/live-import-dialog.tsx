@@ -27,6 +27,7 @@ import {
   Pencil,
   Upload,
 } from "lucide-react"
+import { EXTRACT_GROUP_KINDS } from "@/i18n/dynamic-keys"
 import { useEffect, useRef, useState } from "react"
 import { useTranslation } from "react-i18next"
 import { toast } from "sonner"
@@ -279,12 +280,17 @@ export function LiveImportDialog({
 // 色是项目皮肤铁律，换肤自动跟随）：蓝=端点（连接）、金=模型、绿=行为开关。
 // 分组只改展示结构，提取时仍提取全部候选（后端过滤凭据）。
 
-/** 三组小节配置：展示顺序、组标签 key、色点（chart 数据色类）。 */
-const GROUPS = [
+/** 三组小节配置：展示顺序、组标签 key、色点（chart 数据色类）。kind 类型化
+ *  自 i18n 动态键枚举表（新增组必须同步 EXTRACT_GROUP_KINDS，否则三语键
+ *  护栏测不到新组的标签键）。 */
+const GROUPS: {
+  kind: (typeof EXTRACT_GROUP_KINDS)[number]
+  dot: string
+}[] = [
   { kind: "endpoint", dot: "bg-chart-cache-create" },
   { kind: "model", dot: "bg-chart-input" },
   { kind: "behavior", dot: "bg-chart-cache-read" },
-] as const
+]
 
 function DiscoverPanel({
   keys,

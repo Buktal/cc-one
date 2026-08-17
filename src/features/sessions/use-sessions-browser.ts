@@ -66,6 +66,52 @@ const TAB_KEY = "cc-one:sessions-tab"
  *  must agree with the query's page size — one source of truth). */
 export const SESSIONS_PAGE_SIZE = 20
 
+/** Title-rename 状态的单一归属（架构扫描候选⑨c）：detail sheet 的头部就地
+ *  管理「编辑中 / 草稿 / 提交」，不再经 useSessionsBrowser → SessionDetailSheet
+ *  → SessionHeader 逐层传递六个 props。rename mutation 与 toast 策略在此
+ *  自己拿（RTK hooks 全局缓存 + useMutateWithToast 每次挂载独立，无共享态）。 */
+export function useSessionTitleRename(session: SessionRow | null) {
+  const [editTitle, setEditTitle] = useState(false)
+  const [titleDraft, setTitleDraft] = useState("")
+  const [customTitleMut] = useSetSessionCustomTitleMutation()
+  const runWithToast = useMutateWithToast()
+
+  function startEditTitle(): void {
+    if (!session) return
+    setEditTitle(true)
+    setTitleDraft(session.title)
+  }
+  function cancelEditTitle(): void {
+    setEditTitle(false)
+  }
+  async function commitEditTitle(): Promise<void> {
+    if (!session) return
+    const name = titleDraft.trim()
+    // Empty draft = revert to the original title (clears the custom override).
+    if (!name || name === session.title) {
+      setEditTitle(false)
+      return
+    }
+    const ok = await runWithToast(
+      customTitleMut,
+      { id: session.id, deviceId: session.device_id, title: name },
+      {
+        success: { key: "sessions.toast.renamed" },
+        failed: { key: "sessions.toast.failed" },
+      },
+    )
+    if (ok) setEditTitle(false)
+  }
+  return {
+    editTitle,
+    titleDraft,
+    setTitleDraft,
+    startEditTitle,
+    cancelEditTitle,
+    commitEditTitle,
+  }
+}
+
 export function useSessionsBrowser() {
   const { t } = useTranslation()
   const dispatch = useAppDispatch()
@@ -114,8 +160,6 @@ export function useSessionsBrowser() {
   // current slice (tab switch / filter change) so the sheet stays open instead
   // of snapping shut. Refreshed whenever the live lookup hits.
   const lastKnownRef = useRef<SessionRow | null>(null)
-  const [editTitle, setEditTitle] = useState(false)
-  const [titleDraft, setTitleDraft] = useState("")
   const [createGroupOpen, setCreateGroupOpen] = useState(false)
 
   // The sidebar selection is track-scoped (local vs synced group ids are
@@ -234,7 +278,6 @@ export function useSessionsBrowser() {
   }, [groupsQuery.data])
 
   const [favoritedMut] = useSetSessionFavoritedMutation()
-  const [customTitleMut] = useSetSessionCustomTitleMutation()
   const [setLocalGroupMut] = useSetSessionLocalGroupMutation()
   const [setSyncedGroupMut] = useSetSessionSyncedGroupMutation()
   const [createLocalMut] = useCreateLocalGroupMutation()
@@ -433,12 +476,34 @@ export function useSessionsBrowser() {
     }
   }
 
+  /** group 双轨 mutation 选择（架构扫描候选⑨b）：local（SQLite 直写）vs
+   *  synced（git 往返）——四个 group mutation 的成对关系收敛在此，调用方只
+   *  选轨道：操作当前标签的组（setSessionGroup / reorderGroups）传
+   *  effectiveTrack；操作指定组（renameGroup / deleteGroup）传该组的 kind。
+   *  create 不在表里：其返回类型两轨不同（LocalGroup vs SyncedGroup），
+   *  union trigger 无法喂给 runWithToast 的泛型推断，createGroup 保留手动
+   *  分支。新增 group mutation 时成对关系必须进这张表。 */
+  function groupMutations(track: GroupTrack) {
+    return track === "local"
+      ? {
+          setGroup: setLocalGroupMut,
+          rename: renameLocalMut,
+          delete: deleteLocalMut,
+          reorder: reorderLocalMut,
+        }
+      : {
+          setGroup: setSyncedGroupMut,
+          rename: renameSyncedMut,
+          delete: deleteSyncedMut,
+          reorder: reorderSyncedMut,
+        }
+  }
+
   async function setSessionGroup(
     s: SessionRow,
     groupId: string | null,
   ): Promise<void> {
-    const mut =
-      effectiveTrack === "local" ? setLocalGroupMut : setSyncedGroupMut
+    const mut = groupMutations(effectiveTrack).setGroup
     await runWithToast(
       mut,
       { id: s.id, deviceId: s.device_id, groupId },
@@ -447,34 +512,6 @@ export function useSessionsBrowser() {
         failed: { key: "sessions.toast.failed" },
       },
     )
-  }
-
-  // ---- detail sheet: title rename ----
-  function startEditTitle(): void {
-    if (!preview) return
-    setEditTitle(true)
-    setTitleDraft(preview.title)
-  }
-  function cancelEditTitle(): void {
-    setEditTitle(false)
-  }
-  async function commitEditTitle(): Promise<void> {
-    if (!preview) return
-    const name = titleDraft.trim()
-    // Empty draft = revert to the original title (clears the custom override).
-    if (!name || name === preview.title) {
-      setEditTitle(false)
-      return
-    }
-    const ok = await runWithToast(
-      customTitleMut,
-      { id: preview.id, deviceId: preview.device_id, title: name },
-      {
-        success: { key: "sessions.toast.renamed" },
-        failed: { key: "sessions.toast.failed" },
-      },
-    )
-    if (ok) setEditTitle(false)
   }
 
   // ---- group CRUD ----
@@ -509,9 +546,9 @@ export function useSessionsBrowser() {
       notifyGitRequired()
       return false
     }
-    // Branch per track so the toast helper can infer a single return type
-    // (createLocal returns LocalGroup, createSynced returns SyncedGroup — a
-    // union trigger would not unify).
+    // create 的返回类型两轨不同（LocalGroup vs SyncedGroup），union trigger
+    // 无法喂给 runWithToast 的泛型推断（TS 逆变的 trigger 参数不接受联合），
+    // 分支保留在此（groupMutations 表里无 create 条目，见其注释）。
     setPendingGroup(trimmed)
     const ok =
       effectiveTrack === "local"
@@ -533,7 +570,9 @@ export function useSessionsBrowser() {
     if (!trimmed || trimmed === g.name) return
     setBusyGroupId(g.id)
     try {
-      const mut = g.kind === "local" ? renameLocalMut : renameSyncedMut
+      // 组自身的轨道决定走哪套 mutation（groups.json 里来的 synced 组与本地
+      // 组共存于同一侧栏）。
+      const mut = groupMutations(g.kind === "local" ? "local" : "synced").rename
       await runWithToast(
         mut,
         { id: g.id, name: trimmed },
@@ -550,7 +589,7 @@ export function useSessionsBrowser() {
   async function deleteGroup(g: SessionGroup): Promise<void> {
     setBusyGroupId(g.id)
     try {
-      const mut = g.kind === "local" ? deleteLocalMut : deleteSyncedMut
+      const mut = groupMutations(g.kind === "local" ? "local" : "synced").delete
       const ok = await runWithToast(mut, g.id, {
         success: { key: "sessions.toast.groupDeleted" },
         failed: { key: "sessions.toast.failed" },
@@ -567,7 +606,7 @@ export function useSessionsBrowser() {
   // no success toast.
   async function reorderGroups(orderedIds: string[]): Promise<void> {
     setGroupOrderOverride(orderedIds)
-    const mut = effectiveTrack === "local" ? reorderLocalMut : reorderSyncedMut
+    const mut = groupMutations(effectiveTrack).reorder
     const ok = await runWithToast(mut, orderedIds, {
       failed: { key: "sessions.toast.failed" },
     })
@@ -632,12 +671,6 @@ export function useSessionsBrowser() {
     transcriptLoading: transcriptQuery.isLoading,
     transcriptError: transcriptQuery.error,
     refetchTranscript: transcriptQuery.refetch,
-    editTitle,
-    titleDraft,
-    setTitleDraft,
-    startEditTitle,
-    cancelEditTitle,
-    commitEditTitle,
     // group CRUD
     createGroupOpen,
     setCreateGroupOpen,
