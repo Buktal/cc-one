@@ -467,13 +467,9 @@ mod tests {
             "扁平键零效果，必须拒绝"
         );
         // 其它顶层键（claude 风格开关在 gemini 下同样零效果）——拒绝。
-        assert!(
-            validate_snippet(App::Gemini, r#"{"includeCoAuthoredBy": false}"#).is_err()
-        );
+        assert!(validate_snippet(App::Gemini, r#"{"includeCoAuthoredBy": false}"#).is_err());
         // 合法形状：只有 env 子对象。
-        assert!(
-            validate_snippet(App::Gemini, r#"{"env": {"GEMINI_MODEL": "m"}}"#).is_ok()
-        );
+        assert!(validate_snippet(App::Gemini, r#"{"env": {"GEMINI_MODEL": "m"}}"#).is_ok());
     }
 
     #[test]

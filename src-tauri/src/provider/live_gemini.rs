@@ -176,10 +176,7 @@ pub fn merge_gemini_settings_json(existing: &str, target: &GeminiSettings) -> Ap
     }
     // 顶层身份键撤除：config 不携带即撤（ADR-0010 受控轴「新供应商赢」）。
     for key in GEMINI_CONTROLLED_FIELDS {
-        let carried = target
-            .config
-            .as_ref()
-            .is_some_and(|c| c.contains_key(*key));
+        let carried = target.config.as_ref().is_some_and(|c| c.contains_key(*key));
         if !carried {
             merged_obj.remove(*key);
         }
@@ -502,9 +499,8 @@ mod tests {
             env: HashMap::new(),
             config: Some(cfg),
         };
-        let out = parsed(
-            &merge_gemini_settings_json(&existing_settings("oauth"), &target).unwrap(),
-        );
+        let out =
+            parsed(&merge_gemini_settings_json(&existing_settings("oauth"), &target).unwrap());
         assert_eq!(out["model"], serde_json::json!("gemini-3-flash"));
 
         // 目标 config 带其它键但不带 model → model 撤除；mcpServers 保留。
@@ -517,9 +513,8 @@ mod tests {
             env: HashMap::new(),
             config: Some(cfg2),
         };
-        let out2 = parsed(
-            &merge_gemini_settings_json(&existing_settings("oauth"), &target2).unwrap(),
-        );
+        let out2 =
+            parsed(&merge_gemini_settings_json(&existing_settings("oauth"), &target2).unwrap());
         assert!(out2.get("model").is_none(), "未携带的身份键撤除");
         assert_eq!(out2["selectedTheme"], serde_json::json!("auto"));
         assert_eq!(
@@ -740,10 +735,7 @@ mod tests {
             "settings 合并失败不得先写 .env（半截状态）"
         );
         assert_eq!(fs::read_to_string(&settings_path).unwrap(), "{oops");
-        assert!(
-            !env_backup_path(&env_path).exists(),
-            "失败路径不得产生备份"
-        );
+        assert!(!env_backup_path(&env_path).exists(), "失败路径不得产生备份");
     }
 
     /// settings 写盘一步失败（备份被占成目录）→ 已写的 .env 回滚到写盘前
@@ -788,10 +780,7 @@ mod tests {
             r#"{"env":{"GEMINI_API_KEY":"sk-new"}}"#,
         );
         assert!(r2.is_err());
-        assert!(
-            !env_path2.exists(),
-            "原本不存在的 .env 在回滚后必须被删除"
-        );
+        assert!(!env_path2.exists(), "原本不存在的 .env 在回滚后必须被删除");
     }
 
     /// gemini 通用片段经 settings_config 层并入 .env（#50）：apply_snippet 把片段

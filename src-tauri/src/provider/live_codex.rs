@@ -483,8 +483,8 @@ enabled = false
         }
 
         // 官方 → 第三方：目标携带 → 替换（不回归）。
-        let back = merge_codex_config(&merged, &third_party_target("kimi-k2.7-code", "kimi"))
-            .unwrap();
+        let back =
+            merge_codex_config(&merged, &third_party_target("kimi-k2.7-code", "kimi")).unwrap();
         assert_eq!(
             get_str(&back, &["model"]).as_deref(),
             Some("kimi-k2.7-code")
@@ -628,10 +628,7 @@ name = "New"
             "登录态版切换撤除受控键: {written}"
         );
         let bak = tmp.path().join("config.toml.bak");
-        assert!(
-            bak.exists(),
-            "config 变化（撤除受控键）必须备份"
-        );
+        assert!(bak.exists(), "config 变化（撤除受控键）必须备份");
         assert!(
             fs::read_to_string(&bak).unwrap().contains("gpt-5.6"),
             ".bak 是写盘前的 live 快照"

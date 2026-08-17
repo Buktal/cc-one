@@ -763,8 +763,8 @@ default = "xai""#
     /// 提取不得绕过（#60）。
     #[test]
     fn gemini_extract_skips_empty_values() {
-        let content =
-            gemini_extract_snippet("GEMINI_MODEL=gemini-2.5-flash\nGEMINI_DEBUG=\n").expect("有可提取");
+        let content = gemini_extract_snippet("GEMINI_MODEL=gemini-2.5-flash\nGEMINI_DEBUG=\n")
+            .expect("有可提取");
         let v: Value = serde_json::from_str(&content).unwrap();
         assert_eq!(v["env"]["GEMINI_MODEL"], "gemini-2.5-flash");
         assert!(
