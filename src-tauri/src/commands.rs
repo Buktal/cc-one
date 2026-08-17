@@ -1301,14 +1301,12 @@ fn import_opencode_from_live_text(
     let mut count = 0u32;
     for (key, entry) in entries {
         let settings_config = serde_json::to_string(&entry)?;
-        // 预览列表的行内改名优先（key → name 覆盖），否则 entry.name，缺 → key。
-        let display_name = name_overrides.get(&key).cloned().unwrap_or_else(|| {
-            entry
-                .get("name")
-                .and_then(|v| v.as_str())
-                .unwrap_or(&key)
-                .to_string()
-        });
+        // 预览列表的行内改名优先（key → name 覆盖），否则 entry.name 非空
+        // 优先、缺失或空串 → key（与预览同一推导，单一事实来源）。
+        let display_name = name_overrides
+            .get(&key)
+            .cloned()
+            .unwrap_or_else(|| live_opencode::entry_display_name(&entry, &key));
         let provider = match by_live_key.get(&key) {
             Some(existing) => Provider {
                 name: display_name,
@@ -1431,7 +1429,8 @@ pub enum LiveImportPreview {
 pub struct LiveImportPreviewEntry {
     /// `provider.<key>`（opencode）或 name（单激活应用），即导入后的去重键。
     pub key: String,
-    /// entry.name 优先，缺 → key（与导入的 display_name 规则一致）。
+    /// entry.name 非空优先，缺失或空串 → key（与导入共用
+    /// `live_opencode::entry_display_name`，同一推导）。
     pub name: String,
     /// 名字是否由 base_url 的注册域推导（单激活应用，后端 host_of）；opencode
     /// 的名字来自 entry.name / key，恒 false。前端理由行只在该标志为 true 时
@@ -1479,12 +1478,7 @@ fn preview_opencode_import_text(
         .into_iter()
         .map(|(key, entry)| LiveImportPreviewEntry {
             key: key.clone(),
-            name: entry
-                .get("name")
-                .and_then(|v| v.as_str())
-                .filter(|s| !s.is_empty())
-                .unwrap_or(&key)
-                .to_string(),
+            name: live_opencode::entry_display_name(&entry, &key),
             name_derived_from_url: false,
             base_url: entry
                 .pointer("/options/baseURL")
@@ -1867,6 +1861,30 @@ mod tests {
         assert_eq!(kimi.name, "kimi", "无 name → key 作显示名");
         assert_eq!(kimi.base_url, "https://api.moonshot.cn");
         assert!(!kimi.has_secret, "无 apiKey → 不含密钥");
+    }
+
+    /// 空 name（`"name": ""`）导入与预览同判：回退 key（原导入存 ""、预览回退
+    /// key，两路漂移——现共用 entry_display_name，#67）。
+    #[test]
+    fn import_and_preview_agree_on_empty_name_falling_back_to_key() {
+        let live = r#"{
+          "provider": {
+            "blank": {
+              "npm": "@ai-sdk/openai-compatible",
+              "name": "",
+              "options": { "baseURL": "https://x.dev", "apiKey": "sk-x" }
+            }
+          }
+        }"#;
+        let entries = preview_opencode_import_text(live, &HashSet::new());
+        assert_eq!(entries[0].name, "blank", "预览：空 name → key");
+        let s = mem();
+        import_opencode_from_live_text(&s, App::OpenCode, live, &HashMap::new()).unwrap();
+        let providers = s.list_providers_for(App::OpenCode).unwrap();
+        assert_eq!(
+            providers[0].name, "blank",
+            "导入与预览同一显示名（空 name → key，不再存空串）"
+        );
     }
 
     /// 「新建 vs 更新」判定与导入一致：existing_keys 按 liveKey 集合判定。

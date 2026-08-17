@@ -280,6 +280,18 @@ pub fn meta_live_managed(meta: &str) -> Option<bool> {
     parse_meta(meta).ok()?.get("liveManaged")?.as_bool()
 }
 
+/// opencode entry 的显示名（导入/预览共用的单一事实来源）：`entry.name`
+/// 非空字符串优先；缺失或空串 → 回退 `provider.<key>`（空名供应商在列表里
+/// 不可辨，key 至少唯一可认）。
+pub fn entry_display_name(entry: &Value, key: &str) -> String {
+    entry
+        .get("name")
+        .and_then(|v| v.as_str())
+        .filter(|s| !s.is_empty())
+        .unwrap_or(key)
+        .to_string()
+}
+
 /// 读 meta 里的 `liveKey`（opencode.json 的 provider.<key> 的 key）。`None` = 未
 /// 设置（首次添加时由命令层 slugify 生成并写回 meta）。
 pub fn meta_live_key(meta: &str) -> Option<String> {
