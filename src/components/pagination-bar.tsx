@@ -4,6 +4,10 @@
 // sequence implementation). `loading` disables the controls while a page
 // refetches so a page flip never goes feedback-less.
 //
+// total === 0 renders nothing — the「0 条 + 两个禁用按钮」strip under a
+// centered empty state reads as broken（判断归这里，调用方不再各自复制
+// `total > 0 &&` 条件）.
+//
 // Single-line guarantee: the footer is a @container — the page-info label
 // never wraps (whitespace-nowrap) and never shrinks (shrink-0), the numbered
 // page buttons hide below a 40rem container (a 7-page spread is ~250px of
@@ -40,6 +44,7 @@ export function PaginationBar({
   loading?: boolean
 }) {
   const { t } = useTranslation()
+  if (total === 0) return null
   return (
     // @container: the narrow-window breakpoints below measure this footer's
     // own width (the card's content column), not the window — the sidebar's

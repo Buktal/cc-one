@@ -195,18 +195,15 @@ export function SessionsView() {
             {/* Paged footer — the shared PaginationBar (page info left,
               numbered pages with ellipsis jumps right; disabled states agree
               with the page query's size — SESSIONS_PAGE_SIZE, single source).
-              Hidden on an empty result set (loading or zero rows): a "0 of 0
-              pages" strip under a centered empty state reads as a broken
-              layout. */}
-            {b.totalCount > 0 ? (
-              <PaginationBar
-                page={b.page}
-                totalPages={b.totalPages}
-                total={b.viewTotal}
-                loading={b.isFetching}
-                onPageChange={(p) => b.setOffset((p - 1) * SESSIONS_PAGE_SIZE)}
-              />
-            ) : null}
+              Hidden on an empty result set (zero rows render nothing — the
+              judgment lives in PaginationBar, shared by every call site). */}
+            <PaginationBar
+              page={b.page}
+              totalPages={b.totalPages}
+              total={b.viewTotal}
+              loading={b.isFetching}
+              onPageChange={(p) => b.setOffset((p - 1) * SESSIONS_PAGE_SIZE)}
+            />
           </CardContent>
         </Card>
       </div>

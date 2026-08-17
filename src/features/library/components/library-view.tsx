@@ -28,6 +28,7 @@ import { useTranslation } from "react-i18next"
 import { ConfirmDialog } from "@/components/confirm-dialog"
 import { EmptyState } from "@/components/empty-state"
 import { PaginationBar } from "@/components/pagination-bar"
+import { QueryState } from "@/components/query-state"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Input } from "@/components/ui/input"
@@ -74,6 +75,8 @@ export function LibraryView() {
     totalPages,
     setOffset,
     isLoading,
+    scanError,
+    refetchScan,
     deviceOptions,
     deviceScope,
     setDeviceScope,
@@ -219,71 +222,80 @@ export function LibraryView() {
           <CardTitle>{t("library.title")}</CardTitle>
         </CardHeader>
         <CardContent className="flex min-h-0 flex-1 flex-col">
-          {isLoading ? (
-            <div className="text-muted-foreground p-4 text-sm">
-              {t("common.loading")}
-            </div>
-          ) : totalCount === 0 ? (
-            search.trim() ? (
-              /* Searched but nothing matched — a lighter state than the
+          {/* 加载/错误态统一走 QueryState（与 sessions/pricing/logs 同一呈现：
+              居中 Skeleton / 可重试错误）。扫描失败不再伪装成「空文件夹」
+              空态——错误与真空目录是两种状态两种出路。空态/表格作为 children：
+              未 loading、未 error 时由 QueryState 原样渲染。 */}
+          <QueryState
+            isLoading={isLoading}
+            error={scanError}
+            isEmpty={false}
+            errorAction={{
+              label: t("common.retry"),
+              onClick: () => void refetchScan(),
+            }}
+          >
+            {totalCount === 0 ? (
+              search.trim() ? (
+                /* Searched but nothing matched — a lighter state than the
                  empty-folder invite, so "no matches" ≠ "add files". */
-              <div className="text-muted-foreground flex flex-1 items-center justify-center py-12 text-sm">
-                {t("library.noMatch")}
-              </div>
+                <div className="text-muted-foreground flex flex-1 items-center justify-center py-12 text-sm">
+                  {t("library.noMatch")}
+                </div>
+              ) : (
+                <div className="flex flex-1 items-center justify-center">
+                  <EmptyState
+                    icon={Folder}
+                    title={t("library.empty.title")}
+                    description={t("library.empty.desc")}
+                  />
+                </div>
+              )
             ) : (
-              <div className="flex flex-1 items-center justify-center">
-                <EmptyState
-                  icon={Folder}
-                  title={t("library.empty.title")}
-                  description={t("library.empty.desc")}
-                />
-              </div>
-            )
-          ) : (
-            <div className="min-h-0 flex-1 -mr-2.5 overflow-auto pr-2.5">
-              {/* table-fixed: column widths come from the header row, so the
+              <div className="min-h-0 flex-1 -mr-2.5 overflow-auto pr-2.5">
+                {/* table-fixed: column widths come from the header row, so the
                   name column never changes width when a row switches to the
                   inline rename editor (under auto layout the input's intrinsic
                   width stretched the column and shoved the other columns
                   sideways). The name column takes the remaining space and
                   truncates long names; every other column is fixed-width. */}
-              <Table className="table-fixed">
-                <TableHeader>
-                  <TableRow>
-                    <TableHead className="min-w-32">
-                      {t("library.col.name")}
-                    </TableHead>
-                    <TableHead className="w-24">
-                      {t("library.col.kind")}
-                    </TableHead>
-                    <TableHead className="w-24">
-                      {t("library.col.size")}
-                    </TableHead>
-                    <TableHead className="w-40">
-                      {showDevice
-                        ? t("library.col.device")
-                        : t("library.col.modified")}
-                    </TableHead>
-                    <TableHead className="w-32 text-right">
-                      {t("library.col.actions")}
-                    </TableHead>
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {entries.map((e) => {
-                    const Icon = kindIcon(e.name, e.kind === "dir")
-                    const isRenaming = renaming === e.rel_path
-                    const busy = busyRelPath === e.rel_path
-                    const kindLabel =
-                      e.kind === "dir"
-                        ? t("library.kind.dir")
-                        : e.name.split(".").pop()?.toUpperCase() ||
-                          t("library.kind.file")
-                    return (
-                      <TableRow key={e.rel_path}>
-                        <TableCell>
-                          {isRenaming ? (
-                            /* w-full tracks the fixed table-fixed column, so
+                <Table className="table-fixed">
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead className="min-w-32">
+                        {t("library.col.name")}
+                      </TableHead>
+                      <TableHead className="w-24">
+                        {t("library.col.kind")}
+                      </TableHead>
+                      <TableHead className="w-24">
+                        {t("library.col.size")}
+                      </TableHead>
+                      <TableHead className="w-40">
+                        {showDevice
+                          ? t("library.col.device")
+                          : t("library.col.modified")}
+                      </TableHead>
+                      <TableHead className="w-32 text-right">
+                        {t("library.col.actions")}
+                      </TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {entries.map((e) => {
+                      const Icon = kindIcon(e.name, e.kind === "dir")
+                      const isRenaming = renaming === e.rel_path
+                      const busy = busyRelPath === e.rel_path
+                      const kindLabel =
+                        e.kind === "dir"
+                          ? t("library.kind.dir")
+                          : e.name.split(".").pop()?.toUpperCase() ||
+                            t("library.kind.file")
+                      return (
+                        <TableRow key={e.rel_path}>
+                          <TableCell>
+                            {isRenaming ? (
+                              /* w-full tracks the fixed table-fixed column, so
                                the editor can't widen the name column (under
                                auto layout the input's intrinsic width would
                                stretch it and shift every row sideways).
@@ -296,180 +308,187 @@ export function LibraryView() {
                                otherwise double-submit (blur commit + click
                                commit) and the cancel button would commit
                                before canceling. */
-                            <div className="relative w-full">
-                              <Input
-                                value={renameVal}
-                                onChange={(ev) => setRenameVal(ev.target.value)}
-                                className="h-7 w-full pr-16"
-                                onKeyDown={(ev) => {
-                                  if (ev.key === "Enter") commitRename(e)
-                                  if (ev.key === "Escape") cancelRename()
-                                }}
-                                onBlur={() => commitRename(e)}
-                                autoFocus
-                              />
-                              <div className="absolute top-1/2 right-1 flex -translate-y-1/2 gap-0.5">
-                                <Button
-                                  variant="ghost"
-                                  size="icon-sm"
-                                  disabled={busy}
-                                  onMouseDown={(ev) => ev.preventDefault()}
-                                  onClick={() => commitRename(e)}
-                                >
-                                  {busy ? (
-                                    <Loader2 className="animate-spin" />
-                                  ) : (
-                                    <Check />
-                                  )}
-                                </Button>
-                                <Button
-                                  variant="ghost"
-                                  size="icon-sm"
-                                  onMouseDown={(ev) => ev.preventDefault()}
-                                  onClick={cancelRename}
-                                >
-                                  <X />
-                                </Button>
+                              <div className="relative w-full">
+                                <Input
+                                  value={renameVal}
+                                  onChange={(ev) =>
+                                    setRenameVal(ev.target.value)
+                                  }
+                                  className="h-7 w-full pr-16"
+                                  onKeyDown={(ev) => {
+                                    if (ev.key === "Enter") commitRename(e)
+                                    if (ev.key === "Escape") cancelRename()
+                                  }}
+                                  onBlur={() => commitRename(e)}
+                                  autoFocus
+                                />
+                                <div className="absolute top-1/2 right-1 flex -translate-y-1/2 gap-0.5">
+                                  <Button
+                                    variant="ghost"
+                                    size="icon-sm"
+                                    disabled={busy}
+                                    onMouseDown={(ev) => ev.preventDefault()}
+                                    onClick={() => commitRename(e)}
+                                  >
+                                    {busy ? (
+                                      <Loader2 className="animate-spin" />
+                                    ) : (
+                                      <Check />
+                                    )}
+                                  </Button>
+                                  <Button
+                                    variant="ghost"
+                                    size="icon-sm"
+                                    onMouseDown={(ev) => ev.preventDefault()}
+                                    onClick={cancelRename}
+                                  >
+                                    <X />
+                                  </Button>
+                                </div>
                               </div>
-                            </div>
-                          ) : (
-                            <button
-                              type="button"
-                              className={cn(
-                                /* min-w-0 max-w-full: under table-fixed the
+                            ) : (
+                              <button
+                                type="button"
+                                className={cn(
+                                  /* min-w-0 max-w-full: under table-fixed the
                                    cell is clipped to the column — the flex
                                    button must shrink and let the span
                                    truncate instead of spilling into the next
                                    column. */
-                                "hover:text-accent-brand-strong flex min-w-0 max-w-full items-center gap-2",
-                                /* Directories read heavier so the structure
+                                  "hover:text-accent-brand-strong flex min-w-0 max-w-full items-center gap-2",
+                                  /* Directories read heavier so the structure
                                    scans at a glance (file-manager norm). */
-                                e.kind === "dir" && "font-medium",
-                              )}
-                              onClick={() =>
-                                e.kind === "dir" ? drill(e) : setPreview(e)
-                              }
-                            >
-                              <Icon className="size-4 shrink-0" />
-                              <Tooltip>
-                                <TooltipTrigger
-                                  render={
-                                    <span className="min-w-0 truncate">
-                                      {e.name}
-                                    </span>
-                                  }
-                                />
-                                <TooltipContent>{e.name}</TooltipContent>
-                              </Tooltip>
-                            </button>
-                          )}
-                        </TableCell>
-                        <TableCell className="text-muted-foreground text-xs">
-                          {kindLabel}
-                        </TableCell>
-                        <TableCell className="text-muted-foreground text-xs tabular-nums">
-                          {formatSize(e.size)}
-                        </TableCell>
-                        {/* Tooltip keeps the clipped device name readable —
+                                  e.kind === "dir" && "font-medium",
+                                )}
+                                onClick={() =>
+                                  e.kind === "dir" ? drill(e) : setPreview(e)
+                                }
+                              >
+                                <Icon className="size-4 shrink-0" />
+                                <Tooltip>
+                                  <TooltipTrigger
+                                    render={
+                                      <span className="min-w-0 truncate">
+                                        {e.name}
+                                      </span>
+                                    }
+                                  />
+                                  <TooltipContent>{e.name}</TooltipContent>
+                                </Tooltip>
+                              </button>
+                            )}
+                          </TableCell>
+                          <TableCell className="text-muted-foreground text-xs">
+                            {kindLabel}
+                          </TableCell>
+                          <TableCell className="text-muted-foreground text-xs tabular-nums">
+                            {formatSize(e.size)}
+                          </TableCell>
+                          {/* Tooltip keeps the clipped device name readable —
                             the column is fixed at w-40 under table-fixed. */}
-                        <TableCell className="text-muted-foreground text-xs truncate">
-                          {showDevice ? (
-                            e.is_self ? (
-                              t("devices.thisDevice")
+                          <TableCell className="text-muted-foreground text-xs truncate">
+                            {showDevice ? (
+                              e.is_self ? (
+                                t("devices.thisDevice")
+                              ) : (
+                                <Tooltip>
+                                  <TooltipTrigger
+                                    render={<span>{e.device_name}</span>}
+                                  />
+                                  <TooltipContent>
+                                    {e.device_name}
+                                  </TooltipContent>
+                                </Tooltip>
+                              )
                             ) : (
                               <Tooltip>
                                 <TooltipTrigger
-                                  render={<span>{e.device_name}</span>}
+                                  render={
+                                    <span>
+                                      {dayjs(e.modified_ms).fromNow()}
+                                    </span>
+                                  }
                                 />
-                                <TooltipContent>{e.device_name}</TooltipContent>
+                                <TooltipContent>
+                                  {dayjs(e.modified_ms).format("MM/DD HH:mm")}
+                                </TooltipContent>
                               </Tooltip>
-                            )
-                          ) : (
-                            <Tooltip>
-                              <TooltipTrigger
-                                render={
-                                  <span>{dayjs(e.modified_ms).fromNow()}</span>
-                                }
-                              />
-                              <TooltipContent>
-                                {dayjs(e.modified_ms).format("MM/DD HH:mm")}
-                              </TooltipContent>
-                            </Tooltip>
-                          )}
-                        </TableCell>
-                        <TableCell className="text-right">
-                          <div className="flex justify-end gap-1">
-                            <Tooltip>
-                              <TooltipTrigger
-                                render={
-                                  <Button
-                                    variant="ghost"
-                                    size="icon-sm"
-                                    aria-label={t("library.row.export")}
-                                    disabled={busy}
-                                    onClick={() => onExport(e)}
-                                  />
-                                }
-                              >
-                                {busy ? (
-                                  <Loader2 className="animate-spin" />
-                                ) : (
-                                  <Download />
-                                )}
-                              </TooltipTrigger>
-                              <TooltipContent>
-                                {t("library.row.export")}
-                              </TooltipContent>
-                            </Tooltip>
-                            <Tooltip>
-                              <TooltipTrigger
-                                render={
-                                  <Button
-                                    variant="ghost"
-                                    size="icon-sm"
-                                    aria-label={t("library.row.rename")}
-                                    disabled={busy}
-                                    onClick={() => startRename(e)}
-                                  />
-                                }
-                              >
-                                <Pencil />
-                              </TooltipTrigger>
-                              <TooltipContent>
-                                {t("library.row.rename")}
-                              </TooltipContent>
-                            </Tooltip>
-                            <Tooltip>
-                              <TooltipTrigger
-                                render={
-                                  <Button
-                                    variant="ghost"
-                                    size="icon-sm"
-                                    aria-label={t("library.row.delete")}
-                                    disabled={busy}
-                                    onClick={() => setDeleting(e)}
-                                  />
-                                }
-                              >
-                                {busy ? (
-                                  <Loader2 className="animate-spin" />
-                                ) : (
-                                  <Trash2 />
-                                )}
-                              </TooltipTrigger>
-                              <TooltipContent>
-                                {t("library.row.delete")}
-                              </TooltipContent>
-                            </Tooltip>
-                          </div>
-                        </TableCell>
-                      </TableRow>
-                    )
-                  })}
-                </TableBody>
-              </Table>
-            </div>
-          )}
+                            )}
+                          </TableCell>
+                          <TableCell className="text-right">
+                            <div className="flex justify-end gap-1">
+                              <Tooltip>
+                                <TooltipTrigger
+                                  render={
+                                    <Button
+                                      variant="ghost"
+                                      size="icon-sm"
+                                      aria-label={t("library.row.export")}
+                                      disabled={busy}
+                                      onClick={() => onExport(e)}
+                                    />
+                                  }
+                                >
+                                  {busy ? (
+                                    <Loader2 className="animate-spin" />
+                                  ) : (
+                                    <Download />
+                                  )}
+                                </TooltipTrigger>
+                                <TooltipContent>
+                                  {t("library.row.export")}
+                                </TooltipContent>
+                              </Tooltip>
+                              <Tooltip>
+                                <TooltipTrigger
+                                  render={
+                                    <Button
+                                      variant="ghost"
+                                      size="icon-sm"
+                                      aria-label={t("library.row.rename")}
+                                      disabled={busy}
+                                      onClick={() => startRename(e)}
+                                    />
+                                  }
+                                >
+                                  <Pencil />
+                                </TooltipTrigger>
+                                <TooltipContent>
+                                  {t("library.row.rename")}
+                                </TooltipContent>
+                              </Tooltip>
+                              <Tooltip>
+                                <TooltipTrigger
+                                  render={
+                                    <Button
+                                      variant="ghost"
+                                      size="icon-sm"
+                                      aria-label={t("library.row.delete")}
+                                      disabled={busy}
+                                      onClick={() => setDeleting(e)}
+                                    />
+                                  }
+                                >
+                                  {busy ? (
+                                    <Loader2 className="animate-spin" />
+                                  ) : (
+                                    <Trash2 />
+                                  )}
+                                </TooltipTrigger>
+                                <TooltipContent>
+                                  {t("library.row.delete")}
+                                </TooltipContent>
+                              </Tooltip>
+                            </div>
+                          </TableCell>
+                        </TableRow>
+                      )
+                    })}
+                  </TableBody>
+                </Table>
+              </div>
+            )}
+          </QueryState>
 
           {/* Paged footer — the shared PaginationBar (page info left, numbered
             pages with ellipsis jumps right; disabled states agree with the

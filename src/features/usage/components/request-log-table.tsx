@@ -158,15 +158,13 @@ export function RequestLogTable({ filter }: { filter: FilterState }) {
           </div>
         </QueryState>
 
-        {total > 0 ? (
-          <PaginationBar
-            page={page}
-            totalPages={totalPages}
-            total={total}
-            loading={isFetching}
-            onPageChange={(p) => setOffset((p - 1) * PAGE_SIZE)}
-          />
-        ) : null}
+        <PaginationBar
+          page={page}
+          totalPages={totalPages}
+          total={total}
+          loading={isFetching}
+          onPageChange={(p) => setOffset((p - 1) * PAGE_SIZE)}
+        />
       </CardContent>
     </Card>
   )

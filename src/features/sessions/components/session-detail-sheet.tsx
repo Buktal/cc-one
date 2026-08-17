@@ -76,6 +76,7 @@ import {
   TooltipContent,
   TooltipTrigger,
 } from "@/components/ui/tooltip"
+import { describeError } from "@/lib/error"
 import { formatCost, formatInt, formatTime, formatTokens } from "@/lib/format"
 import { cn } from "@/lib/utils"
 import type {
@@ -628,9 +629,15 @@ function TranscriptBody({
     )
   }
   if (error) {
+    // 失败态可重试（与空态的刷新动作同一出路）——错误后不该是死胡同。
     return (
-      <div className="text-muted-foreground flex min-h-0 flex-1 items-center justify-center p-8 text-sm">
-        {t("common.loadFailed", { detail: "" })}
+      <div className="flex min-h-0 flex-1 items-center justify-center p-6">
+        <EmptyState
+          icon={Bot}
+          title={t("common.loadFailed", { detail: "" })}
+          description={describeError(error, t) || undefined}
+          action={{ label: t("sessions.detail.refresh"), onClick: onRefresh }}
+        />
       </div>
     )
   }

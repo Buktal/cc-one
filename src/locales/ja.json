@@ -15,6 +15,7 @@
   "common.minutes": "{{n}} 分",
   "common.quit": "終了",
   "common.removing": "削除中…",
+  "common.retry": "再試行",
   "common.save": "保存",
   "common.saving": "保存中…",
   "common.seconds": "{{n}} 秒",

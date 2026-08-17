@@ -36,6 +36,7 @@ import {
 } from "@/app/store/api"
 import { ConfirmDialog } from "@/components/confirm-dialog"
 import { EmptyState } from "@/components/empty-state"
+import { QueryState } from "@/components/query-state"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
@@ -91,6 +92,8 @@ export function ProvidersView() {
   const {
     providers,
     isLoading,
+    listError,
+    refetchProviders,
     onReorder,
     exportProviders,
     importProviders,
@@ -360,66 +363,74 @@ export function ProvidersView() {
           </div>
         </CardHeader>
         <CardContent className="flex flex-col">
-          {isLoading ? (
-            <div className="text-muted-foreground py-12 text-center text-sm">
-              {t("common.loading")}
-            </div>
-          ) : visibleProviders.length === 0 ? (
-            query.trim() ? (
-              <EmptyState icon={Search} title={t("providers.noMatch")} />
+          {/* 加载/错误态统一走 QueryState（与 sessions/pricing/logs 同一呈现）；
+              错误可重试。空态/列表作为 children。 */}
+          <QueryState
+            isLoading={isLoading}
+            error={listError}
+            isEmpty={false}
+            errorAction={{
+              label: t("common.retry"),
+              onClick: () => void refetchProviders(),
+            }}
+          >
+            {visibleProviders.length === 0 ? (
+              query.trim() ? (
+                <EmptyState icon={Search} title={t("providers.noMatch")} />
+              ) : (
+                <EmptyState
+                  icon={Database}
+                  title={t("providers.empty")}
+                  description={t("providers.emptyDesc")}
+                  action={{ label: t("providers.add"), onClick: openNew }}
+                />
+              )
             ) : (
-              <EmptyState
-                icon={Database}
-                title={t("providers.empty")}
-                description={t("providers.emptyDesc")}
-                action={{ label: t("providers.add"), onClick: openNew }}
-              />
-            )
-          ) : (
-            <div className="min-h-0 flex-1 -mr-2.5 overflow-auto pr-2.5">
-              {/* 每行是独立 grid 容器——列宽必须全部由模板决定，不能随行内容
+              <div className="min-h-0 flex-1 -mr-2.5 overflow-auto pr-2.5">
+                {/* 每行是独立 grid 容器——列宽必须全部由模板决定，不能随行内容
                   漂移：分类列固定 8rem（容纳最长的 "Cloud provider"）、操作列
                   固定 10rem（与下方 w-40 占位一致）、端点/模型列 minmax(0,…)
                   可收缩截断。任何 auto 列都会让 fr 分配逐行不同，三列起点错乱
                   （英文下尤其明显）。与下方 ProviderRow 的模板保持一致。 */}
-              {/* 列头 span 与数据列同规则 min-w-0 + truncate：窄窗压窄
+                {/* 列头 span 与数据列同规则 min-w-0 + truncate：窄窗压窄
                   minmax(0,…) 轨道时，en/ja 长列头（如「エンドポイント」）若
                   不截断会溢进相邻列，与下方截断的行内容错位。 */}
-              <div className="text-muted-foreground grid grid-cols-[minmax(10rem,1.2fr)_8rem_minmax(0,1.4fr)_minmax(0,1fr)_10rem] gap-3 px-4 pb-2 text-xs">
-                <span className="min-w-0 truncate">
-                  {t("providers.col.name")}
-                </span>
-                <span className="min-w-0 truncate">
-                  {t("providers.col.category")}
-                </span>
-                <span className="min-w-0 truncate">
-                  {t("providers.col.endpoint")}
-                </span>
-                <span className="min-w-0 truncate">
-                  {t("providers.col.model")}
-                </span>
-                <span className="w-40" />
+                <div className="text-muted-foreground grid grid-cols-[minmax(10rem,1.2fr)_8rem_minmax(0,1.4fr)_minmax(0,1fr)_10rem] gap-3 px-4 pb-2 text-xs">
+                  <span className="min-w-0 truncate">
+                    {t("providers.col.name")}
+                  </span>
+                  <span className="min-w-0 truncate">
+                    {t("providers.col.category")}
+                  </span>
+                  <span className="min-w-0 truncate">
+                    {t("providers.col.endpoint")}
+                  </span>
+                  <span className="min-w-0 truncate">
+                    {t("providers.col.model")}
+                  </span>
+                  <span className="w-40" />
+                </div>
+                <DragDropProvider sensors={sensors} onDragEnd={handleDragEnd}>
+                  {visibleProviders.map((p, i) => (
+                    <ProviderRow
+                      key={p.id}
+                      provider={p}
+                      index={i}
+                      additive={isAdditive}
+                      isActive={activeProvider?.id === p.id}
+                      liveManaged={providerLiveManaged(p)}
+                      onEdit={() => openEdit(p)}
+                      onDuplicate={() => openDuplicate(p)}
+                      onDelete={() => setDeleting(p)}
+                      onSwitch={() => onSwitch(p)}
+                      onAddToLive={() => void onAddToLive(p)}
+                      onRemoveFromLive={() => void onRemoveFromLive(p)}
+                    />
+                  ))}
+                </DragDropProvider>
               </div>
-              <DragDropProvider sensors={sensors} onDragEnd={handleDragEnd}>
-                {visibleProviders.map((p, i) => (
-                  <ProviderRow
-                    key={p.id}
-                    provider={p}
-                    index={i}
-                    additive={isAdditive}
-                    isActive={activeProvider?.id === p.id}
-                    liveManaged={providerLiveManaged(p)}
-                    onEdit={() => openEdit(p)}
-                    onDuplicate={() => openDuplicate(p)}
-                    onDelete={() => setDeleting(p)}
-                    onSwitch={() => onSwitch(p)}
-                    onAddToLive={() => void onAddToLive(p)}
-                    onRemoveFromLive={() => void onRemoveFromLive(p)}
-                  />
-                ))}
-              </DragDropProvider>
-            </div>
-          )}
+            )}
+          </QueryState>
         </CardContent>
       </Card>
 

@@ -61,7 +61,12 @@ export function useLibraryBrowser() {
   const scope = deviceScope === ALL ? "all" : deviceScope
   const showDevice = scope === "all"
 
-  const { data: entries = [], isLoading } = useScanLibraryQuery({
+  const {
+    data: entries = [],
+    isLoading,
+    error: scanError,
+    refetch: refetchScan,
+  } = useScanLibraryQuery({
     deviceScope: scope,
     subpath,
   })
@@ -234,6 +239,8 @@ export function useLibraryBrowser() {
     offset,
     setOffset,
     isLoading,
+    scanError,
+    refetchScan,
     // search
     search,
     setSearch,

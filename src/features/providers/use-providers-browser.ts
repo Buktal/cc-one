@@ -19,7 +19,12 @@ import type { App, ProviderImportMode } from "@/types/generated/bindings"
 
 export function useProvidersBrowser(app: App) {
   const { t } = useTranslation()
-  const { data: providers = [], isLoading } = useListProvidersQuery(app)
+  const {
+    data: providers = [],
+    isLoading,
+    error: listError,
+    refetch: refetchProviders,
+  } = useListProvidersQuery(app)
   const [reorder] = useReorderProvidersMutation()
   const [exportMut, { isLoading: exporting }] = useExportProvidersMutation()
   const [importMut, { isLoading: importing }] = useImportProvidersMutation()
@@ -84,6 +89,8 @@ export function useProvidersBrowser(app: App) {
   return {
     providers,
     isLoading,
+    listError,
+    refetchProviders,
     onReorder,
     exportProviders,
     importProviders,

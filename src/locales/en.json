@@ -15,6 +15,7 @@
   "common.minutes": "{{n}} min",
   "common.quit": "Quit",
   "common.removing": "Removing…",
+  "common.retry": "Retry",
   "common.save": "Save",
   "common.saving": "Saving…",
   "common.seconds": "{{n}}s",

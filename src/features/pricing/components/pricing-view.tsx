@@ -351,14 +351,12 @@ export function PricingView() {
             </div>
           </QueryState>
 
-          {total > 0 ? (
-            <PaginationBar
-              page={page}
-              totalPages={totalPages}
-              total={total}
-              onPageChange={goToPage}
-            />
-          ) : null}
+          <PaginationBar
+            page={page}
+            totalPages={totalPages}
+            total={total}
+            onPageChange={goToPage}
+          />
         </CardContent>
       </Card>
 

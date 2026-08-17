@@ -5,8 +5,8 @@
 import type { LucideIcon } from "lucide-react"
 import type { ReactNode } from "react"
 import { useTranslation } from "react-i18next"
-
 import { EmptyState } from "@/components/empty-state"
+import { Button } from "@/components/ui/button"
 import { Skeleton } from "@/components/ui/skeleton"
 import { describeError } from "@/lib/error"
 
@@ -18,6 +18,7 @@ export function QueryState({
   emptyIcon,
   emptyDescription,
   emptyAction,
+  errorAction,
   children,
 }: {
   isLoading: boolean
@@ -27,6 +28,9 @@ export function QueryState({
   emptyIcon?: LucideIcon
   emptyDescription?: string
   emptyAction?: { label: string; onClick: () => void; disabled?: boolean }
+  /** Retry affordance on the error state (e.g. refetch) — a dead-end error
+   *  with no way out is worse than the error itself. */
+  errorAction?: { label: string; onClick: () => void; disabled?: boolean }
   children: ReactNode
 }) {
   const { t } = useTranslation()
@@ -35,10 +39,15 @@ export function QueryState({
   }
   if (error) {
     return (
-      <div className="text-destructive text-sm">
+      <div className="text-destructive flex flex-col items-start gap-2 text-sm">
         {t("common.loadFailed", {
           detail: describeError(error, t) || t("common.unknownError"),
         })}
+        {errorAction ? (
+          <Button variant="outline" size="sm" onClick={errorAction.onClick}>
+            {errorAction.label}
+          </Button>
+        ) : null}
       </div>
     )
   }
