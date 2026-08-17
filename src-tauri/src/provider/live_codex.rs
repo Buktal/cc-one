@@ -4,9 +4,11 @@
 //! - 目标文件：`~/.codex/config.toml`（TOML）+ `~/.codex/auth.json`（JSON）。
 //! - **TOML 受控合并**：供应商快照（settingsConfig.config 的 TOML 文本）里
 //!   出现的受控键（见 [`CODEX_CONTROLLED_FIELDS`]）整块替换 live 对应键；
-//!   用户手动的 `mcp_servers` / `web_search` / `approval_policy` 等非受控
-//!   字段从 live 原样保留（`toml_edit` 重写保留注释与格式）。**绝不整文件
-//!   覆盖**——目标是受控键替换，不是把 live 换成快照。
+//!   快照缺失的受控键从 live **撤除**（ADR-0010 受控轴：新供应商赢——否则
+//!   旧供应商身份键残留、切换静默失效，官方登录态版快照为空正依赖撤除回到
+//!   无身份配置）；用户手动的 `mcp_servers` / `web_search` / `approval_policy`
+//!   等非受控字段从 live 原样保留（`toml_edit` 重写保留注释与格式）。**绝不
+//!   整文件覆盖**——目标是受控键替换，不是把 live 换成快照。
 //! - **auth.json**：供应商带非空 `OPENAI_API_KEY`（settingsConfig.auth）
 //!   → 受控合并写（只替换 `OPENAI_API_KEY`，登录 token 等非受控字段保留）；
 //!   **登录态版**（官方预设无 key）→ 完全不写 auth.json，保留既有 ChatGPT
@@ -28,12 +30,13 @@ use crate::error::{AppError, AppResult};
 
 /// Codex 受控键清单（与 claude 的 `CONTROLLED_FIELDS` 并列，各自是所属
 /// 应用写盘的唯一权威）：供应商快照（TOML）里出现这些键 → 整块替换 live
-/// 对应键；其余（`mcp_servers` / `web_search` / `approval_policy` 等用户
+/// 对应键；快照缺失 → 从 live 撤除（受控轴「新供应商赢」，防旧供应商身份
+/// 残留）；其余（`mcp_servers` / `web_search` / `approval_policy` 等用户
 /// 手动的配置）非受控，切换时原样保留。清单覆盖模型选择（`model` /
 /// `model_provider` / `model_providers` / `model_reasoning_effort` /
 /// `disable_response_storage`）、凭据覆写（`experimental_bearer_token`）、
-/// 模型目录（`model_catalog_json`，快照带了才替换）与 wire 协议
-/// （`wire_api`，通常住在 `model_providers` 表里、随表整体替换）。
+/// 模型目录（`model_catalog_json`）与 wire 协议（`wire_api`，通常住在
+/// `model_providers` 表里、随表整体替换）。
 pub const CODEX_CONTROLLED_FIELDS: &[&str] = &[
     "model",
     "model_provider",
@@ -123,8 +126,9 @@ pub fn parse_codex_settings(settings_config: &str) -> AppResult<CodexSnapshot> {
 }
 
 /// TOML 受控合并纯函数（最高价值测试接缝）：目标（供应商快照）里出现的
-/// [`CODEX_CONTROLLED_FIELDS`] 键整块替换进 live，其余键从 live 原样保留
-/// （`toml_edit` 重写保留注释与格式）。不碰文件系统。
+/// [`CODEX_CONTROLLED_FIELDS`] 键整块替换进 live，快照缺失的受控键从 live
+/// 撤除；其余键从 live 原样保留（`toml_edit` 重写保留注释与格式）。不碰
+/// 文件系统。
 ///
 /// 边界：live / target 为空串或纯空白 → 视为空文档（live 空 = 没有现存
 /// 配置可保留；target 空 = 无受控内容）；live 或 target 是非空非法 TOML
@@ -134,8 +138,16 @@ pub fn merge_codex_config(live: &str, target: &str) -> AppResult<String> {
     let mut doc = crate::provider::live::parse_toml_or_empty(live, "live config.toml")?;
     let target_doc = crate::provider::live::parse_toml_or_empty(target, "provider config.toml")?;
     for key in CODEX_CONTROLLED_FIELDS {
-        if let Some(item) = target_doc.get(key) {
-            doc.as_table_mut().insert(key, item.clone());
+        match target_doc.get(key) {
+            Some(item) => {
+                doc.as_table_mut().insert(key, item.clone());
+            }
+            None => {
+                // 目标缺失 → 从 live 撤除（ADR-0010 受控轴：新供应商赢，否则
+                // 旧供应商的身份键残留、切换静默失效——第三方 → 官方登录态版
+                // 必须清掉旧 base_url / token）。
+                doc.as_table_mut().remove(key);
+            }
         }
     }
     Ok(doc.to_string())
@@ -368,16 +380,17 @@ requires_openai_auth = true
             get_str(&merged, &["web_search", "enabled"]).as_deref(),
             Some("true")
         );
-        // 受控键但目标没带 → 保留 live 原值（model_reasoning_effort）。
-        assert_eq!(
-            get_str(&merged, &["model_reasoning_effort"]).as_deref(),
-            Some("high")
+        // 受控键但目标没带 → 从 live 撤除（model_reasoning_effort；受控轴
+        // 「新供应商赢」，缺失即撤、不保留旧值）。
+        assert!(
+            get_str(&merged, &["model_reasoning_effort"]).is_none(),
+            "目标缺失的受控键必须撤除，不得残留旧供应商的值"
         );
         // 注释保留针对「未替换的键」成立（见 comment_and_format_preserved_on_
-        // untouched_lines）。本例 fixture 顶部的 `# 用户手动的配置` 是被替换的
-        // `model` 键的 leading decor——target 带了 model（受控键），整键替换
-        // 连同其注释一起换掉，符合「受控键整块替换」语义；非受控块
-        // （mcp_servers / web_search）的原样保留已由上面的断言守住。
+        // untouched_lines）。fixture 顶部 `# 用户手动的配置` 是被替换的 model
+        // 键的 leading decor——target 带了 model（受控键），整键替换连同其注释
+        // 一起换掉，符合「受控键整块替换」语义；非受控块（mcp_servers /
+        // web_search）的原样保留已由上面的断言守住。
     }
 
     #[test]
@@ -423,32 +436,82 @@ enabled = false
     }
 
     #[test]
-    fn empty_target_keeps_live_unchanged() {
+    fn empty_target_removes_controlled_keeps_uncontrolled() {
         let live = live_with_uncontrolled();
         let merged = merge_codex_config(&live, "").unwrap();
-        // 目标没有受控内容 → live 原样。
-        assert_eq!(get_str(&merged, &["model"]).as_deref(), Some("gpt-5.6"));
+        // 目标没有受控内容 → live 的受控键全部撤除（官方登录态版快照为空，
+        // 切换 = 回到无身份配置；旧供应商的 model 残留会让切换静默失效）。
+        assert!(
+            get_str(&merged, &["model"]).is_none(),
+            "空目标必须撤除 live 的受控键 model"
+        );
+        assert!(
+            get_str(&merged, &["model_reasoning_effort"]).is_none(),
+            "空目标必须撤除 live 的受控键 model_reasoning_effort"
+        );
+        assert!(
+            parsed_doc(&merged).get("model_providers").is_none(),
+            "空目标必须撤除 live 的受控键 model_providers"
+        );
+        // 非受控字段保留。
         assert_eq!(
             get_str(&merged, &["mcp_servers", "filesystem", "command"]).as_deref(),
             Some("npx")
+        );
+        assert_eq!(
+            get_str(&merged, &["web_search", "enabled"]).as_deref(),
+            Some("true")
+        );
+    }
+
+    /// #58 主场景：第三方 → 官方登录态版切换，旧身份键（含凭据覆写）全部
+    /// 撤除；官方 → 第三方不回归。
+    #[test]
+    fn third_party_to_official_withdraws_all_identity_keys() {
+        let live = format!(
+            "{}\nexperimental_bearer_token = \"sk-old\"\nmodel_provider = \"custom\"\n",
+            third_party_target("kimi-k2.7-code", "kimi")
+        );
+        // 官方登录态版预设 settingsConfig 为空对象 → 空 config。
+        let merged = merge_codex_config(&live, "").unwrap();
+        let doc = parsed_doc(&merged);
+        for key in CODEX_CONTROLLED_FIELDS {
+            assert!(
+                doc.get(key).is_none(),
+                "官方登录态版切换后受控键 {key} 必须撤除"
+            );
+        }
+
+        // 官方 → 第三方：目标携带 → 替换（不回归）。
+        let back = merge_codex_config(&merged, &third_party_target("kimi-k2.7-code", "kimi"))
+            .unwrap();
+        assert_eq!(
+            get_str(&back, &["model"]).as_deref(),
+            Some("kimi-k2.7-code")
+        );
+        assert_eq!(
+            get_str(&back, &["model_providers", "custom", "base_url"]).as_deref(),
+            Some("https://api.moonshot.cn/v1")
         );
     }
 
     #[test]
     fn comment_and_format_preserved_on_untouched_lines() {
+        // 用非受控键（approval_policy）验格式逐字节保留：受控键在目标缺失时
+        // 会被撤除，不适合作为「未触碰行」的样本。
         let live = r#"# 用户手动的配置
-model   =   "gpt-5.6"
+approval_policy   =   "on-request"
 
 [model_providers.custom]
 name = "Old"
 "#;
-        // 目标只动 model_providers，不碰 model——model 行要逐字节保留。
+        // 目标只动 model_providers，不碰 approval_policy——该行要逐字节保留。
         let target = r#"[model_providers.custom]
 name = "New"
 "#;
         let merged = merge_codex_config(live, target).unwrap();
         assert!(
-            merged.contains("model   =   \"gpt-5.6\""),
+            merged.contains("approval_policy   =   \"on-request\""),
             "未受控行的格式必须逐字节保留: {merged}"
         );
         assert!(
@@ -555,19 +618,27 @@ name = "New"
         let login = r#"{"tokens":{"id_token":"abc"},"auth_mode":"login"}"#;
         let (config_path, auth_path) = seed(tmp.path(), Some(login), Some("model = \"gpt-5.6\"\n"));
 
-        // 登录态版（无 key、无 config 内容）：两文件都要原样保留。
+        // 登录态版（无 key、无 config 内容）：auth.json 原样保留；config 的
+        // 受控键撤除（model 移除——切到官方登录态 = 回到无身份配置）。
         switch_codex_live(&config_path, &auth_path, r#"{"auth":{}}"#, "").unwrap();
         assert_eq!(fs::read_to_string(&auth_path).unwrap(), login);
-        assert_eq!(
-            fs::read_to_string(&config_path).unwrap(),
-            "model = \"gpt-5.6\"\n"
+        let written = fs::read_to_string(&config_path).unwrap();
+        assert!(
+            get_str(&written, &["model"]).is_none(),
+            "登录态版切换撤除受控键: {written}"
+        );
+        let bak = tmp.path().join("config.toml.bak");
+        assert!(
+            bak.exists(),
+            "config 变化（撤除受控键）必须备份"
         );
         assert!(
-            !tmp.path().join("config.toml.bak").exists(),
-            "无变化不得触发备份"
+            fs::read_to_string(&bak).unwrap().contains("gpt-5.6"),
+            ".bak 是写盘前的 live 快照"
         );
 
-        // auth.json 原本不存在 → 保持不存在（不创建空文件）。
+        // auth.json 原本不存在 → 保持不存在（不创建空文件）；config 也不
+        // 存在 → 空 live 合空目标无变化，不创建。
         let tmp2 = tempfile::tempdir().unwrap();
         let (config_path2, auth_path2) = seed(tmp2.path(), None, None);
         switch_codex_live(
