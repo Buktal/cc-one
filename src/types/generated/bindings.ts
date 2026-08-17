@@ -83,8 +83,8 @@ export const commands = {
 	/**  Persist the window-close behavior. */
 	setCloseBehavior: (closeBehavior: CloseBehavior) => typedError<Preferences_Serialize, AppError>(__TAURI_INVOKE("set_close_behavior", { closeBehavior })),
 	/**
-	 *  Persist the background-collect interval (seconds, clamped to [10, 3600];
-	 * ). Pure-local cadence — does not touch the network.
+	 *  Persist the background-collect interval (seconds, clamped to [5, 3600]).
+	 *  Pure-local cadence — does not touch the network.
 	 */
 	setCollectInterval: (seconds: number) => typedError<Preferences_Serialize, AppError>(__TAURI_INVOKE("set_collect_interval", { seconds })),
 	/**
@@ -278,9 +278,11 @@ export const commands = {
 	formatTomlCmd: (text: string) => typedError<string, AppError>(__TAURI_INVOKE("format_toml_cmd", { text })),
 	/**
 	 *  导入后「提取为通用片段」（T6，ADR-0012）：读该应用 live 配置的可共享键，
-	 *  合并进现有片段（已有键不覆盖，沿用 ADR-0010 只补缺失），启用片段。无可
-	 *  提取 → 现有片段原样（enabled 不变，不碰用户停用状态）。非静默——前端先检测
-	 *  候选、用户确认才调本命令。返回更新后的片段。
+	 *  合并进现有片段（已有键不覆盖，沿用 ADR-0010 只补缺失）。启停状态不变——
+	 *  提取是内容操作，不改用户显式的启停选择（原实现强制 enabled=true 会覆盖
+	 *  显式停用）。合并结果经与手动保存同一条校验（`validate_snippet` 单一入口，
+	 *  提取器滤凭据/端点/空值后这里是兜底）。无可提取 → 现有片段原样。非静默——
+	 *  前端先检测候选、用户确认才调本命令。返回更新后的片段。
 	 */
 	extractSnippetFromLiveCmd: (app: App) => typedError<CommonConfigSnippet, AppError>(__TAURI_INVOKE("extract_snippet_from_live_cmd", { app })),
 	/**
@@ -590,7 +592,10 @@ export type LiveImportPreview = { kind: "missing"; path: string } | { kind: "rea
 export type LiveImportPreviewEntry = {
 	/**  `provider.<key>`（opencode）或 name（单激活应用），即导入后的去重键。 */
 	key: string,
-	/**  entry.name 优先，缺 → key（与导入的 display_name 规则一致）。 */
+	/**
+	 *  entry.name 非空优先，缺失或空串 → key（与导入共用
+	 *  `live_opencode::entry_display_name`，同一推导）。
+	 */
 	name: string,
 	/**
 	 *  名字是否由 base_url 的注册域推导（单激活应用，后端 host_of）；opencode
