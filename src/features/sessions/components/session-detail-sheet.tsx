@@ -368,7 +368,6 @@ function SessionHeader({
                   if (e.key === "Enter") onCommitTitle()
                   if (e.key === "Escape") onCancelTitle()
                 }}
-                className="h-7"
                 autoFocus
               />
               <Button variant="ghost" size="sm" onClick={onCommitTitle}>
@@ -407,7 +406,6 @@ function SessionHeader({
           <Button
             variant={favorited ? "default" : "outline"}
             size="sm"
-            className="h-7"
             onClick={onToggleFavorite}
           >
             <Star className={cn("size-4", favorited && "fill-current")} />

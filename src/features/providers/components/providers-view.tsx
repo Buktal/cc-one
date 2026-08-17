@@ -666,9 +666,11 @@ function ProviderRow({
             </Button>
           )
         ) : isActive ? (
+          // h-8 与同组的「切换」Button size="sm" 及 icon-sm 图标按钮同高：
+          // 两态切换时该槽位控件高度不变（h-6 会在 24/32px 间跳变）。
           <Badge
             variant="outline"
-            className="h-6 gap-1 shrink-0 px-2 font-normal text-[11px]"
+            className="h-8 gap-1 shrink-0 px-2 font-normal text-[11px]"
           >
             <span
               aria-hidden
