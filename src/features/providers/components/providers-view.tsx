@@ -130,7 +130,13 @@ export function ProvidersView() {
   const [query, setQuery] = useState("")
   // 切换确认对话框：切到缺必填项（端点/key/模板变量）的供应商前先问一句，
   // 用户确认后照切不误（「我已经知道它缺东西，就是要切」）。
-  const [confirmSwitch, setConfirmSwitch] = useState<Provider | null>(null)
+  /** 缺必填项时挂起的写盘动作：确认后执行。kind 区分单激活「切换」与附加
+   *  模式「加入 live」（opencode——附加模式同样可能缺 key/端点，加入后不可用，
+   *  确认框两者共用）。 */
+  const [confirmPending, setConfirmPending] = useState<{
+    provider: Provider
+    kind: "switch" | "addToLive"
+  } | null>(null)
   // opencode 解释条：切走再切回 opencode 时重新弹出（selectApp 里重置）。
   const [bannerDismissed, setBannerDismissed] = useState(false)
 
@@ -198,12 +204,14 @@ export function ProvidersView() {
   /** 切换入口：缺必填项 → 先弹确认；齐全 → 直接切。 */
   function onSwitch(p: Provider) {
     const missing = providerMissingRequired(p)
-    if (missing.length > 0) setConfirmSwitch(p)
+    if (missing.length > 0) setConfirmPending({ provider: p, kind: "switch" })
     else void doSwitch(p)
   }
 
   function confirmMissing(): string[] {
-    return confirmSwitch ? providerMissingRequired(confirmSwitch) : []
+    return confirmPending
+      ? providerMissingRequired(confirmPending.provider)
+      : []
   }
 
   // opencode 是附加模式（多供应商共存于 opencode.json，无唯一激活）：行交互走
@@ -217,7 +225,7 @@ export function ProvidersView() {
     setBannerDismissed(false)
   }
 
-  async function onAddToLive(p: Provider) {
+  async function doAddToLive(p: Provider) {
     await runWithToast(
       addProviderToLive,
       { app, id: p.id },
@@ -226,6 +234,16 @@ export function ProvidersView() {
         failed: { key: "providers.toast.enableFailed" },
       },
     )
+  }
+
+  /** 附加模式「加入 live」入口：与切换同一必填项检查——缺 → 先弹确认。 */
+  function onAddToLive(p: Provider) {
+    const missing = providerMissingRequired(p)
+    if (missing.length > 0) {
+      setConfirmPending({ provider: p, kind: "addToLive" })
+      return
+    }
+    void doAddToLive(p)
   }
   async function onRemoveFromLive(p: Provider) {
     await runWithToast(
@@ -425,15 +443,15 @@ export function ProvidersView() {
         onResetEditing={() => setEditing(null)}
       />
       <Dialog
-        open={confirmSwitch !== null}
-        onOpenChange={(open) => !open && setConfirmSwitch(null)}
+        open={confirmPending !== null}
+        onOpenChange={(open) => !open && setConfirmPending(null)}
       >
         <DialogContent>
           <DialogHeader>
             <DialogTitle>{t("providers.switchConfirm.title")}</DialogTitle>
             <DialogDescription>
               {t("providers.switchConfirm.description", {
-                name: confirmSwitch?.name ?? "",
+                name: confirmPending?.provider.name ?? "",
                 missing: confirmMissing()
                   .map((m) => t(`providers.switchConfirm.missing.${m}`))
                   .join(", "),
@@ -441,14 +459,16 @@ export function ProvidersView() {
             </DialogDescription>
           </DialogHeader>
           <DialogFooter>
-            <Button variant="outline" onClick={() => setConfirmSwitch(null)}>
+            <Button variant="outline" onClick={() => setConfirmPending(null)}>
               {t("common.cancel")}
             </Button>
             <Button
               onClick={() => {
-                const p = confirmSwitch
-                setConfirmSwitch(null)
-                if (p) void doSwitch(p)
+                const pending = confirmPending
+                setConfirmPending(null)
+                if (!pending) return
+                if (pending.kind === "switch") void doSwitch(pending.provider)
+                else void doAddToLive(pending.provider)
               }}
             >
               {t("providers.switchConfirm.switch")}
