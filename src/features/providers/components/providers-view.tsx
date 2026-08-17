@@ -364,11 +364,22 @@ export function ProvidersView() {
                   固定 10rem（与下方 w-40 占位一致）、端点/模型列 minmax(0,…)
                   可收缩截断。任何 auto 列都会让 fr 分配逐行不同，三列起点错乱
                   （英文下尤其明显）。与下方 ProviderRow 的模板保持一致。 */}
+              {/* 列头 span 与数据列同规则 min-w-0 + truncate：窄窗压窄
+                  minmax(0,…) 轨道时，en/ja 长列头（如「エンドポイント」）若
+                  不截断会溢进相邻列，与下方截断的行内容错位。 */}
               <div className="text-muted-foreground grid grid-cols-[minmax(10rem,1.2fr)_8rem_minmax(0,1.4fr)_minmax(0,1fr)_10rem] gap-3 px-4 pb-2 text-xs">
-                <span>{t("providers.col.name")}</span>
-                <span>{t("providers.col.category")}</span>
-                <span>{t("providers.col.endpoint")}</span>
-                <span>{t("providers.col.model")}</span>
+                <span className="min-w-0 truncate">
+                  {t("providers.col.name")}
+                </span>
+                <span className="min-w-0 truncate">
+                  {t("providers.col.category")}
+                </span>
+                <span className="min-w-0 truncate">
+                  {t("providers.col.endpoint")}
+                </span>
+                <span className="min-w-0 truncate">
+                  {t("providers.col.model")}
+                </span>
                 <span className="w-40" />
               </div>
               <DragDropProvider sensors={sensors} onDragEnd={handleDragEnd}>
