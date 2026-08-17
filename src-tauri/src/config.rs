@@ -245,7 +245,7 @@ pub struct ConfigData {
     /// Window-close behavior. `Ask` ⇒ show the minimize/quit dialog.
     #[serde(default)]
     pub close_behavior: CloseBehavior,
-    /// Background collect interval in seconds. Clamped to [10, 3600]
+    /// Background collect interval in seconds. Clamped to [5, 3600]
     /// at use; serialized verbatim so the UI shows what the user typed.
     #[serde(default = "default_collect_interval_secs")]
     pub collect_interval_secs: u32,

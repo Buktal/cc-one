@@ -269,7 +269,6 @@ mod tests {
         }
     }
 
-    #[test]
     /// 返回值带真实 app 列（#68：TEMP-APP-SHIM 曾硬编码 Claude，落库真实值
     /// 与返回值矛盾——codex 保存后返回看是 claude）。
     #[test]

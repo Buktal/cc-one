@@ -353,8 +353,10 @@ export const vaultApi = createApi({
       providesTags: (_r, _e, { spec }) =>
         storeRead({ type: "Sessions", id: sessionSpecId(spec) }),
     }),
-    /** One session's transcript (favorited-only — collect writes the JSONL only
-     *  for favorited sessions). Cached per session. */
+    /** One session's transcript. Every session's messages land in the store
+     *  (favorites additionally sync to git as snapshots); this reads the
+     *  store, so it works for non-favorited sessions too. Cached per
+     *  session. */
     sessionTranscript: b.query<
       SessionMessage_Serialize[],
       { id: string; deviceId: string }

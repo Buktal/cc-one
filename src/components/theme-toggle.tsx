@@ -1,5 +1,5 @@
 // Theme toggle — cycles light → dark → system (next-themes). Icon-only with a
-// tooltip; mounted in the CommandBar.
+// tooltip; mounted in the shell header (landscape) and sidebar footer.
 
 import { Monitor, Moon, Sun } from "lucide-react"
 import { useTheme } from "next-themes"

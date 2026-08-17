@@ -432,30 +432,6 @@ impl super::Store {
             groups,
         })
     }
-
-    /// Per-session usage aggregate (request_count, total_tokens, total_cost) for
-    /// the transcript / detail view. Public API for a future command; not yet
-    /// wired to one (kept here so the live-aggregate read path is in place next
-    /// to `query_sessions`).
-    #[allow(dead_code)]
-    pub fn query_session_usage(&self, session_id: &str) -> AppResult<(u32, u32, f64)> {
-        let conn = self.conn.lock().expect("db mutex poisoned");
-        let row = conn.query_row(
-            "SELECT COUNT(*),
-                    COALESCE(SUM(input_tokens+output_tokens+cache_creation_tokens+cache_read_tokens),0),
-                    COALESCE(SUM(CAST(total_cost_usd AS REAL)),0)
-             FROM usage_records WHERE session_id = ?1",
-            params![session_id],
-            |r| {
-                Ok((
-                    r.get::<_, i64>(0)? as u32,
-                    r.get::<_, i64>(1)? as u32,
-                    r.get::<_, f64>(2)?,
-                ))
-            },
-        ).optional()?;
-        Ok(row.unwrap_or_default())
-    }
 }
 
 /// Decode a `session_messages` row in the canonical SELECT column order

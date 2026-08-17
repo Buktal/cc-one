@@ -7,6 +7,7 @@ import { useEffect, useState } from "react"
 import { useTranslation } from "react-i18next"
 import { confirmClose } from "@/app/store/api"
 import { Button } from "@/components/ui/button"
+import { Checkbox } from "@/components/ui/checkbox"
 import {
   Dialog,
   DialogContent,
@@ -41,12 +42,14 @@ export function CloseRequestedDialog() {
           <DialogTitle>{t("closeDialog.title")}</DialogTitle>
           <DialogDescription>{t("closeDialog.description")}</DialogDescription>
         </DialogHeader>
-        <label className="flex items-center gap-2 text-sm">
-          <input
-            type="checkbox"
+        <label
+          htmlFor="close-remember"
+          className="flex cursor-pointer items-center gap-2 text-sm"
+        >
+          <Checkbox
+            id="close-remember"
             checked={remember}
-            onChange={(e) => setRemember(e.target.checked)}
-            className="size-4"
+            onCheckedChange={(v) => setRemember(v === true)}
           />
           {t("closeDialog.remember")}
         </label>

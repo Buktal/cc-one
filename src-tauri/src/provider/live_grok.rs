@@ -166,7 +166,11 @@ fn snippet_identity_hit(doc: &DocumentMut) -> Option<&'static str> {
     {
         return Some("[model.\"cc-one\"] 块");
     }
-    if doc.get(MODELS_TABLE).and_then(|t| t.get("default")).is_some() {
+    if doc
+        .get(MODELS_TABLE)
+        .and_then(|t| t.get("default"))
+        .is_some()
+    {
         return Some("models.default");
     }
     None

@@ -1,8 +1,8 @@
 // Data freshness indicator: a live pulse + relative "采集于 3 分钟前". Synced
 // mode appends "· 同步 12 分钟前". Degrades to a first-run hint when no collect
 // has ever landed. The relative string is recomputed on each render; callers
-// that want it to tick over time can re-render on a timer (the CommandBar's
-// queries poll, so it refreshes often enough).
+// that want it to tick over time can re-render on a timer (the views hosting
+// it re-render on their query polls, so it refreshes often enough).
 //
 // Two layouts: `stacked` renders each time on its own line (the sidebar — one
 // line with both times overflows the 12rem column); the default single line

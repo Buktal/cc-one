@@ -477,8 +477,8 @@ pub fn set_close_behavior(
     Ok(to_preferences(&cfg))
 }
 
-/// Persist the background-collect interval (seconds, clamped to [10, 3600];
-///). Pure-local cadence — does not touch the network.
+/// Persist the background-collect interval (seconds, clamped to [5, 3600]).
+/// Pure-local cadence — does not touch the network.
 #[tauri::command]
 #[specta::specta]
 pub fn set_collect_interval(state: State<'_, AppState>, seconds: u32) -> AppResult<Preferences> {

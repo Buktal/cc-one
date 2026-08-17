@@ -33,8 +33,8 @@ pub struct RawUsage {
     /// Source tag, e.g. `claude_code`.
     pub source: String,
     /// Session this call belongs to (the source log's session identifier).
-    /// Empty for parsers not yet wired for sessions (every source but Claude
-    /// in this phase). NOT part of the dedup key — grouping info only.
+    /// All five parsers wire sessions. NOT part of the dedup key — grouping
+    /// info only.
     pub session_id: String,
     pub tokens: TokenCounts,
     pub server_tool_use: ServerToolUse,
@@ -66,12 +66,10 @@ pub struct CollectResult {
     pub turn_durations: Vec<RawTurnDuration>,
     /// Sessions discovered this pass (system data: id/source/project/title/
     /// timestamps). One per source log file (Claude: one session per jsonl).
-    /// Empty for parsers not yet wired for sessions.
     pub sessions: Vec<RawSession>,
     /// Transcript messages extracted this pass (only the new lines past each
     /// file's cursor). Collected for ALL sessions so the ingest layer can decide
-    /// per-session (only favorited ones land in `sessions/<id>.jsonl`). Empty
-    /// for parsers not yet wired for sessions.
+    /// per-session (only favorited ones land in `sessions/<id>.jsonl`).
     pub messages: Vec<SessionMessage>,
     /// Files scanned.
     pub files_scanned: u32,
