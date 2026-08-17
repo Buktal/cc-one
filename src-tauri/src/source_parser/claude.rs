@@ -1294,8 +1294,13 @@ mod tests {
         let p = ClaudeCodeSourceParser::with_dir(dir.path().to_path_buf());
         let files = p.discover().unwrap();
         assert_eq!(files.len(), 2, "discover includes agent files");
+        // discover 的 walkdir 顺序平台依赖（Linux ext4 与 Windows 不同），seen
+        // 集合只论成员资格——排序后断言，与生产路径 collect 对 session_ids 的
+        // 排序同精神。
+        let mut seen = p.session_ids_seen(&files);
+        seen.sort_unstable();
         assert_eq!(
-            p.session_ids_seen(&files),
+            seen,
             vec!["249e8e6b".to_string(), "agent-a10c476b".to_string()],
             "seen set matches discover — agent ids included"
         );
