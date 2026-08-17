@@ -133,10 +133,10 @@ pub fn merge_grok_config(live: &str, target: &str) -> AppResult<String> {
 pub fn merge_grok_snippet(merged: &str, snippet: &str) -> AppResult<String> {
     let mut doc = crate::provider::live::parse_toml_or_empty(merged, "merged config.toml")?;
     let snippet_doc = crate::provider::live::parse_toml_or_empty(snippet, "grok snippet")?;
-    if snippet_has_identity(&snippet_doc) {
-        return Err(AppError::Config(
-            "grok 通用片段不得包含受控身份键（[model.\"cc-one\"] 块 / models.default）".into(),
-        ));
+    if let Some(hit) = snippet_identity_hit(&snippet_doc) {
+        return Err(AppError::Config(format!(
+            "grok 通用片段不得包含受控身份键 {hit}（身份键归供应商管理）"
+        )));
     }
     crate::provider::live::fill_missing_table(doc.as_table_mut(), snippet_doc.as_table());
     Ok(doc.to_string())
@@ -146,26 +146,30 @@ pub fn merge_grok_snippet(merged: &str, snippet: &str) -> AppResult<String> {
 /// （grok 片段写 `mcp_servers` 等、不经 LLM 端点，见 ADR-0010）。
 pub fn validate_grok_snippet(snippet: &str) -> AppResult<()> {
     let doc = crate::provider::live::parse_toml_or_empty(snippet, "grok snippet")?;
-    if snippet_has_identity(&doc) {
-        return Err(AppError::Config(
-            "grok 通用片段不得包含受控身份键（[model.\"cc-one\"] 块 / models.default）".into(),
-        ));
+    if let Some(hit) = snippet_identity_hit(&doc) {
+        return Err(AppError::Config(format!(
+            "grok 通用片段不得包含受控身份键 {hit}（身份键归供应商管理）"
+        )));
     }
     Ok(())
 }
 
-/// 片段是否携带 grok 受控身份键：`[model."cc-one"]` profile 块 或 `models.default`
-/// 指针。用户自建的 `[model.<其它>]` profile 不是身份键（允许进片段）。
-fn snippet_has_identity(doc: &DocumentMut) -> bool {
-    let has_cc_one = doc
+/// 片段携带哪个 grok 受控身份键：`[model."cc-one"]` profile 块 或
+/// `models.default` 指针——返回命中的那个（报错指明具体键，#55：键名细节
+/// 只出现在校验报错里）。用户自建的 `[model.<其它>]` profile 不是身份键
+/// （允许进片段）。
+fn snippet_identity_hit(doc: &DocumentMut) -> Option<&'static str> {
+    if doc
         .get(MODEL_TABLE)
         .and_then(|t| t.get(CC_ONE_PROFILE))
-        .is_some();
-    let has_default = doc
-        .get(MODELS_TABLE)
-        .and_then(|t| t.get("default"))
-        .is_some();
-    has_cc_one || has_default
+        .is_some()
+    {
+        return Some("[model.\"cc-one\"] 块");
+    }
+    if doc.get(MODELS_TABLE).and_then(|t| t.get("default")).is_some() {
+        return Some("models.default");
+    }
+    None
 }
 
 /// 取 doc 里某顶层表的可变引用；不存在（或不是表）则替换为空表后返回。
