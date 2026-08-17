@@ -51,12 +51,17 @@ pub fn apply_snippet(settings_config: &str, snippet: &str, enabled: bool) -> App
 /// 系统。输出是合并后的 settingsConfig JSON 文本（2 空格缩进，与
 /// [`live::merge_live_settings`] 的清洗输出一致）。
 ///
+/// 写盘层兜底：片段携带凭据键 → `Err`——claude/gemini 的凭据拦截不只在 set
+/// 时（[`validate_snippet`]），绕过 set 直接走合并/写盘的路径也拦（与 codex/
+/// grok 的 `merge_*_snippet` 双层同构：set 拦 + 合并纯函数兜底）。
+///
 /// 边界：`snippet` 为空串/纯空白 → 视为 `{}`（启用但没写内容 = 无操作）；
 /// `snippet` 非法 JSON 或非对象 → `Err`；`settings_config` 非法 JSON 或非对象
 /// → `Err`（合并需要解析它；非法的配置本来也过不了写盘）。
 pub fn merge_snippet_into_settings(settings_config: &str, snippet: &str) -> AppResult<String> {
     let mut target = parse_object(settings_config, "provider settingsConfig")?;
     let snippet_obj = parse_snippet_or_empty(snippet)?;
+    reject_sensitive_keys(&snippet_obj, "claude/gemini")?;
 
     let target_obj = target.as_object_mut().expect("parsed object");
 
@@ -93,8 +98,9 @@ pub fn merge_snippet_into_settings(settings_config: &str, snippet: &str) -> AppR
 
 /// 片段校验（set 命令用，按应用分派）：
 /// - claude / gemini：合法 JSON 对象（空串=空片段）；拒绝凭据键（env 是认证
-///   通道，见 ADR-0010）；gemini 另拒端点键 `GOOGLE_GEMINI_BASE_URL`、要求
-///   env 值为非空字符串。
+///   通道，见 ADR-0010）；gemini 另拒端点键 `GOOGLE_GEMINI_BASE_URL`、只认
+///   `env` 子对象（其余顶层键/扁平键合并时零效果，明确拒绝而非静默通过）、
+///   要求 env 值为非空字符串。
 /// - codex / grok：合法 TOML；拒绝受控身份键（凭据键不禁——`mcp_servers` 不
 ///   经 LLM 端点）。
 /// - opencode：附加模式无片段概念 → `Ok`。
@@ -106,6 +112,19 @@ pub fn validate_snippet(app: App, snippet: &str) -> AppResult<()> {
         }
         App::Gemini => {
             let obj = parse_snippet_or_empty(snippet)?;
+            // gemini 片段只认 env 子对象：合并层只把片段 env 补进
+            // settingsConfig.env（再整块写 .env），其余顶层键既不进 .env 也不
+            // 进 settings.json——扁平键（如 {"GEMINI_MODEL":"m"}）静默通过 =
+            // 用户以为配好了实际零效果，明确拒绝并指因。
+            if let Some(map) = obj.as_object() {
+                for key in map.keys() {
+                    if key != "env" {
+                        return Err(AppError::Config(format!(
+                            "gemini 通用片段只认 env 子对象，顶层键 `{key}` 不会生效（请写进 {{\"env\":{{...}}}}）"
+                        )));
+                    }
+                }
+            }
             reject_sensitive_keys(&obj, "gemini")?;
             validate_gemini_extras(&obj)
         }
@@ -391,10 +410,12 @@ mod tests {
     fn merged_snippet_flows_through_live_write_path() {
         // 复用写盘路径：合并后的 settingsConfig 交给 merge_live_settings，
         // live 的非受控字段仍原地保留、受控字段被片段 + 供应商内容覆盖。
+        // 片段 env 不带凭据键（写盘层兜底拒绝，见
+        // write_layer_rejects_credential_keys_outside_set_path）。
         let live = live_with_uncontrolled();
         let snippet_cfg = merge_snippet_into_settings(
             r#"{"env": {"ANTHROPIC_BASE_URL": "https://x.dev"}}"#,
-            r#"{"env": {"ANTHROPIC_AUTH_TOKEN": "sk-x"}, "includeCoAuthoredBy": false}"#,
+            r#"{"env": {"ANTHROPIC_SMALL_FAST_MODEL": "haiku"}, "includeCoAuthoredBy": false}"#,
         )
         .unwrap();
         let out = parsed(&merge_live_settings(&live, &snippet_cfg, &[]).unwrap());
@@ -402,7 +423,7 @@ mod tests {
             out["env"],
             serde_json::json!({
                 "ANTHROPIC_BASE_URL": "https://x.dev",
-                "ANTHROPIC_AUTH_TOKEN": "sk-x"
+                "ANTHROPIC_SMALL_FAST_MODEL": "haiku"
             })
         );
         assert_eq!(out["includeCoAuthoredBy"], serde_json::json!(false));
@@ -414,6 +435,44 @@ mod tests {
         assert_eq!(
             out["hooks"],
             serde_json::json!({"PreToolUse": [{"matcher": "Bash"}]})
+        );
+    }
+
+    /// 写盘层兜底：凭据拦截不只在 set（validate_snippet），绕过 set 直接合并
+    /// 的路径也拒（与 codex/grok 的 merge_*_snippet 双层同构）。
+    #[test]
+    fn write_layer_rejects_credential_keys_outside_set_path() {
+        let r = merge_snippet_into_settings(
+            r#"{"env":{}}"#,
+            r#"{"env": {"ANTHROPIC_AUTH_TOKEN": "sk-x"}}"#,
+        );
+        assert!(
+            matches!(r, Err(AppError::Config(_))),
+            "合并纯函数必须拒绝凭据键（写盘层兜底）"
+        );
+        let r2 = apply_snippet(r#"{"env":{}}"#, r#"{"apiKey": "x"}"#, true);
+        assert!(
+            matches!(r2, Err(AppError::Config(_))),
+            "apply_snippet 写盘入口同样拒绝顶层凭据键"
+        );
+    }
+
+    /// gemini 片段只认 env 子对象：扁平键/其它顶层键合并时零效果，校验层
+    /// 明确拒绝并指因（而非静默通过让用户以为配好了）。
+    #[test]
+    fn validate_gemini_snippet_rejects_flat_and_non_env_top_level_keys() {
+        // 扁平键（env 键直接写在顶层）——零效果，拒绝。
+        assert!(
+            validate_snippet(App::Gemini, r#"{"GEMINI_MODEL": "m"}"#).is_err(),
+            "扁平键零效果，必须拒绝"
+        );
+        // 其它顶层键（claude 风格开关在 gemini 下同样零效果）——拒绝。
+        assert!(
+            validate_snippet(App::Gemini, r#"{"includeCoAuthoredBy": false}"#).is_err()
+        );
+        // 合法形状：只有 env 子对象。
+        assert!(
+            validate_snippet(App::Gemini, r#"{"env": {"GEMINI_MODEL": "m"}}"#).is_ok()
         );
     }
 

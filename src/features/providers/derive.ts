@@ -977,15 +977,19 @@ export function findSensitiveConfigKey(
 const GEMINI_ENDPOINT_KEY = "GOOGLE_GEMINI_BASE_URL"
 
 /** gemini 片段的保存前问题（前端提示用，advisory——实际拒绝仍由后端）：凭据键
- *  （顶层 + env.*，与后端 `reject_sensitive_keys` 同款扫描范围）或 env 下的端点键
- *  GOOGLE_GEMINI_BASE_URL（与后端 `validate_gemini_extras` 同款只扫 env）→ 返回该
- *  键的显示路径；无问题 / 解析不了的草稿 → null。env 值非字符串或空由后端校验
+ *  （顶层 + env.*，与后端 `reject_sensitive_keys` 同款扫描范围）、env 下的端点键
+ *  GOOGLE_GEMINI_BASE_URL、或 env 以外的顶层键（合并层只认 env 子对象，扁平键/
+ *  其它顶层键零效果——与后端 `validate_snippet` gemini 分支同判）→ 返回该键的
+ *  显示路径；无问题 / 解析不了的草稿 → null。env 值非字符串或空由后端校验
  *  兜底（JSON 编辑器 + 格式化已降低这类误写）。 */
 export function geminiSnippetIssue(snippetText: string): string | null {
   const obj = parseSnippetInput(snippetText)
   if (!obj) return null
   const credential = findSensitiveConfigKey(obj)
   if (credential) return credential
+  for (const key of Object.keys(obj)) {
+    if (key !== "env") return key
+  }
   const env = obj.env
   if (
     env &&

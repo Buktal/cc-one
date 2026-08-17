@@ -355,7 +355,9 @@ pub fn gemini_extract_snippet(env_text: &str) -> Option<String> {
     let env = parse_env_file(env_text);
     let mut env_out = serde_json::Map::new();
     for (k, v) in env {
-        if !is_sensitive_config_key(&k) && k != "GOOGLE_GEMINI_BASE_URL" {
+        // 空值跳过：无可共享内容，且 set 校验拒空值（gemini env 值须非空）——
+        // 提取与手动保存同判，live 的 `KEY=` 空值行不进片段。
+        if !is_sensitive_config_key(&k) && k != "GOOGLE_GEMINI_BASE_URL" && !v.trim().is_empty() {
             env_out.insert(k, Value::String(v));
         }
     }
@@ -755,6 +757,22 @@ default = "xai""#
             v["env"].get("GOOGLE_GEMINI_BASE_URL").is_none(),
             "端点键不提取"
         );
+    }
+
+    /// live `.env` 的 `KEY=` 空值行不进片段：与手动保存同判（set 校验拒空值），
+    /// 提取不得绕过（#60）。
+    #[test]
+    fn gemini_extract_skips_empty_values() {
+        let content =
+            gemini_extract_snippet("GEMINI_MODEL=gemini-2.5-flash\nGEMINI_DEBUG=\n").expect("有可提取");
+        let v: Value = serde_json::from_str(&content).unwrap();
+        assert_eq!(v["env"]["GEMINI_MODEL"], "gemini-2.5-flash");
+        assert!(
+            v["env"].get("GEMINI_DEBUG").is_none(),
+            "空值行不进片段（手动保存同判拒绝）"
+        );
+        // 只有空值 → 无可提取。
+        assert!(gemini_extract_snippet("GEMINI_DEBUG=\n").is_none());
     }
 
     #[test]

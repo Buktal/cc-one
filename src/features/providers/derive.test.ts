@@ -1289,8 +1289,12 @@ describe("geminiSnippetIssue", () => {
     expect(geminiSnippetIssue('{"env": {"GOOGLE_GEMINI_BASE_URL": "u"}}')).toBe(
       "env.GOOGLE_GEMINI_BASE_URL",
     )
-    // 顶层端点键：后端接受（apply_snippet 会丢弃），前端不报「将拒绝」。
-    expect(geminiSnippetIssue('{"GOOGLE_GEMINI_BASE_URL": "u"}')).toBeNull()
+    // env 以外的顶层键一律零效果（合并层只认 env 子对象）——扁平键与其它
+    // 顶层键都指给用户（与后端 validate_snippet gemini 分支同判）。
+    expect(geminiSnippetIssue('{"GEMINI_MODEL": "m"}')).toBe("GEMINI_MODEL")
+    expect(geminiSnippetIssue('{"includeCoAuthoredBy": false}')).toBe(
+      "includeCoAuthoredBy",
+    )
     // 合法：非凭据、非端点。
     expect(
       geminiSnippetIssue('{"env": {"GEMINI_MODEL": "gemini-2.5-flash"}}'),

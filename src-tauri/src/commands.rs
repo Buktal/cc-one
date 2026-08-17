@@ -1561,9 +1561,11 @@ fn read_live_snippet_extract(app: App) -> AppResult<Option<String>> {
 }
 
 /// 导入后「提取为通用片段」（T6，ADR-0012）：读该应用 live 配置的可共享键，
-/// 合并进现有片段（已有键不覆盖，沿用 ADR-0010 只补缺失），启用片段。无可
-/// 提取 → 现有片段原样（enabled 不变，不碰用户停用状态）。非静默——前端先检测
-/// 候选、用户确认才调本命令。返回更新后的片段。
+/// 合并进现有片段（已有键不覆盖，沿用 ADR-0010 只补缺失）。启停状态不变——
+/// 提取是内容操作，不改用户显式的启停选择（原实现强制 enabled=true 会覆盖
+/// 显式停用）。合并结果经与手动保存同一条校验（`validate_snippet` 单一入口，
+/// 提取器滤凭据/端点/空值后这里是兜底）。无可提取 → 现有片段原样。非静默——
+/// 前端先检测候选、用户确认才调本命令。返回更新后的片段。
 #[tauri::command]
 #[specta::specta]
 pub fn extract_snippet_from_live_cmd(
@@ -1575,8 +1577,9 @@ pub fn extract_snippet_from_live_cmd(
         return Ok(current);
     };
     let content = import_live::merge_extracted_snippet(app, &current.content, &extracted)?;
+    crate::provider::snippet::validate_snippet(app, &content)?;
     let snippet = CommonConfigSnippet {
-        enabled: true,
+        enabled: current.enabled,
         content,
     };
     state.config.update(|c| c.set_snippet(app, snippet))?;
