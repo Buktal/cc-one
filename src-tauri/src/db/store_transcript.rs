@@ -380,7 +380,7 @@ impl super::Store {
         let conn = self.conn.lock().expect("db mutex poisoned");
         let (clause, mut params_vec) = build_session_where(query.filter.as_ref());
         let sql = format!("{} LIMIT ? OFFSET ?", sessions_select_sql(&clause));
-        params_vec.push(SqlValue::Integer(query.limit as i64));
+        params_vec.push(SqlValue::Integer(super::page_limit(query.limit)));
         params_vec.push(SqlValue::Integer(query.offset as i64));
         let mut stmt = conn.prepare(&sql)?;
         let rows = stmt.query_map(params_from_iter(params_vec.iter()), session_row)?;

@@ -665,6 +665,32 @@ mod tests {
         assert_eq!(all.len(), 5, "unpaged read still returns everything");
     }
 
+    /// 越界 limit 被夹紧（#66：会话分页原漏夹紧、直接透传 query.limit）：
+    /// 0 → 1（不空翻整页），超大 → 1000（不一次物化全表）。
+    #[test]
+    fn query_sessions_page_clamps_out_of_range_limits() {
+        let s = mem();
+        seed_session(&s, "a", "dev", "2026-08-01T10:00:00.000Z");
+        seed_session(&s, "b", "dev", "2026-08-02T10:00:00.000Z");
+        // 0 → 夹到 1（返回一行，不空翻整页也不报错）；超大 → 夹到 1000（全返回）。
+        let zero = s
+            .query_sessions_page(&SessionQuery {
+                filter: None,
+                limit: 0,
+                offset: 0,
+            })
+            .unwrap();
+        assert_eq!(zero.len(), 1, "limit=0 夹到 1");
+        let huge = s
+            .query_sessions_page(&SessionQuery {
+                filter: None,
+                limit: u32::MAX,
+                offset: 0,
+            })
+            .unwrap();
+        assert_eq!(huge.len(), 2, "limit 超大夹到 1000，全部返回");
+    }
+
     /// Search is backend-side (LIKE) so a paged result searches the whole set,
     /// not just the loaded page. Matches the display title (custom title wins)
     /// and the project path, case-insensitively.

@@ -183,7 +183,7 @@ impl super::Store {
     pub fn query_logs(&self, q: &LogsQuery) -> AppResult<Vec<UsageLogRow>> {
         let conn = self.conn.lock().expect("db mutex poisoned");
         let (clause, params_vec) = build_where(&q.filter, true, true);
-        let limit = q.limit.clamp(1, 1000) as i64;
+        let limit = super::page_limit(q.limit);
         let offset = q.offset as i64;
         let sql = format!(
             "SELECT uuid, timestamp, model, pricing_model, source, session_id, device_id,
@@ -370,6 +370,28 @@ mod tests {
             offset: 1,
         };
         assert_eq!(s.query_logs(&q2).unwrap().len(), 1);
+    }
+
+    /// 越界 limit 走任一分页路径都被夹紧（#66：夹紧单一归属 page_limit）：
+    /// 0 → 1（不空翻整页），超大 → 1000（不一次物化全表）。
+    #[test]
+    fn query_logs_clamps_out_of_range_limits() {
+        let s = mem();
+        s.ingest(&[
+            rec("a", "2026-07-13", "glm-5.2", "d", 1, 0, 1.0),
+            rec("b", "2026-07-14", "glm-5.2", "d", 2, 0, 2.0),
+        ])
+        .unwrap();
+        for bad in [0, u32::MAX] {
+            let logs = s
+                .query_logs(&LogsQuery {
+                    filter: UsageFilter::default(),
+                    limit: bad,
+                    offset: 0,
+                })
+                .unwrap();
+            assert!(!logs.is_empty(), "limit={bad} 夹紧后仍返回行");
+        }
     }
 
     #[test]
