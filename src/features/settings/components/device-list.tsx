@@ -265,7 +265,7 @@ export function DeviceList() {
               disabled={forgetting}
               onClick={onConfirmForget}
             >
-              {forgetting ? t("common.saving") : t("devices.remove")}
+              {forgetting ? t("common.removing") : t("devices.remove")}
             </Button>
           </DialogFooter>
         </DialogContent>

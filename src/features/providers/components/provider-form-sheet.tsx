@@ -575,7 +575,7 @@ export function ProviderFormSheet({
             >
               {t(`providers.app.${effectiveApp}`)}
             </Badge>
-            {/* 复制草稿（id 空）未加入 live，不显示「已加入」徽标。 */}
+            {/* 复制草稿（id 空）未加入 live，不显示「已启用」徽标。 */}
             {editing?.id &&
             effectiveApp === "opencode" &&
             providerLiveManaged(editing) ? (
@@ -583,7 +583,7 @@ export function ProviderFormSheet({
                 variant="outline"
                 className="h-5 shrink-0 px-1.5 text-[11px] font-normal"
               >
-                {t("providers.live.added")}
+                {t("providers.live.enabled")}
               </Badge>
             ) : null}
           </div>
