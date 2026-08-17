@@ -96,19 +96,10 @@ impl SourceParser for GeminiCliSourceParser {
     /// head read; on any failure fall back to the stem (a fallback can only
     /// KEEP an extra row, never delete a real session).
     fn session_ids_seen(&self, files: &[std::path::PathBuf]) -> Vec<String> {
-        use std::io::Read;
         files
             .iter()
             .map(|f| {
-                let head = std::fs::File::open(f)
-                    .ok()
-                    .and_then(|mut fh| {
-                        let mut buf = vec![0u8; 64 * 1024];
-                        let n = fh.read(&mut buf).unwrap_or(0);
-                        buf.truncate(n);
-                        String::from_utf8(buf).ok()
-                    })
-                    .unwrap_or_default();
+                let head = super::read_head_utf8(f);
                 serde_json::from_str::<serde_json::Value>(&head)
                     .ok()
                     .and_then(|v| {
@@ -322,7 +313,7 @@ fn extract_usage(msg: &serde_json::Value, session_id: &str) -> Option<RawUsage> 
         .map(str::to_string);
     Some(RawUsage {
         uuid: format!("gemini:{session_id}:{message_id}"),
-        timestamp: timestamp.unwrap_or_else(crate::time::now_iso),
+        timestamp: super::fallback_timestamp(timestamp),
         model: model.to_string(),
         source: "gemini_cli".to_string(),
         session_id: session_id.to_string(),

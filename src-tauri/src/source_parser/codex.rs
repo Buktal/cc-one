@@ -117,22 +117,12 @@ impl SourceParser for CodexSourceParser {
     /// `session_meta` (with the rollout-filename UUID as fallback). Must read
     /// the head to reconcile: the stem default would mis-delete real sessions.
     fn session_ids_seen(&self, files: &[std::path::PathBuf]) -> Vec<String> {
-        use std::io::Read;
         files
             .iter()
             .map(|f| {
-                // Bounded head read (session_meta is near the top); on any
-                // failure fall back to the filename resolution — a fallback can
-                // only KEEP an extra row, never delete a real session.
-                let head = std::fs::File::open(f)
-                    .ok()
-                    .and_then(|mut fh| {
-                        let mut buf = vec![0u8; 64 * 1024];
-                        let n = fh.read(&mut buf).unwrap_or(0);
-                        buf.truncate(n);
-                        String::from_utf8(buf).ok()
-                    })
-                    .unwrap_or_default();
+                // 有界头读（session_meta 在文件顶部）；失败回退文件名解析——
+                // 回退只会多保留一行、绝不误删真实会话（见 read_head_utf8）。
+                let head = super::read_head_utf8(f);
                 let identity = prescan_codex_text(&head).0;
                 resolve_session_id(f, identity.as_ref())
             })
@@ -444,7 +434,7 @@ fn fold_codex_file(file: &Path, text: &str, start_line: i64) -> FileParseOutcome
                     normalize_cache_inclusive(delta.input, delta.cached_input);
                 let usage = RawUsage {
                     uuid: format!("codex:thread-v1:{thread_id}:{}", state.event_index),
-                    timestamp: timestamp.unwrap_or_else(crate::time::now_iso),
+                    timestamp: super::fallback_timestamp(timestamp.clone()),
                     model: state.current_model.clone(),
                     source: "codex_cli".to_string(),
                     session_id: session_id_for_usage.clone(),

@@ -418,7 +418,7 @@ mod tests {
             r#"{"env": {"ANTHROPIC_SMALL_FAST_MODEL": "haiku"}, "includeCoAuthoredBy": false}"#,
         )
         .unwrap();
-        let out = parsed(&merge_live_settings(&live, &snippet_cfg, &[]).unwrap());
+        let out = parsed(&merge_live_settings(&live, &snippet_cfg).unwrap());
         assert_eq!(
             out["env"],
             serde_json::json!({

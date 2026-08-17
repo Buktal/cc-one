@@ -31,7 +31,7 @@ use std::path::{Path, PathBuf};
 use crate::error::{AppError, AppResult};
 use crate::provider::live::{
     atomic_write_file, parse_live_or_empty, parse_target_or_empty, read_live_settings,
-    LIVE_INTERNAL_KEYS,
+    strip_internal_keys,
 };
 
 /// `settings.json` 里 `security.auth.selectedType` 的 API Key 标记对应的
@@ -90,9 +90,7 @@ pub fn parse_gemini_settings(raw: &str) -> AppResult<GeminiSettings> {
     let obj = value
         .as_object_mut()
         .expect("parse_target_or_empty yields object");
-    for key in LIVE_INTERNAL_KEYS {
-        obj.remove(*key);
-    }
+    strip_internal_keys(obj);
 
     let env = match obj.remove("env") {
         None => HashMap::new(),

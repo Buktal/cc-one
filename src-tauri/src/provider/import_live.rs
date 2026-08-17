@@ -34,7 +34,7 @@ use toml_edit::DocumentMut;
 use crate::db::Store;
 use crate::error::AppResult;
 use crate::model::{App, Provider, ProviderCategory};
-use crate::provider::live::{self, CONTROLLED_FIELDS, LIVE_INTERNAL_KEYS};
+use crate::provider::live::{self, CONTROLLED_FIELDS};
 use crate::provider::live_codex::CODEX_CONTROLLED_FIELDS;
 use crate::provider::snippet::is_sensitive_config_key;
 
@@ -115,9 +115,7 @@ pub fn claude_live_to_snapshot(live: &str) -> Option<LiveImportSnapshot> {
             settings.insert((*key).to_string(), v.clone());
         }
     }
-    for key in LIVE_INTERNAL_KEYS {
-        settings.remove(*key);
-    }
+    live::strip_internal_keys(&mut settings);
     if settings.is_empty() {
         return None;
     }
@@ -219,9 +217,7 @@ pub fn gemini_live_to_snapshot(env_text: &str, settings_json: &str) -> Option<Li
         let v = serde_json::from_str::<Value>(settings_json).ok()?;
         let obj = v.as_object()?;
         let mut map = obj.clone();
-        for k in LIVE_INTERNAL_KEYS {
-            map.remove(*k);
-        }
+        live::strip_internal_keys(&mut map);
         map.remove("security");
         if map.is_empty() {
             None

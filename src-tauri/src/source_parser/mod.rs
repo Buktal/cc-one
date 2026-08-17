@@ -409,6 +409,30 @@ pub(super) fn read_source_lossy(file: &Path) -> Option<String> {
     Some(String::from_utf8_lossy(&bytes).into_owned())
 }
 
+/// 缺时间戳的回填策略（单一归属，#71）：原始记录没带时间戳 → 用采集时刻。
+/// 已知偏差：回填的记录被分桶到采集当天而非真实发生日——策略集中在此，
+/// 「回填日 vs 未知」的正确呈现可单独讨论后在这一处替换。
+pub(super) fn fallback_timestamp(ts: Option<String>) -> String {
+    ts.unwrap_or_else(crate::time::now_iso)
+}
+
+/// 读文件头的有界前缀（64 KiB）为 UTF-8 文本——session 元数据（sessionId /
+/// session_meta）都在文件顶部，ghost 回收核对身份时整文件读取太浪费。任何
+/// 失败（打不开 / 读错 / 非 UTF-8）→ 空串：调用方回退到按文件名解析，回退
+/// 只会多保留一行、绝不误删真实会话。
+pub(super) fn read_head_utf8(file: &Path) -> String {
+    use std::io::Read;
+    std::fs::File::open(file)
+        .ok()
+        .and_then(|mut fh| {
+            let mut buf = vec![0u8; 64 * 1024];
+            let n = fh.read(&mut buf).unwrap_or(0);
+            buf.truncate(n);
+            String::from_utf8(buf).ok()
+        })
+        .unwrap_or_default()
+}
+
 /// Stable `scan_progress` key for a source-log file. The same physical file
 /// can surface with different path spellings across runs (e.g. a Windows home
 /// dir resolving with different drive-letter case), which would otherwise fork

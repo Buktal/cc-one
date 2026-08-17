@@ -442,7 +442,7 @@ impl SessionEvent {
             return match (self.uuid, self.duration_ms) {
                 (Some(uuid), Some(duration_ms)) => Parsed::TurnDuration(RawTurnDuration {
                     uuid,
-                    timestamp: self.timestamp.unwrap_or_else(crate::time::now_iso),
+                    timestamp: super::fallback_timestamp(self.timestamp.clone()),
                     duration_ms,
                 }),
                 _ => Parsed::Skip,
@@ -473,7 +473,7 @@ impl SessionEvent {
             return None;
         }
         let uuid = self.uuid?;
-        let timestamp = self.timestamp.unwrap_or_else(crate::time::now_iso);
+        let timestamp = super::fallback_timestamp(self.timestamp.clone());
         let st = usage.server_tool_use.unwrap_or_default();
         Some(RawUsage {
             uuid,

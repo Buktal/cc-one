@@ -88,9 +88,7 @@ fn parse_opencode_entry(entry_json: &str) -> AppResult<Value> {
     }
     let mut obj = crate::provider::live::parse_object(trimmed, "provider settingsConfig")?;
     if let Some(o) = obj.as_object_mut() {
-        for key in crate::provider::live::LIVE_INTERNAL_KEYS {
-            o.remove(*key);
-        }
+        crate::provider::live::strip_internal_keys(o);
     }
     Ok(obj)
 }

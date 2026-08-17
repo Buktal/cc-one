@@ -602,13 +602,12 @@ fn parse_opencode_message_data(value: &serde_json::Value) -> Option<OpenCodeMess
 }
 
 fn opencode_raw_usage(session_id: &str, message_id: &str, msg: &OpenCodeMessageData) -> RawUsage {
-    let timestamp = if msg.timestamp_ms > 0 {
-        chrono::DateTime::from_timestamp_millis(msg.timestamp_ms)
-            .map(|dt| dt.to_rfc3339())
-            .unwrap_or_else(crate::time::now_iso)
+    let parsed_ts = if msg.timestamp_ms > 0 {
+        chrono::DateTime::from_timestamp_millis(msg.timestamp_ms).map(|dt| dt.to_rfc3339())
     } else {
-        crate::time::now_iso()
+        None
     };
+    let timestamp = super::fallback_timestamp(parsed_ts);
     RawUsage {
         uuid: format!("opencode:{session_id}:{message_id}"),
         timestamp,

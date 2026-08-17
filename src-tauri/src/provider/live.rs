@@ -44,6 +44,15 @@ pub const LIVE_INTERNAL_KEYS: &[&str] = &[
     "openrouterCompatMode",
 ];
 
+/// 剥掉对象顶层的内部 meta 键（[`LIVE_INTERNAL_KEYS`]）——这些键只供应用
+/// 自己读，不是合法的 live 配置字段，任何写盘 / 快照 / 片段路径都不带它们。
+/// 单一归属（#71）：改键表只改 `LIVE_INTERNAL_KEYS` 一处，各路径共用本函数。
+pub fn strip_internal_keys(obj: &mut serde_json::Map<String, serde_json::Value>) {
+    for key in LIVE_INTERNAL_KEYS {
+        obj.remove(*key);
+    }
+}
+
 /// 受控字段：切换时整块替换/合并。除这些键之外的任何字段
 /// （permissions / hooks / mcpServers / ...）都不是受控字段，切换时一律从
 /// live 原地保留。
@@ -72,22 +81,20 @@ pub fn claude_settings_path() -> AppResult<PathBuf> {
 /// - 其余受控顶层开关：目标存在则替换，缺失则保留 live 原值。
 /// - 非受控字段：一律从 live 保留；目标里的非受控字段被忽略（绝不写 live，
 ///   否则一切换就清空用户手动的 hooks / MCP / permissions）。
-/// - 清洗：合并前剥掉目标里的内部字段（`internal_keys`），合并后再对结果剥
-///   一遍（live 里若残留旧应用的内部键也一并清掉）。
+/// - 清洗：合并前剥掉目标里的内部字段（[`LIVE_INTERNAL_KEYS`]），合并后再
+///   对结果剥一遍（live 里若残留旧应用的内部键也一并清掉）。
 ///
 /// 边界：`live` 为空串/纯空白 → 视为 `{}`（没有现存配置可保留）；`live` 是
 /// 非空非法 JSON 或非对象 → `Err`（解析不了就没法保留用户手动配置，宁可失败）；
 /// `target` 为空串 → 视为 `{}`；`target` 非法 JSON、非对象、或 `env` 非对象
 /// → `Err`（坏配置不能进用户 settings.json）。
-pub fn merge_live_settings(live: &str, target: &str, internal_keys: &[&str]) -> AppResult<String> {
+pub fn merge_live_settings(live: &str, target: &str) -> AppResult<String> {
     let mut merged = parse_live_or_empty(live)?;
     let mut target_obj = parse_target_or_empty(target)?;
 
     // 清洗目标：剥内部 meta 字段，防止它们被当作受控字段带进 live。
     if let Some(obj) = target_obj.as_object_mut() {
-        for key in internal_keys {
-            obj.remove(*key);
-        }
+        strip_internal_keys(obj);
     }
 
     // 目标 `env` 必须是对象：env 是受控字段，写盘时整块替换 live 的 env——
@@ -111,9 +118,7 @@ pub fn merge_live_settings(live: &str, target: &str, internal_keys: &[&str]) -> 
 
     // 清洗结果：live 里残留的内部键也剥掉，保证写出去的 live 永远不含它们。
     if let Some(obj) = merged.as_object_mut() {
-        for key in internal_keys {
-            obj.remove(*key);
-        }
+        strip_internal_keys(obj);
     }
 
     Ok(serde_json::to_string_pretty(&merged)?)
@@ -243,7 +248,7 @@ pub fn write_live_settings(path: &Path, content: &str) -> AppResult<()> {
 /// 原子写。
 pub fn switch_live_settings(path: &Path, settings_config: &str) -> AppResult<()> {
     let live = read_live_settings(path)?;
-    let merged = merge_live_settings(&live, settings_config, LIVE_INTERNAL_KEYS)?;
+    let merged = merge_live_settings(&live, settings_config)?;
     backup_live_settings(path)?;
     write_live_settings(path, &merged)?;
     Ok(())
@@ -360,9 +365,7 @@ pub(crate) fn parse_and_strip_settings(
     }
     let mut obj = parse_object(trimmed, "provider settingsConfig")?;
     if let Some(o) = obj.as_object_mut() {
-        for key in LIVE_INTERNAL_KEYS {
-            o.remove(*key);
-        }
+        strip_internal_keys(o);
     }
     Ok(Some(obj))
 }
@@ -401,7 +404,7 @@ mod tests {
             "env": {"ANTHROPIC_BASE_URL": "https://new.dev", "ANTHROPIC_AUTH_TOKEN": "sk-new"},
             "includeCoAuthoredBy": false
         }"#;
-        let out = parsed(&merge_live_settings(&live, target, LIVE_INTERNAL_KEYS).unwrap());
+        let out = parsed(&merge_live_settings(&live, target).unwrap());
         // env 整块替换：live 的旧 env（含 KEEP_ME）全被覆盖。
         assert_eq!(
             out["env"],
@@ -417,7 +420,7 @@ mod tests {
     fn uncontrolled_fields_kept_verbatim_from_live() {
         let live = live_with_uncontrolled(r#"{"ANTHROPIC_MODEL": "old"}"#);
         let target = r#"{"env": {"ANTHROPIC_MODEL": "new"}}"#;
-        let out = parsed(&merge_live_settings(&live, target, LIVE_INTERNAL_KEYS).unwrap());
+        let out = parsed(&merge_live_settings(&live, target).unwrap());
         // 非受控字段从 live 原样保留。
         assert_eq!(out["permissions"], serde_json::json!({"allow": ["Bash"]}));
         assert_eq!(
@@ -452,7 +455,7 @@ mod tests {
             "permissions": {"deny": ["Bash"]},
             "model": "claude-opus-4-5"
         }"#;
-        let out = parsed(&merge_live_settings(&live, target, LIVE_INTERNAL_KEYS).unwrap());
+        let out = parsed(&merge_live_settings(&live, target).unwrap());
         assert_eq!(
             out["hooks"],
             serde_json::json!({"PreToolUse": [{"matcher": "Bash"}]}),
@@ -471,7 +474,7 @@ mod tests {
         let live = live_with_uncontrolled(r#"{"ANTHROPIC_BASE_URL": "https://live.dev"}"#);
         // 目标没有 env（只有受控开关）——live 的 env 原样保留。
         let target = r#"{"includeCoAuthoredBy": true}"#;
-        let out = parsed(&merge_live_settings(&live, target, LIVE_INTERNAL_KEYS).unwrap());
+        let out = parsed(&merge_live_settings(&live, target).unwrap());
         assert_eq!(
             out["env"],
             serde_json::json!({"ANTHROPIC_BASE_URL": "https://live.dev"}),
@@ -485,7 +488,7 @@ mod tests {
         let live = live_with_uncontrolled(r#"{"ANTHROPIC_BASE_URL": "https://live.dev"}"#);
         // 目标显式写了空 env =「该供应商不想要任何 env」→ 整块替换成空。
         let target = r#"{"env": {}}"#;
-        let out = parsed(&merge_live_settings(&live, target, LIVE_INTERNAL_KEYS).unwrap());
+        let out = parsed(&merge_live_settings(&live, target).unwrap());
         assert_eq!(out["env"], serde_json::json!({}));
         // 非受控字段仍保留。
         assert_eq!(out["permissions"], serde_json::json!({"allow": ["Bash"]}));
@@ -497,7 +500,6 @@ mod tests {
             &merge_live_settings(
                 "",
                 r#"{"env": {"ANTHROPIC_MODEL": "m"}, "includeCoAuthoredBy": false}"#,
-                LIVE_INTERNAL_KEYS,
             )
             .unwrap(),
         );
@@ -507,7 +509,7 @@ mod tests {
 
     #[test]
     fn invalid_live_json_is_an_error() {
-        let r = merge_live_settings("{not json", r#"{"env":{}}"#, LIVE_INTERNAL_KEYS);
+        let r = merge_live_settings("{not json", r#"{"env":{}}"#);
         assert!(
             matches!(r, Err(AppError::Config(_))),
             "live 非法 JSON 必须失败"
@@ -516,13 +518,13 @@ mod tests {
 
     #[test]
     fn non_object_live_is_an_error() {
-        let r = merge_live_settings(r#"[1,2,3]"#, r#"{"env":{}}"#, LIVE_INTERNAL_KEYS);
+        let r = merge_live_settings(r#"[1,2,3]"#, r#"{"env":{}}"#);
         assert!(matches!(r, Err(AppError::Config(_))), "live 非对象必须失败");
     }
 
     #[test]
     fn invalid_target_json_is_an_error() {
-        let r = merge_live_settings("{}", "{nope", LIVE_INTERNAL_KEYS);
+        let r = merge_live_settings("{}", "{nope");
         assert!(
             matches!(r, Err(AppError::Config(_))),
             "目标非法 JSON 必须失败"
@@ -531,7 +533,7 @@ mod tests {
 
     #[test]
     fn non_object_target_is_an_error() {
-        let r = merge_live_settings("{}", r#""just a string""#, LIVE_INTERNAL_KEYS);
+        let r = merge_live_settings("{}", r#""just a string""#);
         assert!(matches!(r, Err(AppError::Config(_))));
     }
 
@@ -540,7 +542,7 @@ mod tests {
         // 目标 env 非对象（手写/导入的坏配置）——若放行会被整块写进用户的
         // settings.json，必须报错阻止写盘。
         for bad in [r#"{"env": "garbage"}"#, r#"{"env": ["A=1"]}"#] {
-            let r = merge_live_settings("{}", bad, LIVE_INTERNAL_KEYS);
+            let r = merge_live_settings("{}", bad);
             assert!(
                 matches!(r, Err(AppError::Config(_))),
                 "目标 env 非对象必须失败: {bad}"
@@ -558,7 +560,7 @@ mod tests {
             "openrouterCompatMode": true,
             "env": {"ANTHROPIC_MODEL": "m"}
         }"#;
-        let out = merge_live_settings("{}", target, LIVE_INTERNAL_KEYS).unwrap();
+        let out = merge_live_settings("{}", target).unwrap();
         let v = parsed(&out);
         assert!(v.get("api_format").is_none(), "api_format 必须被剥");
         assert!(v.get("apiFormat").is_none(), "apiFormat 必须被剥");
@@ -568,7 +570,7 @@ mod tests {
 
         // live 里残留的内部键同样被清掉（写出去的 live 永远不含内部字段）。
         let live = r#"{"api_format": "anthropic", "permissions": {"allow": ["Bash"]}}"#;
-        let out2 = merge_live_settings(live, r#"{"env":{}}"#, LIVE_INTERNAL_KEYS).unwrap();
+        let out2 = merge_live_settings(live, r#"{"env":{}}"#).unwrap();
         let v2 = parsed(&out2);
         assert!(v2.get("api_format").is_none());
         assert_eq!(v2["permissions"], serde_json::json!({"allow": ["Bash"]}));
