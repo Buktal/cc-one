@@ -4,6 +4,26 @@ cc one 的所有显著变更记录于此。
 
 格式基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，并遵循[语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [2.0.1] - 2026-08-18
+
+### 修复
+
+- **切到登录态版供应商真正生效** —— Codex 受控身份键（`model` / `model_providers` / `experimental_bearer_token`）随「新供应商赢」语义撤除（ADR-0010）：目标不携带即从 live 移除，第三方 → 官方（ChatGPT 登录）切换后 Codex CLI 不再静默走旧供应商而 UI 报已切换。Gemini 的顶层 `model` 键同规则。
+- **Gemini 写盘不再留半截状态** —— 合并与校验全部完成于任何写盘之前；`settings.json` 一步失败会回滚已写的 `.env`，两文件获得对称的 `.bak` 备份。
+- **重复切换同一供应商全面无操作** —— Claude 与 Gemini 补齐 Codex / Grok / OpenCode 既有的「内容无变化 → 无操作」：不重写文件、不刷新 `.bak`、不碰 mtime。写盘事务（无变化判定、备份、原子写、副文件回滚）收口为五个应用共用的一份实现。
+- **必填项确认覆盖全部应用** —— 切换前检查原先只读 Claude 的 env 键；现按应用取键集（Codex auth + TOML base_url、Gemini env、Grok TOML、OpenCode options），切到残缺供应商会先确认，而不是写一份废配置。
+- **通用片段加固** —— 提取路径与保存走同一校验；Claude / Gemini 片段在写盘层同样拒绝凭据键（不只在保存命令层）；Gemini 扁平键（如 `{"GEMINI_MODEL":"m"}`）明确报错指因而非静默零效果；提取片段不再强制 enabled=true。
+- **会话分页夹紧 limit** —— 会话查询与用量查询同样把 limit 夹到 1–1000（0 或超大 limit 不再一次性物化整表）。
+- **OpenCode 导入与预览的名字推导一致** —— 空 `name` 两路都回退到 provider key。
+- **保存返回真实 app** —— `save_provider` 返回值里硬编码 Claude 的内部 shim 删除；保存的 Codex 供应商读回来就是 Codex。
+- **本地化** —— 日文补回 17 个缺键（不再混入英文回退），「已启用」徽标措辞三语一致，Codex / Grok 片段常驻提示改说人话（内部键名只出现在校验报错里），Grok 提示补充自建模型档案随片段写入。
+- **界面修复** —— 转录加载失败可重试，库扫描失败不再伪装「空文件夹」，库/供应商加载态统一居中骨架屏且出错可重试，供应商行与会话详情控件高度对齐，轮次导航全文 tooltip 不再被裁剪，最小窗宽下列头不再溢出，片段编辑器填满视口剩余高度。
+- **Codex 官方双预设改名自明** —— 「OpenAI (ChatGPT 登录)」与「OpenAI (API Key)」，不看说明即可分辨。
+
+### 变更
+
+- **内部重构，行为不变** —— 2084 行 commands 巨石拆为 13 个领域模块；前端重复逻辑（来源标签、设备标签、复制按钮、状态动作）与解析/写盘层助手收敛单一归属；README 预设数量改为五池总数（共 59 个）。
+
 ## [2.0.0] - 2026-08-14
 
 ### 新增
@@ -254,6 +274,7 @@ cc one 的所有显著变更记录于此。
 - **macOS**：仅 Apple Silicon（arm64）；构建未签名——首次启动右键 →「打开」（或 `xattr -dr com.apple.quarantine /Applications/cc one.app`）。Intel Mac 用户可从源码构建。
 - **Provider**：当前仅 Claude Code；更多 provider（Codex、Cursor 等）规划中。
 
+[2.0.1]: https://github.com/Buktal/cc-one/releases/tag/v2.0.1
 [2.0.0]: https://github.com/Buktal/cc-one/releases/tag/v2.0.0
 [1.8.0]: https://github.com/Buktal/cc-one/releases/tag/v1.8.0
 [1.7.1]: https://github.com/Buktal/cc-one/releases/tag/v1.7.1

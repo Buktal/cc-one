@@ -5,6 +5,26 @@ All notable changes to cc one are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.0.1] - 2026-08-18
+
+### Fixed
+
+- **Switching to a login-state provider actually switches** — Codex's controlled identity keys (`model` / `model_providers` / `experimental_bearer_token`) are now withdrawn when the incoming provider doesn't carry them (ADR-0010's "new provider wins"), so third-party → official (ChatGPT login) no longer leaves Codex CLI silently routing to the old vendor while the UI reports switched. Gemini gets the same treatment for its top-level `model` key.
+- **No half-written Gemini config** — merging and validation complete before any write; if the `settings.json` step fails, the already-written `.env` is rolled back, and both files get symmetric `.bak` backups.
+- **Re-switching the same provider is a no-op everywhere** — Claude and Gemini gain the unchanged-content check Codex / Grok / OpenCode already had: no file rewrite, no `.bak` refresh, no mtime touch. The write transaction (no-change check, backup, atomic write, side-file rollback) now lives in one shared implementation behind all five apps.
+- **Missing-key confirmation covers every app** — the pre-switch check used to read Claude's env keys only; it now derives the key set per app (Codex auth + TOML base_url, Gemini env, Grok TOML, OpenCode options), so switching to an incomplete provider asks first instead of writing a dead config.
+- **Snippet hardening** — extraction runs through the same validation as saving; Claude / Gemini snippets reject credential keys at the write layer too (not only at the save command); Gemini flat keys (e.g. `{"GEMINI_MODEL":"m"}`) are rejected with a reason instead of silently doing nothing; extracting a snippet no longer force-enables it.
+- **Session pagination clamps its limit** — the sessions query clamps `limit` to 1–1000 like the usage query (a zero or huge limit no longer materializes the whole table).
+- **OpenCode display names agree between import and preview** — an empty `name` falls back to the provider key on both paths.
+- **Saving returns the real app** — the internal shim that hard-coded Claude into `save_provider`'s return value is gone; a saved Codex provider reads back as Codex.
+- **Localization** — Japanese regains 17 missing keys (no more English fallbacks), the "enabled" badge wording is consistent across languages, the Codex / Grok snippet hints speak plainly (internal key names only appear in validation errors), and the Grok hint notes custom model profiles ride along with the snippet.
+- **UI fixes** — transcript load failures get a retry action, a failed library scan no longer masquerades as "empty folder", library / providers loading states are centered skeletons with a retry on error, provider-row and session-detail controls align their heights, the turn-nav full-text tooltip is no longer clipped, long column headers no longer overflow at the minimum window width, and the snippet editor fills the viewport's remaining height.
+- **Codex official presets renamed to be self-explanatory** — "OpenAI (ChatGPT login)" vs "OpenAI (API Key)", distinguishable without reading the notes.
+
+### Changed
+
+- **Internal refactors, behavior intact** — the 2,084-line commands monolith is split into 13 domain modules; repeated frontend logic (source tags, device labels, copy buttons, state actions) and parser / write-layer helpers converge to single owners; the README's preset counts now cover all five pools (59 presets total).
+
 ## [2.0.0] - 2026-08-14
 
 ### Added
@@ -256,6 +276,7 @@ First public, open-source release.
 - **macOS**: Apple Silicon (arm64) only; builds are unsigned — right-click → **Open** on first launch (or `xattr -dr com.apple.quarantine /Applications/cc one.app`). Intel Mac users can build from source.
 - **Providers**: Claude Code only; additional providers (Codex, Cursor, …) are planned.
 
+[2.0.1]: https://github.com/Buktal/cc-one/releases/tag/v2.0.1
 [2.0.0]: https://github.com/Buktal/cc-one/releases/tag/v2.0.0
 [1.8.0]: https://github.com/Buktal/cc-one/releases/tag/v1.8.0
 [1.7.1]: https://github.com/Buktal/cc-one/releases/tag/v1.7.1
