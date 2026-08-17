@@ -48,7 +48,10 @@ function codexSnapshot(toml: string, withKey = false): string {
 export const CODEX_PROVIDER_PRESETS: ProviderPreset[] = [
   // ── 官方 2 ──
   {
-    name: "OpenAI Official",
+    // 同为 OpenAI 官方端点的两个预设靠括注认证方式区分（对齐 Claude 侧
+    // "AWS Bedrock (AKSK)/(API Key)" 的既有命名式）：ChatGPT 登录态版 vs
+    // API Key 直连版，列表里不看 notes 即可分辨。
+    name: "OpenAI (ChatGPT 登录)",
     category: "official",
     websiteUrl: "https://chatgpt.com/codex",
     icon: "openai",
@@ -57,7 +60,7 @@ export const CODEX_PROVIDER_PRESETS: ProviderPreset[] = [
     settingsConfig: codexSnapshot(""),
   },
   {
-    name: "OpenAI",
+    name: "OpenAI (API Key)",
     category: "official",
     websiteUrl: "https://platform.openai.com",
     icon: "openai",

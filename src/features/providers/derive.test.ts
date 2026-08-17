@@ -1602,9 +1602,9 @@ describe("codexApiKey / codexConfigToml", () => {
       "https://api.moonshot.cn/v1",
     )
     expect(codexConfigToml(kimi.settingsConfig)).toContain("kimi-k2.7-code")
-    // OpenAI Official 是登录态版（settingsConfig = "{}"）。
+    // OpenAI (ChatGPT 登录) 是登录态版（settingsConfig = "{}"）。
     const official = CODEX_PROVIDER_PRESETS.find(
-      (p) => p.name === "OpenAI Official",
+      (p) => p.name === "OpenAI (ChatGPT 登录)",
     )!
     expect(codexApiKey(official.settingsConfig)).toBe("")
     expect(codexConfigToml(official.settingsConfig)).toBe("")

@@ -152,8 +152,8 @@ describe("PROVIDER_PRESETS", () => {
 
 /** Codex 权威清单：官方 2 + 国内大厂 11 + 热门聚合 4 = 17。 */
 const EXPECTED_CODEX_NAMES = [
-  "OpenAI Official",
-  "OpenAI",
+  "OpenAI (ChatGPT 登录)",
+  "OpenAI (API Key)",
   "Kimi",
   "Kimi For Coding",
   "DeepSeek",
@@ -233,9 +233,9 @@ describe("CODEX_PROVIDER_PRESETS", () => {
     }
   })
 
-  it('OpenAI Official 是登录态版（settingsConfig 为 "{}"，无 OPENAI_API_KEY）', () => {
+  it('OpenAI (ChatGPT 登录) 是登录态版（settingsConfig 为 "{}"，无 OPENAI_API_KEY）', () => {
     const official = CODEX_PROVIDER_PRESETS.find(
-      (p) => p.name === "OpenAI Official",
+      (p) => p.name === "OpenAI (ChatGPT 登录)",
     )
     expect(official).toBeDefined()
     expect(official!.settingsConfig).toBe("{}")
