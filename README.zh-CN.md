@@ -39,7 +39,7 @@
 ### 供应商
 
 - **五个 AI CLI，一个配置中枢** —— Claude Code、Codex、Gemini CLI、Grok CLI 与 OpenCode 各有自己的供应商列表：名称、分类、端点与认证。切换供应商会写入该 CLI *真正读取*的配置文件——Codex 的 `config.toml` + `auth.json`、Gemini CLI 的 `settings.json` + env、Grok 的 `config.toml`、OpenCode 的 `opencode.json`——只合并受控字段，写入前先备份原文件。
-- **18 个内置预设** —— Claude 官方 + AWS Bedrock、十一家国内厂商（Kimi、DeepSeek、GLM、火山引擎、豆包、百度、阿里、阶跃、MiniMax、MiMo 等）与四家常用聚合（SiliconFlow、OpenRouter、ModelScope、Novita）。挑一个、填上密钥、切换，完事。
+- **59 个内置预设，五个池** —— 每个 CLI 各有自己的预设池：Claude Code 18 个（官方 + AWS Bedrock、十一家国内厂商、四家常用聚合）、Codex 17 个、OpenCode 12 个、Gemini CLI 6 个、Grok CLI 6 个。挑一个、填上密钥、切换，完事。
 - **原始配置编辑器** —— 每个供应商都携带完整的 settings 快照。内置 JSON 编辑器展示全部内容，随时一键格式化，解析错误直接标红提示，绝不静默丢弃。
 - **模型角色映射** —— 五个角色（Sonnet / Opus / Fable / Haiku / Subagent），各配模型与 1M 上下文开关。一键拉取厂商模型列表；「应用到全部」把单个模型铺满所有角色。
 - **从任何地方导入** —— 从 CC-Switch 导出、本机配置文件或 CC One 备份导入供应商——三个来源平级对待，opencode.json 导入在落地前先预览。完整列表随时可导出为 JSON。

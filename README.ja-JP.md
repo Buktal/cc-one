@@ -39,7 +39,7 @@ AI CLI——**Claude Code、Codex、Gemini CLI、Grok CLI、OpenCode**——を�
 ### プロバイダー
 
 - **5 つの AI CLI、1 つの設定ハブ** —— Claude Code・Codex・Gemini CLI・Grok CLI・OpenCode がそれぞれのプロバイダーリストを持ちます：名前・カテゴリ・エンドポイント・認証。切り替えはその CLI が*実際に読み込む*設定ファイルを書き込みます——Codex の `config.toml` + `auth.json`、Gemini CLI の `settings.json` + env、Grok の `config.toml`、OpenCode の `opencode.json`——制御フィールドのみをマージし、書き込み前には必ずバックアップを取ります。
-- **18 のビルトインプリセット** —— Claude 公式 + AWS Bedrock、国内ベンダー 11 社（Kimi、DeepSeek、GLM、Volcengine、DouBao、Baidu、Alibaba、StepFun、MiniMax、MiMo など）、人気アグリゲーター 4 社（SiliconFlow、OpenRouter、ModelScope、Novita）。選んで、キーを入れ、切り替えるだけ。
+- **59 のビルトインプリセット、5 プール** —— 各 CLI 専用のプールを用意：Claude Code 18（公式 + AWS Bedrock、国内ベンダー 11 社、人気アグリゲーター 4 社）、Codex 17、OpenCode 12、Gemini CLI 6、Grok CLI 6。選んで、キーを入れ、切り替えるだけ。
 - **生の設定エディター** —— 各プロバイダーは完全な settings スナップショットを保持します。内蔵 JSON エディターが全体を表示し、オンデマンドでフォーマットし、パースエラーを静かに破棄せず警告します。
 - **モデルロールマッピング** —— 5 ロール（Sonnet / Opus / Fable / Haiku / Subagent）、それぞれにモデルと 1M コンテキストトグル。ワンクリックでベンダーのモデルリストを取得、「すべてに適用」で 1 つのモデルを全ロールへ展開。
 - **どこからでもインポート** —— CC-Switch のエクスポート、ローカル設定ファイル、CC One バックアップの 3 ソースを対等に扱い、opencode.json インポートは適用前に変更をプレビュー。リスト全体はいつでも JSON でエクスポート可能。

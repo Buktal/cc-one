@@ -39,7 +39,7 @@ Multi-device sync is a purely **opt-in** layer on top — never a precondition.
 ### Providers
 
 - **All five AI CLIs, one config hub** — Claude Code, Codex, Gemini CLI, Grok CLI, and OpenCode each get their own provider list: name, category, endpoint, and auth. Switching a provider writes the *real* config file that CLI reads — Codex's `config.toml` + `auth.json`, Gemini CLI's `settings.json` + env, Grok's `config.toml`, OpenCode's `opencode.json` — merging only controlled fields and backing up the previous file first.
-- **18 built-in presets** — Claude official + AWS Bedrock, eleven domestic vendors (Kimi, DeepSeek, GLM, Volcengine, DouBao, Baidu, Alibaba, StepFun, MiniMax, MiMo …), and four popular aggregators (SiliconFlow, OpenRouter, ModelScope, Novita). Pick one, drop in your key, switch.
+- **59 built-in presets across five pools** — each CLI has its own pool: Claude Code 18 (official + AWS Bedrock, eleven domestic vendors, four popular aggregators), Codex 17, OpenCode 12, Gemini CLI 6, Grok CLI 6. Pick one, drop in your key, switch.
 - **Raw settings editor** — every provider carries its full settings snapshot. A built-in JSON editor shows the whole thing, formats on demand, and flags parse errors instead of silently discarding them.
 - **Model role mapping** — five roles (Sonnet / Opus / Fable / Haiku / Subagent), each with its own model and a 1M-context toggle. One click fetches the vendor's model list; "apply to all" spreads one model across every role.
 - **Import from anywhere** — bring providers in from a CC-Switch export, your local config files, or a CC One backup — three sources treated as equals, with an opencode.json import previewing its changes before landing. Export your whole list as JSON anytime.
