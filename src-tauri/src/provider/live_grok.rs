@@ -62,12 +62,7 @@ pub fn parse_grok_settings(settings_config: &str) -> AppResult<String> {
     let Some(obj) = crate::provider::live::parse_and_strip_settings(settings_config)? else {
         return Ok(String::new());
     };
-    match obj.get("config") {
-        None => Ok(String::new()),
-        Some(v) => v.as_str().map(str::to_string).ok_or_else(|| {
-            AppError::Config("provider settingsConfig config must be a TOML string".into())
-        }),
-    }
+    crate::provider::live::config_toml_field(&obj)
 }
 
 /// TOML 受控合并纯函数（最高价值测试接缝）：目标（供应商快照）里出现的
@@ -131,27 +126,20 @@ pub fn merge_grok_config(live: &str, target: &str) -> AppResult<String> {
 /// 边界：`snippet` 空串/纯空白 → 空文档（无操作）；非空非法 TOML → `Err`；
 /// 含身份键 → `Err`。
 pub fn merge_grok_snippet(merged: &str, snippet: &str) -> AppResult<String> {
-    let mut doc = crate::provider::live::parse_toml_or_empty(merged, "merged config.toml")?;
-    let snippet_doc = crate::provider::live::parse_toml_or_empty(snippet, "grok snippet")?;
-    if let Some(hit) = snippet_identity_hit(&snippet_doc) {
-        return Err(AppError::Config(format!(
-            "grok 通用片段不得包含受控身份键 {hit}（身份键归供应商管理）"
-        )));
-    }
-    crate::provider::live::fill_missing_table(doc.as_table_mut(), snippet_doc.as_table());
-    Ok(doc.to_string())
+    crate::provider::live::merge_toml_snippet(merged, snippet, "grok", grok_identity_hit)
 }
 
 /// grok 片段校验（set 命令用）：合法 TOML；不得含受控身份键。凭据键不禁
-/// （grok 片段写 `mcp_servers` 等、不经 LLM 端点，见 ADR-0010）。
+/// （grok 片段写 `mcp_servers` 等、不经 LLM 端点，见 ADR-0010）。骨架与
+/// codex 共用（`live::validate_toml_snippet`），只有身份键谓词是 grok 自己的。
 pub fn validate_grok_snippet(snippet: &str) -> AppResult<()> {
-    let doc = crate::provider::live::parse_toml_or_empty(snippet, "grok snippet")?;
-    if let Some(hit) = snippet_identity_hit(&doc) {
-        return Err(AppError::Config(format!(
-            "grok 通用片段不得包含受控身份键 {hit}（身份键归供应商管理）"
-        )));
-    }
-    Ok(())
+    crate::provider::live::validate_toml_snippet(snippet, "grok", grok_identity_hit)
+}
+
+/// grok 身份键命中描述（报错用，#55）：复用 [`snippet_identity_hit`] 的判定
+/// （cc-one profile 块 / default 指针），包成共用骨架要的 `Option<String>`。
+fn grok_identity_hit(doc: &DocumentMut) -> Option<String> {
+    snippet_identity_hit(doc).map(str::to_string)
 }
 
 /// 片段携带哪个 grok 受控身份键：`[model."cc-one"]` profile 块 或
@@ -190,7 +178,8 @@ fn table_mut<'a>(doc: &'a mut DocumentMut, key: &str) -> &'a mut Table {
 }
 
 /// 切换写盘全流程（薄壳，按序调用）：解析快照 → TOML 受控合并 → 写盘层补片段
-/// → 无变化则无操作 → 备份 → 原子写。
+/// → 无变化则无操作 → 备份 → 原子写（事务收口在 `live::commit_live_file`，
+/// 五个 app 共用）。
 ///
 /// `snippet` 是写盘层通用片段（与 codex 同构，见 ADR-0010）：`merge_grok_config`
 /// 只搬受控身份键、丢弃 target 其余键，故片段必须在 merge 之后补进 live doc
@@ -199,19 +188,13 @@ pub fn switch_grok_live(config_path: &Path, settings_config: &str, snippet: &str
     let target_toml = parse_grok_settings(settings_config)?;
     let live = crate::provider::live::read_live_settings(config_path)?;
     let mut merged = merge_grok_config(&live, &target_toml)?;
-    // 写盘层补片段：merge_grok_config 只搬身份键、丢弃其余，故片段必须在此补
+    // 写盘层补片段：merge_grok_config 只搬受控身份键、丢弃其余，故片段必须在此补
     // （settings_config 层合会被白名单滤掉→零效果，见 ADR-0010）。片段空则跳过。
     if !snippet.trim().is_empty() {
         merged = merge_grok_snippet(&merged, snippet)?;
     }
-
-    // 内容无变化 → 无操作（不备份、不写盘、不碰 mtime）。trim_end 容忍
-    // toml_edit 重写时对结尾换行的归一化。
-    if merged.trim_end() == live.trim_end() {
-        return Ok(());
-    }
-    crate::provider::live::backup_file(config_path)
-        .and_then(|()| crate::provider::live::atomic_write_file(config_path, &merged))
+    let unchanged = crate::provider::live::content_unchanged(&live, &merged);
+    crate::provider::live::commit_live_file(config_path, &merged, unchanged)
 }
 
 #[cfg(test)]

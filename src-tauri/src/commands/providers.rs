@@ -51,16 +51,12 @@ pub async fn delete_provider_cmd(
     tauri::async_runtime::spawn_blocking(move || -> AppResult<()> {
         // 附加模式：provider 若已写进 live，先从 live 移除再删 DB，避免配置文件
         // 残留 orphan 条目；单激活直接删 DB（其 live 由切换覆盖，无残留概念）。
-        // liveManaged=true 才需移除（已移除的 provider liveManaged=false，live 里
-        // 已没它，跳过免得无谓读写文件）。
+        // 撤除序列（managed 判定 + key 读取 + 移除写盘）收口在
+        // live_opencode::remove_from_live_if_managed，与停用路径（live_import）
+        // 共用同一份。
         if app.is_additive_mode() {
             if let Some(provider) = store.get_provider(app, &id)? {
-                if live_opencode::meta_live_managed(&provider.meta) == Some(true) {
-                    if let Some(key) = live_opencode::meta_live_key(&provider.meta) {
-                        let path = live_opencode::opencode_config_path()?;
-                        live_opencode::remove_opencode_provider(&path, &key)?;
-                    }
-                }
+                live_opencode::remove_from_live_if_managed(&provider)?;
             }
         }
         store.delete_provider(app, &id)?;

@@ -15,8 +15,10 @@
 //! - 清洗：写盘前剥掉 settingsConfig 顶层内部 meta 字段（沿用
 //!   [`live::LIVE_INTERNAL_KEYS`] 语义）。
 //! - 两文件同备份同原子写：`.env.bak` + `settings.json.bak`（单份覆盖），各
-//!   自临时文件 + 改名；合并与校验全部在任何写盘之前完成，settings 写失败
-//!   回滚 .env——任何失败路径不产生半截状态（与 codex 侧同一容错级别）。
+//!   自临时文件 + 改名；合并与校验全部在任何写盘之前完成，两文件内容无变化
+//!   则整体无操作（不备份、不写盘、不碰 mtime，与其它四个 app 同一事务语义，
+//!   原语在 [`live`]）；settings 写失败回滚 .env——任何失败路径不产生半截
+//!   状态（与 codex 侧同一容错级别）。
 //!
 //! 纯函数（最高价值测试接缝，不碰文件系统）：`parse_gemini_settings`
 //! （settingsConfig 文本 → `{env, config}`，含校验与清洗）、
@@ -225,9 +227,10 @@ pub fn backup_env_file(env_path: &Path) -> AppResult<()> {
 
 /// Gemini 写盘全流程（薄壳，按序调用，路径注入便于测试）：解析+清洗 → 读
 /// 两文件现状 → 受控合并（三步全部在任何写盘/备份之前完成——用户手改坏的
-/// settings.json 在这里失败，两文件同旧）→ 备份并原子写 `.env`（整块替换）→
-/// 备份并原子写 settings.json；settings 一步失败回滚 `.env`——任何失败路径
-/// 不产生半截状态（与 codex 侧同一容错语义）。
+/// settings.json 在这里失败，两文件同旧）→ 两文件内容无变化则整体无操作 →
+/// 备份并原子写 `.env`（整块替换）→ 备份并原子写 settings.json；settings
+/// 一步失败回滚 `.env`——任何失败路径不产生半截状态（与 codex 侧同一容错
+/// 语义，回滚原语共用 `live::rollback_side_file`）。
 pub fn write_gemini_live_at(
     env_path: &Path,
     settings_path: &Path,
@@ -241,28 +244,39 @@ pub fn write_gemini_live_at(
     };
     let existing = read_live_settings(settings_path)?;
     let merged = merge_gemini_settings_json(&existing, &target)?;
+    let env_text = serialize_env_file(&target.env);
+    // `.env` 的无变化判定要求「文件存在且内容不变」：文件缺失时即便目标为空
+    // 也要写出（建空 .env 本身是登录态版语义的一部分）；settings.json 用通用
+    // trim_end 比较（`.env` 的备份走 dotfile 专属路径 `backup_env_file`，不经
+    // `commit_live_file`）。
+    let env_unchanged = existing_env
+        .as_deref()
+        .is_some_and(|old| crate::provider::live::content_unchanged(old, &env_text));
+    let settings_unchanged = crate::provider::live::content_unchanged(&existing, &merged);
+    if env_unchanged && settings_unchanged {
+        return Ok(());
+    }
 
-    backup_env_file(env_path)?;
-    atomic_write_file(env_path, &serialize_env_file(&target.env))?;
-    let settings_write = crate::provider::live::backup_file(settings_path)
-        .and_then(|()| atomic_write_file(settings_path, &merged));
-    if let Err(e) = settings_write {
-        rollback_env_file(env_path, &existing_env);
+    let env_committed = if env_unchanged {
+        false
+    } else {
+        backup_env_file(env_path)?;
+        atomic_write_file(env_path, &env_text)?;
+        true
+    };
+    if let Err(e) =
+        crate::provider::live::commit_live_file(settings_path, &merged, settings_unchanged)
+    {
+        if env_committed {
+            crate::provider::live::rollback_side_file(
+                env_path,
+                &existing_env,
+                "gemini settings.json write failed and .env rollback",
+            );
+        }
         return Err(e);
     }
     Ok(())
-}
-
-/// 回滚 `.env` 到写盘前状态：写盘前存在则还原原文，原本不存在则删除。回滚
-/// 自身失败只记录不覆盖主错误——主错误（settings 写失败）才要报告。
-fn rollback_env_file(env_path: &Path, existing: &Option<String>) {
-    let result = match existing {
-        Some(text) => atomic_write_file(env_path, text),
-        None => std::fs::remove_file(env_path).map_err(AppError::from),
-    };
-    if let Err(e) = result {
-        eprintln!("[cc-one] gemini settings.json write failed and .env rollback also failed: {e}");
-    }
 }
 
 /// 真实路径入口：写 `~/.gemini/.env` + `~/.gemini/settings.json`。
@@ -689,6 +703,50 @@ mod tests {
         assert_eq!(
             settings,
             serde_json::json!({"security": {"auth": {"selectedType": "oauth"}}})
+        );
+    }
+
+    /// 重复切换同一供应商 → 整体无操作（两文件都不重写、不新建 .bak、mtime
+    /// 不动）。与其它四个 app 的既有事务语义对齐（此前 gemini 缺失）。
+    #[test]
+    fn write_gemini_live_at_no_change_is_a_noop() {
+        let tmp = tempfile::tempdir().unwrap();
+        let env_path = tmp.path().join(".env");
+        let settings_path = tmp.path().join("settings.json");
+        // 先种旧内容：第一次切换是真实写盘（产生 .bak），第二次同目标无操作。
+        fs::write(&env_path, "OLD=1\n").unwrap();
+        fs::write(&settings_path, r#"{"mcpServers":{}}"#).unwrap();
+        let target = r#"{"env":{"GEMINI_API_KEY":"sk-x"}}"#;
+        write_gemini_live_at(&env_path, &settings_path, target).unwrap();
+        let env_before = fs::read_to_string(&env_path).unwrap();
+        let settings_before = fs::read_to_string(&settings_path).unwrap();
+        // 第一次写盘产生的 .bak 删掉，无变化切换不得重建它们。
+        fs::remove_file(env_backup_path(&env_path)).unwrap();
+        fs::remove_file(tmp.path().join("settings.json.bak")).unwrap();
+        let env_mtime = fs::metadata(&env_path).unwrap().modified().unwrap();
+        let settings_mtime = fs::metadata(&settings_path).unwrap().modified().unwrap();
+
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        write_gemini_live_at(&env_path, &settings_path, target).unwrap();
+        assert_eq!(fs::read_to_string(&env_path).unwrap(), env_before);
+        assert_eq!(fs::read_to_string(&settings_path).unwrap(), settings_before);
+        assert!(
+            !env_backup_path(&env_path).exists(),
+            ".env 无变化不得触发备份"
+        );
+        assert!(
+            !tmp.path().join("settings.json.bak").exists(),
+            "settings.json 无变化不得触发备份"
+        );
+        assert_eq!(
+            fs::metadata(&env_path).unwrap().modified().unwrap(),
+            env_mtime,
+            "无变化不得重写 .env（mtime 不得变化）"
+        );
+        assert_eq!(
+            fs::metadata(&settings_path).unwrap().modified().unwrap(),
+            settings_mtime,
+            "无变化不得重写 settings.json（mtime 不得变化）"
         );
     }
 

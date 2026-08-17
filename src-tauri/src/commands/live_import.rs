@@ -35,14 +35,14 @@ pub(super) fn ensure_opencode_in_live(store: &Store, provider: Provider) -> AppR
 }
 
 /// 附加模式移除（OpenCode）：从 opencode.json 删 `provider.<liveKey>` + 设
-/// `meta.liveManaged = false`（保留 liveKey，便于再加回来）。无 liveKey（从未写
-/// 盘）→ 无操作，原样返回。
+/// `meta.liveManaged = false`（保留 liveKey，便于再加回来）。撤除写盘走
+/// [`live_opencode::remove_from_live_if_managed`]（与删除供应商路径共用）；
+/// 无 liveKey（从未写盘）→ 无操作，原样返回。
 fn remove_opencode_from_live(store: &Store, provider: Provider) -> AppResult<Provider> {
+    live_opencode::remove_from_live_if_managed(&provider)?;
     let Some(key) = live_opencode::meta_live_key(&provider.meta) else {
         return Ok(provider);
     };
-    let path = live_opencode::opencode_config_path()?;
-    live_opencode::remove_opencode_provider(&path, &key)?;
     let updated = Provider {
         meta: live_opencode::with_meta_live_state(&provider.meta, &key, false)?,
         ..provider

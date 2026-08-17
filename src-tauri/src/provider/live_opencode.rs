@@ -41,6 +41,7 @@ use std::path::{Path, PathBuf};
 use serde_json::Value;
 
 use crate::error::{AppError, AppResult};
+use crate::model::Provider;
 
 /// `~/.config/opencode` 目录（跨平台统一走 home，硬编码不尊重 XDG_CONFIG_HOME）。
 /// OpenCode CLI 自身在 mac/win 也硬编码此路径，写到 XDG 位置它不读。
@@ -142,10 +143,11 @@ pub fn remove_opencode_provider_key(live: &str, key: &str) -> AppResult<String> 
 }
 
 /// 添加/更新写盘全流程（薄壳，按序调用）：解析 entry → 读 live → 合并 → 语义
-/// 无变化则无操作 → 备份 → 原子写。「语义无变化」用合并前后 `Value` 相等判定
-/// （而非字符串相等）——json5 live 与 json 输出必然字符串不同（注释/键序），
-/// 字符串比较会每次都误触发写盘；语义比较保证「数据没变就不改写、不备份」，
-/// 用户的注释/键序得以保留。
+/// 无变化则无操作 → 备份 → 原子写（事务收口在 `live::commit_live_file`，五个
+/// app 共用）。「语义无变化」用合并前后 `Value` 相等判定（而非字符串相等）
+/// ——json5 live 与 json 输出必然字符串不同（注释/键序），字符串比较会每次都
+/// 误触发写盘；语义比较保证「数据没变就不改写、不备份」，用户的注释/键序
+/// 得以保留。
 pub fn set_opencode_provider(
     config_path: &Path,
     key: &str,
@@ -154,12 +156,8 @@ pub fn set_opencode_provider(
     let live = crate::provider::live::read_live_settings(config_path)?;
     let old = parse_opencode_live(&live)?;
     let merged = merge_opencode_provider(&live, key, settings_config)?;
-    let new = parse_opencode_live(&merged)?;
-    if old == new {
-        return Ok(());
-    }
-    crate::provider::live::backup_file(config_path)
-        .and_then(|()| crate::provider::live::atomic_write_file(config_path, &merged))
+    let unchanged = parse_opencode_live(&merged)? == old;
+    crate::provider::live::commit_live_file(config_path, &merged, unchanged)
 }
 
 /// 移除写盘全流程（薄壳）：读 live → 移除 `<key>` → 语义无变化则无操作 →
@@ -168,12 +166,24 @@ pub fn remove_opencode_provider(config_path: &Path, key: &str) -> AppResult<()> 
     let live = crate::provider::live::read_live_settings(config_path)?;
     let old = parse_opencode_live(&live)?;
     let merged = remove_opencode_provider_key(&live, key)?;
-    let new = parse_opencode_live(&merged)?;
-    if old == new {
+    let unchanged = parse_opencode_live(&merged)? == old;
+    crate::provider::live::commit_live_file(config_path, &merged, unchanged)
+}
+
+/// 附加模式撤除写盘的单一分派点：provider 已托管（`meta.liveManaged = true` 且
+/// 有 `liveKey`）→ 从 opencode.json 移除该键；未托管 → 无操作（已移除的
+/// provider `liveManaged = false`，live 里已没它，跳过免得无谓读写文件）。
+/// 删除供应商（`commands::providers`）与停用（`commands::live_import`）共用
+/// ——撤除序列只此一份，`liveManaged`/`liveKey`/移除的编排不再各自内联。
+pub fn remove_from_live_if_managed(provider: &Provider) -> AppResult<()> {
+    if meta_live_managed(&provider.meta) != Some(true) {
         return Ok(());
     }
-    crate::provider::live::backup_file(config_path)
-        .and_then(|()| crate::provider::live::atomic_write_file(config_path, &merged))
+    if let Some(key) = meta_live_key(&provider.meta) {
+        let path = opencode_config_path()?;
+        remove_opencode_provider(&path, &key)?;
+    }
+    Ok(())
 }
 
 // ---- 写盘 key 派生（slug）+ 已托管状态（meta）-------------------------------

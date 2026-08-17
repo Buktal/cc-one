@@ -14,8 +14,9 @@
 //!   `enableAllProjectMcpServers` / `model` / `extraKnownMarketplaces` /
 //!   `statusLine` 等一切其他字段）：切换时从 live **原地保留**；目标配置里的
 //!   非受控字段被忽略，绝不写 live。
-//! - 写盘顺序：读当前 live → 受控合并 → 备份 `settings.json.bak`（单份覆盖）→
-//!   原子写（临时文件 + 改名，进程中断不产生半截文件）。
+//! - 写盘顺序：读当前 live → 受控合并 → 内容无变化则**无操作**（不备份、
+//!   不写盘、不碰 mtime，见 [`commit_live_file`]）→ 备份 `settings.json.bak`
+//!   （单份覆盖）→ 原子写（临时文件 + 改名，进程中断不产生半截文件）。
 //! - 清洗：写 live 前剥掉配置里的应用内部 meta 字段（`api_format` /
 //!   `apiFormat` 等，类比 cc-switch `sanitize_claude_settings_for_live`）。
 //! - **不做** cc-switch 的整文件覆盖 + Backfill。
@@ -133,15 +134,11 @@ pub fn read_live_settings(path: &Path) -> AppResult<String> {
     }
 }
 
-/// 把当前 live 备份为 `<name>.<ext>.bak`（单份覆盖）。live 不存在时跳过——
-/// 没有可备份的内容。claude `settings.json` 与 codex `config.toml` 共用同一
-/// 条备份规则（备份路径由文件扩展名推导，见 [`backup_path`]）。
-pub fn backup_live_settings(path: &Path) -> AppResult<()> {
-    backup_file(path)
-}
-
-/// 通用备份（写盘前调用）：目标存在才备份，`.bak` 单份覆盖不堆积。
-/// codex config.toml 的写前备份走这里（auth.json 是凭据/登录态，不备份）。
+/// 通用备份（写盘前调用，[`commit_live_file`] 与各 live_* 编排共用）：目标
+/// 存在才备份，`.bak` 单份覆盖不堆积。claude `settings.json` / codex
+/// `config.toml` / grok `config.toml` / opencode `opencode.json` 同一条备份
+/// 规则（备份路径由文件扩展名推导，见 [`backup_path`]；gemini 的 `.env` 是
+/// 无扩展名点文件，走 dotfile 专属的 `backup_env_file`）。
 pub(crate) fn backup_file(path: &Path) -> AppResult<()> {
     if !path.exists() {
         return Ok(());
@@ -238,20 +235,51 @@ pub fn write_live(app: App, provider: &Provider, snippet: &str) -> AppResult<()>
     }
 }
 
-/// claude settings.json 的原子写（`atomic_write_file` 的既有公开面，调用方
-/// 与测试沿用此名）。
-pub fn write_live_settings(path: &Path, content: &str) -> AppResult<()> {
-    atomic_write_file(path, content)
-}
-
-/// 切换写盘全流程（薄壳，按序调用）：读 live → 受控合并（含清洗）→ 备份 .bak →
-/// 原子写。
+/// 切换写盘全流程（薄壳，按序调用）：读 live → 受控合并（含清洗）→ 无变化
+/// 则无操作 → 备份 .bak → 原子写。事务（无变化判定 + 备份 + 原子写）收口在
+/// [`commit_live_file`]，与 codex / grok / gemini / opencode 五个 app 共用同一
+/// 份语义。
 pub fn switch_live_settings(path: &Path, settings_config: &str) -> AppResult<()> {
     let live = read_live_settings(path)?;
     let merged = merge_live_settings(&live, settings_config)?;
-    backup_live_settings(path)?;
-    write_live_settings(path, &merged)?;
-    Ok(())
+    let unchanged = content_unchanged(&live, &merged);
+    commit_live_file(path, &merged, unchanged)
+}
+
+/// 写盘事务（五个 app 共用的单一归属）：`unchanged`（内容无变化）→ 无操作
+/// （不备份、不写盘、不碰 mtime）；有变化 → 备份 + 原子写。`unchanged` 的
+/// 判定由调用方按应用规则给出——TOML / JSON 文档用 [`content_unchanged`]，
+/// opencode 用 json5 合并前后的语义比较（保用户注释/键序），gemini 的 `.env`
+/// 要求「文件存在且内容不变」（缺失时即便目标为空也要建文件）。
+///
+/// 「无变化不写盘」此前是 codex / grok / opencode 各自的私有实现，claude /
+/// gemini 缺失（重复切换同一供应商仍重写文件 + 刷新 .bak、碰 mtime）——收口
+/// 后五个 app 行为一致。
+pub(crate) fn commit_live_file(path: &Path, content: &str, unchanged: bool) -> AppResult<()> {
+    if unchanged {
+        return Ok(());
+    }
+    backup_file(path).and_then(|()| atomic_write_file(path, content))
+}
+
+/// 无变化判定的通用形态：trim_end 比较（容忍 toml_edit / serde_json 重写时对
+/// 结尾换行的归一化）。opencode 例外——live 是 json5（注释/键序），字符串比较
+/// 永远不等，改用合并前后 `Value` 相等判定（见 `live_opencode`）。
+pub(crate) fn content_unchanged(old: &str, new: &str) -> bool {
+    old.trim_end() == new.trim_end()
+}
+
+/// 副文件回滚（主文件写失败时恢复先写的副文件，codex auth.json / gemini
+/// `.env` 共用）：写盘前存在 → 还原原文；原本不存在 → 删除。回滚自身失败只
+/// eprintln 不覆盖主错误——要报告的是主错误（主文件写失败）。
+pub(crate) fn rollback_side_file(path: &Path, existing: &Option<String>, context: &str) {
+    let result = match existing {
+        Some(text) => atomic_write_file(path, text),
+        None => fs::remove_file(path).map_err(AppError::from),
+    };
+    if let Err(e) = result {
+        eprintln!("[cc-one] {context} also failed: {e}");
+    }
 }
 
 /// 拒绝写盘前的未物化模板变量：settingsConfig 里残留 `${VAR}` 占位符（保存时
@@ -349,6 +377,61 @@ pub(crate) fn fill_missing_table(target: &mut Table, source: &Table) {
             target.insert(key, item.clone());
         }
     }
+}
+
+/// 从已剥内部 meta 键的 settingsConfig 对象提取 `config` TOML 字符串（codex /
+/// grok 共用，两家的 settingsConfig 形状在此字段上同构）：缺失 → 空串（登录
+/// 态版 / 无受控内容）；非字符串 → `Err`（坏配置不能进用户 config.toml）。
+pub(crate) fn config_toml_field(obj: &serde_json::Value) -> AppResult<String> {
+    match obj.get("config") {
+        None => Ok(String::new()),
+        Some(v) => v.as_str().map(str::to_string).ok_or_else(|| {
+            AppError::Config("provider settingsConfig config must be a TOML string".into())
+        }),
+    }
+}
+
+/// TOML 片段校验共用骨架（codex / grok，合并层分派见 ADR-0010）：片段须是
+/// 合法 TOML 且不含受控身份键——`identity_hit` 返回命中身份键的描述（用于
+/// 报错指明具体键，#55：键名细节只出现在校验报错里；`None` = 未命中）。
+/// set 命令的提前拦截与 [`merge_toml_snippet`] 的兜底拒绝走同一条规则。
+pub(crate) fn validate_toml_snippet(
+    snippet: &str,
+    label: &str,
+    identity_hit: impl Fn(&DocumentMut) -> Option<String>,
+) -> AppResult<()> {
+    let doc = parse_toml_or_empty(snippet, &format!("{label} snippet"))?;
+    reject_snippet_identity(&doc, label, &identity_hit)
+}
+
+/// TOML 片段补缺失共用骨架（codex / grok）：在 merge 结果上
+/// [`fill_missing_table`] 补片段键（live 已有则保留、递归进子表），身份键
+/// 拒绝与 [`validate_toml_snippet`] 同一条规则（防绕过 set 的路径）。
+pub(crate) fn merge_toml_snippet(
+    merged: &str,
+    snippet: &str,
+    label: &str,
+    identity_hit: impl Fn(&DocumentMut) -> Option<String>,
+) -> AppResult<String> {
+    let mut doc = parse_toml_or_empty(merged, "merged config.toml")?;
+    let snippet_doc = parse_toml_or_empty(snippet, &format!("{label} snippet"))?;
+    reject_snippet_identity(&snippet_doc, label, &identity_hit)?;
+    fill_missing_table(doc.as_table_mut(), snippet_doc.as_table());
+    Ok(doc.to_string())
+}
+
+/// 片段携带受控身份键 → `Err`（报错含 `identity_hit` 给出的具体键）。
+fn reject_snippet_identity(
+    doc: &DocumentMut,
+    label: &str,
+    identity_hit: &impl Fn(&DocumentMut) -> Option<String>,
+) -> AppResult<()> {
+    if let Some(hit) = identity_hit(doc) {
+        return Err(AppError::Config(format!(
+            "{label} 通用片段不得包含受控身份键 {hit}（身份键归供应商管理）"
+        )));
+    }
+    Ok(())
 }
 
 /// 解析供应商 settingsConfig JSON 文本为「剥过内部 meta 键的对象」：空串/
@@ -581,18 +664,18 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let path = tmp.path().join("settings.json");
         // live 不存在 → 跳过备份。
-        backup_live_settings(&path).unwrap();
+        backup_file(&path).unwrap();
         assert!(!path.with_extension("json.bak").exists());
 
         fs::write(&path, r#"{"env":{}}"#).unwrap();
-        backup_live_settings(&path).unwrap();
+        backup_file(&path).unwrap();
         let bak = path.with_extension("json.bak");
         assert!(bak.exists(), "live 存在时必须生成 .bak");
         assert_eq!(fs::read_to_string(&bak).unwrap(), r#"{"env":{}}"#);
 
         // 单份覆盖：再次备份，旧 .bak 被新内容覆盖，不会堆积多份。
         fs::write(&path, r#"{"env":{"A":"2"}}"#).unwrap();
-        backup_live_settings(&path).unwrap();
+        backup_file(&path).unwrap();
         assert_eq!(
             fs::read_to_string(&bak).unwrap(),
             r#"{"env":{"A":"2"}}"#,
@@ -605,7 +688,7 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let path = tmp.path().join("settings.json");
         fs::write(&path, "old").unwrap();
-        write_live_settings(&path, r#"{"env":{"A":"1"}}"#).unwrap();
+        atomic_write_file(&path, r#"{"env":{"A":"1"}}"#).unwrap();
         assert_eq!(fs::read_to_string(&path).unwrap(), r#"{"env":{"A":"1"}}"#);
         // 临时文件已改名，目录里没有残留 .tmp.*。
         let leftovers: Vec<_> = fs::read_dir(tmp.path())
@@ -664,6 +747,34 @@ mod tests {
         assert!(
             !path.with_extension("json.bak").exists(),
             "live 原本不存在 → 无备份"
+        );
+    }
+
+    /// 重复切换同一供应商 → 无操作（不重写文件、不刷新 .bak、不碰 mtime）。
+    /// 与 codex / grok / opencode 的既有语义对齐（此前 claude 缺失，重复切换
+    /// 仍重写 + 刷新备份）。
+    #[test]
+    fn switch_live_settings_no_change_is_a_noop() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("settings.json");
+        let target = r#"{"env":{"ANTHROPIC_MODEL":"m"}}"#;
+        switch_live_settings(&path, target).unwrap();
+        let before = fs::read_to_string(&path).unwrap();
+        let mtime_before = fs::metadata(&path).unwrap().modified().unwrap();
+
+        // 同一目标再切一次：内容不变、不新建 .bak、mtime 不动（睡眠跨过文件
+        // 系统的时间戳粒度，mtime 相同才证明没写盘）。
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        switch_live_settings(&path, target).unwrap();
+        assert_eq!(fs::read_to_string(&path).unwrap(), before);
+        assert!(
+            !path.with_extension("json.bak").exists(),
+            "内容无变化不得触发备份"
+        );
+        let mtime_after = fs::metadata(&path).unwrap().modified().unwrap();
+        assert_eq!(
+            mtime_before, mtime_after,
+            "无变化不得重写文件（mtime 不得变化）"
         );
     }
 

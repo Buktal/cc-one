@@ -26,6 +26,8 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
+use toml_edit::DocumentMut;
+
 use crate::error::{AppError, AppResult};
 
 /// Codex 受控键清单（与 claude 的 `CONTROLLED_FIELDS` 并列，各自是所属
@@ -113,15 +115,7 @@ pub fn parse_codex_settings(settings_config: &str) -> AppResult<CodexSnapshot> {
             }
         }
     };
-    let config = match obj.get("config") {
-        None => String::new(),
-        Some(v) => v
-            .as_str()
-            .ok_or_else(|| {
-                AppError::Config("provider settingsConfig config must be a TOML string".into())
-            })?
-            .to_string(),
-    };
+    let config = crate::provider::live::config_toml_field(&obj)?;
     Ok(CodexSnapshot { auth_key, config })
 }
 
@@ -169,31 +163,23 @@ pub fn merge_codex_config(live: &str, target: &str) -> AppResult<String> {
 /// 含身份键 → `Err`。`merged` 来自 `merge_codex_config`，假定合法；非空非法
 /// → `Err`（防御）。
 pub fn merge_codex_snippet(merged: &str, snippet: &str) -> AppResult<String> {
-    let mut doc = crate::provider::live::parse_toml_or_empty(merged, "merged config.toml")?;
-    let snippet_doc = crate::provider::live::parse_toml_or_empty(snippet, "codex snippet")?;
-    for key in CODEX_CONTROLLED_FIELDS {
-        if snippet_doc.get(key).is_some() {
-            return Err(AppError::Config(format!(
-                "codex 通用片段不得包含受控身份键 `{key}`（身份键归供应商管理）"
-            )));
-        }
-    }
-    crate::provider::live::fill_missing_table(doc.as_table_mut(), snippet_doc.as_table());
-    Ok(doc.to_string())
+    crate::provider::live::merge_toml_snippet(merged, snippet, "codex", codex_identity_hit)
 }
 
 /// codex 片段校验（set 命令用）：合法 TOML；不得含受控身份键。凭据键不禁
-/// （codex 片段写 `mcp_servers` 等、不经 LLM 端点，见 ADR-0010）。
+/// （codex 片段写 `mcp_servers` 等、不经 LLM 端点，见 ADR-0010）。骨架与
+/// grok 共用（`live::validate_toml_snippet`），只有身份键谓词是 codex 自己的。
 pub fn validate_codex_snippet(snippet: &str) -> AppResult<()> {
-    let doc = crate::provider::live::parse_toml_or_empty(snippet, "codex snippet")?;
-    for key in CODEX_CONTROLLED_FIELDS {
-        if doc.get(key).is_some() {
-            return Err(AppError::Config(format!(
-                "codex 通用片段不得包含受控身份键 `{key}`（身份键归供应商管理）"
-            )));
-        }
-    }
-    Ok(())
+    crate::provider::live::validate_toml_snippet(snippet, "codex", codex_identity_hit)
+}
+
+/// codex 身份键命中描述（报错用，#55：键名细节只出现在校验报错里）：
+/// [`CODEX_CONTROLLED_FIELDS`] 里第一个出现在片段里的键。
+fn codex_identity_hit(doc: &DocumentMut) -> Option<String> {
+    CODEX_CONTROLLED_FIELDS
+        .iter()
+        .find(|key| doc.get(key).is_some())
+        .map(|key| format!("`{key}`"))
 }
 
 /// 构建 auth.json 受控写入载荷：现有内容（缺失 → 空对象）上替换受控键
@@ -222,7 +208,8 @@ fn build_auth_payload(existing: Option<&str>, key: &str) -> AppResult<String> {
 
 /// 切换写盘全流程（薄壳，按序调用）：解析快照 → TOML 受控合并 → 判定
 /// auth.json 是否要写 → 两文件都没变化则无操作 → 备份 config → 先原子写
-/// auth 后原子写 config（config 一步失败回滚 auth）。
+/// auth 后原子写 config（事务原语 `backup_file` / `atomic_write_file` /
+/// 无变化判定 / 回滚收口在 `live`，见 [`crate::provider::live::commit_live_file`]）。
 pub fn switch_codex_live(
     config_path: &Path,
     auth_path: &Path,
@@ -251,47 +238,41 @@ pub fn switch_codex_live(
         None => None,
     };
 
-    // 内容都没变化 → 无操作（不备份、不写盘、不碰 mtime）。trim_end 容忍
-    // toml_edit 重写时对结尾换行的归一化。
-    let config_changed = merged.trim_end() != live.trim_end();
-    let auth_changed = match (&auth_payload, &existing_auth) {
-        (Some(payload), Some(existing)) => payload != existing,
-        (Some(_), None) => true,
-        (None, _) => false,
+    // 内容都没变化 → 无操作（不备份、不写盘、不碰 mtime）。auth 是凭据文件、
+    // 本应用自己序列化，用精确比较；config 走 trim_end（容忍 toml_edit 重写
+    // 对结尾换行的归一化）。
+    let config_unchanged = crate::provider::live::content_unchanged(&live, &merged);
+    let auth_unchanged = match (&auth_payload, &existing_auth) {
+        (Some(payload), Some(existing)) => payload == existing,
+        (Some(_), None) => false,
+        (None, _) => true,
     };
-    if !config_changed && !auth_changed {
+    if config_unchanged && auth_unchanged {
         return Ok(());
     }
 
     // 原子写两文件：先 auth 后 config，config 一步失败回滚 auth。每个文件
     // 自身是临时文件 + 改名，进程中断只留临时文件、不产生半截 config.toml /
     // auth.json。
-    if let Some(payload) = &auth_payload {
-        crate::provider::live::atomic_write_file(auth_path, payload)?;
-    }
-    if config_changed {
-        let write_result = crate::provider::live::backup_file(config_path)
-            .and_then(|()| crate::provider::live::atomic_write_file(config_path, &merged));
-        if let Err(e) = write_result {
-            if auth_payload.is_some() {
-                rollback_auth(auth_path, &existing_auth);
-            }
-            return Err(e);
+    let auth_written = match (&auth_payload, auth_unchanged) {
+        (Some(payload), false) => {
+            crate::provider::live::atomic_write_file(auth_path, payload)?;
+            true
         }
+        _ => false,
+    };
+    if let Err(e) = crate::provider::live::commit_live_file(config_path, &merged, config_unchanged)
+    {
+        if auth_written {
+            crate::provider::live::rollback_side_file(
+                auth_path,
+                &existing_auth,
+                "codex config write failed and auth.json rollback",
+            );
+        }
+        return Err(e);
     }
     Ok(())
-}
-
-/// 回滚 auth.json 到写盘前状态：写盘前存在则还原原文，原本不存在则删除。
-/// 回滚自身失败只记录不覆盖主错误——主错误（写 config 失败）才要报告。
-fn rollback_auth(auth_path: &Path, existing: &Option<String>) {
-    let result = match existing {
-        Some(text) => crate::provider::live::atomic_write_file(auth_path, text),
-        None => fs::remove_file(auth_path).map_err(AppError::from),
-    };
-    if let Err(e) = result {
-        eprintln!("[cc-one] codex config write failed and auth.json rollback also failed: {e}");
-    }
 }
 
 #[cfg(test)]
