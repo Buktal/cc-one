@@ -1112,8 +1112,10 @@ function TurnNavPanel({
                     {firstLine(turn.content) || "—"}
                   </span>
                 </TooltipTrigger>
+                {/* top：面板左缘贴详情 Sheet、右缘贴窗口，left/right 两向
+                    都会被裁剪（同上方工具栏注释的结论）。 */}
                 <TooltipContent
-                  side="left"
+                  side="top"
                   align="start"
                   sideOffset={8}
                   className="max-h-72 max-w-md overflow-y-auto border border-border text-[13px]"
