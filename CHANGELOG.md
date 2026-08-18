@@ -5,6 +5,22 @@ All notable changes to cc one are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.0.2] - 2026-08-18
+
+### Fixed
+
+- **Local credentials are no longer lost on sync pull** — importing a peer's Codex / OpenCode providers used to silently overwrite your API keys with the redacted copy (push stripped four key locations, pull restored two); the key locations now live in a single module behind paired strip/restore, and codex auth plus opencode options restore too, pinned by a round-trip property test.
+- **Dirty flags can no longer wedge sync** — flags left dirty by a failed or crashed push were never re-cleared behind the "pushed" gate, leaving the device permanently one push behind; clearing is now a single transaction without the gate, proven by a test that fails on the old code.
+- **No more half-cleared mid-sync state** — two sequential clears could leave "days cleared, sessions still dirty" when the second failed; a single transaction makes that state structurally impossible, guarded by a SQLITE_BUSY-injection test.
+- **All-secret template values no longer vanish from sync** — stripping removed the whole record when every templateValue was a key, dropping the provider on round-trip (the Bedrock AK/SK scenario); restore now recreates it.
+- **Claude saves no longer write back unexpanded placeholders** — an unexpanded Bedrock placeholder endpoint was written into the snapshot and rejected by the backend validator; saving now reads from the materialized text.
+- **OpenCode edits can no longer swallow half-written JSON** — field write-backs go through the same guarded write as the other four apps, refusing when the JSON text is broken.
+
+### Changed
+
+- **Internal refactors, behavior intact** — all twelve architecture candidates landed: key-location module, per-app live adapter seam (8 dispatch points), five-domain sync pairing, import convergence on a store-level conflict-planning seam, discovery traversal skeleton with explicit gate modes, corrections channel for the collect protocol, FilterSelect sentinel dropdowns, paged-browser controller, provider-form mirror-state removal (1033→640 lines), api.ts split across seven domains with a cache-key dimension registry, turn-nav search state-machine reducer, and the four-item misc cluster (shell state clusters, date-range filter, raw error text, delete confirmation). 50+ new tests, all on production paths.
+- **Request-log empty-state copy follows sync state** — with multi-device sync in progress the CTA reads "Syncing…" instead of the generic "Collecting…", matching the sidebar.
+
 ## [2.0.1] - 2026-08-18
 
 ### Fixed
