@@ -247,7 +247,10 @@ export function spanLabelKey(span: SessionSpan | null): {
 } | null {
   if (!span) return null
   if (span.days > 0) {
-    return { key: "sessions.span.daysHours", vars: { d: span.days, h: span.hours } }
+    return {
+      key: "sessions.span.daysHours",
+      vars: { d: span.days, h: span.hours },
+    }
   }
   if (span.hours > 0) {
     return span.minutes > 0
@@ -466,20 +469,43 @@ function snippetAround(text: string, start: number, len: number): string {
   }`
 }
 
+/** Does a message role default to collapsed? The xor rule — collapsed-set
+ *  membership means the OPPOSITE of the row's default: messages default
+ *  expanded (open = not-in-set), tool rows default collapsed (open = in-set).
+ *  Single source for the default: the bulk-toggle write ends and the detail
+ *  view's read end (isRowOpen) all hang off it, so a new default-collapsed
+ *  role changes one line here, not two files. */
+export function roleDefaultsCollapsed(role: string): boolean {
+  return role === "tool"
+}
+
+/** A row's open state: in-set xor defaults-to-collapsed. The detail view's
+ *  per-row isOpen — lifted here so the read side and the bulk-toggle write
+ *  side share the one xor rule. */
+export function isRowOpen(
+  uuid: string,
+  role: string,
+  collapsed: ReadonlySet<string>,
+): boolean {
+  return roleDefaultsCollapsed(role)
+    ? collapsed.has(uuid)
+    : !collapsed.has(uuid)
+}
+
 /**
  * The collapsed-row sets for the bulk collapse / expand toggle. Row open-state
- * is a Set<uuid> whose membership means the OPPOSITE of the row's default:
- * messages default expanded (open = not-in-set), tool rows default collapsed
- * (open = in-set). So "collapse all" = every message uuid in the set, and
- * "expand all" = every tool uuid in the set (messages drop out, tools join).
- * Pure so the toggle's end states are testable — see isAllCollapsed.
+ * is a Set<uuid> whose membership means the OPPOSITE of the row's default (see
+ * roleDefaultsCollapsed). So "collapse all" = every default-expanded uuid in
+ * the set, and "expand all" = every default-collapsed uuid in the set
+ * (messages drop out, tools join). Pure so the toggle's end states are
+ * testable — see isAllCollapsed.
  */
 export function collapseAllMessages(
   messages: readonly SessionMessage[],
 ): Set<string> {
   const out = new Set<string>()
   for (const m of messages) {
-    if (m.role !== "tool") out.add(m.uuid)
+    if (!roleDefaultsCollapsed(m.role)) out.add(m.uuid)
   }
   return out
 }
@@ -489,22 +515,22 @@ export function expandAllMessages(
 ): Set<string> {
   const out = new Set<string>()
   for (const m of messages) {
-    if (m.role === "tool") out.add(m.uuid)
+    if (roleDefaultsCollapsed(m.role)) out.add(m.uuid)
   }
   return out
 }
 
 /** Is every message row collapsed — the "collapse all" end state? False when
- *  the transcript has no expandable (non-tool) rows (e.g. tool-only or empty),
- *  so the toggle never reports a full-collapse on a transcript that has no
- *  messages to collapse. */
+ *  the transcript has no expandable (default-expanded) rows (e.g. tool-only or
+ *  empty), so the toggle never reports a full-collapse on a transcript that
+ *  has no messages to collapse. */
 export function isAllCollapsed(
   messages: readonly SessionMessage[],
   collapsed: ReadonlySet<string>,
 ): boolean {
   let sawExpandable = false
   for (const m of messages) {
-    if (m.role === "tool") continue
+    if (roleDefaultsCollapsed(m.role)) continue
     sawExpandable = true
     if (!collapsed.has(m.uuid)) return false
   }

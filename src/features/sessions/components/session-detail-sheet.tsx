@@ -83,6 +83,7 @@ import {
   expandAllMessages,
   firstLine,
   isAllCollapsed,
+  isRowOpen,
   modelsUsed,
   sessionSpan,
   spanLabelKey,
@@ -91,6 +92,7 @@ import {
 import { highlight } from "../highlight"
 import { sessionSourceLabel } from "../source-labels"
 import { initialTurnNav, reduceTurnNav, turnAnchors } from "../turn-nav"
+import { initialTurnSearch, reduceTurnSearch } from "../turn-search"
 import { useSessionTitleRename } from "../use-sessions-browser"
 import { MarkdownContent, ToolContent } from "./markdown-content"
 
@@ -170,9 +172,11 @@ export function SessionDetailSheet(props: SessionDetailSheetProps) {
       return next
     })
   }, [])
+  // Row open-state is "in the set" xor "defaults to collapsed" — the same xor
+  // rule the bulk toggle's end states come from (derive.ts, tested), so both
+  // sides share the one predicate.
   const isOpen = useCallback(
-    (uuid: string, role: string) =>
-      role === "tool" ? collapsed.has(uuid) : !collapsed.has(uuid),
+    (uuid: string, role: string) => isRowOpen(uuid, role, collapsed),
     [collapsed],
   )
   // Bulk collapse / expand — the end-state sets come from derive (the
@@ -763,11 +767,11 @@ function TurnNavPanel({
   // Panel has two modes: the numbered turn index (default) and in-session
   // search (toolbar toggle). Search hits jump to any row kind — assistant and
   // tool rows included — which is why the panel takes the full transcript.
-  const [searching, setSearching] = useState(false)
-  const [query, setQuery] = useState("")
-  // The search hit most recently jumped to — kept highlighted until the query
-  // changes, so the eye has an anchor while reading the transcript.
-  const [lastJumped, setLastJumped] = useState<string | null>(null)
+  // The mode / query / hit-highlight state machine lives in the pure reducer
+  // (../turn-search) — the exit semantics (toggle / Esc / clear / query change)
+  // are asserted in its tests.
+  const [search, setSearch] = useState(initialTurnSearch)
+  const { searching, query, lastJumped } = search
   // uuid → message index: the coordinate scrollToIndex speaks. Built once per
   // transcript; search hits look up through it.
   const rowIndex = useMemo(() => {
@@ -783,7 +787,7 @@ function TurnNavPanel({
     (uuid: string) => {
       const index = rowIndex.get(uuid)
       if (index === undefined) return
-      setLastJumped(uuid)
+      setSearch((s) => reduceTurnSearch(s, { type: "hit", uuid }))
       jumpTo(uuid, index)
     },
     [rowIndex, jumpTo],
@@ -867,15 +871,9 @@ function TurnNavPanel({
                     variant="ghost"
                     size="icon-xs"
                     aria-label={t("sessions.detail.searchInSession")}
-                    onClick={() => {
-                      setSearching((v) => !v)
-                      // Closing the mode drops the query — the panel returns
-                      // to the clean turn index.
-                      if (searching) {
-                        setQuery("")
-                        setLastJumped(null)
-                      }
-                    }}
+                    onClick={() =>
+                      setSearch((s) => reduceTurnSearch(s, { type: "toggle" }))
+                    }
                     className={cn(
                       searching && "bg-accent-tint text-accent-brand-strong",
                     )}
@@ -934,16 +932,17 @@ function TurnNavPanel({
               <Search className="text-muted-foreground absolute top-1/2 left-1.5 size-3 -translate-y-1/2" />
               <Input
                 value={query}
-                onChange={(e) => {
-                  setQuery(e.target.value)
-                  setLastJumped(null)
-                }}
+                onChange={(e) =>
+                  setSearch((s) =>
+                    reduceTurnSearch(s, {
+                      type: "query",
+                      query: e.target.value,
+                    }),
+                  )
+                }
                 onKeyDown={(e) => {
-                  if (e.key === "Escape") {
-                    setSearching(false)
-                    setQuery("")
-                    setLastJumped(null)
-                  }
+                  if (e.key === "Escape")
+                    setSearch((s) => reduceTurnSearch(s, { type: "esc" }))
                 }}
                 placeholder={t("sessions.detail.searchInSession")}
                 aria-label={t("sessions.detail.searchInSession")}
@@ -958,11 +957,11 @@ function TurnNavPanel({
                     render={
                       <button
                         type="button"
-                        onClick={() => {
-                          setSearching(false)
-                          setQuery("")
-                          setLastJumped(null)
-                        }}
+                        onClick={() =>
+                          setSearch((s) =>
+                            reduceTurnSearch(s, { type: "clear" }),
+                          )
+                        }
                         aria-label={t("sessions.detail.clearSearch")}
                         className="text-muted-foreground hover:text-foreground absolute top-1/2 right-1 -translate-y-1/2 rounded p-0.5"
                       >

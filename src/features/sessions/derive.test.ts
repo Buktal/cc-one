@@ -23,10 +23,12 @@ import {
   favKey,
   firstLine,
   isAllCollapsed,
+  isRowOpen,
   modelsUsed,
   neighborNav,
   nextFavValue,
   reorderGroupIds,
+  roleDefaultsCollapsed,
   type SessionScopeSpec,
   sessionSpan,
   sessionSpecId,
@@ -593,17 +595,44 @@ describe("collapseAllMessages / expandAllMessages / isAllCollapsed", () => {
     expect(isAllCollapsed([], new Set())).toBe(false)
   })
 
-  it("bulk sets round-trip through the row's own isOpen rule", () => {
-    // Simulate the detail view's isOpen: non-tool open = not-in-set, tool
-    // open = in-set. After collapseAll no row is open; after expandAll every
-    // row is open.
+  it("bulk sets round-trip through the detail view's real isRowOpen", () => {
+    // The detail view's per-row open state runs the same xor rule as the bulk
+    // sets (single source in derive): after collapseAll no row is open, after
+    // expandAll every row is open. Calls the production isRowOpen — no fork
+    // (architecture.md: "测试必须跑生产路径").
     const all = msgs("user", "tool", "assistant")
-    const isOpen = (m: SessionMessage, set: Set<string>) =>
-      m.role === "tool" ? set.has(m.uuid) : !set.has(m.uuid)
     const collapsed = collapseAllMessages(all)
-    expect(all.every((m) => !isOpen(m, collapsed))).toBe(true)
+    expect(all.every((m) => !isRowOpen(m.uuid, m.role, collapsed))).toBe(true)
     const expanded = expandAllMessages(all)
-    expect(all.every((m) => isOpen(m, expanded))).toBe(true)
+    expect(all.every((m) => isRowOpen(m.uuid, m.role, expanded))).toBe(true)
+  })
+
+  it("read/write consistency: every role's default matches both ends", () => {
+    // The xor rule has one source (roleDefaultsCollapsed). A third
+    // default-collapsed role would have to change that predicate, and this
+    // table forces the change there — not silently in two files.
+    for (const role of ["user", "assistant", "tool", "system"] as const) {
+      const m = msgs(role)[0]
+      const collapsed = collapseAllMessages([m])
+      const expanded = expandAllMessages([m])
+      expect(
+        isRowOpen(m.uuid, m.role, collapsed),
+        `${role} row must be closed after collapseAll`,
+      ).toBe(false)
+      expect(
+        isRowOpen(m.uuid, m.role, expanded),
+        `${role} row must be open after expandAll`,
+      ).toBe(true)
+    }
+  })
+})
+
+describe("roleDefaultsCollapsed", () => {
+  it("only tool rows default collapsed", () => {
+    expect(roleDefaultsCollapsed("tool")).toBe(true)
+    expect(roleDefaultsCollapsed("user")).toBe(false)
+    expect(roleDefaultsCollapsed("assistant")).toBe(false)
+    expect(roleDefaultsCollapsed("system")).toBe(false)
   })
 })
 
