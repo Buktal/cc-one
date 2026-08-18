@@ -1091,7 +1091,8 @@ mod tests {
         assert_eq!(r1.messages.len(), 1, "first pass: one message");
         // The honest cursor contract: the summary's cursor is mtime-only
         // (line offset 0), the chat's is a real line cursor.
-        let key_summary = crate::source_parser::scan_progress_key(&session_dir.join("summary.json"));
+        let key_summary =
+            crate::source_parser::scan_progress_key(&session_dir.join("summary.json"));
         let key_chat = crate::source_parser::scan_progress_key(&chat_path);
         assert_eq!(
             delta.get(&key_summary).unwrap().last_line_offset,

@@ -505,7 +505,10 @@ mod tests {
         // mtime-only gate: the recorded cursor carries NO line offset — the
         // fake line-cursor contract must not leak here.
         let (_, cursor) = delta.iter().next().expect("cursor recorded");
-        assert_eq!(cursor.last_line_offset, 0, "no line cursor for Gemini files");
+        assert_eq!(
+            cursor.last_line_offset, 0,
+            "no line cursor for Gemini files"
+        );
         let progress: ScanProgress = delta;
         // Unchanged file ⇒ mtime gate skips it entirely.
         let (r2, delta2) = p.collect_incremental(&progress).unwrap();
