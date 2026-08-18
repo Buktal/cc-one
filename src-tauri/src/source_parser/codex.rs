@@ -19,13 +19,18 @@
 use std::path::{Path, PathBuf};
 
 use crate::error::AppResult;
-use crate::model::{RawSession, ServerToolUse, SessionMessage, SessionMessageRole, TokenCounts};
+use crate::model::{RawSession, SessionMessage, SessionMessageRole, TokenCounts};
 
 use super::{
-    collect_jsonl_incremental, normalize_cache_inclusive, truncate, CollectResult,
-    FileParseOutcome, RawUsage, ScanProgress, ScanProgressDelta, SourceParser, TITLE_MAX,
-    TRIM_LIMIT,
+    collect_jsonl_incremental, discover_files, is_jsonl_file, normalize_cache_inclusive, truncate,
+    CollectResult, DirectoryShape, FileParseOutcome, RawUsage, ScanProgress, ScanProgressDelta,
+    SourceParser, TITLE_MAX, TRIM_LIMIT,
 };
+
+/// Stable source tag — becomes `RawUsage.source` / `RawSession.source` and the
+/// DB source column; the single literal behind `name()`, usage, and session
+/// construction.
+const SOURCE_TAG: &str = "codex_cli";
 
 /// Codex (`~/.codex`) session-log parser.
 ///
@@ -59,38 +64,31 @@ impl CodexSourceParser {
     pub(crate) fn with_dir(dir: PathBuf) -> Self {
         Self { codex_dir: dir }
     }
-
-    fn discover_in(&self) -> Vec<PathBuf> {
-        let mut files = Vec::new();
-        let sessions = self.codex_dir.join("sessions");
-        if sessions.is_dir() {
-            collect_codex_jsonl_recursive(&sessions, &mut files, 0, 3);
-        }
-        let archived = self.codex_dir.join("archived_sessions");
-        if archived.is_dir() {
-            if let Ok(entries) = std::fs::read_dir(&archived) {
-                for entry in entries.flatten() {
-                    let path = entry.path();
-                    if path.extension().and_then(|e| e.to_str()) == Some("jsonl") {
-                        files.push(path);
-                    }
-                }
-            }
-        }
-        files
-    }
 }
 
 impl SourceParser for CodexSourceParser {
     fn name(&self) -> &'static str {
-        "codex_cli"
+        SOURCE_TAG
     }
 
     fn discover(&self) -> AppResult<Vec<PathBuf>> {
-        if !self.codex_dir.exists() {
-            return Ok(Vec::new());
-        }
-        Ok(self.discover_in())
+        // Two shapes: `sessions/**` (three dir levels deep, i.e. `YYYY/MM/DD`)
+        // and flat `archived_sessions/` (top level only). A missing codex dir
+        // is not an error — the shared skeleton yields no files for absent
+        // roots.
+        Ok(discover_files(
+            &[
+                DirectoryShape {
+                    root: self.codex_dir.join("sessions"),
+                    max_depth: Some(4), // sessions/YYYY/MM/DD/*.jsonl
+                },
+                DirectoryShape {
+                    root: self.codex_dir.join("archived_sessions"),
+                    max_depth: Some(1), // flat: files directly in the dir
+                },
+            ],
+            is_jsonl_file,
+        ))
     }
 
     fn parse(&self, files: &[PathBuf]) -> AppResult<CollectResult> {
@@ -437,7 +435,7 @@ fn fold_codex_file(file: &Path, text: &str, start_line: i64) -> FileParseOutcome
                     uuid: format!("codex:thread-v1:{thread_id}:{}", state.event_index),
                     timestamp: super::fallback_timestamp(timestamp.clone()),
                     model: state.current_model.clone(),
-                    source: "codex_cli".to_string(),
+                    source: SOURCE_TAG.to_string(),
                     session_id: session_id_for_usage.clone(),
                     tokens: TokenCounts {
                         input: fresh_input,
@@ -445,10 +443,7 @@ fn fold_codex_file(file: &Path, text: &str, start_line: i64) -> FileParseOutcome
                         cache_creation: 0,
                         cache_read: clamped_cache_read,
                     },
-                    server_tool_use: ServerToolUse::default(),
-                    stop_reason: String::new(),
-                    service_tier: String::new(),
-                    iterations: 0,
+                    ..Default::default()
                 };
                 // Model resolution lags the token events (see `learn_model`),
                 // so route each built event accordingly:
@@ -508,7 +503,7 @@ fn fold_codex_file(file: &Path, text: &str, start_line: i64) -> FileParseOutcome
         let title_orig = truncate(title_orig.unwrap_or(""), TITLE_MAX);
         vec![RawSession {
             id: session_id,
-            source: "codex_cli".to_string(),
+            source: SOURCE_TAG.to_string(),
             project_dir,
             title_orig,
             started_at,
@@ -804,21 +799,6 @@ fn codex_request_heading_payload(line: &str) -> Option<&str> {
             .trim_start_matches(|c: char| c.is_whitespace() || matches!(c, ':' | '：' | '-' | '—'))
             .trim(),
     )
-}
-
-/// Recursive `.jsonl` discovery with a depth cap (Codex nests `YYYY/MM/DD`).
-fn collect_codex_jsonl_recursive(dir: &Path, files: &mut Vec<PathBuf>, depth: u32, max_depth: u32) {
-    let Ok(entries) = std::fs::read_dir(dir) else {
-        return;
-    };
-    for entry in entries.flatten() {
-        let path = entry.path();
-        if path.is_dir() && depth < max_depth {
-            collect_codex_jsonl_recursive(&path, files, depth + 1, max_depth);
-        } else if path.extension().and_then(|e| e.to_str()) == Some("jsonl") {
-            files.push(path);
-        }
-    }
 }
 
 /// Extract the session identity from a `session_meta` payload. The `id` is the

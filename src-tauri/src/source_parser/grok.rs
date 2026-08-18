@@ -29,13 +29,18 @@ use std::io::BufRead;
 use std::path::{Path, PathBuf};
 
 use crate::error::AppResult;
-use crate::model::{RawSession, ServerToolUse, SessionMessage, SessionMessageRole, TokenCounts};
+use crate::model::{RawSession, SessionMessage, SessionMessageRole, TokenCounts};
 
 use super::{
-    collect_jsonl_incremental, normalize_cache_inclusive, truncate, CollectResult,
-    FileParseOutcome, RawUsage, ScanProgress, ScanProgressDelta, SourceParser, TITLE_MAX,
-    TRIM_LIMIT,
+    collect_jsonl_incremental, discover_files, normalize_cache_inclusive, truncate, CollectResult,
+    DirectoryShape, FileParseOutcome, GateMode, RawUsage, ScanProgress, ScanProgressDelta,
+    SourceParser, TITLE_MAX, TRIM_LIMIT,
 };
+
+/// Stable source tag — becomes `RawUsage.source` / `RawSession.source` and the
+/// DB source column; the single literal behind `name()`, usage, and session
+/// construction.
+const SOURCE_TAG: &str = "grok_cli";
 
 /// Grok CLI ("Grok Build") session-log parser.
 ///
@@ -69,35 +74,35 @@ impl GrokSourceParser {
     pub(crate) fn with_dir(dir: PathBuf) -> Self {
         Self { grok_dir: dir }
     }
-
-    /// Recursively collect every session sibling file (`summary.json`,
-    /// `chat_history.jsonl`, `updates.jsonl`) under `sessions/` and
-    /// `archived_sessions/`. Layout depth varies (`<enc-cwd>/<session-id>/…`),
-    /// so discovery is by filename, mirroring Grok's session browser. Each file
-    /// becomes its own cursor entry (keyed by full path), so the three siblings
-    /// of one session are mtime/line-gated independently.
-    fn discover_in(&self) -> Vec<PathBuf> {
-        let mut files = Vec::new();
-        for sub in ["sessions", "archived_sessions"] {
-            let root = self.grok_dir.join(sub);
-            if root.is_dir() {
-                collect_grok_session_files(&root, &mut files, 0);
-            }
-        }
-        files
-    }
 }
 
 impl SourceParser for GrokSourceParser {
     fn name(&self) -> &'static str {
-        "grok_cli"
+        SOURCE_TAG
     }
 
     fn discover(&self) -> AppResult<Vec<PathBuf>> {
-        if !self.grok_dir.exists() {
-            return Ok(Vec::new());
-        }
-        Ok(self.discover_in())
+        // Recursively collect every session sibling file (`summary.json`,
+        // `chat_history.jsonl`, `updates.jsonl`) under `sessions/` and
+        // `archived_sessions/`. Layout depth varies
+        // (`<enc-cwd>/<session-id>/…`), so discovery is by filename,
+        // mirroring Grok's session browser; the depth cap guards against
+        // pathological nesting. Each file becomes its own cursor entry (keyed
+        // by full path), so the three siblings of one session are
+        // mtime/line-gated independently. A missing grok dir is not an error.
+        Ok(discover_files(
+            &[
+                DirectoryShape {
+                    root: self.grok_dir.join("sessions"),
+                    max_depth: Some(9),
+                },
+                DirectoryShape {
+                    root: self.grok_dir.join("archived_sessions"),
+                    max_depth: Some(9),
+                },
+            ],
+            is_grok_sibling_file,
+        ))
     }
 
     fn parse(&self, files: &[PathBuf]) -> AppResult<CollectResult> {
@@ -124,30 +129,27 @@ impl SourceParser for GrokSourceParser {
     ) -> AppResult<(CollectResult, ScanProgressDelta)> {
         collect_jsonl_incremental(self, progress, parse_grok_file)
     }
-}
 
-/// Recursively collect every Grok session sibling file under `root`
-/// (`summary.json` / `chat_history.jsonl` / `updates.jsonl`). Symlinked dirs
-/// are not followed (file_type is non-following) and a depth cap guards against
-/// pathological nesting.
-fn collect_grok_session_files(root: &Path, files: &mut Vec<PathBuf>, depth: u32) {
-    if depth > 8 {
-        return;
-    }
-    let Ok(entries) = std::fs::read_dir(root) else {
-        return;
-    };
-    for entry in entries.flatten() {
-        let path = entry.path();
-        let is_dir = entry.file_type().map(|t| t.is_dir()).unwrap_or(false);
-        if is_dir {
-            collect_grok_session_files(&path, files, depth + 1);
-        } else if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
-            if name == "summary.json" || name == "chat_history.jsonl" || name == "updates.jsonl" {
-                files.push(path);
-            }
+    /// summary.json is one JSON object re-read in full on each gate pass
+    /// (mtime-only — no line cursor); chat_history/updates are append JSONL
+    /// (line cursor). Declared per file so the shared driver never pretends a
+    /// cursor for the summary.
+    fn gate_mode(&self, file: &Path) -> GateMode {
+        if file.file_name().and_then(|n| n.to_str()) == Some("summary.json") {
+            GateMode::MtimeOnly
+        } else {
+            GateMode::LineCursor
         }
     }
+}
+
+/// Grok session sibling filenames — the whitelist that makes discovery
+/// layout-agnostic.
+fn is_grok_sibling_file(path: &Path) -> bool {
+    matches!(
+        path.file_name().and_then(|n| n.to_str()),
+        Some("summary.json" | "chat_history.jsonl" | "updates.jsonl")
+    )
 }
 
 /// One-pass dispatcher: route a discovered file to its parser by filename. The
@@ -284,7 +286,7 @@ fn parse_grok_notification(
             uuid: format!("grok:turn:{session_id}:{turn_key}:{model}"),
             timestamp: timestamp.clone(),
             model,
-            source: "grok_cli".to_string(),
+            source: SOURCE_TAG.to_string(),
             session_id: session_id.to_string(),
             tokens: TokenCounts {
                 input: fresh_input,
@@ -292,10 +294,7 @@ fn parse_grok_notification(
                 cache_creation: 0,
                 cache_read: clamped_cache_read,
             },
-            server_tool_use: ServerToolUse::default(),
-            stop_reason: String::new(),
-            service_tier: String::new(),
-            iterations: 0,
+            ..Default::default()
         });
     }
     Some(events)
@@ -328,7 +327,7 @@ fn raw_session_from_summary(file: &Path, text: &str) -> RawSession {
     let dir_id = session_id_of(file);
     let mut session = RawSession {
         id: dir_id,
-        source: "grok_cli".to_string(),
+        source: SOURCE_TAG.to_string(),
         project_dir: String::new(),
         title_orig: String::new(),
         started_at: String::new(),
@@ -494,7 +493,7 @@ fn parse_grok_chat_history(file: &Path, text: &str, start_line: i64) -> FilePars
     } else {
         vec![RawSession {
             id: session_id,
-            source: "grok_cli".to_string(),
+            source: SOURCE_TAG.to_string(),
             project_dir: String::new(),
             title_orig: String::new(),
             started_at: String::new(),
@@ -1053,6 +1052,28 @@ mod tests {
         );
     }
 
+    /// Gate modes are declared per file: summary.json is mtime-only (no line
+    /// cursor), chat/updates are line-cursor append logs. The driver must
+    /// record a line offset ONLY for the line-cursor files — the fake-cursor
+    /// contract this pins is the whole point of the three-state declaration.
+    #[test]
+    fn grok_gate_modes_declared_per_file() {
+        let p = GrokSourceParser::with_dir(tempfile::tempdir().unwrap().path().to_path_buf());
+        assert_eq!(
+            p.gate_mode(Path::new("/x/summary.json")),
+            GateMode::MtimeOnly,
+            "summary re-reads whole — no line cursor"
+        );
+        assert_eq!(
+            p.gate_mode(Path::new("/x/chat_history.jsonl")),
+            GateMode::LineCursor
+        );
+        assert_eq!(
+            p.gate_mode(Path::new("/x/updates.jsonl")),
+            GateMode::LineCursor
+        );
+    }
+
     /// chat_history.jsonl incremental: only appended lines yield messages.
     #[test]
     fn grok_incremental_chat_history_emits_only_appended_messages() {
@@ -1064,6 +1085,19 @@ mod tests {
         let p = GrokSourceParser::with_dir(dir.path().to_path_buf());
         let (r1, delta) = p.collect_incremental(&ScanProgress::new()).unwrap();
         assert_eq!(r1.messages.len(), 1, "first pass: one message");
+        // The honest cursor contract: the summary's cursor is mtime-only
+        // (line offset 0), the chat's is a real line cursor.
+        let key_summary = crate::source_parser::scan_progress_key(&session_dir.join("summary.json"));
+        let key_chat = crate::source_parser::scan_progress_key(&chat_path);
+        assert_eq!(
+            delta.get(&key_summary).unwrap().last_line_offset,
+            0,
+            "summary.json has no line cursor (mtime-only)"
+        );
+        assert!(
+            delta.get(&key_chat).unwrap().last_line_offset >= 1,
+            "chat_history.jsonl advances a real line cursor"
+        );
         let progress: ScanProgress = delta;
         std::thread::sleep(std::time::Duration::from_millis(20));
         {

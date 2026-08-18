@@ -6,9 +6,15 @@ use crate::error::AppResult;
 use crate::model::{RawSession, ServerToolUse, SessionMessage, SessionMessageRole, TokenCounts};
 
 use super::{
-    collect_jsonl_incremental, truncate, CollectResult, RawTurnDuration, RawUsage, ScanProgress,
-    ScanProgressDelta, SourceParser, TITLE_MAX, TRIM_LIMIT,
+    collect_jsonl_incremental, discover_files, is_jsonl_file, truncate, CollectResult,
+    DirectoryShape, RawTurnDuration, RawUsage, ScanProgress, ScanProgressDelta, SourceParser,
+    TITLE_MAX, TRIM_LIMIT,
 };
+
+/// Stable source tag — becomes `RawUsage.source` / `RawSession.source` and the
+/// DB source column; the single literal behind `name()`, usage, and session
+/// construction.
+const SOURCE_TAG: &str = "claude_code";
 
 /// Claude Code session-log parser.
 ///
@@ -248,7 +254,7 @@ impl ClaudeCodeSourceParser {
             };
             vec![RawSession {
                 id: session_id,
-                source: "claude_code".to_string(),
+                source: SOURCE_TAG.to_string(),
                 project_dir,
                 title_orig,
                 started_at,
@@ -271,36 +277,25 @@ impl ClaudeCodeSourceParser {
 
 impl SourceParser for ClaudeCodeSourceParser {
     fn name(&self) -> &'static str {
-        "claude_code"
+        SOURCE_TAG
     }
 
     fn discover(&self) -> AppResult<Vec<PathBuf>> {
-        if !self.projects_dir.exists() {
-            // No Claude Code sessions on this machine yet — not an error.
-            return Ok(Vec::new());
-        }
-        let mut out = Vec::new();
-        for entry in walkdir::WalkDir::new(&self.projects_dir)
-            .follow_links(false)
-            .into_iter()
-            .filter_map(|e| e.ok())
-        {
-            if !entry.file_type().is_file() {
-                continue;
-            }
-            let path = entry.path();
-            if path.extension().and_then(|e| e.to_str()) != Some("jsonl") {
-                continue;
-            }
-            // `agent-*.jsonl` (subagent/sidechain sessions) ARE included: they
-            // are real token consumers and show up as subagent sessions with
-            // their `.meta.json` task description as title. Without that
-            // meta-driven naming they'd flood the list as duplicate-titled
-            // noise — the reason they were once skipped (a real project dir
-            // had 49 agent- files vs 5 real sessions).
-            out.push(path.to_path_buf());
-        }
-        Ok(out)
+        // Missing projects dir (no Claude Code sessions on this machine yet)
+        // is not an error — the shared skeleton yields no files for an absent
+        // root. `agent-*.jsonl` (subagent/sidechain sessions) ARE included:
+        // they are real token consumers and show up as subagent sessions with
+        // their `.meta.json` task description as title. Without that
+        // meta-driven naming they'd flood the list as duplicate-titled noise
+        // — the reason they were once skipped (a real project dir had 49
+        // agent- files vs 5 real sessions).
+        Ok(discover_files(
+            &[DirectoryShape {
+                root: self.projects_dir.clone(),
+                max_depth: None,
+            }],
+            is_jsonl_file,
+        ))
     }
 
     fn parse(&self, files: &[PathBuf]) -> AppResult<CollectResult> {
@@ -472,7 +467,7 @@ impl SessionEvent {
             uuid,
             timestamp,
             model: msg.model.unwrap_or_else(|| "unknown".to_string()),
-            source: "claude_code".to_string(),
+            source: SOURCE_TAG.to_string(),
             session_id: session_id.to_string(),
             tokens,
             server_tool_use: ServerToolUse {

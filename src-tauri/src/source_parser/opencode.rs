@@ -3,13 +3,18 @@
 use std::path::{Path, PathBuf};
 
 use crate::error::{AppError, AppResult};
-use crate::model::{RawSession, ServerToolUse, SessionMessage, SessionMessageRole, TokenCounts};
+use crate::model::{RawSession, SessionMessage, SessionMessageRole, TokenCounts};
 use crate::time::epoch_millis_to_iso;
 
 use super::{
-    metadata_modified_nanos, truncate, CollectResult, FileCursor, RawUsage, ScanProgress,
+    metadata_modified_nanos, truncate, CollectResult, FileCursor, GateMode, RawUsage, ScanProgress,
     ScanProgressDelta, SourceParser, TRIM_LIMIT,
 };
+
+/// Stable source tag — becomes `RawUsage.source` / `RawSession.source` and the
+/// DB source column; the single literal behind `name()`, usage, and session
+/// construction.
+const SOURCE_TAG: &str = "opencode";
 
 /// OpenCode (`~/.local/share/opencode/opencode.db`) session-log parser.
 ///
@@ -46,7 +51,7 @@ impl OpenCodeSourceParser {
 
 impl SourceParser for OpenCodeSourceParser {
     fn name(&self) -> &'static str {
-        "opencode"
+        SOURCE_TAG
     }
 
     fn discover(&self) -> AppResult<Vec<PathBuf>> {
@@ -197,6 +202,15 @@ impl SourceParser for OpenCodeSourceParser {
         );
         Ok((result, delta))
     }
+
+    /// SQLite-backed: the incremental gate is a per-session watermark (db
+    /// mtime + per-session `time_updated`), not a line cursor — declared so
+    /// the shared driver's line-cursor contract is not assumed for this
+    /// parser. Its own `collect_incremental` does not consult this; the
+    /// declaration pins the strategy where a future driver change can see it.
+    fn gate_mode(&self, _file: &Path) -> GateMode {
+        GateMode::SessionWatermark
+    }
 }
 
 /// Resolve the opencode db path: `OPENCODE_DB` (absolute) > `XDG_DATA_HOME` >
@@ -317,7 +331,7 @@ fn query_session_rows(conn: &rusqlite::Connection) -> AppResult<Vec<OpenCodeSess
 fn opencode_raw_session(row: &OpenCodeSessionRow) -> RawSession {
     RawSession {
         id: row.id.clone(),
-        source: "opencode".to_string(),
+        source: SOURCE_TAG.to_string(),
         project_dir: row.directory.clone(),
         title_orig: derive_title(&row.title, &row.directory),
         started_at: epoch_millis_to_iso(row.time_created_ms),
@@ -617,7 +631,7 @@ fn opencode_raw_usage(session_id: &str, message_id: &str, msg: &OpenCodeMessageD
         uuid: format!("opencode:{session_id}:{message_id}"),
         timestamp,
         model: msg.model_id.clone(),
-        source: "opencode".to_string(),
+        source: SOURCE_TAG.to_string(),
         session_id: session_id.to_string(),
         tokens: TokenCounts {
             input: msg.input_tokens,
@@ -625,10 +639,7 @@ fn opencode_raw_usage(session_id: &str, message_id: &str, msg: &OpenCodeMessageD
             cache_creation: msg.cache_write_tokens,
             cache_read: msg.cache_read_tokens,
         },
-        server_tool_use: ServerToolUse::default(),
-        stop_reason: String::new(),
-        service_tier: String::new(),
-        iterations: 0,
+        ..Default::default()
     }
 }
 

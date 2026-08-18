@@ -3,13 +3,18 @@
 use std::path::{Path, PathBuf};
 
 use crate::error::AppResult;
-use crate::model::{RawSession, ServerToolUse, SessionMessage, SessionMessageRole, TokenCounts};
+use crate::model::{RawSession, SessionMessage, SessionMessageRole, TokenCounts};
 
 use super::{
-    collect_jsonl_incremental, normalize_cache_inclusive, truncate, CollectResult,
-    FileParseOutcome, RawUsage, ScanProgress, ScanProgressDelta, SourceParser, TITLE_MAX,
-    TRIM_LIMIT,
+    collect_jsonl_incremental, discover_files, normalize_cache_inclusive, truncate, CollectResult,
+    DirectoryShape, FileParseOutcome, GateMode, RawUsage, ScanProgress, ScanProgressDelta,
+    SourceParser, TITLE_MAX, TRIM_LIMIT,
 };
+
+/// Stable source tag — becomes `RawUsage.source` / `RawSession.source` and the
+/// DB source column; the single literal behind `name()`, usage, and session
+/// construction.
+const SOURCE_TAG: &str = "gemini_cli";
 
 /// Gemini CLI (`~/.gemini`) session-log parser.
 ///
@@ -40,50 +45,24 @@ impl GeminiCliSourceParser {
     pub(crate) fn with_dir(dir: PathBuf) -> Self {
         Self { gemini_dir: dir }
     }
-
-    fn discover_in(&self) -> Vec<PathBuf> {
-        let mut files = Vec::new();
-        let tmp = self.gemini_dir.join("tmp");
-        if !tmp.is_dir() {
-            return files;
-        }
-        let Ok(project_dirs) = std::fs::read_dir(&tmp) else {
-            return files;
-        };
-        for entry in project_dirs.flatten() {
-            let chats = entry.path().join("chats");
-            if !chats.is_dir() {
-                continue;
-            }
-            let Ok(chat_files) = std::fs::read_dir(&chats) else {
-                continue;
-            };
-            for fe in chat_files.flatten() {
-                let path = fe.path();
-                let is_session = path
-                    .file_name()
-                    .and_then(|n| n.to_str())
-                    .map(|n| n.starts_with("session-") && n.ends_with(".json"))
-                    .unwrap_or(false);
-                if is_session {
-                    files.push(path);
-                }
-            }
-        }
-        files
-    }
 }
 
 impl SourceParser for GeminiCliSourceParser {
     fn name(&self) -> &'static str {
-        "gemini_cli"
+        SOURCE_TAG
     }
 
     fn discover(&self) -> AppResult<Vec<PathBuf>> {
-        if !self.gemini_dir.exists() {
-            return Ok(Vec::new());
-        }
-        Ok(self.discover_in())
+        // Fixed two-level shape `tmp/<project_hash>/chats/session-*.json`. A
+        // missing gemini dir (no CLI install / no sessions yet) is not an
+        // error — the shared skeleton yields no files for an absent root.
+        Ok(discover_files(
+            &[DirectoryShape {
+                root: self.gemini_dir.join("tmp"),
+                max_depth: Some(3), // tmp/<hash>/chats/*.json
+            }],
+            is_gemini_session_file,
+        ))
     }
 
     fn parse(&self, files: &[PathBuf]) -> AppResult<CollectResult> {
@@ -115,23 +94,43 @@ impl SourceParser for GeminiCliSourceParser {
     }
 
     /// Incremental collect: a Gemini session file is a single JSON object, so
-    /// there is no line cursor — only the mtime gate (owned by the shared JSONL
-    /// driver) is meaningful, and a gated file is re-parsed in full. The line
-    /// cursor the driver advances is harmless: this parser's `parse_file`
-    /// ignores `start_line` and parses the whole text every gate pass. The
-    /// store dedups already-seen message ids at ingest; a CLI rewrite that
-    /// changes an existing message's tokens is NOT re-costed (freeze + top-up
-    /// only), which matches the session-log contract.
+    /// there is no line cursor — [`GateMode::MtimeOnly`] declares that, and
+    /// the shared driver mtime-gates the file and re-parses it in full
+    /// (recording no line offset). The store dedups already-seen message ids
+    /// at ingest; a CLI rewrite that changes an existing message's tokens is
+    /// NOT re-costed (freeze + top-up only), which matches the session-log
+    /// contract.
     fn collect_incremental(
         &self,
         progress: &ScanProgress,
     ) -> AppResult<(CollectResult, ScanProgressDelta)> {
         collect_jsonl_incremental(self, progress, |file, text, _start_line| {
-            // Single JSON object per file ⇒ no line cursor; `start_line` is
-            // irrelevant and the whole text is parsed on every gate pass.
             fold_file(file, text)
         })
     }
+
+    /// A Gemini session file is one JSON object — mtime-only, no line cursor.
+    /// Declared (not pretended) so the shared driver records no line offset
+    /// for these files.
+    fn gate_mode(&self, _file: &Path) -> GateMode {
+        GateMode::MtimeOnly
+    }
+}
+
+/// Gemini session files live at `tmp/<project_hash>/chats/session-*.json` —
+/// the `chats` parent check pins the shape so sibling files elsewhere (e.g.
+/// `.project_root`) can never match.
+fn is_gemini_session_file(path: &Path) -> bool {
+    let in_chats = path
+        .parent()
+        .and_then(|p| p.file_name())
+        .and_then(|n| n.to_str())
+        == Some("chats");
+    in_chats
+        && path
+            .file_name()
+            .and_then(|n| n.to_str())
+            .is_some_and(|n| n.starts_with("session-") && n.ends_with(".json"))
 }
 
 /// Parsed token fields from a Gemini `tokens` object (pre-thoughts-merge).
@@ -269,7 +268,7 @@ fn fold_file(file: &Path, text: &str) -> FileParseOutcome {
         turn_durations: Vec::new(),
         sessions: vec![RawSession {
             id: session_id,
-            source: "gemini_cli".to_string(),
+            source: SOURCE_TAG.to_string(),
             project_dir,
             title_orig,
             started_at,
@@ -316,7 +315,7 @@ fn extract_usage(msg: &serde_json::Value, session_id: &str) -> Option<RawUsage> 
         uuid: format!("gemini:{session_id}:{message_id}"),
         timestamp: super::fallback_timestamp(timestamp),
         model: model.to_string(),
-        source: "gemini_cli".to_string(),
+        source: SOURCE_TAG.to_string(),
         session_id: session_id.to_string(),
         tokens: TokenCounts {
             input: fresh_input,
@@ -324,10 +323,7 @@ fn extract_usage(msg: &serde_json::Value, session_id: &str) -> Option<RawUsage> 
             cache_creation: 0,
             cache_read: clamped_cache_read,
         },
-        server_tool_use: ServerToolUse::default(),
-        stop_reason: String::new(),
-        service_tier: String::new(),
-        iterations: 0,
+        ..Default::default()
     })
 }
 
@@ -504,6 +500,10 @@ mod tests {
         let p = GeminiCliSourceParser::with_dir(dir.path().to_path_buf());
         let (r1, delta) = p.collect_incremental(&ScanProgress::new()).unwrap();
         assert_eq!(r1.events.len(), 1);
+        // mtime-only gate: the recorded cursor carries NO line offset — the
+        // fake line-cursor contract must not leak here.
+        let (_, cursor) = delta.iter().next().expect("cursor recorded");
+        assert_eq!(cursor.last_line_offset, 0, "no line cursor for Gemini files");
         let progress: ScanProgress = delta;
         // Unchanged file ⇒ mtime gate skips it entirely.
         let (r2, delta2) = p.collect_incremental(&progress).unwrap();

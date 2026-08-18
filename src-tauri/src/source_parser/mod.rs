@@ -1,7 +1,11 @@
 //! Source-log parsers (parse local session logs).
 //!
 //! Plugin trait + shared incremental driver. Concrete parsers live in
-//! submodules (`claude`, `codex`, `gemini`, `grok`, `opencode`). A parser
+//! submodules (`claude`, `codex`, `gemini`, `grok`, `opencode`). Discovery
+//! funnels through one shared directory-walk skeleton ([`DirectoryShape`] +
+//! [`discover_files`]) and each file's incremental gate is declared
+//! ([`GateMode`] via [`SourceParser::gate_mode`]) — parsers never inline
+//! their own walkers or pretend a line cursor they don't honor. A parser
 //! discovers Source files and parses them into two raw streams:
 //!   - per-call [`RawUsage`] (one per `assistant` event = one API request), and
 //!   - per-turn [`RawTurnDuration`] (from `system/turn_duration` events).
@@ -22,7 +26,12 @@ mod grok;
 mod opencode;
 
 /// A single parsed per-call usage event (parser output, pre-cost / pre-device).
-#[derive(Debug, Clone, PartialEq)]
+///
+/// `Default` is the empty-record shape the append parsers use via
+/// `..Default::default()` for the tail fields sources don't populate
+/// (server_tool_use / stop_reason / service_tier / iterations) — the
+/// one place that zero tail is written.
+#[derive(Debug, Clone, PartialEq, Default)]
 pub struct RawUsage {
     /// Globally-unique id from the Source log — the dedup key.
     pub uuid: String,
@@ -93,6 +102,8 @@ pub struct FileCursor {
     /// File mtime (nanos) as last seen by this cursor.
     pub last_modified: i64,
     /// Last fully-processed 1-based line number. 0 = nothing parsed yet.
+    /// Mtime-only files ([`GateMode::MtimeOnly`]) keep this at 0 — they have
+    /// no line cursor.
     pub last_line_offset: i64,
 }
 
@@ -133,6 +144,16 @@ pub trait SourceParser: Send + Sync {
         &self,
         progress: &ScanProgress,
     ) -> AppResult<(CollectResult, ScanProgressDelta)>;
+
+    /// Incremental gate strategy for one of this parser's source files —
+    /// declared, not assumed, so [`collect_jsonl_incremental`] never pretends
+    /// a line cursor for files that don't honor it (Gemini's single-JSON
+    /// files, Grok summary.json) and SQLite parsers (OpenCode) state their
+    /// watermark model. The driver consults this per file; the default is the
+    /// append-JSONL line cursor.
+    fn gate_mode(&self, _file: &Path) -> GateMode {
+        GateMode::LineCursor
+    }
 
     /// Session ids represented by the discovered files — the reconciliation
     /// "seen" set. Default = file stem (Claude: one session per jsonl and the
@@ -193,16 +214,37 @@ pub(super) struct FileParseOutcome {
     pub(super) skipped: u32,
 }
 
-/// Shared incremental collect for line-oriented JSONL sources (Claude Code,
-/// Codex, Grok) plus Gemini (single JSON object per file, no line cursor — its
-/// `parse_file` ignores `start_line` and re-parses the whole text on each gate
-/// pass). Walks every discovered file: mtime-gates unchanged ones, re-reads
-/// changed ones past their line cursor, and hands the file text + start line to
-/// `parse_file` — the only thing that differs across these parsers is "how a
-/// file's text becomes events". `parse_file` receives the 1-based start line
-/// (already self-healed on truncation) and must skip lines at or before it.
-/// OpenCode (SQLite, two-level watermark) keeps its own `collect_incremental` —
-/// its source shape does not fit this driver.
+/// How a parser's per-file incremental gate advances — declared per file via
+/// [`SourceParser::gate_mode`], so the line-cursor contract of
+/// [`collect_jsonl_incremental`] is never pretended for files that don't
+/// honor one.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum GateMode {
+    /// Skip lines at/before the stored `last_line_offset`; the driver hands
+    /// `parse_file` the 1-based start line (self-healed on truncation) and
+    /// advances the offset (partial-last-line guard). Append-only JSONL logs:
+    /// Claude, Codex, Grok chat/updates.
+    LineCursor,
+    /// Re-parse the whole file whenever it passes the mtime gate; the line
+    /// offset is meaningless and stays 0. Single-object JSON: Gemini,
+    /// Grok summary.json.
+    MtimeOnly,
+    /// Per-session watermark inside the source (SQLite: OpenCode). The shared
+    /// JSONL driver does not apply.
+    SessionWatermark,
+}
+
+/// Shared incremental collect for line-oriented JSONL sources. Walks every
+/// discovered file: mtime-gates unchanged ones, re-reads changed ones, and
+/// hands the file text + start line to `parse_file`. Each file's [`GateMode`]
+/// (declared by its parser via [`SourceParser::gate_mode`]) decides whether
+/// `start_line` is meaningful: line-cursor files (Claude, Codex, Grok
+/// chat/updates) skip lines at or before it (already self-healed on
+/// truncation); mtime-only files (Gemini's single JSON object, Grok
+/// summary.json) ignore it and re-parse the whole text on each gate pass,
+/// recording no line offset. OpenCode (SQLite, two-level session watermark)
+/// keeps its own `collect_incremental` — its source shape does not fit this
+/// driver.
 pub(super) fn collect_jsonl_incremental(
     parser: &dyn SourceParser,
     progress: &ScanProgress,
@@ -217,6 +259,7 @@ pub(super) fn collect_jsonl_incremental(
     let mut delta = ScanProgressDelta::new();
 
     for file in &files {
+        let gate_mode = parser.gate_mode(file);
         let path_str = scan_progress_key(file);
         // mtime gate — one stat; unchanged files do no IO/serde.
         let metadata = match std::fs::metadata(file) {
@@ -239,14 +282,32 @@ pub(super) fn collect_jsonl_incremental(
                 continue;
             }
         };
-        let total_lines = text.lines().count() as i64;
-        // Truncation self-heal: if the file shrank below the last known offset,
-        // re-read from the start (would otherwise silently drop post-truncation
-        // appends).
-        let start_line = if total_lines < prev.last_line_offset {
-            0
+        // Line-cursor files derive the start line (truncation self-heal) and
+        // the advanced offset (partial-last-line guard); mtime-only files get
+        // (0, 0) — the offset is meaningless for them and stays 0.
+        let (start_line, new_offset) = if gate_mode == GateMode::LineCursor {
+            let total_lines = text.lines().count() as i64;
+            // Truncation self-heal: if the file shrank below the last known
+            // offset, re-read from the start (would otherwise silently drop
+            // post-truncation appends).
+            let start_line = if total_lines < prev.last_line_offset {
+                0
+            } else {
+                prev.last_line_offset
+            };
+            // Partial-last-line guard: no trailing newline ⇒ the last line may
+            // be mid-write; don't advance past it or the next collect skips it.
+            let ends_clean = text.ends_with('\n') || text.ends_with('\r');
+            let new_offset = if ends_clean {
+                total_lines
+            } else if total_lines > start_line {
+                total_lines - 1
+            } else {
+                start_line
+            };
+            (start_line, new_offset)
         } else {
-            prev.last_line_offset
+            (0, 0)
         };
         let outcome = parse_file(file, &text, start_line);
         events.extend(outcome.events);
@@ -254,16 +315,6 @@ pub(super) fn collect_jsonl_incremental(
         sessions.extend(outcome.sessions);
         messages.extend(outcome.messages);
         skipped += outcome.skipped;
-        // Partial-last-line guard: no trailing newline ⇒ the last line may be
-        // mid-write; don't advance past it or the next collect skips it.
-        let ends_clean = text.ends_with('\n') || text.ends_with('\r');
-        let new_offset = if ends_clean {
-            total_lines
-        } else if total_lines > start_line {
-            total_lines - 1
-        } else {
-            start_line
-        };
         delta.insert(
             path_str,
             FileCursor {
@@ -358,6 +409,59 @@ pub(super) fn parse_jsonl_full(
         lines_skipped: skipped,
         session_ids,
     })
+}
+
+/// One directory shape a parser declares for discovery: a root to walk plus
+/// the max directory depth at which files are collected.
+pub(super) struct DirectoryShape {
+    pub(super) root: PathBuf,
+    /// Max depth below `root` (walkdir depth: `root` = 0, its children = 1)
+    /// at which files are collected; directories at exactly `max_depth` are
+    /// not descended into. `None` = unlimited.
+    pub(super) max_depth: Option<u32>,
+}
+
+/// The shared directory-walk skeleton behind every file-backed parser's
+/// `discover` — the traversal invariants live here once, not in per-parser
+/// copies:
+///   - a missing/empty root yields no files (absent source dir is not an
+///     error);
+///   - only regular files are collected, in deterministic order per call
+///     (readdir order, never sorted — the collect layer sorts what needs
+///     sorting);
+///   - symlinks are never followed (not even symlinked files);
+///   - unreadable subtrees are skipped entry-wise.
+/// Per-parser code only declares its directory shapes and a filename
+/// predicate.
+pub(super) fn discover_files(
+    shapes: &[DirectoryShape],
+    is_target: impl Fn(&Path) -> bool,
+) -> Vec<PathBuf> {
+    let mut out = Vec::new();
+    for shape in shapes {
+        if !shape.root.is_dir() {
+            continue; // absent source dir — not an error
+        }
+        for entry in walkdir::WalkDir::new(&shape.root)
+            .follow_links(false)
+            .max_depth(shape.max_depth.unwrap_or(u32::MAX) as usize)
+            .into_iter()
+            .filter_map(|e| e.ok())
+        {
+            if !entry.file_type().is_file() {
+                continue;
+            }
+            if is_target(entry.path()) {
+                out.push(entry.path().to_path_buf());
+            }
+        }
+    }
+    out
+}
+
+/// Shared filename predicate for the append-JSONL parsers (Claude, Codex).
+pub(super) fn is_jsonl_file(path: &Path) -> bool {
+    path.extension().and_then(|e| e.to_str()) == Some("jsonl")
 }
 
 /// Normalize a cache-inclusive `input` — one whose value already contains its
@@ -485,5 +589,122 @@ mod tests {
         // Both zero ⇒ both zero.
         let (fresh, cached) = normalize_cache_inclusive(0, 0);
         assert_eq!((fresh, cached), (0, 0));
+    }
+
+    // ===================== discovery skeleton invariants =====================
+    //
+    // The shared walker's invariants (missing root = empty not error, depth
+    // cap, deterministic order, no symlink following) are pinned here once —
+    // every parser's `discover` runs this exact skeleton over real tempdirs,
+    // so these tests exercise the production path, not a mock.
+
+    fn shape(root: PathBuf, max_depth: Option<u32>) -> DirectoryShape {
+        DirectoryShape { root, max_depth }
+    }
+
+    #[test]
+    fn discover_missing_or_empty_root_yields_empty_not_error() {
+        let base = tempfile::tempdir().unwrap();
+        // Missing root: an absent source dir is not an error.
+        assert!(
+            discover_files(&[shape(base.path().join("nope"), None)], is_jsonl_file).is_empty()
+        );
+        // Existing but empty root: same.
+        let empty = base.path().join("empty");
+        std::fs::create_dir_all(&empty).unwrap();
+        assert!(discover_files(&[shape(empty, None)], is_jsonl_file).is_empty());
+    }
+
+    #[test]
+    fn discover_respects_max_depth() {
+        let base = tempfile::tempdir().unwrap();
+        let root = base.path().join("root");
+        std::fs::create_dir_all(root.join("l1").join("l2")).unwrap();
+        std::fs::write(root.join("a.jsonl"), "{}").unwrap(); // depth 1
+        std::fs::write(root.join("l1").join("b.jsonl"), "{}").unwrap(); // depth 2
+        std::fs::write(root.join("l1").join("l2").join("c.jsonl"), "{}").unwrap(); // depth 3
+        fn names(files: &[PathBuf]) -> Vec<&str> {
+            let mut v: Vec<&str> = files
+                .iter()
+                .filter_map(|p| p.file_name().and_then(|n| n.to_str()))
+                .collect();
+            // readdir order is platform-dependent — compare membership only.
+            v.sort_unstable();
+            v
+        }
+        assert_eq!(
+            names(&discover_files(&[shape(root.clone(), Some(1))], is_jsonl_file)),
+            vec!["a.jsonl"]
+        );
+        assert_eq!(
+            names(&discover_files(&[shape(root.clone(), Some(2))], is_jsonl_file)),
+            vec!["a.jsonl", "b.jsonl"]
+        );
+        assert_eq!(
+            names(&discover_files(&[shape(root, None)], is_jsonl_file)),
+            vec!["a.jsonl", "b.jsonl", "c.jsonl"]
+        );
+    }
+
+    #[test]
+    fn discover_order_is_deterministic_across_calls() {
+        // Same tree, two walks → byte-identical order (readdir order is stable
+        // for an unchanged tree on one machine; the skeleton must not inject
+        // nondeterminism such as HashMap iteration).
+        let base = tempfile::tempdir().unwrap();
+        let root = base.path().join("root");
+        std::fs::create_dir_all(root.join("sub")).unwrap();
+        for (dir, file) in [("", "x.jsonl"), ("", "y.jsonl"), ("sub", "z.jsonl")] {
+            std::fs::write(root.join(dir).join(file), "{}").unwrap();
+        }
+        let r1 = discover_files(&[shape(root.clone(), None)], is_jsonl_file);
+        let r2 = discover_files(&[shape(root, None)], is_jsonl_file);
+        assert_eq!(r1, r2, "identical order across calls");
+    }
+
+    #[test]
+    fn discover_does_not_follow_symlinks() {
+        let base = tempfile::tempdir().unwrap();
+        let root = base.path().join("root");
+        std::fs::create_dir_all(root.join("real")).unwrap();
+        std::fs::write(root.join("real").join("x.jsonl"), "{}").unwrap();
+        // Windows needs Developer Mode (or admin) for symlinks — skip then.
+        if symlink_dir(&root.join("real"), &root.join("linkdir")).is_err() {
+            return;
+        }
+        if symlink_file(&root.join("real").join("x.jsonl"), &root.join("linkfile.jsonl")).is_err()
+        {
+            return;
+        }
+        let files = discover_files(&[shape(root, None)], is_jsonl_file);
+        assert_eq!(
+            files.len(),
+            1,
+            "a symlinked dir and a symlinked file are both skipped"
+        );
+        assert_eq!(
+            files[0].file_name().and_then(|n| n.to_str()),
+            Some("x.jsonl"),
+            "only the real file is collected"
+        );
+    }
+
+    /// `std::fs` has no portable symlink API — cfg-gated helpers for the
+    /// no-symlink-following test above.
+    #[cfg(unix)]
+    fn symlink_dir(target: &Path, link: &Path) -> std::io::Result<()> {
+        std::os::unix::fs::symlink_dir(target, link)
+    }
+    #[cfg(windows)]
+    fn symlink_dir(target: &Path, link: &Path) -> std::io::Result<()> {
+        std::os::windows::fs::symlink_dir(target, link)
+    }
+    #[cfg(unix)]
+    fn symlink_file(target: &Path, link: &Path) -> std::io::Result<()> {
+        std::os::unix::fs::symlink(target, link)
+    }
+    #[cfg(windows)]
+    fn symlink_file(target: &Path, link: &Path) -> std::io::Result<()> {
+        std::os::windows::fs::symlink_file(target, link)
     }
 }
