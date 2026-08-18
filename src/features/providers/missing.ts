@@ -13,7 +13,7 @@ import {
   openCodeOptionsOf,
   parseOpenCodeEntry,
 } from "./codecs/opencode"
-import { extractTemplateVars } from "./derive"
+import { extractTemplateVars } from "./template-vars"
 
 /** 宽容读 TOML 文本里首个 `key = "value"` 字符串赋值（codex/grok 的
  *  settingsConfig 是 preset 形状的机器生成 TOML；缺键 → null）。切换前必填项
