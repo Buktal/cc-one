@@ -2,13 +2,15 @@
 //!
 //! Stores the day-buckets holding un-pushed local changes and the per-day
 //! source rows the push path re-exports. Also hosts the shared
-//! `mark_days_dirty` helper used by the collect-side ingest path.
+//! `mark_days_dirty` helper used by the collect-side ingest path, and the
+//! combined dirty-flag clear ([`Store::clear_dirty_flags_if_unchanged`]) that
+//! the push flow uses to drop days AND sessions in one transaction.
 
 use super::schema;
 use super::*;
 
 /// Recompute-time row counts for one day — exactly what the push materialized
-/// from the store. `clear_dirty_days_if_unchanged` re-checks these counts
+/// from the store. `clear_dirty_flags_if_unchanged` re-checks these counts
 /// before dropping the day's dirty flag, so a row that raced in after the
 /// snapshot keeps the day dirty (a blind delete would strand it on the
 /// local-only side of git forever).
@@ -19,12 +21,12 @@ pub struct DaySnapshot {
 }
 
 impl super::Store {
-    // ---------------- Dirty days (sync recompute driver) ----------------
+    // ---------------- Dirty flags (sync recompute driver) ----------------
 
     /// The day-buckets holding un-pushed local changes, in deterministic order
     /// (sorted). Drives the push path's per-day Artifact recompute. Read-only —
     /// it does NOT clear: clearing happens only after a push lands (see
-    /// [`Self::clear_dirty_days_if_unchanged`]), so a failed push leaves the
+    /// [`Self::clear_dirty_flags_if_unchanged`]), so a failed push leaves the
     /// days dirty for the next retry. Pure local state: this makes no claim
     /// about the git worktree and never reads it.
     pub fn dirty_days(&self) -> AppResult<Vec<String>> {
@@ -35,27 +37,40 @@ impl super::Store {
             .map_err(AppError::from)
     }
 
-    /// Clear the dirty flag for each day whose store contents still match the
-    /// recompute-time snapshot — i.e. exactly the rows the last push committed.
-    /// A collect that raced in a new row since (row count grew) keeps the day
-    /// dirty so the next push carries that row up; a blind delete would silently
-    /// strand it (the exact "miss git" failure the same-tx marking prevents on
-    /// the write side). The check and the delete run in ONE transaction, so the
-    /// flag can never be dropped after new rows land between the two. Row counts
-    /// suffice: per-device rows are INSERT-only (a count mismatch exactly means
-    /// "new row since the snapshot"); `forget_device` wipes a whole device, not
-    /// one day, so it never hides a mismatch.
-    pub fn clear_dirty_days_if_unchanged(
+    /// Drop the dirty flags for BOTH flag domains — days and sessions — in ONE
+    /// transaction, each side scoped to its recompute-time snapshot:
+    /// - a day whose `usage_records`/`turn_durations` counts still match the
+    ///   snapshot is cleared; a count that grew since keeps the day dirty;
+    /// - a session whose message count still matches is cleared; a count that
+    ///   grew keeps the session dirty;
+    /// - `removed` sessions (non-favorited, snapshot deleted) clear
+    ///   unconditionally — deletion is idempotent, and a raced re-favorite
+    ///   re-marks the session dirty in `set_session_favorited`.
+    ///
+    /// The single transaction is the pairing invariant: days and sessions
+    /// clear together or not at all. A mid-transaction failure rolls back
+    /// everything, so the store can never sit in "days cleared, sessions still
+    /// dirty" (or the reverse) — the state a crash between two separate clears
+    /// used to leave, which a later no-op push could never heal.
+    ///
+    /// The per-flag check runs BEFORE its delete in the same transaction, so a
+    /// flag can never be dropped after new rows land between the two. Row
+    /// counts suffice: per-device rows are INSERT-only (a count mismatch
+    /// exactly means "new row since the snapshot"); `forget_device` wipes a
+    /// whole device, not one flag, so it never hides a mismatch.
+    pub fn clear_dirty_flags_if_unchanged(
         &self,
-        snapshots: &[DaySnapshot],
         device_id: &str,
+        day_snapshots: &[DaySnapshot],
+        recomputed: &[SessionCounts],
+        removed: &[String],
     ) -> AppResult<()> {
-        if snapshots.is_empty() {
+        if day_snapshots.is_empty() && recomputed.is_empty() && removed.is_empty() {
             return Ok(());
         }
         let mut conn = self.conn.lock().expect("db mutex poisoned");
         let tx = conn.transaction()?;
-        for s in snapshots {
+        for s in day_snapshots {
             let usage: i64 = tx.query_row(
                 "SELECT COUNT(*) FROM usage_records WHERE day = ?1 AND device_id = ?2",
                 params![s.day, device_id],
@@ -69,6 +84,25 @@ impl super::Store {
             if usage == s.usage_rows as i64 && turns == s.turn_rows as i64 {
                 tx.execute("DELETE FROM dirty_days WHERE day = ?1", params![s.day])?;
             }
+        }
+        for s in recomputed {
+            let count: i64 = tx.query_row(
+                "SELECT COUNT(*) FROM session_messages WHERE device_id = ?1 AND session_id = ?2",
+                params![device_id, s.session_id],
+                |r| r.get(0),
+            )?;
+            if count == s.message_rows as i64 {
+                tx.execute(
+                    "DELETE FROM dirty_sessions WHERE session_id = ?1",
+                    params![s.session_id],
+                )?;
+            }
+        }
+        for sid in removed {
+            tx.execute(
+                "DELETE FROM dirty_sessions WHERE session_id = ?1",
+                params![sid],
+            )?;
         }
         tx.commit()?;
         Ok(())
@@ -222,13 +256,15 @@ mod tests {
         let r = rec("a", "2026-07-13", "glm-5.2", "dev1", 100, 50, 1.0);
         s.ingest_marking_dirty(std::slice::from_ref(&r)).unwrap();
         // Snapshot (1 usage row, 0 turns) still matches ⇒ cleared.
-        s.clear_dirty_days_if_unchanged(
+        s.clear_dirty_flags_if_unchanged(
+            "dev1",
             &[DaySnapshot {
                 day: "2026-07-13".into(),
                 usage_rows: 1,
                 turn_rows: 0,
             }],
-            "dev1",
+            &[],
+            &[],
         )
         .unwrap();
         // Same uuid again ⇒ no new row ⇒ no dirty flag.
@@ -267,13 +303,15 @@ mod tests {
             2.0,
         )))
         .unwrap();
-        s.clear_dirty_days_if_unchanged(
+        s.clear_dirty_flags_if_unchanged(
+            "dev1",
             &[DaySnapshot {
                 day: "2026-07-13".into(),
                 usage_rows: 1,
                 turn_rows: 0,
             }],
-            "dev1",
+            &[],
+            &[],
         )
         .unwrap();
         assert_eq!(
@@ -311,7 +349,8 @@ mod tests {
         );
         // Pull-path turn ingest does not flag. (Snapshots still match — the
         // turn count per day is 1.)
-        s.clear_dirty_days_if_unchanged(
+        s.clear_dirty_flags_if_unchanged(
+            "d",
             &[
                 DaySnapshot {
                     day: "2026-07-13".into(),
@@ -324,7 +363,8 @@ mod tests {
                     turn_rows: 1,
                 },
             ],
-            "d",
+            &[],
+            &[],
         )
         .unwrap();
         s.ingest_turn_durations(&[TurnDuration {
@@ -354,5 +394,132 @@ mod tests {
             s.dirty_days().unwrap(),
             vec!["2026-07-13".to_string(), "2026-07-14".to_string()]
         );
+    }
+
+    // ---- combined clear: days + sessions clear together or not at all ----
+
+    /// The production clear shape: ONE call drops a matching day AND a matching
+    /// session together, and the per-flag if-unchanged guard still applies
+    /// within the same call — a day whose rows grew since the snapshot stays
+    /// dirty while the untouched session clears.
+    #[test]
+    fn clear_flags_if_unchanged_clears_days_and_sessions_together() {
+        let s = mem();
+        let dev = "dev1";
+        // Day with one usage row + session with one message, both dirty.
+        s.ingest_marking_dirty(&[rec("u1", "2026-07-13", "glm-5.2", dev, 1, 0, 0.0)])
+            .unwrap();
+        seed_session(&s, "s1", dev, "2026-08-15T10:00:00.000Z");
+        s.ingest_session_messages_marking_dirty(
+            dev,
+            &[msg("m1", "s1", SessionMessageRole::User, "2026-07-13T10:00:00Z")],
+        )
+        .unwrap();
+        assert_eq!(s.dirty_days().unwrap().len(), 1);
+        assert_eq!(s.dirty_sessions().unwrap(), vec!["s1".to_string()]);
+
+        // Matching snapshots ⇒ both clear in one call.
+        s.clear_dirty_flags_if_unchanged(
+            dev,
+            &[DaySnapshot {
+                day: "2026-07-13".into(),
+                usage_rows: 1,
+                turn_rows: 0,
+            }],
+            &[SessionCounts {
+                session_id: "s1".into(),
+                message_rows: 1,
+            }],
+            &[],
+        )
+        .unwrap();
+        assert!(s.dirty_days().unwrap().is_empty());
+        assert!(s.dirty_sessions().unwrap().is_empty());
+
+        // Both grow a post-snapshot row ⇒ both stay dirty (the raced-write
+        // guard applies per flag inside the same transaction).
+        s.ingest_marking_dirty(&[rec("u2", "2026-07-13", "glm-5.2", dev, 1, 0, 0.0)])
+            .unwrap();
+        s.ingest_session_messages_marking_dirty(
+            dev,
+            &[msg("m2", "s1", SessionMessageRole::User, "2026-07-13T10:00:01Z")],
+        )
+        .unwrap();
+        s.clear_dirty_flags_if_unchanged(
+            dev,
+            &[DaySnapshot {
+                day: "2026-07-13".into(),
+                usage_rows: 1,
+                turn_rows: 0,
+            }],
+            &[SessionCounts {
+                session_id: "s1".into(),
+                message_rows: 1,
+            }],
+            &[],
+        )
+        .unwrap();
+        assert_eq!(s.dirty_days().unwrap(), vec!["2026-07-13".to_string()]);
+        assert_eq!(s.dirty_sessions().unwrap(), vec!["s1".to_string()]);
+    }
+
+    /// The clear's pairing invariant under failure: days and sessions clear in
+    /// ONE transaction, so a mid-transaction failure (here: another connection
+    /// holding the SQLite write lock turns the clear's first write into
+    /// SQLITE_BUSY) rolls back EVERYTHING — the store is left with both flag
+    /// sets dirty, never days-clean + sessions-dirty. The failure is injected
+    /// on the SESSIONS side (the day's snapshot mismatches, so the days
+    /// section only reads; the sessions DELETE is the clear's first write) —
+    /// the "second clear fails" scenario the old two-transaction clear got
+    /// wrong. Seeding and the failing call run the production paths
+    /// (`ingest_marking_dirty` / `ingest_session_messages_marking_dirty` /
+    /// `clear_dirty_flags_if_unchanged`) on a real file-backed store.
+    #[test]
+    fn clear_flags_if_unchanged_rolls_back_both_domains_on_mid_transaction_failure() {
+        let dir = tempfile::tempdir().unwrap();
+        let db_path = dir.path().join("cc-one-test.db");
+        let s = Store::open(&db_path).unwrap();
+        let dev = "dev1";
+        // Day + session, both dirty (1 row each at snapshot time).
+        s.ingest_marking_dirty(&[rec("u1", "2026-07-13", "glm-5.2", dev, 1, 0, 0.0)])
+            .unwrap();
+        seed_session(&s, "s1", dev, "2026-08-15T10:00:00.000Z");
+        s.ingest_session_messages_marking_dirty(
+            dev,
+            &[msg("m1", "s1", SessionMessageRole::User, "2026-07-13T10:00:00Z")],
+        )
+        .unwrap();
+        // A second usage row lands AFTER the snapshot ⇒ the day's count
+        // mismatches and the days section performs no writes.
+        s.ingest_marking_dirty(&[rec("u2", "2026-07-13", "glm-5.2", dev, 1, 0, 0.0)])
+            .unwrap();
+        let day_snapshots = [DaySnapshot {
+            day: "2026-07-13".into(),
+            usage_rows: 1,
+            turn_rows: 0,
+        }];
+        let recomputed = [SessionCounts {
+            session_id: "s1".into(),
+            message_rows: 1,
+        }];
+
+        // A second connection to the same file holds the write lock
+        // (BEGIN IMMEDIATE). The clear's first WRITE — the sessions DELETE —
+        // now fails with SQLITE_BUSY mid-transaction.
+        let locker = rusqlite::Connection::open(&db_path).unwrap();
+        locker.execute_batch("BEGIN IMMEDIATE").unwrap();
+        let err = s
+            .clear_dirty_flags_if_unchanged(dev, &day_snapshots, &recomputed, &[])
+            .unwrap_err();
+        assert!(
+            err.to_string().contains("locked"),
+            "failure channel is the injected write-lock: {err}"
+        );
+        drop(locker);
+
+        // Either both cleared or both dirty — a mid-clear failure must leave
+        // both dirty (the transaction rolled back), never a split state.
+        assert_eq!(s.dirty_days().unwrap(), vec!["2026-07-13".to_string()]);
+        assert_eq!(s.dirty_sessions().unwrap(), vec!["s1".to_string()]);
     }
 }

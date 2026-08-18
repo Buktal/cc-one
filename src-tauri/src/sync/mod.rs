@@ -1,9 +1,12 @@
-//! GitHub-repo sync over libgit2, split into two layers:
+//! GitHub-repo sync over libgit2, split into three layers:
 //!   - [`git`] — pure libgit2 primitives (credential callback, open/clone,
 //!     pull, rebase, commit, push, status queries). Knows nothing about the
 //!     Local Store or dirty flags.
+//!   - [`domains`] — the per-syncable-domain pairs (usage / sessions /
+//!     providers / devices): each domain's push-side materialize + pull-side
+//!     import, and the shared atomic dirty-flag clear. Knows nothing about git.
 //!   - [`flow`] — the high-level pull → import → commit → push pipeline that
-//!     composes those primitives with the store and `snapshot_policy`.
+//!     composes the git primitives with the domain pairs.
 //!
 //! Synced-mode only: the high-level entry (`ensure_repo`) refuses to run unless
 //! a repo URL *and* a PAT are configured, so Standalone mode never touches a
@@ -12,6 +15,7 @@
 //! or an env var. Public API is re-exported below so command-layer callers keep
 //! using `crate::sync::*` unchanged.
 
+mod domains;
 mod flow;
 mod git;
 
@@ -831,8 +835,8 @@ mod tests {
     /// favorited sessions whose snapshot file is absent this pull are exactly
     /// what `presence_mismatches` flags, and `bulk_unfavorite_sessions` clears
     /// those (favorited flag + shared messages) while leaving the still-filed
-    /// ones alone. Mirrors `import_peer_sessions`'s per-peer loop without a real
-    /// git round-trip.
+    /// ones alone. Mirrors `domains::sessions_import`'s per-peer loop without a
+    /// real git round-trip.
     #[test]
     fn pull_unfavorite_matches_presence_mismatches_without_git() {
         use crate::model::{SessionMessage, SessionMessageRole, SessionSystemData};
@@ -1095,6 +1099,145 @@ mod tests {
         assert_eq!(
             env_b2["ANTHROPIC_AUTH_TOKEN"], "sk-b-secret",
             "B's key survived A's edit"
+        );
+    }
+
+    /// The dirty-flag pairing invariant, flow level: a PUSH FAILURE leaves the
+    /// store untouched — both flag domains stay dirty (days AND sessions), so
+    /// the retry recomputes everything. The old code only ever failed one side
+    /// or the other at the CLEAR step; this pins the "push never landed ⇒ both
+    /// stay dirty" half of "either both cleared or both dirty".
+    #[test]
+    fn push_usage_failure_keeps_both_flags_dirty() {
+        let tmp = tempfile::tempdir().unwrap();
+        let remote = tmp.path().join("remote.git");
+        seed_remote(&remote);
+        let url = remote.to_string_lossy().to_string();
+        let dev = "aaaaaaaaaaaa";
+        let paths = crate::config::Paths::resolve(&tmp.path().join("dev"));
+        let cfg = ConfigData {
+            repo_url: Some(url.clone()),
+            github_token: Some("tok".into()),
+            device_id: dev.into(),
+            ..Default::default()
+        };
+        let _repo = open_or_clone(&url, &paths.repo, "").unwrap();
+        let store = crate::db::Store::open(std::path::Path::new(":memory:")).unwrap();
+
+        // Day dirty (one usage row) + session dirty (favorited + one message).
+        let book = crate::pricing::seed_book();
+        let rec = crate::collect::ingest::recordify(&raw_usage("a-1"), dev, &book);
+        store
+            .ingest_marking_dirty(std::slice::from_ref(&rec))
+            .unwrap();
+        let sys = crate::model::SessionSystemData {
+            id: "sx".into(),
+            source: "claude_code".into(),
+            project_dir: "/p".into(),
+            title_orig: "Title".into(),
+            started_at: "2026-08-01T00:00:00.000Z".into(),
+            last_active_at: "2026-08-02T00:00:00.000Z".into(),
+            agent_type: String::new(),
+        };
+        let msg = crate::model::SessionMessage {
+            uuid: "m1".into(),
+            session_id: "sx".into(),
+            role: crate::model::SessionMessageRole::User,
+            ts: "2026-08-01T10:00:00.000Z".into(),
+            model: None,
+            name: None,
+            content: "hello".into(),
+        };
+        crate::collect::ingest::ingest_sessions(&store, dev, &[sys], &[msg]).unwrap();
+        store.set_session_favorited(dev, "sx", true).unwrap();
+
+        // The remote dies between clone and push ⇒ commit lands locally, the
+        // push fails, and push_usage must return the error with BOTH flag
+        // domains untouched for the next retry.
+        std::fs::remove_dir_all(&remote).unwrap();
+        assert!(matches!(
+            push_usage(&store, &paths, &cfg).unwrap_err(),
+            AppError::Sync(_)
+        ));
+        assert_eq!(
+            store.dirty_days().unwrap(),
+            vec!["2026-07-13".to_string()],
+            "failed push leaves the dirty day dirty"
+        );
+        assert_eq!(
+            store.dirty_sessions().unwrap(),
+            vec!["sx".to_string()],
+            "failed push leaves the dirty session dirty"
+        );
+    }
+
+    /// The split-clear crash window self-heals: if the process died between
+    /// the commit and the clear, a flag can be stale while its materialized
+    /// snapshot is ALREADY on the remote (nothing to push). The clear must run
+    /// even on a no-op push — gating it on `pushed` would strand the flag
+    /// forever. Construction: push once (snapshot committed), then re-mark the
+    /// session dirty WITHOUT changing its content (the production
+    /// `set_session_favorited` re-mark) — the materialization is byte-identical,
+    /// commit_and_push no-ops, and the flag must still clear.
+    #[test]
+    fn push_usage_clears_stale_flags_on_noop_push_after_split_clear() {
+        use crate::model::{SessionMessage, SessionMessageRole, SessionSystemData};
+
+        let tmp = tempfile::tempdir().unwrap();
+        let remote = tmp.path().join("remote.git");
+        seed_remote(&remote);
+        let url = remote.to_string_lossy().to_string();
+        let dev = "aaaaaaaaaaaa";
+        let paths = crate::config::Paths::resolve(&tmp.path().join("dev"));
+        let cfg = ConfigData {
+            repo_url: Some(url.clone()),
+            github_token: Some("tok".into()),
+            device_id: dev.into(),
+            ..Default::default()
+        };
+        let _repo = open_or_clone(&url, &paths.repo, "").unwrap();
+        let store = crate::db::Store::open(std::path::Path::new(":memory:")).unwrap();
+
+        let sys = SessionSystemData {
+            id: "sx".into(),
+            source: "claude_code".into(),
+            project_dir: "/p".into(),
+            title_orig: "Title".into(),
+            started_at: "2026-08-01T00:00:00.000Z".into(),
+            last_active_at: "2026-08-02T00:00:00.000Z".into(),
+            agent_type: String::new(),
+        };
+        let msg = SessionMessage {
+            uuid: "m1".into(),
+            session_id: "sx".into(),
+            role: SessionMessageRole::User,
+            ts: "2026-08-01T10:00:00.000Z".into(),
+            model: None,
+            name: None,
+            content: "hello".into(),
+        };
+        crate::collect::ingest::ingest_sessions(&store, dev, &[sys], &[msg]).unwrap();
+        store.set_session_favorited(dev, "sx", true).unwrap();
+        assert!(push_usage(&store, &paths, &cfg).unwrap(), "first push ships");
+        assert!(
+            store.dirty_sessions().unwrap().is_empty(),
+            "successful push clears the session"
+        );
+
+        // Simulate the split-clear residue: the session is re-marked dirty
+        // while its snapshot (already committed + pushed) is byte-identical to
+        // what the store would recompute.
+        store.set_session_favorited(dev, "sx", true).unwrap();
+        assert_eq!(store.dirty_sessions().unwrap(), vec!["sx".to_string()]);
+        assert!(!has_changes(&open_or_clone(&url, &paths.repo, "").unwrap()).unwrap());
+
+        // No-op push (nothing to ship) must STILL clear the stale flag — the
+        // unconditional clear heals the crash window instead of stranding it.
+        let pushed = push_usage(&store, &paths, &cfg).unwrap();
+        assert!(!pushed, "nothing new to push");
+        assert!(
+            store.dirty_sessions().unwrap().is_empty(),
+            "stale flag cleared on a no-op push"
         );
     }
 }

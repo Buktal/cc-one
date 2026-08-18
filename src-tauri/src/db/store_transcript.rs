@@ -9,7 +9,7 @@ use super::store_sessions::{upsert_session_row, SessionUpsertPolicy};
 use super::*;
 
 /// Recompute-time message count for one session — what the push wrote.
-/// `clear_dirty_sessions_if_unchanged` re-checks it before dropping the
+/// `Store::clear_dirty_flags_if_unchanged` re-checks it before dropping the
 /// session's dirty flag, so a message that raced in after the snapshot keeps
 /// the session dirty (a blind delete would strand it on the local-only side
 /// of git forever).
@@ -77,7 +77,7 @@ impl super::Store {
     /// Drives the push path's per-session jsonl recompute (a recompute WRITES the
     /// snapshot for a favorited session, DELETES it for a non-favorited one).
     /// Read-only — it does NOT clear: clearing happens only after a push lands
-    /// ([`Self::clear_dirty_sessions_if_unchanged`]), so a failed push retries on
+    /// (`Store::clear_dirty_flags_if_unchanged`), so a failed push retries on
     /// the next attempt. Pure local state: makes no claim about the git worktree.
     pub fn dirty_sessions(&self) -> AppResult<Vec<String>> {
         let conn = self.conn.lock().expect("db mutex poisoned");
@@ -120,50 +120,6 @@ impl super::Store {
             )
             .optional()?;
         Ok(row)
-    }
-
-    /// Clear the dirty flag for each session whose store contents still match the
-    /// recompute-time snapshot — i.e. exactly the sessions the last push committed.
-    /// A collect that raced in a new message since (count grew) keeps the session
-    /// dirty so the next push carries it up; a blind delete would silently strand
-    /// it. `recomputed` are favorited sessions that had a snapshot written (cleared
-    /// only when their message count is unchanged); `removed` are non-favorited
-    /// sessions whose leftover snapshot was deleted (cleared unconditionally —
-    /// deletion is idempotent, and a raced re-favorite re-marks the session dirty
-    /// in `set_session_favorited`). The check and the delete run in ONE transaction,
-    /// so the flag can never drop after new messages land between the two.
-    pub fn clear_dirty_sessions_if_unchanged(
-        &self,
-        recomputed: &[SessionCounts],
-        device_id: &str,
-        removed: &[String],
-    ) -> AppResult<()> {
-        if recomputed.is_empty() && removed.is_empty() {
-            return Ok(());
-        }
-        let mut conn = self.conn.lock().expect("db mutex poisoned");
-        let tx = conn.transaction()?;
-        for s in recomputed {
-            let count: i64 = tx.query_row(
-                "SELECT COUNT(*) FROM session_messages WHERE device_id = ?1 AND session_id = ?2",
-                params![device_id, s.session_id],
-                |r| r.get(0),
-            )?;
-            if count == s.message_rows as i64 {
-                tx.execute(
-                    "DELETE FROM dirty_sessions WHERE session_id = ?1",
-                    params![s.session_id],
-                )?;
-            }
-        }
-        for sid in removed {
-            tx.execute(
-                "DELETE FROM dirty_sessions WHERE session_id = ?1",
-                params![sid],
-            )?;
-        }
-        tx.commit()?;
-        Ok(())
     }
 
     /// Import a peer's session snapshot into the store (pull path). UPSERTs the

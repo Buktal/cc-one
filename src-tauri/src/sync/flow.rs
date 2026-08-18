@@ -1,20 +1,19 @@
 //! High-level sync flow: compose the low-level git primitives (`super::git`)
-//! with the Local Store (dirty-day / dirty-session tracking) and snapshot_policy
-//! to form the full pull → import → commit → push pipeline. This is the only
-//! layer that knows about both git AND the store — `super::git` stays pure git,
-//! and the store stays pure SQL. Best-effort wrappers (`*_best_effort`) swallow
-//! errors for background/exit paths; their fallible counterparts propagate.
+//! with the per-domain sync pairs (`super::domains`) to form the full
+//! pull → import → commit → push pipeline. This is the only layer that knows
+//! about git — `super::git` stays pure git, the store stays pure SQL, and
+//! `super::domains` owns each syncable domain's materialize/import pair, so
+//! adding a domain never touches this file beyond one import call per side.
+//! Best-effort wrappers (`*_best_effort`) swallow errors for background/exit
+//! paths; their fallible counterparts propagate.
 
 use super::git::{
     author_email, commit_all, has_changes, is_ahead_of_origin, open_or_clone, pull, push,
     rebase_and_push, require_synced, PullOutcome,
 };
 use crate::config::{ConfigData, Paths};
-use crate::db::{DaySnapshot, SessionCounts, Store};
+use crate::db::Store;
 use crate::error::AppResult;
-use crate::sessions::snapshot_policy::{
-    decide_snapshot_action, presence_mismatches, SnapshotAction,
-};
 
 // ---------------------------------------------------------------------------
 // High-level sync flow: pull → import JSONL → commit → push
@@ -45,57 +44,14 @@ pub fn pull_and_import(store: &Store, paths: &Paths, cfg: &ConfigData) -> AppRes
         }
         PullOutcome::UpToDate | PullOutcome::FastForwarded => {}
     }
-    let records = crate::collect::artifact::read_all_artifacts(paths)?;
-    let inserted = store.ingest(&records)?;
-    // Per-turn durations (separate grain, uuid-deduped).
-    let turns = crate::collect::artifact::read_all_turn_artifacts(paths)?;
-    store.ingest_turn_durations(&turns)?;
-    // Sessions: import peers' snapshots (self is local-authoritative, skipped
-    // on read) and propagate cross-device un-favorites.
-    import_peer_sessions(store, paths, &cfg.device_id)?;
-    // Providers: import peers' key-stripped structure (self skipped on read;
-    // local keys are merged back — an import never overwrites a local key).
-    crate::provider::sync::import_peer_providers(store, paths, &cfg.device_id)?;
-    // Device-name registry: pull may have added/updated config/devices/*.json.
-    crate::devices::reload_devices_into_store(store, paths, cfg)?;
-    Ok(inserted.len() as u32)
-}
-
-/// Import peers' session snapshots into the store and propagate cross-device
-/// un-favorites. Self's own snapshots are skipped on read
-/// ([`crate::sessions::session_snapshot::read_all_session_snapshots`]), so self's rows are never
-/// overwritten by a possibly-stale git copy of itself. For every peer that has
-/// (or had) a favorited session row, sessions whose snapshot file vanished since
-/// the last pull are un-favorited and their shared messages dropped — the
-/// pull-side counterpart to the push-side jsonl deletion.
-fn import_peer_sessions(store: &Store, paths: &Paths, self_device_id: &str) -> AppResult<()> {
-    let snapshots =
-        crate::sessions::session_snapshot::read_all_session_snapshots(paths, self_device_id)?;
-    // still-favorited ids per peer = the snapshot files that exist this pull.
-    let mut per_device: std::collections::BTreeMap<String, std::collections::BTreeSet<String>> =
-        std::collections::BTreeMap::new();
-    for snap in &snapshots {
-        per_device
-            .entry(snap.device_id.clone())
-            .or_default()
-            .insert(snap.meta.id.clone());
-        store.import_session_snapshot(&snap.device_id, &snap.meta, &snap.messages)?;
-    }
-    // Reconcile every peer with a favorited row — including ones that shipped
-    // no files this pull (they may have un-favorited everything). The sessions
-    // to un-favorite here = the peer's favorited sessions whose snapshot file
-    // vanished, computed by the shared snapshot_policy oracle so push and pull
-    // agree on what "in sync" means (the push path enforces the same invariant
-    // for this device via `decide_snapshot_action`).
-    for peer in store.favorited_session_devices(self_device_id)? {
-        let still_present = per_device.remove(&peer).unwrap_or_default();
-        let peer_favorited: std::collections::BTreeSet<String> =
-            store.favorited_session_ids(&peer)?.into_iter().collect();
-        let to_unfavorite =
-            presence_mismatches(&still_present, &peer_favorited).favorites_without_files;
-        store.bulk_unfavorite_sessions(&peer, &to_unfavorite)?;
-    }
-    Ok(())
+    // Each syncable domain declares its pull-side import in `super::domains` —
+    // usage/turns Artifacts, session snapshots (+ un-favorite propagation),
+    // key-stripped provider structure, and the device-name registry.
+    let inserted = super::domains::usage_import(store, paths)?;
+    super::domains::sessions_import(store, paths, &cfg.device_id)?;
+    super::domains::providers_import(store, paths, &cfg.device_id)?;
+    super::domains::devices_import(store, paths, cfg)?;
+    Ok(inserted)
 }
 
 /// Commit any local Artifact/config change and push it (push). A clean worktree
@@ -140,91 +96,49 @@ pub fn commit_and_push_best_effort(paths: &Paths, cfg: &ConfigData, message: &st
 
 /// Sync push: materialize this device's un-pushed days, session snapshots AND
 /// provider structure (key-stripped `providers.json`) from the store, then
-/// commit + push, clearing the dirty flags only once the push lands. This is
-/// the push-side counterpart to collect's store-only
+/// commit + push, clearing the dirty flags once the materialization is on the
+/// remote. This is the push-side counterpart to collect's store-only
 /// writes: collect flags days/sessions dirty; this recomputes each dirty day's
-/// per-day Artifact (`recompute_usage_day` / `recompute_turns_day`) and each
-/// dirty session's jsonl snapshot (`recompute_session_snapshot`), commits the
-/// rewritten files, pushes, and on success clears the flags (a failed push
-/// leaves them dirty for the next retry). Synced-only; a no-op (`false`) when
-/// there is nothing dirty to recompute and nothing else to push.
+/// per-day Artifact and each dirty session's jsonl snapshot, commits the
+/// rewritten files, pushes, and clears the flags (a failed push leaves them
+/// dirty for the next retry). Synced-only; a no-op (`false`) when there is
+/// nothing dirty to recompute and nothing else to push.
 ///
-/// The session favorites gate lives HERE (not in collect): a favorited dirty
-/// session gets its snapshot rewritten; a non-favorited dirty session gets any
-/// leftover `sessions/<id>.jsonl` removed — the local half of un-favorite
-/// propagation (a peer pulling sees the file vanish). The clear is scoped to
-/// recompute-time row/message counts so a raced new row/message keeps its
-/// day/session dirty (see [`crate::db::Store::clear_dirty_days_if_unchanged`] /
-/// [`crate::db::Store::clear_dirty_sessions_if_unchanged`]).
+/// The session favorites gate lives in `super::domains::sessions_materialize`
+/// (not in collect): a favorited dirty session gets its snapshot rewritten; a
+/// non-favorited dirty session gets any leftover `sessions/<id>.jsonl` removed
+/// — the local half of un-favorite propagation (a peer pulling sees the file
+/// vanish). The clear is scoped to recompute-time row/message counts so a
+/// raced new row/message keeps its day/session dirty (see
+/// [`crate::db::Store::clear_dirty_flags_if_unchanged`]).
+///
+/// The clear runs even on a no-op push (NOT gated on `pushed`): its
+/// if-unchanged guards make a stale clear a no-op, and clearing on a no-op
+/// push self-heals the split-clear crash window — a process dying between the
+/// commit and the clear leaves flags stale with a worktree that already
+/// matches origin, and the next push would otherwise skip the clear forever
+/// (`pushed == false` ⇒ stale flags). Days and sessions clear in ONE
+/// transaction: a mid-clear failure rolls back both, so the store can never
+/// sit in days-clean + sessions-dirty.
 ///
 /// Library sync does NOT call this — it has no store/dirty concern and uses
 /// [`commit_and_push`] directly.
 pub fn push_usage(store: &Store, paths: &Paths, cfg: &ConfigData) -> AppResult<bool> {
-    let dirty = store.dirty_days()?;
-    // Recompute-time row counts — the clear boundary: rows that land AFTER
-    // these snapshots must keep their day dirty.
-    let mut day_snapshots: Vec<DaySnapshot> = Vec::with_capacity(dirty.len());
-    for day in &dirty {
-        let usage =
-            crate::collect::artifact::recompute_usage_day(store, paths, &cfg.device_id, day)?;
-        let turns =
-            crate::collect::artifact::recompute_turns_day(store, paths, &cfg.device_id, day)?;
-        day_snapshots.push(DaySnapshot {
-            day: day.clone(),
-            usage_rows: usage,
-            turn_rows: turns,
-        });
-    }
-
-    // Sessions: recompute a derived jsonl per favorited dirty session; delete
-    // any leftover jsonl for non-favorited dirty sessions (un-favorite local).
-    let dirty_sessions = store.dirty_sessions()?;
-    let mut recomputed: Vec<SessionCounts> = Vec::with_capacity(dirty_sessions.len());
-    let mut removed: Vec<String> = Vec::new();
-    for sid in &dirty_sessions {
-        let favorited = store
-            .get_session_favorited(&cfg.device_id, sid)?
-            .unwrap_or(false);
-        match decide_snapshot_action(favorited) {
-            // favorited ⇒ the snapshot must exist: recompute it from the store.
-            SnapshotAction::Write => {
-                let count = crate::sessions::session_snapshot::recompute_session_snapshot(
-                    store,
-                    paths,
-                    &cfg.device_id,
-                    sid,
-                )?;
-                recomputed.push(SessionCounts {
-                    session_id: sid.clone(),
-                    message_rows: count,
-                });
-            }
-            // not favorited ⇒ the snapshot must not exist. Idempotent: a
-            // never-favorited session has no file to remove.
-            SnapshotAction::Remove => {
-                let path = paths.session_snapshot_path(&cfg.device_id, sid);
-                if path.exists() {
-                    std::fs::remove_file(path)?;
-                }
-                removed.push(sid.clone());
-            }
-        }
-    }
-
-    // Providers: materialize this device's providers.json from the store,
-    // key-stripped (API keys stay in the local DB — the file carries only
-    // structure). No dirty flag: the write is byte-stable, so an unchanged
-    // store rewrites identical bytes and `commit_and_push` below no-ops.
-    crate::provider::sync::write_own_providers(store, paths, &cfg.device_id)?;
+    // Each syncable domain declares its push-side materialize in
+    // `super::domains`; the recompute-time snapshots feed the shared clear.
+    let day_snapshots = super::domains::usage_materialize(store, paths, &cfg.device_id)?;
+    let sessions = super::domains::sessions_materialize(store, paths, &cfg.device_id)?;
+    super::domains::providers_materialize(store, paths, &cfg.device_id)?;
 
     let pushed = commit_and_push(paths, cfg, "cc-one: sync")?;
-    if pushed {
-        // Push landed ⇒ the recomputed days/sessions are on the remote; drop
-        // them so the next push only touches things with fresh local changes.
-        // A push failure returns early via `?` above, leaving flags dirty.
-        store.clear_dirty_days_if_unchanged(&day_snapshots, &cfg.device_id)?;
-        store.clear_dirty_sessions_if_unchanged(&recomputed, &cfg.device_id, &removed)?;
-    }
+    // Unconditional (see the doc above). A push failure returns early via `?`
+    // above, leaving both flag sets dirty for the next retry.
+    store.clear_dirty_flags_if_unchanged(
+        &cfg.device_id,
+        &day_snapshots,
+        &sessions.recomputed,
+        &sessions.removed,
+    )?;
     Ok(pushed)
 }
 
