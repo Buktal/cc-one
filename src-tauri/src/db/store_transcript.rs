@@ -561,13 +561,20 @@ fn sessions_select_sql(clause: &str) -> String {
 
 /// Decode a `sessions` row in the shared SELECT's column order (13 columns —
 /// the positional mapping lives in one place for both the paged and unpaged
-/// reads).
+/// reads). `project_dir` crosses as the PROJECT IDENTITY
+/// ([`crate::model::project_identity`]): a Claude Code worktree suffix
+/// (`.claude\worktrees\…`) collapses to its parent project here, at the one
+/// decode seam every session-list read goes through — so worktree sessions
+/// (subagents et al.) surface under their parent project in every consumer of
+/// the list. The stored row keeps the raw launch dir; only the read is
+/// truncated.
 fn session_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<SessionRow> {
+    let project_dir: String = r.get(3)?;
     Ok(SessionRow {
         id: r.get(0)?,
         device_id: r.get(1)?,
         source: r.get(2)?,
-        project_dir: r.get(3)?,
+        project_dir: project_identity(&project_dir).to_string(),
         title: r.get(4)?,
         favorited: r.get::<_, i64>(5)? != 0,
         local_group_id: r.get(6)?,
@@ -719,6 +726,51 @@ mod tests {
         assert_eq!(
             t.iter().map(|m| m.uuid.as_str()).collect::<Vec<_>>(),
             vec!["u1", "a1", "a2"]
+        );
+    }
+
+    /// Worktree sessions surface under their parent project on the production
+    /// read path: a row stored with a `.claude\worktrees\…` project_dir (the
+    /// launch dir Claude Code gives subagent/parallel sessions, issue #84)
+    /// comes back from `query_sessions_page` truncated to the parent — every
+    /// consumer of the session list reasons about the parent project, while
+    /// the stored row keeps the raw launch dir (the snapshot meta read below
+    /// pins that the raw value is NOT rewritten).
+    #[test]
+    fn query_sessions_page_collapses_worktree_project_to_parent() {
+        let s = mem();
+        s.upsert_session(
+            "dev",
+            &SessionSystemData {
+                id: "agent-a10c476b".into(),
+                source: "claude_code".into(),
+                project_dir: "D:\\Project\\O_CC_One\\.claude\\worktrees\\agent-a10c476b".into(),
+                title_orig: "核实 cc-switch 供应商".into(),
+                started_at: "2026-08-01T00:00:00.000Z".into(),
+                last_active_at: "2026-08-02T00:00:00.000Z".into(),
+                agent_type: "Explore".into(),
+            },
+        )
+        .unwrap();
+        let rows = s
+            .query_sessions_page(&SessionQuery {
+                filter: None,
+                limit: 50,
+                offset: 0,
+            })
+            .unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].project_dir, "D:\\Project\\O_CC_One");
+        assert_eq!(rows[0].agent_type, "Explore", "subagent tag crosses as-is");
+        // The stored row (and thus the git snapshot meta) keeps the RAW launch
+        // dir — truncation is a read-side rule, not a rewrite.
+        let meta = s
+            .get_session_snapshot_meta("dev", "agent-a10c476b")
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            meta.project_dir,
+            "D:\\Project\\O_CC_One\\.claude\\worktrees\\agent-a10c476b"
         );
     }
 

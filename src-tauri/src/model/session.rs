@@ -169,6 +169,11 @@ pub struct SessionRow {
     pub id: String,
     pub device_id: String,
     pub source: String,
+    /// Project identity for the project dimension — the stored launch
+    /// directory with a Claude Code worktree suffix collapsed to its parent
+    /// ([`project_identity`]). The raw launch dir stays in the `sessions` row
+    /// and the git snapshot; truncation is a read-side rule, so nothing is
+    /// lost and no re-collect is needed for existing rows.
     pub project_dir: String,
     /// Display title: `custom_title` when set, else `title_orig`.
     pub title: String,
@@ -185,6 +190,46 @@ pub struct SessionRow {
     pub total_tokens: u32,
     /// Live aggregate: sum of cost.
     pub total_cost_usd: f64,
+}
+
+/// Map a stored `project_dir` (the session's launch directory, collected raw
+/// from the source log) to the project identity the project dimension groups
+/// by: a Claude Code worktree suffix — a `.claude` path component immediately
+/// followed by a `worktrees` component — collapses to its parent directory.
+/// Claude Code launches parallel/subagent sessions inside
+/// `<project>/.claude/worktrees/<name>`, transient scratch copies that must
+/// aggregate under `<project>` itself (their sessions, tokens, and costs are
+/// the parent project's; left raw, each worktree would surface as its own
+/// one-session bucket — 15 such buckets on the machine this rule was derived
+/// from, issue #84). Both separators match: cwd strings arrive from Windows
+/// (`\`) and Unix (`/`) devices alike via the cross-device store. The first
+/// worktree segment wins. Returns the input unchanged when no worktree
+/// segment exists, or when the cut would leave an empty prefix (a bare
+/// relative worktree path keeps its raw form rather than degrading to the
+/// empty no-project bucket).
+pub fn project_identity(project_dir: &str) -> &str {
+    // (byte offset, component) pairs over BOTH separators — a Unix peer's
+    // `/home/p/.claude/worktrees/x` and a Windows `\` form live in the same
+    // store, so neither separator may be assumed.
+    let mut comps: Vec<(usize, &str)> = Vec::new();
+    let mut start = 0;
+    for (i, c) in project_dir.char_indices() {
+        if c == '/' || c == '\\' {
+            comps.push((start, &project_dir[start..i]));
+            start = i + 1; // '/' and '\\' are 1-byte ASCII
+        }
+    }
+    comps.push((start, &project_dir[start..]));
+    for w in 0..comps.len() - 1 {
+        if comps[w].1 == ".claude" && comps[w + 1].1 == "worktrees" {
+            let (cut, _) = comps[w];
+            if cut > 0 {
+                // Drop the separator before `.claude` too (also 1-byte).
+                return &project_dir[..cut - 1];
+            }
+        }
+    }
+    project_dir
 }
 
 /// Optional filter for `query_sessions`. Every field optional; `None` = no
@@ -296,4 +341,69 @@ pub struct SyncedGroup {
     /// files lack the field — `default_group_position` (MAX) sorts them last.
     #[serde(default = "default_group_position")]
     pub position: u32,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // ---- project_identity: worktree suffix collapses to the parent project ----
+
+    #[test]
+    fn project_identity_collapses_windows_worktree_suffix() {
+        // The real-world shape this rule was derived from (issue #84): a
+        // subagent/parallel session launched in a Claude Code worktree.
+        assert_eq!(
+            project_identity("D:\\Project\\O_CC_One\\.claude\\worktrees\\agent-a10c476b"),
+            "D:\\Project\\O_CC_One"
+        );
+    }
+
+    #[test]
+    fn project_identity_collapses_unix_worktree_suffix() {
+        // A Unix peer's cwd lands in the same cross-device store.
+        assert_eq!(
+            project_identity("/home/me/proj/.claude/worktrees/agent-ff"),
+            "/home/me/proj"
+        );
+    }
+
+    #[test]
+    fn project_identity_no_worktree_segment_is_unchanged() {
+        // Ordinary launch dirs — including a project that merely CONTAINS a
+        // `.claude` dir (without the `worktrees` child) — pass through.
+        assert_eq!(
+            project_identity("D:\\Project\\O_CC_One"),
+            "D:\\Project\\O_CC_One"
+        );
+        assert_eq!(project_identity("/home/me/proj"), "/home/me/proj");
+        assert_eq!(project_identity("D:\\foo\\.claude"), "D:\\foo\\.claude");
+        // A directory whose name merely ends in `.claude` is NOT the segment.
+        assert_eq!(
+            project_identity("D:\\foo\\my.claude\\worktrees\\x"),
+            "D:\\foo\\my.claude\\worktrees\\x"
+        );
+        assert_eq!(project_identity(""), "");
+    }
+
+    #[test]
+    fn project_identity_empty_parent_keeps_raw_form() {
+        // A bare relative worktree path would truncate to nothing; keeping the
+        // raw string avoids degrading the row to the empty no-project bucket.
+        assert_eq!(
+            project_identity(".claude\\worktrees\\agent-x"),
+            ".claude\\worktrees\\agent-x"
+        );
+    }
+
+    #[test]
+    fn project_identity_trailing_separator_and_nested_forms() {
+        // Trailing separator: the tail empty component changes nothing.
+        assert_eq!(project_identity("/p/.claude/worktrees/agent-x/"), "/p");
+        // First segment wins when (pathologically) two appear.
+        assert_eq!(
+            project_identity("/p/.claude/worktrees/x/.claude/worktrees/y"),
+            "/p"
+        );
+    }
 }
