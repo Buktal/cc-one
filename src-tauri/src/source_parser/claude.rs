@@ -51,8 +51,9 @@ impl ClaudeCodeSourceParser {
     ///     incremental cursor — same as before, message-id-deduped);
     ///   - one session-meta record (`RawSession`) covering the WHOLE file —
     ///     system data is refreshable, so every pass re-reads first/last ts,
-    ///     cwd, and the title sources (custom-title > summary > first user
-    ///     message > project dir basename), latest-seen at each level;
+    ///     the first-seen cwd (project_dir), and the title sources
+    ///     (custom-title > summary > first user message > project dir
+    ///     basename), latest-seen at each title level;
     ///   - transcript messages (lines past `start_line` only — incremental, so a
     ///     re-collect appends only new lines to `sessions/<id>.jsonl`).
     ///
@@ -94,11 +95,17 @@ impl ClaudeCodeSourceParser {
         // we only saw the appended lines on a re-collect).
         let mut started_at = String::new();
         let mut last_active_at = String::new();
-        // cwd counts + first-seen order → the mode becomes project_dir at the
-        // end (a mid-session `cd` must not pin the project to a subdirectory).
-        let mut cwd_order: Vec<String> = Vec::new();
-        let mut cwd_counts: std::collections::HashMap<String, u32> =
-            std::collections::HashMap::new();
+        // project_dir = the FIRST non-empty cwd in the file (= the session's
+        // launch directory — Claude Code itself buckets session files under
+        // `~/.claude/projects/<encoded-launch-dir>`). Deliberately not the
+        // cwd mode: working inside a subdirectory for most of a session would
+        // pin the mode to that subdir even though the session was launched at
+        // the repo root (observed in real logs, issue #83). Deliberately not
+        // restricted to `system` events either — cwd rides on
+        // user/assistant/system events alike, and subagent or short sessions
+        // carry no cwd-bearing system event at all; first-seen-anywhere is
+        // the launch directory in every observed shape.
+        let mut first_cwd: Option<String> = None;
         let mut summary = String::new();
         let mut custom_title: Option<String> = None;
         let mut first_user_text: Option<String> = None;
@@ -133,14 +140,12 @@ impl ClaudeCodeSourceParser {
                     last_active_at = ts.clone();
                 }
             }
-            if let Some(c) = &ev.cwd {
-                let c = c.trim();
-                if !c.is_empty() {
-                    let n = cwd_counts.entry(c.to_string()).or_insert(0);
-                    if *n == 0 {
-                        cwd_order.push(c.to_string());
+            if first_cwd.is_none() {
+                if let Some(c) = &ev.cwd {
+                    let c = c.trim();
+                    if !c.is_empty() {
+                        first_cwd = Some(c.to_string());
                     }
-                    *n += 1;
                 }
             }
             // summary: latest non-empty wins — Claude may emit it later in
@@ -211,7 +216,7 @@ impl ClaudeCodeSourceParser {
         }
 
         let sessions = if saw_any_event {
-            let project_dir = pick_project_dir(&cwd_order, &cwd_counts).unwrap_or_default();
+            let project_dir = first_cwd.unwrap_or_default();
             // Subagent sessions title from the task description (the only
             // meaningful name Claude Code gives them — no custom-title/summary
             // events are written for subagents). Main sessions keep the
@@ -352,7 +357,9 @@ struct SessionEvent {
     /// `durationMs` on `system/turn_duration` events.
     #[serde(rename = "durationMs", default)]
     duration_ms: Option<u32>,
-    /// `cwd` on `system` events — the session's working directory (project_dir).
+    /// `cwd` on user/assistant/system events — the working directory at the
+    /// time of the event. The first non-empty one is the session's launch
+    /// directory (project_dir); later ones may drift into subdirectories.
     #[serde(default)]
     cwd: Option<String>,
     /// `summary` on a top-level event — Claude's auto-generated session
@@ -492,32 +499,6 @@ impl SessionEvent {
 // The soft cap (TRIM_LIMIT = 32 KiB), the original-title max (TITLE_MAX = 80),
 // and the `truncate` helper all live in [`super`] as shared parser helpers,
 // so the truncation rule cannot drift between Claude and Codex.
-
-/// Pick the session's project dir as the most frequent non-empty `cwd` seen in
-/// the file. A session may `cd` into a subdirectory mid-conversation; taking
-/// the first cwd would then pin the project to e.g. `…/src-tauri` instead of
-/// the repo root (observed in real logs). The mode — not the first — is the
-/// stable answer; ties keep the first-seen entry (an explicit `order` list is
-/// required because HashMap iteration order is arbitrary).
-fn pick_project_dir(
-    cwd_order: &[String],
-    cwd_counts: &std::collections::HashMap<String, u32>,
-) -> Option<String> {
-    let mut best: Option<&str> = None;
-    let mut best_count = 0u32;
-    for c in cwd_order {
-        if c.is_empty() {
-            continue;
-        }
-        let n = cwd_counts[c];
-        // Strictly greater wins — a tie keeps the earlier-seen path.
-        if n > best_count {
-            best = Some(c);
-            best_count = n;
-        }
-    }
-    best.map(str::to_string)
-}
 
 /// First text block of a message's content (string content or the first `text`
 /// block of an array). Used for the original-title fallback (first user msg).
@@ -1171,67 +1152,46 @@ mod tests {
         assert_eq!(result.sessions[0].project_dir, "/home/me/O_cc one");
     }
 
-    // ---- project_dir mode picking ----
+    // ---- project_dir = first non-empty cwd ----
 
-    fn mode_of(paths: &[&str]) -> Option<String> {
-        let mut order: Vec<String> = Vec::new();
-        let mut counts: std::collections::HashMap<String, u32> = std::collections::HashMap::new();
-        for p in paths {
-            let n = counts.entry(p.to_string()).or_insert(0);
-            if *n == 0 {
-                order.push(p.to_string());
-            }
-            *n += 1;
-        }
-        pick_project_dir(&order, &counts)
-    }
-
+    /// The acceptance case of issue #83: a session starts at the repo root,
+    /// then works inside a subdirectory for most of its life. project_dir
+    /// must be the FIRST cwd (the launch directory), not the cwd mode — the
+    /// mode is what pinned such sessions to `…\src-tauri` buckets.
     #[test]
-    fn pick_project_dir_takes_the_mode() {
-        assert_eq!(
-            mode_of(&["/a", "/a", "/b"]).as_deref(),
-            Some("/a"),
-            "most frequent cwd wins"
-        );
-    }
-
-    #[test]
-    fn pick_project_dir_tie_keeps_first_seen() {
-        assert_eq!(
-            mode_of(&["/a", "/b", "/b", "/a"]).as_deref(),
-            Some("/a"),
-            "equal counts keep the first-seen path (not the last)"
-        );
-    }
-
-    #[test]
-    fn pick_project_dir_skips_empty_and_returns_none_when_all_empty() {
-        assert_eq!(
-            mode_of(&["", "/b", "", "/b"]).as_deref(),
-            Some("/b"),
-            "empty cwd strings never count"
-        );
-        assert_eq!(mode_of(&[]), None);
-        assert_eq!(mode_of(&["", ""]), None);
-    }
-
-    /// A real-session regression: the file's FIRST cwd is a subdirectory the
-    /// user cd'd into (e.g. `…\src-tauri`), but the majority is the repo root
-    /// — the mode must win so the project shows as the root, not the subdir.
-    #[test]
-    fn session_project_dir_uses_mode_not_first_cwd() {
+    fn session_project_dir_uses_first_cwd_not_mode() {
         let dir = tempfile::tempdir().unwrap();
         let file = dir.path().join("s.jsonl");
-        let sub = r#"{"type":"system","timestamp":"2026-08-01T09:00:00Z","uuid":"s1","cwd":"D:\\Project\\O_cc one\\src-tauri"}"#;
-        let root1 = r#"{"type":"user","timestamp":"2026-08-01T10:00:00Z","uuid":"u1","cwd":"D:\\Project\\O_cc one","message":{"role":"user","content":"hi"}}"#;
-        let root2 = r#"{"type":"assistant","timestamp":"2026-08-01T10:01:00Z","uuid":"a1","cwd":"D:\\Project\\O_cc one","message":{"id":"m1","model":"glm-5.2","role":"assistant","usage":{"input_tokens":1,"output_tokens":1}}}"#;
-        write_lines(&file, &[sub, root1, root2]);
+        let root = r#"{"type":"user","timestamp":"2026-08-01T09:00:00Z","uuid":"u1","cwd":"D:\\Project\\O_CC_One","message":{"role":"user","content":"hi"}}"#;
+        let sub1 = r#"{"type":"assistant","timestamp":"2026-08-01T10:00:00Z","uuid":"a1","cwd":"D:\\Project\\O_CC_One\\src-tauri","message":{"id":"m1","model":"glm-5.2","role":"assistant","usage":{"input_tokens":1,"output_tokens":1}}}"#;
+        let sub2 = r#"{"type":"assistant","timestamp":"2026-08-01T11:00:00Z","uuid":"a2","cwd":"D:\\Project\\O_CC_One\\src-tauri","message":{"id":"m2","model":"glm-5.2","role":"assistant","usage":{"input_tokens":1,"output_tokens":1}}}"#;
+        write_lines(&file, &[root, sub1, sub2]);
         let p = ClaudeCodeSourceParser::with_dir(dir.path().to_path_buf());
         let result = p.parse(&p.discover().unwrap()).unwrap();
         assert_eq!(
-            result.sessions[0].project_dir, "D:\\Project\\O_cc one",
-            "mode cwd (2× root) beats first cwd (1× src-tauri)"
+            result.sessions[0].project_dir, "D:\\Project\\O_CC_One",
+            "first cwd (launch dir) wins even when the subdir is the mode (2×)"
         );
+    }
+
+    /// Empty/whitespace cwd values never become project_dir — the first
+    /// NON-empty cwd is picked; a file with no usable cwd at all degrades to
+    /// an empty project_dir (the same fallback the mode picker had).
+    #[test]
+    fn session_project_dir_skips_empty_cwd_values() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("s.jsonl");
+        let empty_cwd = r#"{"type":"user","timestamp":"2026-08-01T09:00:00Z","uuid":"u1","cwd":"  ","message":{"role":"user","content":"hi"}}"#;
+        let real = r#"{"type":"user","timestamp":"2026-08-01T09:01:00Z","uuid":"u2","cwd":"/home/me/proj","message":{"role":"user","content":"again"}}"#;
+        write_lines(&file, &[empty_cwd, real]);
+        let p = ClaudeCodeSourceParser::with_dir(dir.path().to_path_buf());
+        let result = p.parse(&p.discover().unwrap()).unwrap();
+        assert_eq!(result.sessions[0].project_dir, "/home/me/proj");
+
+        let no_cwd = r#"{"type":"assistant","timestamp":"2026-08-01T09:02:00Z","uuid":"a1","message":{"id":"m1","model":"glm-5.2","role":"assistant","usage":{"input_tokens":1,"output_tokens":1}}}"#;
+        write_lines(&file, &[no_cwd]);
+        let result = p.parse(&p.discover().unwrap()).unwrap();
+        assert_eq!(result.sessions[0].project_dir, "");
     }
 
     /// The reconcile "seen" set comes from the DISCOVERED FILES, not the parsed
