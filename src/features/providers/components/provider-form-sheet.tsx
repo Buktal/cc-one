@@ -600,7 +600,7 @@ export function ProviderFormSheet({
                 {effectiveApp === "opencode" ? (
                   <OpenCodeFormFields
                     configText={configText}
-                    onChange={setConfigText}
+                    onChange={(next) => guardedWrite(() => next)}
                     fetching={fetching}
                     fetchedModels={fetchedModels}
                     onFetchModels={onFetchOpenCodeModels}
