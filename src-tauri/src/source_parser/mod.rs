@@ -726,10 +726,12 @@ mod tests {
     }
 
     /// `std::fs` has no portable symlink API — cfg-gated helpers for the
-    /// no-symlink-following test above.
+    /// no-symlink-following test above. Unix symlinks don't distinguish
+    /// file/dir targets (`std::os::unix::fs::symlink`); the dir/file variants
+    /// are Windows-only.
     #[cfg(unix)]
     fn symlink_dir(target: &Path, link: &Path) -> std::io::Result<()> {
-        std::os::unix::fs::symlink_dir(target, link)
+        std::os::unix::fs::symlink(target, link)
     }
     #[cfg(windows)]
     fn symlink_dir(target: &Path, link: &Path) -> std::io::Result<()> {
