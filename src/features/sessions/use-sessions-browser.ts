@@ -59,6 +59,7 @@ import {
   withFavOverride,
   withoutFavOverride,
 } from "./derive"
+import { useSessionJumpConsumer } from "./session-jump"
 
 /** Persisted-tab key — the chosen tab (local / favorites) survives restarts. */
 const TAB_KEY = "cc-one:sessions-tab"
@@ -352,6 +353,10 @@ export function useSessionsBrowser() {
       setPreviewKey(null)
     }
   }
+
+  // 跨域跳转落地（usage 请求日志→会话，features/sessions/session-jump.ts）：
+  // target 到达时取回会话行并经 setPreview 打开——与列表行点击同一条通道。
+  useSessionJumpConsumer(setPreview)
 
   // ---- detail sheet: prev / next session navigation ----
   // Walks the currently visible page (±1 row). At a page edge the step pages

@@ -344,6 +344,21 @@ impl super::Store {
             .map_err(AppError::from)
     }
 
+    /// One session row by its exact composite key `(id, device_id)` — the
+    /// usage-side "request log → session" jump channel: the frontend resolves a
+    /// usage record's `session_id` into the session row (title + identity) via
+    /// this read instead of a backend join on the usage query. Same SELECT as
+    /// the list (usage aggregates + project_identity truncation included), so
+    /// the resolved row is identical to what the session list would show.
+    /// `None` = no such session (usage record without a collected session).
+    pub fn get_session(&self, id: &str, device_id: &str) -> AppResult<Option<SessionRow>> {
+        let conn = self.conn.lock().expect("db mutex poisoned");
+        let sql = sessions_select_sql("WHERE s.id = ?1 AND s.device_id = ?2");
+        conn.query_row(&sql, params![id, device_id], session_row)
+            .optional()
+            .map_err(AppError::from)
+    }
+
     /// Sidebar + paginator counts for one grouping track under a filter: the
     /// total session count (drives the paginator and the sidebar's "All" row)
     /// plus per-bucket counts (the group rows). The track selects the group
@@ -871,6 +886,45 @@ mod tests {
             meta.project_dir,
             "D:\\Project\\O_CC_One\\.claude\\worktrees\\agent-a10c476b"
         );
+    }
+
+    /// The jump read resolves by the FULL composite key: the same session id
+    /// can exist under two devices (a session collected on both), and usage
+    /// aggregates must come from that device's records only. A key that
+    /// matches no row resolves to `None` (session-less historical usage).
+    #[test]
+    fn get_session_resolves_by_composite_key_with_usage_aggregate() {
+        let s = mem();
+        for (dev, title) in [("dev-a", "本机采集的会话"), ("dev-b", "peer 同 id 会话")] {
+            s.upsert_session(
+                dev,
+                &SessionSystemData {
+                    id: "sid-1".into(),
+                    source: "claude_code".into(),
+                    project_dir: "D:\\Project\\O_CC_One".into(),
+                    title_orig: title.into(),
+                    started_at: "2026-08-01T00:00:00.000Z".into(),
+                    last_active_at: "2026-08-02T00:00:00.000Z".into(),
+                    agent_type: String::new(),
+                },
+            )
+            .unwrap();
+        }
+        // bound_rec 侧 helper 固定 device "dev"，这里需要 dev-a —— 就地组记录。
+        let mut r = rec("u1", "2026-08-15", "glm-5.2", "dev-a", 100, 50, 0.25);
+        r.session_id = "sid-1".into();
+        s.ingest_marking_dirty(&[r]).unwrap();
+        let a = s.get_session("sid-1", "dev-a").unwrap().unwrap();
+        assert_eq!(a.device_id, "dev-a");
+        assert_eq!(a.title, "本机采集的会话");
+        assert_eq!(a.request_count, 1, "usage aggregate joins on device too");
+        assert_eq!(a.total_tokens, 150);
+        assert_eq!(a.total_cost_usd, 0.25);
+        let b = s.get_session("sid-1", "dev-b").unwrap().unwrap();
+        assert_eq!(b.title, "peer 同 id 会话");
+        assert_eq!(b.request_count, 0, "peer row has no usage of its own");
+        assert!(s.get_session("sid-1", "dev-x").unwrap().is_none());
+        assert!(s.get_session("sid-2", "dev-a").unwrap().is_none());
     }
 
     /// Seed one usage record bound to `sid` with explicit token buckets +

@@ -52,6 +52,7 @@ import { cn } from "@/lib/utils"
 import type { UsageLogRow } from "@/types/generated/bindings"
 import { sourceLabel } from "../source-labels"
 import { useDeviceLabelMap, useDeviceOptions } from "../use-device-options"
+import { SessionLink } from "./session-link"
 
 const PAGE_SIZE = 20
 
@@ -372,16 +373,12 @@ function DetailRow({ r }: { r: UsageLogRow }) {
                   {t("usage.logs.detail.session")}
                 </span>
                 <span className="flex min-w-0 items-center gap-1.5">
-                  <Tooltip>
-                    <TooltipTrigger
-                      render={
-                        <span className="truncate font-mono">
-                          {r.session_id}
-                        </span>
-                      }
-                    />
-                    <TooltipContent>{r.session_id}</TooltipContent>
-                  </Tooltip>
+                  {/* session_id 解析为会话标题 + 点击跳转（usage→sessions
+                      跨域通道）；未命中退回裸 id，复制按钮仍拷 id。 */}
+                  <SessionLink
+                    sessionId={r.session_id}
+                    deviceId={r.device_id}
+                  />
                   <CopyButton
                     value={r.session_id}
                     label={t("usage.logs.detail.copy")}

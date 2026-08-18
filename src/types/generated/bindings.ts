@@ -250,6 +250,42 @@ export const commands = {
 	 */
 	search: string | null,
 } | null) => typedError<ProjectStatsRow[], AppError>(__TAURI_INVOKE("query_project_stats_cmd", { filter })),
+	/**
+	 *  One session row by its exact composite key `(id, device_id)` — the
+	 *  "request log → session" jump channel. The frontend resolves a usage
+	 *  record's `session_id` into a title + a jump target through this read (one
+	 *  RTK Query cache row shared by the link and the landing consumer), instead
+	 *  of the usage log query joining session titles backend-side. `None` = no
+	 *  such session (e.g. session-less historical usage).
+	 */
+	getSessionCmd: (id: string, deviceId: string) => typedError<{
+	id: string,
+	device_id: string,
+	source: string,
+	/**
+	 *  Project identity for the project dimension — the stored launch
+	 *  directory with a Claude Code worktree suffix collapsed to its parent
+	 *  ([`project_identity`]). The raw launch dir stays in the `sessions` row
+	 *  and the git snapshot; truncation is a read-side rule, so nothing is
+	 *  lost and no re-collect is needed for existing rows.
+	 */
+	project_dir: string,
+	/**  Display title: `custom_title` when set, else `title_orig`. */
+	title: string,
+	/**  `""` = main session; non-empty = subagent type tag (e.g. `Explore`). */
+	agent_type: string,
+	favorited: boolean,
+	local_group_id: string,
+	synced_group_id: string,
+	started_at: string,
+	last_active_at: string,
+	/**  Live aggregate over `usage_records` for this session. */
+	request_count: number,
+	/**  Live aggregate: sum of all four token buckets. */
+	total_tokens: number,
+	/**  Live aggregate: sum of cost. */
+	total_cost_usd: number | null,
+} | null, AppError>(__TAURI_INVOKE("get_session_cmd", { id, deviceId })),
 	getSessionTranscriptCmd: (id: string, deviceId: string) => typedError<SessionMessage_Serialize[], AppError>(__TAURI_INVOKE("get_session_transcript_cmd", { id, deviceId })),
 	setSessionFavoritedCmd: (id: string, deviceId: string, favorited: boolean) => typedError<null, AppError>(__TAURI_INVOKE("set_session_favorited_cmd", { id, deviceId, favorited })),
 	setSessionCustomTitleCmd: (id: string, deviceId: string, title: string | null) => typedError<null, AppError>(__TAURI_INVOKE("set_session_custom_title_cmd", { id, deviceId, title })),

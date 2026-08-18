@@ -25,6 +25,7 @@ import {
 export const {
   useListSessionsQuery,
   useSessionCountsQuery,
+  useGetSessionQuery,
   useSessionTranscriptQuery,
   useSetSessionFavoritedMutation,
   useSetSessionCustomTitleMutation,
@@ -78,6 +79,19 @@ export const {
         run(commands.countSessionsCmd(buildSessionFilter(spec), track)),
       providesTags: (_r, _e, { spec }) =>
         storeRead({ type: "Sessions", id: sessionSpecId(spec) }),
+    }),
+    /** One session row by its exact composite key — the "request log →
+     *  session" jump channel's read. The usage side resolves a log row's
+     *  `session_id` into the session title through this endpoint, and the
+     *  sessions-side landing consumer opens the session from the SAME cache
+     *  row (clicking a resolved link is instant). `null` = no such session
+     *  (session-less historical usage / deleted) — the link then degrades to
+     *  the raw id. */
+    getSession: b.query<SessionRow | null, { id: string; deviceId: string }>({
+      queryFn: async ({ id, deviceId }) =>
+        run(commands.getSessionCmd(id, deviceId)),
+      providesTags: (_r, _e, { id, deviceId }) =>
+        storeRead({ type: "Sessions", id: `row:${deviceId}:${id}` }),
     }),
     /** One session's transcript. Every session's messages land in the store
      *  (favorites additionally sync to git as snapshots); this reads the

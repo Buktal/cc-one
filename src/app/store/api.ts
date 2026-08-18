@@ -53,6 +53,7 @@ export {
   useCreateSyncedGroupMutation,
   useDeleteLocalGroupMutation,
   useDeleteSyncedGroupMutation,
+  useGetSessionQuery,
   useListGroupsQuery,
   useListLocalGroupsQuery,
   useListSessionsQuery,

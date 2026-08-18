@@ -52,6 +52,22 @@ pub fn query_project_stats_cmd(
     state.store.query_project_stats(filter.as_ref())
 }
 
+/// One session row by its exact composite key `(id, device_id)` — the
+/// "request log → session" jump channel. The frontend resolves a usage
+/// record's `session_id` into a title + a jump target through this read (one
+/// RTK Query cache row shared by the link and the landing consumer), instead
+/// of the usage log query joining session titles backend-side. `None` = no
+/// such session (e.g. session-less historical usage).
+#[tauri::command]
+#[specta::specta]
+pub fn get_session_cmd(
+    state: State<'_, AppState>,
+    id: String,
+    device_id: String,
+) -> AppResult<Option<SessionRow>> {
+    state.store.get_session(&id, &device_id)
+}
+
 #[tauri::command]
 #[specta::specta]
 pub fn get_session_transcript_cmd(

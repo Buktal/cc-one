@@ -11,6 +11,7 @@ import { configureStore } from "@reduxjs/toolkit"
 
 import { vaultApi } from "./api"
 import filterReducer from "./slices/filterSlice"
+import sessionJumpReducer from "./slices/sessionJumpSlice"
 import updateReducer from "./slices/updateSlice"
 import viewReducer from "./slices/viewSlice"
 
@@ -19,6 +20,7 @@ export const store = configureStore({
     view: viewReducer,
     filter: filterReducer,
     update: updateReducer,
+    sessionJump: sessionJumpReducer,
     [vaultApi.reducerPath]: vaultApi.reducer,
   },
   middleware: (getDefault) => getDefault().concat(vaultApi.middleware),
