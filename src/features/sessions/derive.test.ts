@@ -79,6 +79,7 @@ describe("sessionTabFilter", () => {
       from_ts: null,
       to_ts: null,
       model: null,
+      project: null,
       search: null,
     })
   })
@@ -93,6 +94,7 @@ describe("sessionTabFilter", () => {
       from_ts: null,
       to_ts: null,
       model: null,
+      project: null,
       search: null,
     })
   })
@@ -120,6 +122,7 @@ describe("sessionTabFilter", () => {
       from_ts: null,
       to_ts: null,
       model: null,
+      project: null,
       search: null,
     })
     expect(
@@ -133,6 +136,7 @@ describe("sessionTabFilter", () => {
       from_ts: null,
       to_ts: null,
       model: null,
+      project: null,
       search: null,
     })
   })

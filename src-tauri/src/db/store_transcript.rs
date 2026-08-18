@@ -388,6 +388,80 @@ impl super::Store {
             groups,
         })
     }
+
+    /// The project dimension: sessions rolled up by project identity, joined
+    /// live with their `usage_records` aggregates (requests / token
+    /// four-buckets / cost — the usage table stays the single source of token
+    /// truth, nothing is stored at project grain). One bucket per
+    /// `project_identity(s.project_dir)` value — the SQL scalar backed by the
+    /// one Rust rule — so Claude Code worktree sessions and their usage land
+    /// under the PARENT project. `MAX(last_active_at)` feeds the
+    /// recent-activity metric and orders the buckets (most recent first, `pid`
+    /// tiebreaker for determinism). Sessions with NO usage still form their
+    /// bucket's session count (LEFT JOIN + COALESCE): the dimension describes
+    /// where sessions ran, not only where usage landed. The filter applies
+    /// BEFORE grouping, so a time range narrows which sessions feed the
+    /// buckets at all.
+    pub fn query_project_stats(
+        &self,
+        filter: Option<&SessionFilter>,
+    ) -> AppResult<Vec<ProjectStatsRow>> {
+        let conn = self.conn.lock().expect("db mutex poisoned");
+        let (clause, params_vec) = build_session_where(filter);
+        let sql = format!(
+            "SELECT project_identity(s.project_dir) AS pid,
+                    COUNT(*) AS session_count,
+                    COALESCE(SUM(agg.request_count), 0) AS request_count,
+                    COALESCE(SUM(agg.input_tokens), 0) AS input_tokens,
+                    COALESCE(SUM(agg.output_tokens), 0) AS output_tokens,
+                    COALESCE(SUM(agg.cache_creation_tokens), 0) AS cache_creation_tokens,
+                    COALESCE(SUM(agg.cache_read_tokens), 0) AS cache_read_tokens,
+                    COALESCE(SUM(agg.total_cost_usd), 0.0) AS total_cost_usd,
+                    MAX(s.last_active_at) AS last_active_at
+             FROM sessions s
+             LEFT JOIN (
+                SELECT session_id, device_id,
+                       COUNT(*) AS request_count,
+                       SUM(input_tokens) AS input_tokens,
+                       SUM(output_tokens) AS output_tokens,
+                       SUM(cache_creation_tokens) AS cache_creation_tokens,
+                       SUM(cache_read_tokens) AS cache_read_tokens,
+                       SUM(CAST(total_cost_usd AS REAL)) AS total_cost_usd
+                FROM usage_records GROUP BY session_id, device_id
+             ) agg ON agg.session_id = s.id AND agg.device_id = s.device_id
+             {clause}
+             GROUP BY pid
+             ORDER BY last_active_at DESC, pid"
+        );
+        let mut stmt = conn.prepare(&sql)?;
+        let rows = stmt.query_map(params_from_iter(params_vec.iter()), |r| {
+            let tokens = TokenCounts {
+                input: r.get::<_, i64>(3)? as u32,
+                output: r.get::<_, i64>(4)? as u32,
+                cache_creation: r.get::<_, i64>(5)? as u32,
+                cache_read: r.get::<_, i64>(6)? as u32,
+            };
+            Ok(ProjectStatsRow {
+                project_dir: r.get(0)?,
+                session_count: r.get::<_, i64>(1)? as u32,
+                request_count: r.get::<_, i64>(2)? as u32,
+                // Both derived metrics reuse TokenCounts' single
+                // implementations — the same ones the dashboard's stats and
+                // per-model rows use (output is not in the hit-rate
+                // denominator; the formula ignores it).
+                total_tokens: tokens.total(),
+                input_tokens: tokens.input,
+                output_tokens: tokens.output,
+                cache_creation_tokens: tokens.cache_creation,
+                cache_read_tokens: tokens.cache_read,
+                cache_hit_rate: tokens.cache_hit_rate(),
+                total_cost_usd: r.get(7)?,
+                last_active_at: r.get(8)?,
+            })
+        })?;
+        rows.collect::<rusqlite::Result<Vec<_>>>()
+            .map_err(AppError::from)
+    }
 }
 
 /// Decode a `session_messages` row in the canonical SELECT column order
@@ -462,6 +536,17 @@ fn build_session_where(filter: Option<&SessionFilter>) -> (String, Vec<SqlValue>
     if let Some(g) = &f.synced_group_id {
         conds.push("s.synced_group_id = ?".into());
         params.push(SqlValue::Text(g.clone()));
+    }
+    if let Some(p) = &f.project {
+        if !p.is_empty() {
+            // Match by project IDENTITY via the `project_identity` SQL scalar
+            // (the one Rust rule, registered as a UDF) — a worktree session's
+            // raw launch dir collapses to its parent, so it matches the parent
+            // project's filter. Same function the project aggregate groups by,
+            // so filtering and bucketing can never disagree.
+            conds.push("project_identity(s.project_dir) = ?".into());
+            params.push(SqlValue::Text(p.clone()));
+        }
     }
     if let Some(ts) = &f.from_ts {
         if !ts.is_empty() {
@@ -772,6 +857,293 @@ mod tests {
             meta.project_dir,
             "D:\\Project\\O_CC_One\\.claude\\worktrees\\agent-a10c476b"
         );
+    }
+
+    /// Seed one usage record bound to `sid` with explicit token buckets +
+    /// cost (the project aggregate's inputs).
+    fn bound_rec(s: &Store, uuid: &str, sid: &str, tokens: TokenCounts, cost: f64) {
+        let mut r = rec(
+            uuid,
+            "2026-08-15",
+            "glm-5.2",
+            "dev",
+            tokens.input,
+            tokens.output,
+            cost,
+        );
+        r.session_id = sid.into();
+        r.tokens = tokens;
+        s.ingest_marking_dirty(&[r]).unwrap();
+    }
+
+    /// The project dimension's core rollup: per project — session count,
+    /// request count, token four-buckets, cost, and MAX(last_active_at) — with
+    /// sessions that have NO usage still counting toward their bucket's
+    /// session count (LEFT JOIN + COALESCE), and buckets ordered most-recent
+    /// first. Cache-hit rate reuses `TokenCounts::cache_hit_rate` (the same
+    /// single formula the dashboard and per-model rows read).
+    #[test]
+    fn project_stats_rolls_up_sessions_usage_and_recency_per_project() {
+        let s = mem();
+        seed_session_project(&s, "a1", "dev", "/proj/alpha", "2026-08-10T10:00:00.000Z");
+        seed_session_project(&s, "a2", "dev", "/proj/alpha", "2026-08-12T10:00:00.000Z");
+        seed_session_project(&s, "b1", "dev", "/proj/beta", "2026-08-11T10:00:00.000Z");
+        bound_rec(
+            &s,
+            "u1",
+            "a1",
+            TokenCounts {
+                input: 100,
+                output: 20,
+                cache_read: 70,
+                cache_creation: 0,
+            },
+            1.0,
+        );
+        bound_rec(
+            &s,
+            "u2",
+            "a2",
+            TokenCounts {
+                input: 50,
+                output: 0,
+                cache_read: 50,
+                cache_creation: 0,
+            },
+            2.0,
+        );
+
+        let rows = s.query_project_stats(None).unwrap();
+        assert_eq!(rows.len(), 2, "one bucket per project identity");
+        // Most recent first: alpha (08-12) before beta (08-11).
+        assert_eq!(rows[0].project_dir, "/proj/alpha");
+        assert_eq!(rows[0].session_count, 2);
+        assert_eq!(rows[0].request_count, 2);
+        assert_eq!(rows[0].input_tokens, 150);
+        assert_eq!(rows[0].output_tokens, 20);
+        assert_eq!(rows[0].cache_read_tokens, 120);
+        assert_eq!(rows[0].total_tokens, 290);
+        assert!((rows[0].total_cost_usd - 3.0).abs() < 1e-9);
+        // cache_read / (input + cache_creation + cache_read) = 120 / 270
+        // (the cacheable pool includes cache_read itself).
+        assert!((rows[0].cache_hit_rate - 120.0 / 270.0).abs() < 1e-9);
+        assert_eq!(rows[0].last_active_at, "2026-08-12T10:00:00.000Z");
+
+        // Beta has one session but zero usage: the bucket survives with
+        // zeroed aggregates (the dimension describes where sessions ran).
+        assert_eq!(rows[1].project_dir, "/proj/beta");
+        assert_eq!(rows[1].session_count, 1);
+        assert_eq!(rows[1].request_count, 0);
+        assert_eq!(rows[1].total_tokens, 0);
+        assert_eq!(rows[1].cache_hit_rate, 0.0);
+        assert_eq!(rows[1].total_cost_usd, 0.0);
+    }
+
+    /// Worktree sessions aggregate under their PARENT project (issue #84's
+    /// rule, applied by the `project_identity` SQL scalar at GROUP BY): the
+    /// parent bucket absorbs the worktree session, its usage, and its newer
+    /// last_active_at — while an unrelated project stays its own bucket.
+    #[test]
+    fn project_stats_collapses_worktree_sessions_into_parent() {
+        let s = mem();
+        seed_session_project(
+            &s,
+            "s-main",
+            "dev",
+            "D:\\Project\\O_CC_One",
+            "2026-08-02T10:00:00.000Z",
+        );
+        seed_session_project(
+            &s,
+            "s-agent",
+            "dev",
+            "D:\\Project\\O_CC_One\\.claude\\worktrees\\agent-a10c476b",
+            "2026-08-03T10:00:00.000Z",
+        );
+        seed_session_project(
+            &s,
+            "s-other",
+            "dev",
+            "D:\\Project\\Other",
+            "2026-08-04T10:00:00.000Z",
+        );
+        bound_rec(
+            &s,
+            "u1",
+            "s-main",
+            TokenCounts {
+                input: 10,
+                output: 0,
+                cache_read: 0,
+                cache_creation: 0,
+            },
+            0.5,
+        );
+        bound_rec(
+            &s,
+            "u2",
+            "s-agent",
+            TokenCounts {
+                input: 20,
+                output: 0,
+                cache_read: 0,
+                cache_creation: 0,
+            },
+            1.5,
+        );
+
+        let rows = s.query_project_stats(None).unwrap();
+        assert_eq!(
+            rows.iter()
+                .map(|r| r.project_dir.as_str())
+                .collect::<Vec<_>>(),
+            ["D:\\Project\\Other", "D:\\Project\\O_CC_One"],
+            "two buckets: the worktree never forms its own"
+        );
+        let parent = rows.last().unwrap();
+        assert_eq!(parent.session_count, 2, "main + worktree session");
+        assert_eq!(parent.request_count, 2, "both sessions' usage landed");
+        assert!((parent.total_cost_usd - 2.0).abs() < 1e-9);
+        assert_eq!(
+            parent.last_active_at, "2026-08-03T10:00:00.000Z",
+            "MAX over the bucket incl. the worktree session"
+        );
+    }
+
+    /// The SessionFilter project dimension: matching runs through
+    /// `project_identity`, so filtering to the parent project returns BOTH the
+    /// parent's own sessions and its worktree sessions — in the paged list,
+    /// the sidebar counts, and the project aggregate alike. A project nobody
+    /// ran in matches nothing.
+    #[test]
+    fn session_filter_project_matches_worktree_sessions_to_parent() {
+        let s = mem();
+        seed_session_project(
+            &s,
+            "s-main",
+            "dev",
+            "/proj/alpha",
+            "2026-08-02T10:00:00.000Z",
+        );
+        seed_session_project(
+            &s,
+            "s-agent",
+            "dev",
+            "/proj/alpha/.claude/worktrees/agent-x",
+            "2026-08-03T10:00:00.000Z",
+        );
+        seed_session_project(
+            &s,
+            "s-other",
+            "dev",
+            "/proj/beta",
+            "2026-08-04T10:00:00.000Z",
+        );
+
+        let f = SessionFilter {
+            project: Some("/proj/alpha".into()),
+            ..Default::default()
+        };
+        let ids: Vec<String> = s
+            .query_sessions_page(&SessionQuery {
+                filter: Some(f.clone()),
+                limit: 50,
+                offset: 0,
+            })
+            .unwrap()
+            .into_iter()
+            .map(|r| r.id)
+            .collect();
+        assert_eq!(ids, ["s-agent", "s-main"], "worktree matches the parent");
+
+        let counts = s.count_sessions(Some(&f), "local").unwrap();
+        assert_eq!(counts.total, 2);
+
+        let buckets = s.query_project_stats(Some(&f)).unwrap();
+        assert_eq!(
+            buckets.len(),
+            1,
+            "the filter narrows the aggregate's buckets"
+        );
+        assert_eq!(buckets[0].project_dir, "/proj/alpha");
+        assert_eq!(buckets[0].session_count, 2);
+
+        // A project with no sessions matches nothing anywhere.
+        let none = SessionFilter {
+            project: Some("/proj/gone".into()),
+            ..Default::default()
+        };
+        assert!(s
+            .query_sessions_page(&SessionQuery {
+                filter: Some(none.clone()),
+                limit: 50,
+                offset: 0,
+            })
+            .unwrap()
+            .is_empty());
+        assert_eq!(s.count_sessions(Some(&none), "local").unwrap().total, 0);
+        assert!(s.query_project_stats(Some(&none)).unwrap().is_empty());
+    }
+
+    /// The filter applies BEFORE grouping: a time range narrows which sessions
+    /// feed the buckets, so a session excluded by the window drops out of both
+    /// the session count and its usage out of the token/cost aggregates.
+    #[test]
+    fn project_stats_time_filter_narrows_buckets_before_grouping() {
+        let s = mem();
+        seed_session_project(
+            &s,
+            "a-old",
+            "dev",
+            "/proj/alpha",
+            "2026-08-01T10:00:00.000Z",
+        );
+        seed_session_project(
+            &s,
+            "a-new",
+            "dev",
+            "/proj/alpha",
+            "2026-08-10T10:00:00.000Z",
+        );
+        seed_session_project(&s, "b-mid", "dev", "/proj/beta", "2026-08-05T10:00:00.000Z");
+        bound_rec(
+            &s,
+            "u1",
+            "a-old",
+            TokenCounts {
+                input: 100,
+                output: 0,
+                cache_read: 0,
+                cache_creation: 0,
+            },
+            1.0,
+        );
+        bound_rec(
+            &s,
+            "u2",
+            "a-new",
+            TokenCounts {
+                input: 10,
+                output: 0,
+                cache_read: 0,
+                cache_creation: 0,
+            },
+            0.5,
+        );
+
+        let from = SessionFilter {
+            from_ts: Some("2026-08-04T00:00:00.000Z".into()),
+            ..Default::default()
+        };
+        let rows = s.query_project_stats(Some(&from)).unwrap();
+        assert_eq!(rows.len(), 2, "alpha keeps its newer session");
+        let alpha = rows
+            .iter()
+            .find(|r| r.project_dir == "/proj/alpha")
+            .unwrap();
+        assert_eq!(alpha.session_count, 1, "a-old excluded by the window");
+        assert_eq!(alpha.request_count, 1, "its usage dropped with it");
+        assert!((alpha.total_cost_usd - 0.5).abs() < 1e-9);
     }
 
     /// The other policy half: `import_session_snapshot` (pull) uses

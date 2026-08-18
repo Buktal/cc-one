@@ -83,6 +83,7 @@ fn specta_builder() -> Builder<tauri::Wry> {
         commands::library_device_summary,
         commands::query_sessions_cmd,
         commands::count_sessions_cmd,
+        commands::query_project_stats_cmd,
         commands::get_session_transcript_cmd,
         commands::set_session_favorited_cmd,
         commands::set_session_custom_title_cmd,

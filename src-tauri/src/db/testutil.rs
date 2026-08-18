@@ -84,6 +84,32 @@ pub fn seed_session_source(store: &Store, id: &str, device: &str, source: &str, 
         .unwrap();
 }
 
+/// Helper: insert one session row with an explicit project_dir (the raw launch
+/// dir — worktree suffixes stay raw in storage, the project dimension
+/// collapses them at read time).
+pub fn seed_session_project(
+    store: &Store,
+    id: &str,
+    device: &str,
+    project_dir: &str,
+    last_active: &str,
+) {
+    store
+        .upsert_session(
+            device,
+            &SessionSystemData {
+                id: id.into(),
+                source: "claude_code".into(),
+                project_dir: project_dir.into(),
+                title_orig: "Title".into(),
+                started_at: "2026-08-01T00:00:00.000Z".into(),
+                last_active_at: last_active.into(),
+                agent_type: String::new(),
+            },
+        )
+        .unwrap();
+}
+
 /// Helper: insert one session row with a given last_active_at.
 pub fn seed_session(store: &Store, id: &str, device: &str, last_active: &str) {
     seed_session_source(store, id, device, "claude_code", last_active)

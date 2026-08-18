@@ -43,6 +43,7 @@ describe("toFilter", () => {
       model: null,
       source: null,
       device_scope: null,
+      project: null,
     })
   })
 

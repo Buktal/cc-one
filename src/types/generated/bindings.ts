@@ -174,6 +174,14 @@ export const commands = {
 	local_group_id: string | null,
 	/**  Scope to a synced group (empty string matches ungrouped). */
 	synced_group_id: string | null,
+	/**
+	 *  Scope to one project — matched by project IDENTITY, not the raw stored
+	 *  launch dir: the comparison runs through the `project_identity` SQL
+	 *  scalar, so a Claude Code worktree session (`<proj>\.claude\worktrees\…`)
+	 *  matches its parent project's bucket. Same rule the project aggregate
+	 *  groups by. `None`/empty = no constraint.
+	 */
+	project: string | null,
 	/**  Inclusive lower bound on `last_active_at` (ISO8601). */
 	from_ts: string | null,
 	/**  Inclusive upper bound on `last_active_at` (ISO8601). */
@@ -193,6 +201,51 @@ export const commands = {
 	 */
 	search: string | null,
 } | null, track: string) => typedError<SessionGroupCounts, AppError>(__TAURI_INVOKE("count_sessions_cmd", { filter, track })),
+	/**
+	 *  The project dimension: sessions rolled up by project identity with their
+	 *  usage aggregates (session count / requests / token four-buckets / cache-hit
+	 *  rate / cost / last active). Worktree sessions land under their parent
+	 *  project. The filter applies before grouping (time range etc. narrow which
+	 *  sessions feed the buckets).
+	 */
+	queryProjectStatsCmd: (filter: {
+	/**  Scope to one device (`None` = all devices). */
+	device_scope: string | null,
+	/**  Scope to one source, e.g. `claude_code`. */
+	source: string | null,
+	/**  `Some(true)` = only favorited; `Some(false)` = only non-favorited. */
+	favorited: boolean | null,
+	/**  Scope to a local group (empty string matches ungrouped). */
+	local_group_id: string | null,
+	/**  Scope to a synced group (empty string matches ungrouped). */
+	synced_group_id: string | null,
+	/**
+	 *  Scope to one project — matched by project IDENTITY, not the raw stored
+	 *  launch dir: the comparison runs through the `project_identity` SQL
+	 *  scalar, so a Claude Code worktree session (`<proj>\.claude\worktrees\…`)
+	 *  matches its parent project's bucket. Same rule the project aggregate
+	 *  groups by. `None`/empty = no constraint.
+	 */
+	project: string | null,
+	/**  Inclusive lower bound on `last_active_at` (ISO8601). */
+	from_ts: string | null,
+	/**  Inclusive upper bound on `last_active_at` (ISO8601). */
+	to_ts: string | null,
+	/**
+	 *  Scope to sessions that have at least one usage record with this model
+	 *  (EXISTS semantics — a session spanning several models matches any of
+	 *  them). The model lives on `usage_records`, not on the session row.
+	 */
+	model: string | null,
+	/**
+	 *  Substring search over the display title (custom title when set, else the
+	 *  original) and the project path — case-insensitive, literal (LIKE
+	 *  metacharacters are escaped). `None`/empty = no constraint. Lives
+	 *  backend-side because paged results make client-side filtering
+	 *  inconsistent (it would only search the loaded page).
+	 */
+	search: string | null,
+} | null) => typedError<ProjectStatsRow[], AppError>(__TAURI_INVOKE("query_project_stats_cmd", { filter })),
 	getSessionTranscriptCmd: (id: string, deviceId: string) => typedError<SessionMessage_Serialize[], AppError>(__TAURI_INVOKE("get_session_transcript_cmd", { id, deviceId })),
 	setSessionFavoritedCmd: (id: string, deviceId: string, favorited: boolean) => typedError<null, AppError>(__TAURI_INVOKE("set_session_favorited_cmd", { id, deviceId, favorited })),
 	setSessionCustomTitleCmd: (id: string, deviceId: string, title: string | null) => typedError<null, AppError>(__TAURI_INVOKE("set_session_custom_title_cmd", { id, deviceId, title })),
@@ -222,17 +275,15 @@ export const commands = {
 	reorderProvidersCmd: (app: App, orderedIds: string[]) => typedError<null, AppError>(__TAURI_INVOKE("reorder_providers_cmd", { app, orderedIds })),
 	/**
 	 *  切换供应商（核心动作）：按 (app, id) 查 provider → 按应用分派写盘 →
-	 *  记该应用的激活状态。写盘分派 `write_live(app, provider, snippet)`：claude
-	 *  走 JSON 受控合并进 `~/.claude/settings.json`，codex 走 TOML 受控合并 +
-	 *  auth.json，gemini 走 env 整块替换 + settings.json 受控合并。各分支语义
-	 *  一致：只替换受控字段、非受控字段（hooks / MCP / permissions / model /
-	 *  mcp_servers 等）从 live 原地保留，不整文件覆盖、不做 Backfill。
-	 * 
-	 *  通用片段按应用分派合并层（ADR-0010）：claude/gemini 在 settings_config 层
-	 *  并入（合并前先叠片段；claude 另拦截未物化模板变量——gemini 的 `.env` 由
-	 *  dotenv 展开 `${VAR}` 是合法引用，不拦）；codex/grok 在写盘层补缺失（片段
-	 *  随 `snippet` 传给 `write_live`，受控合并后补进 live 文件——否则被白名单
-	 *  滤掉→零效果）。「保存」只写 DB（save_provider_cmd），本命令才真正写盘。
+	 *  记该应用的激活状态。写盘分派 `write_live(app, provider, snippet)` 与片段
+	 *  合并层（ADR-0010）都收口在 `provider::live_adapter` 的 per-app 方法（单一
+	 *  seam，见 [`App::snippet_layer`] / [`App::validates_template_vars`]）：
+	 *  claude/gemini 片段在 settings_config 层并入（先叠片段再写盘），codex/grok
+	 *  在写盘层补缺失（片段随 `snippet` 透传 `write_live`，受控合并后补进 live
+	 *  文件——否则被白名单滤掉→零效果）。各分支语义一致：只替换受控字段、非受控
+	 *  字段（hooks / MCP / permissions / model / mcp_servers 等）从 live 原地保留，
+	 *  不整文件覆盖、不做 Backfill。「保存」只写 DB（save_provider_cmd），本命令
+	 *  才真正写盘。
 	 */
 	switchProviderCmd: (app: App, id: string) => typedError<Provider, AppError>(__TAURI_INVOKE("switch_provider_cmd", { app, id })),
 	/**
@@ -278,9 +329,10 @@ export const commands = {
 	formatTomlCmd: (text: string) => typedError<string, AppError>(__TAURI_INVOKE("format_toml_cmd", { text })),
 	/**
 	 *  导入后「提取为通用片段」（T6，ADR-0012）：读该应用 live 配置的可共享键，
-	 *  合并进现有片段（已有键不覆盖，沿用 ADR-0010 只补缺失）。启停状态不变——
-	 *  提取是内容操作，不改用户显式的启停选择（原实现强制 enabled=true 会覆盖
-	 *  显式停用）。合并结果经与手动保存同一条校验（`validate_snippet` 单一入口，
+	 *  合并进现有片段（已有键不覆盖，沿用 ADR-0010 只补缺失，分派在
+	 *  `live_adapter` 的 [`App::merge_extracted_snippet`]）。启停状态不变——提取是
+	 *  内容操作，不改用户显式的启停选择（原实现强制 enabled=true 会覆盖显式
+	 *  停用）。合并结果经与手动保存同一条校验（[`App::validate_snippet`] 单一入口，
 	 *  提取器滤凭据/端点/空值后这里是兜底）。无可提取 → 现有片段原样。非静默——
 	 *  前端先检测候选、用户确认才调本命令。返回更新后的片段。
 	 */
@@ -298,15 +350,14 @@ export const commands = {
 	 */
 	importProvidersCmd: (sourcePath: string, mode: ProviderImportMode) => typedError<ProviderImportReport, AppError>(__TAURI_INVOKE("import_providers_cmd", { sourcePath, mode })),
 	/**
-	 *  获取供应商的可用模型列表。`app` 决定端点格式：claude / codex 走 OpenAI
-	 *  兼容 `GET /v1/models`，gemini 走 Google 原生 `GET /v1beta/models`。WebView
-	 *  fetch 撞 CORS，所以请求由后端发（ureq）。claude / codex 路径里 `models_url`
-	 *  非空时精确覆写候选列表（只试这一个）；否则对 baseURL 构造候选 URL（版本段
-	 *  识别 + 兼容子路径剥离，见 `provider::model_fetch::candidate_models_urls`），
-	 *  按序尝试首个成功。gemini 路径端点形状固定（`gemini_models_url` 构造单一
-	 *  URL），`models_url` 不参与。错误串带稳定前缀标签（AUTH_FAILED /
-	 *  ENDPOINT_CLOSED / TIMEOUT / BAD_FORMAT / NETWORK），两条路径同一套标签，
-	 *  前端按标签分桶提示。
+	 *  获取供应商的可用模型列表。端点协议按应用分派收口在 `live_adapter` 的
+	 *  [`App::fetch_models`]（单一 seam）：gemini 走 Google 原生
+	 *  `GET /v1beta/models`（端点形状固定，`models_url` 不参与）；其余 app 走
+	 *  OpenAI 兼容 `GET /v1/models`（`models_url` 非空时精确覆写候选列表；否则
+	 *  对 baseURL 构造候选 URL，按序尝试首个成功，见 `provider::model_fetch`）。
+	 *  WebView fetch 撞 CORS，所以请求由后端发（ureq）。错误串带稳定前缀标签
+	 *  （AUTH_FAILED / ENDPOINT_CLOSED / TIMEOUT / BAD_FORMAT / NETWORK），两条
+	 *  路径同一套标签，前端按标签分桶提示。
 	 */
 	fetchModelsCmd: (app: App, baseUrl: string, apiKey: string, modelsUrl: string | null) => typedError<string[], AppError>(__TAURI_INVOKE("fetch_models_cmd", { app, baseUrl, apiKey, modelsUrl })),
 	/**
@@ -332,8 +383,9 @@ export const commands = {
 	 */
 	previewLiveImportCmd: (app: App) => typedError<LiveImportPreview, AppError>(__TAURI_INVOKE("preview_live_import_cmd", { app })),
 	/**
-	 *  「从 CC-Switch 导入」按钮：定位本机 CC-Switch 配置 → 读 + 转换供应商 → 复用
-	 *  `apply_import`（merge / overwrite）写本机库。**单应用语境**：`app` 是当前
+	 *  「从 CC-Switch 导入」按钮：定位本机 CC-Switch 配置 → 读 + 转换供应商 → 直接
+	 *  喂 store 层 seam（merge / overwrite）写本机库——不再序列化成导出文档绕道，
+	 *  冲突键 (app, id)、只写本机 DB 由 seam 守住。**单应用语境**：`app` 是当前
 	 *  视图的应用，只搬该应用的供应商（claude 视图不冒出 codex 供应商，见
 	 *  ADR-0012）。代理 / OAuth / 不支持应用的供应商跳过并进报告明细。找不到配置
 	 *  → 明确错误（前端展示友好提示）。
@@ -465,7 +517,7 @@ export type AppInfo = {
 
 /**  CC-Switch 导入报告（跨 Rust→JS 边界，`u32` 计数避免 specta BigInt 问题）。 */
 export type CcSwitchImportReport = {
-	/**  实际写入数（来自 apply_import）。 */
+	/**  实际写入数（来自导入 seam 的 AppId 策略）。 */
 	imported: number,
 	/**  merge 模式下 (app, id) 冲突跳过数。 */
 	mergeSkipped: number,
@@ -704,6 +756,51 @@ export type PricingEntry = {
 };
 
 /**
+ *  One project bucket of the project dimension: every session whose project
+ *  IDENTITY equals `project_dir`, rolled up with its usage. Session count and
+ *  last-active come from `sessions`; requests / token buckets / cost are live
+ *  aggregates over `usage_records` (the same single source of token truth
+ *  `SessionRow` reads — nothing is stored at project grain). The bucket key is
+ *  the project identity (the `project_identity` SQL scalar = the #84 rule), so
+ *  a Claude Code worktree session and its usage land under the PARENT project,
+ *  never as a one-session bucket of their own.
+ */
+export type ProjectStatsRow = {
+	/**  Project identity — the bucket key the filter's `project` matches. */
+	project_dir: string,
+	/**
+	 *  Sessions in the bucket. Same grain as the session list: one row per
+	 *  (session id, device), so a session collected on two devices counts
+	 *  twice.
+	 */
+	session_count: number,
+	/**  Live aggregate: usage rows across the bucket's sessions. */
+	request_count: number,
+	/**
+	 *  Live aggregate: sum of all four token buckets
+	 *  ([`TokenCounts::total`], computed at decode time).
+	 */
+	total_tokens: number,
+	input_tokens: number,
+	output_tokens: number,
+	cache_creation_tokens: number,
+	cache_read_tokens: number,
+	/**
+	 *  Cache-hit ratio over the bucket's cacheable pool, [0,1]
+	 *  ([`TokenCounts::cache_hit_rate`], computed at decode time — the same
+	 *  single implementation the dashboard and per-model rows use).
+	 */
+	cache_hit_rate: number | null,
+	/**  Live aggregate: sum of cost. */
+	total_cost_usd: number | null,
+	/**
+	 *  `MAX(last_active_at)` across the bucket's sessions (ISO8601) — drives
+	 *  the bucket ordering.
+	 */
+	last_active_at: string,
+};
+
+/**
  *  A provider (供应商): `settingsConfig` is the owning app's live-file
  *  snapshot (raw JSON text) — Claude 是 `settings.json` 快照，Codex 是
  *  `{"auth", "config"}` 快照（auth = auth.json 内容、config = config.toml
@@ -740,11 +837,9 @@ export type Provider = {
 export type ProviderCategory = "official" | "cn_official" | "aggregator" | "cloud_provider" | "custom";
 
 /**
- *  导入冲突模式：merge = 已有 `(app, id)` 跳过（保留双方，按 (app, id) 去重）；
- *  overwrite = 同 `(app, id)` 以导入为准（后者胜），本地独有保留（不做删除——
- *  保守迁移）。两种模式都不还原导出方的排序：已存在行保留本地 `sort_index`
- *  （排序是本地偏好，导入不做重排），导入的新行追加在末尾（`save_provider`
- *  语义）。
+ *  导入冲突模式（导出文档 / CC-Switch 导入的 AppId 策略参数）：merge = 已有
+ *  `(app, id)` 跳过（保留双方，按 (app, id) 去重）；overwrite = 同 `(app, id)`
+ *  以导入为准（后者胜），本地独有保留（不做删除——保守迁移）。
  */
 export type ProviderImportMode = "merge" | "overwrite";
 
@@ -755,9 +850,12 @@ export type ProviderImportMode = "merge" | "overwrite";
  *  会让 bindings.ts 生成失败。计数是行数（一次导入顶多几条），`u32` 足够。
  */
 export type ProviderImportReport = {
-	/**  实际写入的行数（merge = 新 (app, id)；overwrite = 全部导入行）。 */
+	/**
+	 *  实际写入的行数（AppId-merge = 新 (app, id)；AppId-overwrite = 全部导入
+	 *  行；Name / LiveKey = 处理的行数——更新与新建都算写入）。
+	 */
 	imported: number,
-	/**  merge 模式下因 (app, id) 冲突被跳过的行数（overwrite 恒为 0）。 */
+	/**  AppId-merge 模式下因 (app, id) 冲突被跳过的行数（其余策略恒为 0）。 */
 	skipped: number,
 };
 
@@ -785,6 +883,14 @@ export type SessionFilter = {
 	local_group_id: string | null,
 	/**  Scope to a synced group (empty string matches ungrouped). */
 	synced_group_id: string | null,
+	/**
+	 *  Scope to one project — matched by project IDENTITY, not the raw stored
+	 *  launch dir: the comparison runs through the `project_identity` SQL
+	 *  scalar, so a Claude Code worktree session (`<proj>\.claude\worktrees\…`)
+	 *  matches its parent project's bucket. Same rule the project aggregate
+	 *  groups by. `None`/empty = no constraint.
+	 */
+	project: string | null,
 	/**  Inclusive lower bound on `last_active_at` (ISO8601). */
 	from_ts: string | null,
 	/**  Inclusive upper bound on `last_active_at` (ISO8601). */
@@ -932,6 +1038,13 @@ export type SessionRow = {
 	id: string,
 	device_id: string,
 	source: string,
+	/**
+	 *  Project identity for the project dimension — the stored launch
+	 *  directory with a Claude Code worktree suffix collapsed to its parent
+	 *  ([`project_identity`]). The raw launch dir stays in the `sessions` row
+	 *  and the git snapshot; truncation is a read-side rule, so nothing is
+	 *  lost and no re-collect is needed for existing rows.
+	 */
 	project_dir: string,
 	/**  Display title: `custom_title` when set, else `title_orig`. */
 	title: string,
@@ -1095,6 +1208,16 @@ export type UsageFilter = {
 	model: string | null,
 	source: string | null,
 	device_scope: string | null,
+	/**
+	 *  Scope to one project (identity 口径, same rule as the sessions-side
+	 *  filter): a row matches when its session's `project_dir` maps to this
+	 *  project identity via the `project_identity` SQL scalar — so usage from
+	 *  a Claude Code worktree session counts under the PARENT project. Rows
+	 *  without a session id belong to no project and never match. `None`/empty
+	 *  = no constraint. Not applied to the per-turn aggregates in `UsageStats`
+	 *  (`turn_durations` has no session dimension to filter on).
+	 */
+	project: string | null,
 };
 
 /**

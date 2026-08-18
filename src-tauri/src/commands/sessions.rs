@@ -5,8 +5,8 @@ use tauri::{Emitter, State};
 use super::AppState;
 use crate::error::{AppError, AppResult};
 use crate::model::{
-    LocalGroup, SessionFilter, SessionGroup, SessionGroupCounts, SessionMessage, SessionQuery,
-    SessionRow, SyncedGroup,
+    LocalGroup, ProjectStatsRow, SessionFilter, SessionGroup, SessionGroupCounts, SessionMessage,
+    SessionQuery, SessionRow, SyncedGroup,
 };
 use crate::sessions;
 
@@ -36,6 +36,20 @@ pub fn count_sessions_cmd(
     track: String,
 ) -> AppResult<SessionGroupCounts> {
     state.store.count_sessions(filter.as_ref(), &track)
+}
+
+/// The project dimension: sessions rolled up by project identity with their
+/// usage aggregates (session count / requests / token four-buckets / cache-hit
+/// rate / cost / last active). Worktree sessions land under their parent
+/// project. The filter applies before grouping (time range etc. narrow which
+/// sessions feed the buckets).
+#[tauri::command]
+#[specta::specta]
+pub fn query_project_stats_cmd(
+    state: State<'_, AppState>,
+    filter: Option<SessionFilter>,
+) -> AppResult<Vec<ProjectStatsRow>> {
+    state.store.query_project_stats(filter.as_ref())
 }
 
 #[tauri::command]

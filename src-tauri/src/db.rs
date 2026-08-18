@@ -41,10 +41,10 @@ use rusqlite::{params, params_from_iter, types::Value as SqlValue, Connection, O
 use crate::error::{AppError, AppResult};
 use crate::model::{
     project_identity, LocalGroup, LogCostBreakdown, LogsQuery, ModelStatsRow, PricingEntry,
-    ServerToolUse, SessionFilter, SessionGroupCount, SessionGroupCounts, SessionMessage,
-    SessionMessageRole, SessionQuery, SessionRow, SessionSnapshotMeta, SessionSystemData,
-    TokenCounts, TrendBucket, TrendPoint, TurnDuration, UsageFilter, UsageLogRow, UsageRecord,
-    UsageStats, SESSION_SNAPSHOT_VERSION,
+    ProjectStatsRow, ServerToolUse, SessionFilter, SessionGroupCount, SessionGroupCounts,
+    SessionMessage, SessionMessageRole, SessionQuery, SessionRow, SessionSnapshotMeta,
+    SessionSystemData, TokenCounts, TrendBucket, TrendPoint, TurnDuration, UsageFilter,
+    UsageLogRow, UsageRecord, UsageStats, SESSION_SNAPSHOT_VERSION,
 };
 use crate::pricing::{ModelPricing, PricingBook};
 use crate::source_parser::{FileCursor, ScanProgress, ScanProgressDelta};
@@ -68,6 +68,7 @@ impl Store {
     pub fn open(path: &std::path::Path) -> AppResult<Self> {
         let conn = Connection::open(path)?;
         conn.execute_batch("PRAGMA journal_mode = WAL; PRAGMA foreign_keys = ON;")?;
+        register_project_identity_udf(&conn)?;
         // Tables → migrate → indexes, in that order. A legacy DB's usage_records
         // predates the session_id column, so idx_usage_session must not run until
         // migrate_schema has ALTERed the column on — building it first panics on
@@ -82,4 +83,26 @@ impl Store {
         store.ensure_pricing_seed()?;
         Ok(store)
     }
+}
+
+/// Register the `project_identity(text) -> text` SQL scalar on a connection:
+/// the single source of the project-dimension bucketing rule, callable from
+/// SQL as `project_identity(s.project_dir)` so the project aggregate
+/// (`GROUP BY`), the session-list project filter, and the usage-side project
+/// filter all bucket by the ONE Rust implementation ([`project_identity`], the
+/// #84 rule: a Claude Code `.claude\worktrees\` suffix collapses to its parent
+/// project) instead of carrying a second, drifting SQL transcription of it.
+/// DETERMINISTIC: same input ⇒ same bucket, safe for GROUP BY and WHERE.
+fn register_project_identity_udf(conn: &Connection) -> AppResult<()> {
+    use rusqlite::functions::FunctionFlags;
+    conn.create_scalar_function(
+        "project_identity",
+        1,
+        FunctionFlags::SQLITE_DETERMINISTIC,
+        |ctx| {
+            let raw: String = ctx.get(0)?;
+            Ok(project_identity(&raw).to_string())
+        },
+    )?;
+    Ok(())
 }

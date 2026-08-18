@@ -295,6 +295,14 @@ pub struct UsageFilter {
     pub model: Option<String>,
     pub source: Option<String>,
     pub device_scope: Option<String>,
+    /// Scope to one project (identity 口径, same rule as the sessions-side
+    /// filter): a row matches when its session's `project_dir` maps to this
+    /// project identity via the `project_identity` SQL scalar — so usage from
+    /// a Claude Code worktree session counts under the PARENT project. Rows
+    /// without a session id belong to no project and never match. `None`/empty
+    /// = no constraint. Not applied to the per-turn aggregates in `UsageStats`
+    /// (`turn_durations` has no session dimension to filter on).
+    pub project: Option<String>,
 }
 
 /// Query params for the request-log endpoint (adds paging to `UsageFilter`).

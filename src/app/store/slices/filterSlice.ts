@@ -83,7 +83,10 @@ export function dayPatch(
  *  Date bounds are derived via effectiveDays: a dynamic preset (today/7d/30d)
  *  re-rolls to the current day on every call, so the caller (an endpoint
  *  queryFn) always gets fresh bounds with nothing time-shaped frozen into the
- *  state or cache key. */
+ *  state or cache key. `project` is constant null here — the shared filter has
+ *  no project dimension yet (the usage-side project picker is a later ticket);
+ *  null = "no constraint", so it stays out of FILTER_DIMENSIONS and the cache
+ *  key for free. */
 export function toFilter(s: FilterState): UsageFilter {
   const { from_day, to_day } = effectiveDays(s)
   const { from_ts, to_ts } = dayRangeToTs(from_day, to_day)
@@ -93,6 +96,7 @@ export function toFilter(s: FilterState): UsageFilter {
     model: s.model || null,
     source: s.source || null,
     device_scope: s.device_scope || null,
+    project: null,
   }
 }
 

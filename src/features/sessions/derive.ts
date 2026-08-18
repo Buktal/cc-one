@@ -64,6 +64,13 @@ export interface SessionListFilter {
   deviceScope?: string | null
   /** Session used this model at least once (EXISTS over usage_records). */
   model?: string | null
+  /**
+   * Project identity to narrow to (matched backend-side through the
+   * `project_identity` rule, so a worktree session counts under its parent
+   * project). No UI feeds this yet — the project tree track is a later ticket;
+   * null = "no constraint".
+   */
+  project?: string | null
   /** Substring search over the display title and project path (backend LIKE). */
   search?: string | null
 }
@@ -96,6 +103,7 @@ export function sessionTabFilter(
   const fromTs = filter.fromTs || null
   const toTs = filter.toTs || null
   const model = filter.model || null
+  const project = filter.project || null
   const search = filter.search || null
   const trackGroup = (): string | null => {
     if (groupId == null || groupId === ALL_GROUPS) return null
@@ -108,6 +116,7 @@ export function sessionTabFilter(
       favorited: null,
       local_group_id: trackGroup(),
       synced_group_id: null,
+      project,
       from_ts: fromTs,
       to_ts: toTs,
       model,
@@ -121,6 +130,7 @@ export function sessionTabFilter(
     favorited: true,
     local_group_id: null,
     synced_group_id: trackGroup(),
+    project,
     from_ts: fromTs,
     to_ts: toTs,
     model,

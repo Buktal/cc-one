@@ -246,6 +246,12 @@ pub struct SessionFilter {
     pub local_group_id: Option<String>,
     /// Scope to a synced group (empty string matches ungrouped).
     pub synced_group_id: Option<String>,
+    /// Scope to one project — matched by project IDENTITY, not the raw stored
+    /// launch dir: the comparison runs through the `project_identity` SQL
+    /// scalar, so a Claude Code worktree session (`<proj>\.claude\worktrees\…`)
+    /// matches its parent project's bucket. Same rule the project aggregate
+    /// groups by. `None`/empty = no constraint.
+    pub project: Option<String>,
     /// Inclusive lower bound on `last_active_at` (ISO8601).
     pub from_ts: Option<String>,
     /// Inclusive upper bound on `last_active_at` (ISO8601).
@@ -291,6 +297,42 @@ pub struct SessionGroupCount {
 pub struct SessionGroupCounts {
     pub total: u32,
     pub groups: Vec<SessionGroupCount>,
+}
+
+/// One project bucket of the project dimension: every session whose project
+/// IDENTITY equals `project_dir`, rolled up with its usage. Session count and
+/// last-active come from `sessions`; requests / token buckets / cost are live
+/// aggregates over `usage_records` (the same single source of token truth
+/// `SessionRow` reads — nothing is stored at project grain). The bucket key is
+/// the project identity (the `project_identity` SQL scalar = the #84 rule), so
+/// a Claude Code worktree session and its usage land under the PARENT project,
+/// never as a one-session bucket of their own.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, specta::Type)]
+pub struct ProjectStatsRow {
+    /// Project identity — the bucket key the filter's `project` matches.
+    pub project_dir: String,
+    /// Sessions in the bucket. Same grain as the session list: one row per
+    /// (session id, device), so a session collected on two devices counts
+    /// twice.
+    pub session_count: u32,
+    /// Live aggregate: usage rows across the bucket's sessions.
+    pub request_count: u32,
+    /// Live aggregate: sum of all four token buckets
+    /// ([`TokenCounts::total`], computed at decode time).
+    pub total_tokens: u32,
+    pub input_tokens: u32,
+    pub output_tokens: u32,
+    pub cache_creation_tokens: u32,
+    pub cache_read_tokens: u32,
+    /// Cache-hit ratio over the bucket's cacheable pool, [0,1]
+    /// ([`TokenCounts::cache_hit_rate`], computed at decode time — the same
+    /// single implementation the dashboard and per-model rows use).
+    pub cache_hit_rate: f64,
+    /// Live aggregate: sum of cost.
+    pub total_cost_usd: f64,
+    /// `MAX(last_active_at)` across the bucket's sessions (ISO8601) — drives
+    /// the bucket ordering.
+    pub last_active_at: String,
 }
 
 /// One group entry for the frontend, unified across the two tracks. Order is

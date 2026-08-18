@@ -8,7 +8,7 @@ impl super::Store {
     /// Aggregate stats over a filter (BLUEPRINT 使用统计).
     pub fn query_stats(&self, filter: &UsageFilter) -> AppResult<UsageStats> {
         let conn = self.conn.lock().expect("db mutex poisoned");
-        let (clause, params_vec) = build_where(filter, true, true);
+        let (clause, params_vec) = build_where(filter, true, true, true);
         let sql = format!(
             "SELECT
                 COUNT(*),
@@ -43,8 +43,10 @@ impl super::Store {
             cache_read: s.cache_read_tokens,
         };
         s.cache_hit_rate = tokens.cache_hit_rate();
-        // Per-turn aggregates (separate grain, from turn_durations).
-        let (tclause, tparams) = build_where(filter, false, false);
+        // Per-turn aggregates (separate grain, from turn_durations). The
+        // project facet does not apply here: turn_durations has no session
+        // dimension to resolve a project through.
+        let (tclause, tparams) = build_where(filter, false, false, false);
         let tsql =
             format!("SELECT COUNT(*), COALESCE(AVG(duration_ms),0) FROM turn_durations {tclause}");
         let (turn_count, avg_dur): (i64, f64) =
@@ -59,7 +61,7 @@ impl super::Store {
     /// Per-model breakdown over a filter.
     pub fn query_models(&self, filter: &UsageFilter) -> AppResult<Vec<ModelStatsRow>> {
         let conn = self.conn.lock().expect("db mutex poisoned");
-        let (clause, params_vec) = build_where(filter, true, true);
+        let (clause, params_vec) = build_where(filter, true, true, true);
         let sql = format!(
             "SELECT model,
                 COUNT(*),
@@ -103,7 +105,7 @@ impl super::Store {
         bucket: TrendBucket,
     ) -> AppResult<Vec<TrendPoint>> {
         let conn = self.conn.lock().expect("db mutex poisoned");
-        let (clause, params_vec) = build_where(filter, true, true);
+        let (clause, params_vec) = build_where(filter, true, true, true);
         // Hour buckets read the clock in the device's local zone so a UTC+8
         // "today" trends in hours the user recognizes; the day bucket stays on
         // the stored UTC `day` for cross-device determinism.
@@ -160,7 +162,7 @@ impl super::Store {
             "model" => (false, true),
             _ => (true, false),
         };
-        let (mut clause, params_vec) = build_where(filter, include_model, include_source);
+        let (mut clause, params_vec) = build_where(filter, include_model, include_source, true);
         // Always exclude empty values; splice onto the WHERE clause (or start one).
         if clause.is_empty() {
             clause = format!("WHERE {col} != ''");
@@ -182,7 +184,7 @@ impl super::Store {
     /// text column; unknown/corrupt payloads fall back to zeros.
     pub fn query_logs(&self, q: &LogsQuery) -> AppResult<Vec<UsageLogRow>> {
         let conn = self.conn.lock().expect("db mutex poisoned");
-        let (clause, params_vec) = build_where(&q.filter, true, true);
+        let (clause, params_vec) = build_where(&q.filter, true, true, true);
         let limit = super::page_limit(q.limit);
         let offset = q.offset as i64;
         let sql = format!(
@@ -234,7 +236,7 @@ impl super::Store {
     /// Total row count (for paging display).
     pub fn count_logs(&self, filter: &UsageFilter) -> AppResult<u32> {
         let conn = self.conn.lock().expect("db mutex poisoned");
-        let (clause, params_vec) = build_where(filter, true, true);
+        let (clause, params_vec) = build_where(filter, true, true, true);
         let sql = format!("SELECT COUNT(*) FROM usage_records {clause}");
         let n: i64 = conn.query_row(&sql, params_from_iter(params_vec.iter()), |r| r.get(0))?;
         Ok(n as u32)
@@ -242,16 +244,20 @@ impl super::Store {
 }
 
 /// Build a `WHERE` clause + bound params for a `UsageFilter` (timestamp range,
-/// model, source, device scope). The range filters on `timestamp` (UTC), not
-/// `day` — see `UsageFilter` for why. `include_model` / `include_source` gate
-/// those two facets independently: the distinct-dropdown path queries one
-/// facet while ignoring its OWN filter (a picked value must never shrink its
-/// own candidate list) yet still narrows by the other facet + time + device.
+/// model, source, device scope, project). The range filters on `timestamp`
+/// (UTC), not `day` — see `UsageFilter` for why. `include_model` /
+/// `include_source` gate those two facets independently: the distinct-dropdown
+/// path queries one facet while ignoring its OWN filter (a picked value must
+/// never shrink its own candidate list) yet still narrows by the other facet +
+/// time + device. `include_project` gates the project facet for the one query
+/// it cannot apply to: the per-turn aggregates read `turn_durations`, which has
+/// no session dimension to resolve a project through (see `UsageFilter`).
 /// Returns `("WHERE ...", vec![...])` or `("", [])`.
 fn build_where(
     filter: &UsageFilter,
     include_model: bool,
     include_source: bool,
+    include_project: bool,
 ) -> (String, Vec<SqlValue>) {
     let mut conds: Vec<String> = Vec::new();
     let mut params: Vec<SqlValue> = Vec::new();
@@ -287,6 +293,26 @@ fn build_where(
         if !d.is_empty() {
             conds.push("device_id = ?".into());
             params.push(SqlValue::Text(d.clone()));
+        }
+    }
+    if include_project {
+        if let Some(p) = &filter.project {
+            if !p.is_empty() {
+                // Project identity 口径 (aligned with the sessions-side
+                // filter): resolve the row's session and compare through the
+                // `project_identity` SQL scalar — the one Rust rule — so usage
+                // from a Claude Code worktree session matches its PARENT
+                // project. Both keys are required: session ids can collide
+                // across devices. Rows without a session id match no project.
+                conds.push(
+                    "EXISTS (SELECT 1 FROM sessions s \
+                     WHERE s.id = usage_records.session_id \
+                       AND s.device_id = usage_records.device_id \
+                       AND project_identity(s.project_dir) = ?)"
+                        .into(),
+                );
+                params.push(SqlValue::Text(p.clone()));
+            }
         }
     }
     let clause = if conds.is_empty() {
@@ -493,6 +519,67 @@ mod tests {
         assert_eq!(
             srcs,
             vec!["claude_code".to_string(), "gemini_cli".to_string()]
+        );
+    }
+
+    /// The usage-side project filter (identity 口径, aligned with the
+    /// sessions side): a row matches when its session's `project_dir` maps to
+    /// the project identity via the `project_identity` SQL scalar — so usage
+    /// from a worktree session lands under the PARENT project in stats, logs,
+    /// and counts alike, while a session-less row belongs to no project.
+    #[test]
+    fn usage_project_filter_buckets_worktree_usage_under_parent() {
+        let s = mem();
+        seed_session_project(&s, "s-main", "d", "/proj/alpha", "2026-08-02T10:00:00.000Z");
+        seed_session_project(
+            &s,
+            "s-agent",
+            "d",
+            "/proj/alpha/.claude/worktrees/agent-x",
+            "2026-08-03T10:00:00.000Z",
+        );
+        // One row per session + one session-less legacy row.
+        let mut main = rec("u1", "2026-08-15", "glm-5.2", "d", 10, 0, 1.0);
+        main.session_id = "s-main".into();
+        let mut agent = rec("u2", "2026-08-15", "glm-5.2", "d", 20, 0, 2.0);
+        agent.session_id = "s-agent".into();
+        let loose = rec("u3", "2026-08-15", "glm-5.2", "d", 40, 0, 4.0);
+        s.ingest(&[main, agent, loose]).unwrap();
+
+        let alpha = UsageFilter {
+            project: Some("/proj/alpha".into()),
+            ..Default::default()
+        };
+        // Stats: both sessions' rows count (the worktree's included); the
+        // session-less row matches no project.
+        let stats = s.query_stats(&alpha).unwrap();
+        assert_eq!(stats.request_count, 2);
+        assert_eq!(stats.input_tokens, 30);
+        assert!((stats.total_cost_usd - 3.0).abs() < 1e-9);
+        // The log list and its count agree with stats (same WHERE builder).
+        assert_eq!(s.count_logs(&alpha).unwrap(), 2);
+        assert_eq!(
+            s.query_logs(&LogsQuery {
+                filter: alpha.clone(),
+                limit: 10,
+                offset: 0,
+            })
+            .unwrap()
+            .len(),
+            2
+        );
+
+        // Another project matches nothing; no constraint sees all three rows.
+        let beta = UsageFilter {
+            project: Some("/proj/beta".into()),
+            ..Default::default()
+        };
+        assert_eq!(s.query_stats(&beta).unwrap().request_count, 0);
+        assert_eq!(
+            s.query_stats(&UsageFilter::default())
+                .unwrap()
+                .request_count,
+            3
         );
     }
 }

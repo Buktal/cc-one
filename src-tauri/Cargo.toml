@@ -33,7 +33,10 @@ tauri-specta = { version = "=2.0.0-rc.25", features = ["derive", "typescript"] }
 thiserror = "2"
 
 # Local store: rusqlite with bundled SQLite so no system SQLite needed.
-rusqlite = { version = "0.31", features = ["bundled"] }
+# `functions`: register the `project_identity` SQL scalar (the #84 rule as a
+# UDF) so project-dimension queries group/filter without a second SQL copy of
+# the truncation logic.
+rusqlite = { version = "0.31", features = ["bundled", "functions"] }
 # Cost precision (Decimal stored as TEXT).
 rust_decimal = { version = "1", features = ["serde"] }
 # Timestamps as ISO8601 UTC.
