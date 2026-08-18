@@ -83,7 +83,10 @@ pub fn ingest_collected(
     book: &PricingBook,
     result: CollectResult,
 ) -> AppResult<IngestReport> {
-    let events_collected = result.events.len() as u32;
+    // Corrections are re-emitted events (rows an earlier pass already wrote) —
+    // counted as collected like before the channel split, so the report does
+    // not shrink.
+    let events_collected = (result.events.len() + result.corrections.len()) as u32;
     let turn_durations_collected = result.turn_durations.len() as u32;
     let source = result.source.clone();
 
@@ -94,6 +97,21 @@ pub fn ingest_collected(
         .map(|r| recordify(r, device_id, book))
         .collect();
     let inserted = store.ingest_marking_dirty(&records)?;
+
+    // Correction candidates (Codex unknown-model self-heal) → the guarded
+    // upsert that rewrites exactly the rows still reading model='unknown'
+    // (the protocol's store half — see
+    // `Store::ingest_corrections_marking_dirty`). Rewritten rows count as
+    // inserted: they ARE real store changes, and their days are flagged dirty
+    // so the push path recomputes the derived artifact.
+    let correction_records: Vec<UsageRecord> = result
+        .corrections
+        .iter()
+        .map(|r| recordify(r, device_id, book))
+        .collect();
+    let mut landed = store.ingest_corrections_marking_dirty(&correction_records)?;
+    landed.extend(inserted);
+    let inserted = landed;
 
     // Per-turn durations (separate grain) → store (+ mark dirty, same tx).
     let turns: Vec<TurnDuration> = result
@@ -305,6 +323,7 @@ mod tests {
         let result = CollectResult {
             source: "claude_code".into(),
             events: vec![d1, d2],
+            corrections: vec![],
             turn_durations: vec![raw_turn("td1")],
             files_scanned: 1,
             lines_skipped: 0,
@@ -337,6 +356,7 @@ mod tests {
         let result = CollectResult {
             source: "claude_code".into(),
             events: vec![raw("dup", "glm-5.2")],
+            corrections: vec![],
             turn_durations: vec![raw_turn("td1")],
             files_scanned: 1,
             lines_skipped: 0,
@@ -479,6 +499,7 @@ mod tests {
         let pass1 = CollectResult {
             source: "claude_code".into(),
             events: vec![],
+            corrections: vec![],
             turn_durations: vec![],
             sessions: vec![
                 sys_session("s1", "2026-08-01T01:00:00.000Z"),
@@ -495,6 +516,7 @@ mod tests {
         let pass1b = CollectResult {
             source: "claude_code".into(),
             events: vec![],
+            corrections: vec![],
             turn_durations: vec![],
             sessions: vec![
                 sys_session("s1", "2026-08-01T01:00:00.000Z"),
@@ -516,6 +538,7 @@ mod tests {
         let pass2 = CollectResult {
             source: "claude_code".into(),
             events: vec![],
+            corrections: vec![],
             turn_durations: vec![],
             sessions: vec![sys_session("s1", "2026-08-02T01:00:00.000Z")],
             messages: vec![],

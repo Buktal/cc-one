@@ -188,6 +188,31 @@ pub fn known_device_ids(paths: &Paths, cfg: &ConfigData) -> Vec<String> {
 
 // ---------------- Registry reconciliation ----------------
 
+/// Refresh the device registry on the collect path — the single post-collect
+/// maintenance entry, replacing the caller's ad-hoc sequencing:
+///   1. [`touch_self`] — keep THIS device's row current (a rename self-heals);
+///   2. `Store::discover_devices_from_usage` — materialize rows for devices
+///      that have usage but never published a name artifact;
+///   3. [`reconcile_devices`] — purge rows the local repo no longer backs
+///      (Git is the source of truth; a row with no git presence is residue).
+///
+/// THE ORDER IS LOAD-BEARING: discover must run BEFORE reconcile, so the rows
+/// discover just materialized are reconciled against git truth IN THE SAME
+/// PASS — a usage-only device whose repo presence is gone (a peer deleted
+/// itself, a regenerated-id residue) is purged immediately, together with its
+/// usage, instead of appearing in the picker for one collect interval until
+/// the next pass purges it. (Reconcile iterates the store's `device` table, so
+/// a usage-backed device that has NO row yet is only purgeable once discover
+/// has materialized it — discover-first is what makes the same-pass cleanup
+/// happen.) Pinned inside this one entry so the collect path cannot reorder
+/// the steps; the invariant is unit-tested here
+/// ([`tests::refresh_device_registry_pins_discover_before_reconcile`]).
+pub fn refresh_device_registry(store: &Store, paths: &Paths, cfg: &ConfigData) -> AppResult<()> {
+    touch_self(store, cfg)?;
+    store.discover_devices_from_usage()?;
+    reconcile_devices(store, paths, cfg)
+}
+
 /// Purge local device rows Git no longer backs. Git is the source of truth for
 /// which devices exist, so a device with NO git presence is residue and is
 /// forgotten locally (row + usage). "Present" = this device ∪ devices
@@ -480,6 +505,105 @@ mod tests {
             !ids.iter().any(|i| i == ghost),
             "local-only ghost must be pruned"
         );
+    }
+
+    /// The refresh entry's ORDER INVARIANT (discover before reconcile, pinned
+    /// inside `refresh_device_registry`), the two facts that make the order
+    /// observable after ONE refresh:
+    ///   - a usage-backed device that IS git-present (data dir in the repo)
+    ///     but never published a name artifact gets a materialized row and is
+    ///     KEPT — discover's purpose ("appears in the picker");
+    ///   - a usage-backed device with NO git presence (no artifact, no data
+    ///     dir — e.g. a peer that deleted itself, a regenerated-id residue) is
+    ///     purged IN THE SAME PASS, row AND usage: discover first gives
+    ///     reconcile a row to purge. The reverse order (reconcile first) would
+    ///     leave it alive — reconcile iterates only existing `device` rows, so
+    ///     the not-yet-materialized device would survive the pass, show in the
+    ///     picker for one collect interval, and only be purged next pass.
+    #[test]
+    fn refresh_device_registry_pins_discover_before_reconcile() {
+        let tmp = tempfile::tempdir().unwrap();
+        let paths = Paths::resolve(tmp.path());
+        std::fs::create_dir_all(&paths.repo_config).unwrap();
+        std::fs::create_dir_all(&paths.repo_data).unwrap();
+        let store = crate::db::Store::open(std::path::Path::new(":memory:")).unwrap();
+
+        let self_id = "0123456789ab";
+        let peer_usage_only = "aaaaaaaaaaaa"; // usage rows, no artifact, data dir present
+        let orphan_usage_only = "bbbbbbbbbbbb"; // usage rows, no artifact, NO git presence
+        let cfg = ConfigData {
+            device_id: self_id.into(),
+            ..Default::default()
+        };
+
+        // Usage rows for both; git presence (data dir) only for the peer.
+        store.upsert_device(self_id, "self", true).unwrap();
+        std::fs::create_dir_all(paths.device_data_dir(peer_usage_only)).unwrap();
+        store
+            .ingest(&[
+                crate::db::testutil::rec(
+                    "u1",
+                    "2026-07-13",
+                    "glm-5.2",
+                    peer_usage_only,
+                    100,
+                    50,
+                    0.0,
+                ),
+                crate::db::testutil::rec(
+                    "u2",
+                    "2026-07-14",
+                    "glm-5.2",
+                    orphan_usage_only,
+                    200,
+                    80,
+                    0.0,
+                ),
+            ])
+            .unwrap();
+
+        refresh_device_registry(&store, &paths, &cfg).unwrap();
+
+        // The git-present usage-only peer: row materialized by discover, kept
+        // by reconcile — this is the "appears in the picker" case.
+        let ids = store.list_device_ids().unwrap();
+        assert!(
+            ids.iter().any(|i| i == peer_usage_only),
+            "git-present usage-only device kept with a materialized row"
+        );
+        let row = store
+            .list_devices()
+            .unwrap()
+            .into_iter()
+            .find(|d| d.device_id == peer_usage_only)
+            .unwrap();
+        assert_eq!(
+            row.display_name,
+            crate::config::default_display_name(peer_usage_only),
+            "fallback name from discover"
+        );
+        assert_eq!(
+            row.first_seen, "2026-07-13T10:00:00.000Z",
+            "earliest usage timestamp as first_seen"
+        );
+        // The no-git usage-only device: purged in the SAME pass (discover
+        // materialized it, reconcile pruned it). Reverse order would leave it
+        // alive for one collect.
+        assert!(
+            !ids.iter().any(|i| i == orphan_usage_only),
+            "usage-only device without git presence purged same-pass"
+        );
+        assert_eq!(
+            store
+                .count_logs(&crate::model::UsageFilter {
+                    device_scope: Some(orphan_usage_only.into()),
+                    ..crate::model::UsageFilter::default()
+                })
+                .unwrap(),
+            0,
+            "its usage rows are gone with it"
+        );
+        assert!(ids.iter().any(|i| i == self_id), "self always kept");
     }
 
     #[test]

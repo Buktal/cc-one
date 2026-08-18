@@ -218,6 +218,7 @@ mod tests {
         let result = CollectResult {
             source: "claude_code".into(),
             events: vec![raw("zzz", "glm-5.2"), raw("aaa", "glm-5.2")],
+            corrections: vec![],
             turn_durations: vec![],
             files_scanned: 1,
             lines_skipped: 0,
@@ -255,6 +256,7 @@ mod tests {
         let result = CollectResult {
             source: "claude_code".into(),
             events: vec![raw("a", "glm-5.2")],
+            corrections: vec![],
             turn_durations: vec![],
             files_scanned: 1,
             lines_skipped: 0,
@@ -283,6 +285,7 @@ mod tests {
         let result = CollectResult {
             source: "claude_code".into(),
             events: vec![raw("a", "glm-5.2")],
+            corrections: vec![],
             turn_durations: vec![raw_turn("td1"), raw_turn("td2")],
             files_scanned: 1,
             lines_skipped: 0,

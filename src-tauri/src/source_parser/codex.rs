@@ -240,7 +240,11 @@ fn prescan_codex_text(text: &str) -> (Option<CodexSessionIdentity>, Option<i64>)
 /// only when the model is resolved; early token_count `info` carries no
 /// model). Events built while the model is unknown are deferred — see
 /// [`learn_model`] — so they get the model once it appears instead of being
-/// permanently stamped "unknown".
+/// permanently stamped "unknown". The two deferral lists map onto the
+/// [`CollectResult`] channels: events THIS pass builds past the cursor become
+/// regular `events`; events an EARLIER pass already wrote (at/before the
+/// cursor, `model="unknown"` in the store) become `corrections` — re-emitted
+/// with their original uuids for the store's guarded upsert.
 ///
 /// Sub-agent / fork sessions (`source.subagent` / `forked_from_id` / session id
 /// ≠ thread id) emit no [`RawSession`] and no transcript — only their own
@@ -270,6 +274,7 @@ fn fold_codex_file(file: &Path, text: &str, start_line: i64) -> FileParseOutcome
     };
 
     let mut events = Vec::new();
+    let mut corrections = Vec::new();
     let mut messages = Vec::new();
     let mut skipped = 0u32;
 
@@ -358,7 +363,7 @@ fn fold_codex_file(file: &Path, text: &str, start_line: i64) -> FileParseOutcome
                         .or_else(|| payload.get("info").and_then(|i| i.get("model")))
                         .and_then(|v| v.as_str())
                     {
-                        learn_model(model, &mut state, &mut events);
+                        learn_model(model, &mut state, &mut events, &mut corrections);
                     }
                 }
             }
@@ -379,7 +384,7 @@ fn fold_codex_file(file: &Path, text: &str, start_line: i64) -> FileParseOutcome
                     .or_else(|| payload.get("model"))
                     .and_then(|v| v.as_str())
                 {
-                    learn_model(model, &mut state, &mut events);
+                    learn_model(model, &mut state, &mut events, &mut corrections);
                 }
                 // Prefer cumulative total_token_usage; fall back to last_token_usage
                 // (already a per-call delta).
@@ -449,8 +454,10 @@ fn fold_codex_file(file: &Path, text: &str, start_line: i64) -> FileParseOutcome
                 // so route each built event accordingly:
                 //   - already-synced lines (≤ cursor) rebuild state but are not
                 //     re-emitted — unless their model was "unknown", in which
-                //     case they become correction candidates for the pass that
-                //     first sees the model;
+                //     case they become CORRECTION CANDIDATES for the pass that
+                //     first sees the model (`learn_model` flushes them into the
+                //     `corrections` output channel, not `events` — the store
+                //     rewrites only rows that still read model='unknown');
                 //   - lines past the cursor emit now when the model is known,
                 //     and are deferred otherwise (flushed by `learn_model`, or
                 //     with the "unknown" fallback at EOF).
@@ -479,10 +486,12 @@ fn fold_codex_file(file: &Path, text: &str, start_line: i64) -> FileParseOutcome
         }
     }
 
-    // The file carried no model context this pass — deferred events fall back
-    // to "unknown" (unchanged from pre-fix behavior; the pass that later sees
-    // the model re-emits them as corrections via `learn_model`). Stale
-    // candidates are dropped: they were already written by an earlier pass.
+    // The file carried no model context this pass — this-pass deferred events
+    // fall back to "unknown" (unchanged from pre-fix behavior; the pass that
+    // later sees the model re-emits them as corrections via `learn_model`).
+    // Stale candidates are dropped: they were already written by an earlier
+    // pass as "unknown" and will be re-collected + re-offered as corrections
+    // on the pass that sees the model (or a later one).
     events.extend(std::mem::take(&mut state.pending_unknown));
 
     let sessions = if !is_subagent && saw_any_event {
@@ -516,6 +525,7 @@ fn fold_codex_file(file: &Path, text: &str, start_line: i64) -> FileParseOutcome
 
     FileParseOutcome {
         events,
+        corrections,
         turn_durations: Vec::new(),
         sessions,
         messages,
@@ -533,30 +543,39 @@ fn is_history_snapshot_event(boundary: Option<i64>, line_offset: i64) -> bool {
 /// Codex writes the model context AFTER the first token events (it is resolved
 /// per turn; early token_count `info` carries no model), so events built before
 /// it must not be permanently stamped "unknown". Two deferral lists on `state`
-/// are flushed here:
-///   - `pending_unknown` — events emitted THIS pass before the model line;
-///   - `stale_unknown` — events at or before the cursor, written by an EARLIER
-///     pass as "unknown"; re-emitted with their original uuids so the ingest
-///     layer's guarded upsert rewrites exactly those store rows.
+/// are flushed here onto the two [`CollectResult`] channels:
+///   - `pending_unknown` → `events` — rows emitted THIS pass before the model
+///     line; never written before, they are ordinary new events once resolved;
+///   - `stale_unknown` → `corrections` — rows at or before the cursor, written
+///     by an EARLIER pass as "unknown"; re-emitted with their ORIGINAL uuids so
+///     the ingest layer's guarded upsert rewrites exactly those store rows
+///     (the protocol's store half, `Store::ingest_corrections_marking_dirty`).
 ///
 /// The stale re-emission runs in EVERY pass that sees the model, cursor or
 /// not: the parser cannot tell which pre-model rows an earlier pass wrote
-/// before the fix — re-emitting costs a few deduped rows per file, and the
+/// before the fix — re-offering costs a few deduped rows per file, and the
 /// store's `WHERE model = 'unknown'` guard makes the rewrite a no-op for rows
 /// that already carry the model. Subsequent model switches in the same pass
 /// just update `current_model`; later events use it directly.
-fn learn_model(model: &str, state: &mut CodexFileState, events: &mut Vec<RawUsage>) {
+fn learn_model(
+    model: &str,
+    state: &mut CodexFileState,
+    events: &mut Vec<RawUsage>,
+    corrections: &mut Vec<RawUsage>,
+) {
     state.current_model = crate::model::normalize_model_key(model);
     if state.model_resolved {
         return;
     }
     state.model_resolved = true;
     let model = state.current_model.clone();
-    for usage in state
-        .stale_unknown
-        .drain(..)
-        .chain(state.pending_unknown.drain(..))
-    {
+    for usage in state.stale_unknown.drain(..) {
+        corrections.push(RawUsage {
+            model: model.clone(),
+            ..usage
+        });
+    }
+    for usage in state.pending_unknown.drain(..) {
         events.push(RawUsage {
             model: model.clone(),
             ..usage
@@ -1257,11 +1276,17 @@ mod tests {
         );
     }
 
-    /// Incremental self-heal: pass 1 scans the pre-model prefix (rows written
-    /// "unknown"); pass 2 — the pass that first sees the model — re-emits the
-    /// stale events as corrections (same uuids, model now known) so the ingest
-    /// layer's guarded upsert can rewrite the store rows. Later passes must NOT
-    /// re-emit them again.
+    /// The unknown-model self-heal protocol, PARSER HALF: pass 1 scans the
+    /// pre-model prefix and emits the rows as `events` with model "unknown"
+    /// (the pass that wrote the store rows); pass 2 — the pass that first sees
+    /// the model — must NOT re-emit those stale rows as ordinary events; it
+    /// re-offers them in the explicit `corrections` channel (same uuids, model
+    /// now known) so the ingest layer's guarded upsert can rewrite exactly the
+    /// store rows that still read "unknown". New rows past the cursor stay in
+    /// `events`. Every LATER pass re-offers the corrections again (the parser
+    /// cannot tell which pre-model rows an earlier pass wrote before the fix —
+    /// pre-fix legacy rows heal on any later pass); the store guard turns the
+    /// re-offer into a no-op for rows that already carry the model.
     #[test]
     fn codex_incremental_corrects_stale_unknown_events_when_model_appears() {
         let dir = tempfile::tempdir().unwrap();
@@ -1280,6 +1305,10 @@ mod tests {
         // Pass 1 never saw a model → events flushed with the fallback.
         assert_eq!(r1.events.len(), 2);
         assert!(r1.events.iter().all(|e| e.model == "unknown"));
+        assert!(
+            r1.corrections.is_empty(),
+            "no corrections on the first pass"
+        );
         let progress: ScanProgress = delta;
 
         // Model context + one more usage event arrive (session kept running).
@@ -1294,36 +1323,36 @@ mod tests {
             writeln!(f, "{}", codex_token_count(500, 200, 60)).unwrap();
         }
         let (r2, progress2) = p.collect_incremental(&progress).unwrap();
-        // The firing pass re-emits the 2 stale events (corrected) + the 1 new
-        // event — all with the model.
-        assert_eq!(r2.events.len(), 3, "stale events re-emitted as corrections");
-        assert!(
-            r2.events.iter().all(|e| e.model == "gpt-5.6-sol"),
-            "{:?}",
-            r2.events
-                .iter()
-                .map(|e| e.model.clone())
-                .collect::<Vec<_>>()
+        // The firing pass re-offers the 2 stale rows as CORRECTIONS (their own
+        // channel, not events) and emits the 1 new event — all with the model.
+        assert_eq!(
+            r2.corrections.len(),
+            2,
+            "stale rows re-offered as corrections"
         );
+        assert_eq!(r2.events.len(), 1, "only the appended event is new");
+        assert!(r2.corrections.iter().all(|e| e.model == "gpt-5.6-sol"));
+        assert!(r2.events.iter().all(|e| e.model == "gpt-5.6-sol"));
         // The corrections keep the ORIGINAL uuids so the store upsert hits the
         // already-written rows.
-        let mut uuids: Vec<String> = r2.events.iter().map(|e| e.uuid.clone()).collect();
+        let mut uuids: Vec<String> = r2.corrections.iter().map(|e| e.uuid.clone()).collect();
         uuids.sort();
         assert_eq!(
             uuids,
             vec![
                 "codex:thread-v1:t1:1".to_string(),
-                "codex:thread-v1:t1:2".to_string(),
-                "codex:thread-v1:t1:3".to_string()
+                "codex:thread-v1:t1:2".to_string()
             ]
         );
+        assert!(r2.events[0].uuid.ends_with(":3"));
 
-        // A later pass (cursor past the model line) re-emits the pre-model
-        // events AGAIN as corrections — the parser cannot tell which pre-model
+        // A later pass (cursor past the model line) re-offers the pre-model
+        // rows AGAIN as corrections — the parser cannot tell which pre-model
         // rows were written before the fix, so every pass re-offers them with
         // their original uuids and the store's guarded upsert turns the
-        // re-emission into a no-op for rows that already carry the model. Plus
-        // the one appended event.
+        // re-offer into a no-op for rows that already carry the model (this is
+        // also how pre-fix legacy rows, whose cursor already passed the model
+        // line, heal). Plus the one appended event.
         std::thread::sleep(std::time::Duration::from_millis(20));
         {
             use std::io::Write;
@@ -1334,24 +1363,29 @@ mod tests {
             writeln!(f, "{}", codex_token_count(700, 300, 80)).unwrap();
         }
         let (r3, _) = p.collect_incremental(&progress2).unwrap();
-        // The 2 corrections (same uuids :1, :2 — store dedup/guarded upsert
-        // make them no-ops) + the 1 appended event (:4).
-        assert_eq!(r3.events.len(), 3);
-        assert!(r3.events.iter().all(|e| e.model == "gpt-5.6-sol"));
-        let mut uuids3: Vec<String> = r3.events.iter().map(|e| e.uuid.clone()).collect();
+        assert_eq!(r3.corrections.len(), 2, "corrections re-offered every pass");
+        let mut uuids3: Vec<String> = r3.corrections.iter().map(|e| e.uuid.clone()).collect();
         uuids3.sort();
         assert_eq!(
             uuids3,
             vec![
                 "codex:thread-v1:t1:1".to_string(),
-                "codex:thread-v1:t1:2".to_string(),
-                "codex:thread-v1:t1:4".to_string()
+                "codex:thread-v1:t1:2".to_string()
             ]
         );
+        assert_eq!(r3.events.len(), 1, "only the appended event is new");
+        assert!(r3.events[0].uuid.ends_with(":4"));
+        assert!(r3.corrections.iter().all(|e| e.model == "gpt-5.6-sol"));
     }
 
-    /// End-to-end production chain (parser → ingest → store): rows written
-    /// "unknown" before the model line self-heal once the model appears.
+    /// Composition seam (parser → ingest → store): the two protocol halves
+    /// meet in `ingest_collected`, which must route the parser's `corrections`
+    /// through the guarded upsert. Pass 1 writes the pre-model rows "unknown";
+    /// pass 2's corrections rewrite exactly those rows — the store rows heal
+    /// end-to-end. (The halves' own contracts are unit-tested separately: the
+    /// parser half above, the store half in `db::store_ingest`; the legacy
+    /// pre-fix-row variant is covered by their composition — re-offered
+    /// corrections + guard rewrites only "unknown" rows.)
     #[test]
     fn codex_unknown_model_rows_self_heal_across_collect_passes() {
         use crate::collect::ingest::ingest_collected;
@@ -1379,7 +1413,8 @@ mod tests {
 
         // Collect 1: model context not yet written → rows land as "unknown".
         let (r1, progress) = p.collect_incremental(&ScanProgress::new()).unwrap();
-        ingest_collected(&store, &paths, dev, &book, r1).unwrap();
+        let report1 = ingest_collected(&store, &paths, dev, &book, r1).unwrap();
+        assert_eq!(report1.rows_inserted, 2);
         let rows = store.usage_for_day_device(day, dev).unwrap();
         assert_eq!(rows.len(), 2);
         assert!(rows.iter().all(|r| r.model == "unknown"));
@@ -1396,7 +1431,12 @@ mod tests {
             writeln!(f, "{}", codex_token_count(500, 200, 60)).unwrap();
         }
         let (r2, _) = p.collect_incremental(&progress).unwrap();
-        ingest_collected(&store, &paths, dev, &book, r2).unwrap();
+        // The routing contract: corrections carried in their own channel, and
+        // the ingest counts both the 2 rewritten corrections and the 1 new row.
+        assert_eq!(r2.corrections.len(), 2);
+        assert_eq!(r2.events.len(), 1);
+        let report2 = ingest_collected(&store, &paths, dev, &book, r2).unwrap();
+        assert_eq!(report2.rows_inserted, 3, "2 corrections + 1 new row");
 
         let rows = store.usage_for_day_device(day, dev).unwrap();
         assert_eq!(rows.len(), 3);
@@ -1404,81 +1444,6 @@ mod tests {
             rows.iter().all(|r| r.model == "gpt-5.6-sol"),
             "stale 'unknown' rows must self-heal: {:?}",
             rows.iter().map(|r| r.model.clone()).collect::<Vec<_>>()
-        );
-
-        // Legacy rows written BEFORE the fix: a second session file whose DB
-        // rows carry "unknown" (the pre-fix parser emitted them before the
-        // model line), with a cursor that already passed the model line — a
-        // plain rescan would never re-touch them. Any later pass still
-        // re-emits the pre-model events (same uuids), and the store's guarded
-        // upsert rewrites exactly the "unknown" rows.
-        let file2 = dir.path().join("sessions").join("legacy.jsonl");
-        write_jsonl(
-            &file2,
-            &[
-                codex_session_meta_cwd("legacy", "/tmp"),
-                codex_token_count(100, 50, 10),
-                codex_token_count(300, 100, 40),
-                codex_turn_context("gpt-5.6-sol"),
-                codex_token_count(500, 200, 60),
-            ],
-        );
-        store
-            .ingest_marking_dirty(&[
-                crate::db::testutil::rec(
-                    "codex:thread-v1:legacy:1",
-                    day,
-                    "unknown",
-                    dev,
-                    50,
-                    10,
-                    0.0,
-                ),
-                crate::db::testutil::rec(
-                    "codex:thread-v1:legacy:2",
-                    day,
-                    "unknown",
-                    dev,
-                    100,
-                    20,
-                    0.0,
-                ),
-            ])
-            .unwrap();
-        // The pre-fix pass's cursor already covered the whole file.
-        let meta = std::fs::metadata(&file2).unwrap();
-        let mut progress_legacy = progress.clone();
-        progress_legacy.insert(
-            crate::source_parser::scan_progress_key(&file2),
-            crate::source_parser::FileCursor {
-                last_modified: crate::source_parser::metadata_modified_nanos(&meta),
-                last_line_offset: 5,
-            },
-        );
-
-        // One more append forces a normal pass (cursor past the model line).
-        std::thread::sleep(std::time::Duration::from_millis(20));
-        {
-            use std::io::Write;
-            let mut f = std::fs::OpenOptions::new()
-                .append(true)
-                .open(&file2)
-                .unwrap();
-            writeln!(f, "{}", codex_token_count(700, 300, 80)).unwrap();
-        }
-        let (r3, _) = p.collect_incremental(&progress_legacy).unwrap();
-        ingest_collected(&store, &paths, dev, &book, r3).unwrap();
-        let rows = store.usage_for_day_device(day, dev).unwrap();
-        let legacy: Vec<&String> = rows
-            .iter()
-            .filter(|r| r.uuid.contains("legacy"))
-            .map(|r| &r.model)
-            .collect();
-        assert_eq!(legacy.len(), 3);
-        assert!(
-            legacy.iter().all(|m| m.as_str() == "gpt-5.6-sol"),
-            "pre-fix 'unknown' rows must self-heal on any later pass: {:?}",
-            legacy
         );
     }
 

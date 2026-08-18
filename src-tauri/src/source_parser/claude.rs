@@ -267,6 +267,7 @@ impl ClaudeCodeSourceParser {
 
         super::FileParseOutcome {
             events: events_by_mid.into_values().collect(),
+            corrections: Vec::new(),
             turn_durations,
             sessions,
             messages,

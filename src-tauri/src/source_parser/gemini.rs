@@ -173,6 +173,7 @@ fn fold_file(file: &Path, text: &str) -> FileParseOutcome {
     let Ok(value) = serde_json::from_str::<serde_json::Value>(text) else {
         return FileParseOutcome {
             events: Vec::new(),
+            corrections: Vec::new(),
             turn_durations: Vec::new(),
             sessions: Vec::new(),
             messages: Vec::new(),
@@ -265,6 +266,7 @@ fn fold_file(file: &Path, text: &str) -> FileParseOutcome {
 
     FileParseOutcome {
         events,
+        corrections: Vec::new(),
         turn_durations: Vec::new(),
         sessions: vec![RawSession {
             id: session_id,

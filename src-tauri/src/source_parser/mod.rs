@@ -71,6 +71,18 @@ pub struct RawTurnDuration {
 pub struct CollectResult {
     pub source: String,
     pub events: Vec<RawUsage>,
+    /// Correction candidates (Codex unknown-model self-heal — parser half):
+    /// events an EARLIER pass already wrote with `model = "unknown"` (rows at
+    /// or before the scan cursor), re-emitted this pass with the model now
+    /// that a `turn_context` / `info.model` line resolved it. Carried in a
+    /// dedicated channel — NOT `events` — so the ingest layer routes them
+    /// through the guarded upsert that rewrites exactly the store rows that
+    /// still read `model = 'unknown'` (the protocol's store half, see
+    /// `Store::ingest_corrections_marking_dirty`). The parser re-offers them
+    /// on EVERY pass (it cannot tell which pre-model rows an earlier pass
+    /// wrote), and the guard turns re-offers into no-ops once a row carries
+    /// the model. Other sources never populate this.
+    pub corrections: Vec<RawUsage>,
     /// Per-turn durations (from `system/turn_duration` events).
     pub turn_durations: Vec<RawTurnDuration>,
     /// Sessions discovered this pass (system data: id/source/project/title/
@@ -205,6 +217,9 @@ pub fn all_source_parsers_at(home: &Path) -> Vec<Box<dyn SourceParser>> {
 /// truncation self-heal, partial-last-line guard, cursor advance, ordering).
 pub(super) struct FileParseOutcome {
     pub(super) events: Vec<RawUsage>,
+    /// Correction candidates for this file (see [`CollectResult::corrections`]).
+    /// Only the Codex parser populates it.
+    pub(super) corrections: Vec<RawUsage>,
     pub(super) turn_durations: Vec<RawTurnDuration>,
     /// Sessions discovered in this file (one per Claude jsonl; empty for
     /// parsers not yet wired for sessions).
@@ -252,6 +267,7 @@ pub(super) fn collect_jsonl_incremental(
 ) -> AppResult<(CollectResult, ScanProgressDelta)> {
     let files = parser.discover()?;
     let mut events: Vec<RawUsage> = Vec::new();
+    let mut corrections: Vec<RawUsage> = Vec::new();
     let mut turn_durations: Vec<RawTurnDuration> = Vec::new();
     let mut sessions: Vec<RawSession> = Vec::new();
     let mut messages: Vec<SessionMessage> = Vec::new();
@@ -311,6 +327,7 @@ pub(super) fn collect_jsonl_incremental(
         };
         let outcome = parse_file(file, &text, start_line);
         events.extend(outcome.events);
+        corrections.extend(outcome.corrections);
         turn_durations.extend(outcome.turn_durations);
         sessions.extend(outcome.sessions);
         messages.extend(outcome.messages);
@@ -324,9 +341,9 @@ pub(super) fn collect_jsonl_incremental(
         );
     }
 
-    // Deterministic order (shared with `parse_jsonl_full`): events by
-    // (timestamp, uuid), sessions by (last_active_at, id).
-    order_results(&mut events, &mut sessions);
+    // Deterministic order (shared with `parse_jsonl_full`): events and
+    // corrections by (timestamp, uuid), sessions by (last_active_at, id).
+    order_results(&mut events, &mut sessions, &mut corrections);
     // Messages: keep source order (within-file chronological); cross-file extend
     // is stable per the discover() order, which is deterministic per OS but not
     // sorted — the ingest layer re-groups by session_id before writing, and each
@@ -343,6 +360,7 @@ pub(super) fn collect_jsonl_incremental(
     let result = CollectResult {
         source: parser.name().to_string(),
         events,
+        corrections,
         turn_durations,
         sessions,
         messages,
@@ -353,12 +371,18 @@ pub(super) fn collect_jsonl_incremental(
     Ok((result, delta))
 }
 
-/// Deterministic ordering for collected results: events by (timestamp, uuid),
-/// sessions by (last_active_at, id). Applied by every parse/collect path so
-/// repeated runs over the same sources yield identical grain lines — the single
-/// rule, replacing the sort copy each parser used to inline.
-pub(super) fn order_results(events: &mut [RawUsage], sessions: &mut [RawSession]) {
+/// Deterministic ordering for collected results: events and corrections by
+/// (timestamp, uuid), sessions by (last_active_at, id). Applied by every
+/// parse/collect path so repeated runs over the same sources yield identical
+/// grain lines — the single rule, replacing the sort copy each parser used to
+/// inline.
+pub(super) fn order_results(
+    events: &mut [RawUsage],
+    sessions: &mut [RawSession],
+    corrections: &mut [RawUsage],
+) {
     events.sort_by(|a, b| (&a.timestamp, &a.uuid).cmp(&(&b.timestamp, &b.uuid)));
+    corrections.sort_by(|a, b| (&a.timestamp, &a.uuid).cmp(&(&b.timestamp, &b.uuid)));
     sessions.sort_by(|a, b| (&a.last_active_at, &a.id).cmp(&(&b.last_active_at, &b.id)));
 }
 
@@ -377,6 +401,7 @@ pub(super) fn parse_jsonl_full(
     parse_file: impl Fn(&Path, &str, i64) -> FileParseOutcome,
 ) -> AppResult<CollectResult> {
     let mut events = Vec::new();
+    let mut corrections = Vec::new();
     let mut turn_durations = Vec::new();
     let mut sessions = Vec::new();
     let mut messages = Vec::new();
@@ -391,17 +416,19 @@ pub(super) fn parse_jsonl_full(
         };
         let outcome = parse_file(file, &text, 0);
         events.extend(outcome.events);
+        corrections.extend(outcome.corrections);
         turn_durations.extend(outcome.turn_durations);
         sessions.extend(outcome.sessions);
         messages.extend(outcome.messages);
         skipped += outcome.skipped;
     }
-    order_results(&mut events, &mut sessions);
+    order_results(&mut events, &mut sessions, &mut corrections);
     let mut session_ids = parser.session_ids_seen(files);
     session_ids.sort_unstable();
     Ok(CollectResult {
         source: parser.name().to_string(),
         events,
+        corrections,
         turn_durations,
         sessions,
         messages,

@@ -52,7 +52,6 @@ pub fn collect_into_with(
     let cfg = config.get();
     let paths = config.paths();
     let progress = store.load_scan_progress()?;
-    crate::devices::touch_self(store, &cfg)?;
     let book = store.load_pricing_book()?;
 
     let mut merged = IngestReport::default();
@@ -73,18 +72,14 @@ pub fn collect_into_with(
         merged_delta.extend(delta);
     }
     merged.source = sources_with_rows.join(",");
-    // Self-heal: backfill device rows for any device that has usage but was
-    // never published (no name artifact) so it still appears in the picker. Runs
-    // here, on the collect path — not on the read-only list_devices command — so
-    // a query never mutates the DB. Worst-case latency to surface a new device
-    // is one collect interval.
-    store.discover_devices_from_usage()?;
+    // Post-collect device-registry maintenance: touch self, discover
+    // usage-only devices, then reconcile residue — one entry, discover-before-
+    // reconcile order pinned inside (`devices::refresh_device_registry`). Runs
+    // here, on the collect path — not on the read-only list_devices command —
+    // so a query never mutates the DB. Worst-case latency to surface a new
+    // device is one collect interval.
+    crate::devices::refresh_device_registry(store, &paths, &cfg)?;
     store.save_scan_progress(&merged_delta)?;
-    // Drop devices the local repo no longer backs (e.g. a peer deleted itself
-    // and its data is gone, or a regenerated-id residue). The local repo
-    // filesystem is the source of truth and is always available, so this runs
-    // on every collect — not only on a sync pull.
-    crate::devices::reconcile_devices(store, &paths, &cfg)?;
     Ok(merged)
 }
 

@@ -63,6 +63,7 @@ impl SourceParser for OpenCodeSourceParser {
 
     fn parse(&self, files: &[PathBuf]) -> AppResult<CollectResult> {
         let mut events = Vec::new();
+        let mut corrections = Vec::new();
         let mut sessions = Vec::new();
         let mut messages = Vec::new();
         let mut skipped = 0u32;
@@ -85,10 +86,11 @@ impl SourceParser for OpenCodeSourceParser {
                 Err(_) => skipped += 1,
             }
         }
-        super::order_results(&mut events, &mut sessions);
+        super::order_results(&mut events, &mut sessions, &mut corrections);
         Ok(CollectResult {
             source: self.name().to_string(),
             events,
+            corrections,
             turn_durations: Vec::new(),
             sessions,
             messages,
@@ -192,7 +194,11 @@ impl SourceParser for OpenCodeSourceParser {
                 Err(_) => result.lines_skipped += 1,
             }
         }
-        super::order_results(&mut result.events, &mut result.sessions);
+        super::order_results(
+            &mut result.events,
+            &mut result.sessions,
+            &mut result.corrections,
+        );
         delta.insert(
             db_path_str,
             FileCursor {

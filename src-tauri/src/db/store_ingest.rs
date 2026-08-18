@@ -16,16 +16,43 @@ impl super::Store {
         self.ingest_impl(records, false)
     }
 
-    /// Local-collect ingest: like [`Store::ingest`], but flags each inserted
-    /// row's day dirty in the SAME transaction. Same-tx is load-bearing — if the
-    /// row write and the dirty flag were separate transactions, a crash between
-    /// them would leave a written row whose day is never flagged, so the next
-    /// push's per-day recompute would never pick it up and it would silently
-    /// miss git (the exact failure the old JSONL-first ordering guarded). Pull
-    /// does not call this: peer rows are already on git, so flagging their days
-    /// would only cause spurious recomputes and muddy the "local dirtiness"
-    /// invariant (`dirty_days` describes un-pushed LOCAL writes, never imports).
+    /// Local-collect ingest for NEW events: like [`Store::ingest`], but flags
+    /// each inserted row's day dirty in the SAME transaction. Same-tx is
+    /// load-bearing — if the row write and the dirty flag were separate
+    /// transactions, a crash between them would leave a written row whose day
+    /// is never flagged, so the next push's per-day recompute would never pick
+    /// it up and it would silently miss git (the exact failure the old
+    /// JSONL-first ordering guarded). Pull does not call this: peer rows are
+    /// already on git, so flagging their days would only cause spurious
+    /// recomputes and muddy the "local dirtiness" invariant (`dirty_days`
+    /// describes un-pushed LOCAL writes, never imports).
+    ///
+    /// The upsert guard ([`collect_guarded_upsert_sql`]) is the re-scan
+    /// self-heal backstop here: a lost cursor makes the parser re-emit rows an
+    /// earlier pass already wrote, and a conflicting row is rewritten ONLY if
+    /// it still reads `model = 'unknown'` — known-model rows are never touched.
     pub fn ingest_marking_dirty(&self, records: &[UsageRecord]) -> AppResult<Vec<UsageRecord>> {
+        self.ingest_impl(records, true)
+    }
+
+    /// Corrections ingest — the unknown-model self-heal protocol's STORE HALF
+    /// (the parser half is `CollectResult::corrections`): a row the Codex
+    /// parser re-emits with a now-resolved model (original uuid, model was
+    /// "unknown" when an earlier pass wrote it) rewrites the store row ONLY IF
+    /// that row still reads `model = 'unknown'` — model + pricing_model + the
+    /// cost columns, which all derive from the model — and flags its day dirty
+    /// in the same transaction so the push path recomputes the derived
+    /// artifact. Rows that already carry the model are never touched: the
+    /// parser re-offers corrections on every pass (it cannot tell which
+    /// pre-model rows an earlier pass wrote), and this guard turns re-offers
+    /// into no-ops. Same guarded SQL + dirty-marking as
+    /// [`Store::ingest_marking_dirty`]; separate entry so the protocol half is
+    /// independently testable and cannot silently merge back into the events
+    /// path.
+    pub fn ingest_corrections_marking_dirty(
+        &self,
+        records: &[UsageRecord],
+    ) -> AppResult<Vec<UsageRecord>> {
         self.ingest_impl(records, true)
     }
 
@@ -49,26 +76,10 @@ impl super::Store {
             .collect::<Vec<_>>()
             .join(",");
         let insert_sql = if mark_dirty {
-            // Collect path: the Codex parser can re-emit a row its earlier pass
-            // wrote with model "unknown" (the log's model context can follow the
-            // token events), and ONLY those rows must be rewritten — model +
-            // pricing_model + the cost columns, which all derive from the model.
-            // Known-model rows are never touched. The pulled rows' days are
-            // flagged dirty like new rows so the push path recomputes the
-            // derived artifact, which still holds the stale row.
-            format!(
-                "INSERT INTO usage_records ({cols}) VALUES ({placeholders})
-                 ON CONFLICT (uuid, device_id) DO UPDATE SET
-                   model = excluded.model,
-                   pricing_model = excluded.pricing_model,
-                   input_cost_usd = excluded.input_cost_usd,
-                   output_cost_usd = excluded.output_cost_usd,
-                   cache_read_cost_usd = excluded.cache_read_cost_usd,
-                   cache_creation_cost_usd = excluded.cache_creation_cost_usd,
-                   total_cost_usd = excluded.total_cost_usd
-                 WHERE usage_records.model = 'unknown'
-                 RETURNING uuid"
-            )
+            // The collect path's single guarded upsert, shared by the events
+            // ingest (re-scan self-heal backstop) and the corrections ingest
+            // (the unknown-model protocol — see both doc comments).
+            Self::collect_guarded_upsert_sql(cols, &placeholders)
         } else {
             // Pull path: imported rows are already on git; re-importing must
             // never modify an existing row (pure dedup).
@@ -129,6 +140,31 @@ impl super::Store {
 
         tx.commit()?;
         Ok(inserted)
+    }
+
+    /// The collect path's guarded upsert SQL: a conflicting `(uuid, device_id)`
+    /// row is rewritten ONLY when it still reads `model = 'unknown'` — model +
+    /// pricing_model + the cost columns, which all derive from the model —
+    /// because the Codex parser can re-emit a row its earlier pass wrote with
+    /// model "unknown" (the log's model context can follow the token events).
+    /// Known-model rows are never touched, so re-offered corrections are
+    /// no-ops for rows that already carry the model. The rewritten row's day
+    /// is flagged dirty (by the caller, in the same tx) so the push path
+    /// recomputes the derived artifact, which still holds the stale row.
+    fn collect_guarded_upsert_sql(cols: &str, placeholders: &str) -> String {
+        format!(
+            "INSERT INTO usage_records ({cols}) VALUES ({placeholders})
+             ON CONFLICT (uuid, device_id) DO UPDATE SET
+               model = excluded.model,
+               pricing_model = excluded.pricing_model,
+               input_cost_usd = excluded.input_cost_usd,
+               output_cost_usd = excluded.output_cost_usd,
+               cache_read_cost_usd = excluded.cache_read_cost_usd,
+               cache_creation_cost_usd = excluded.cache_creation_cost_usd,
+               total_cost_usd = excluded.total_cost_usd
+             WHERE usage_records.model = 'unknown'
+             RETURNING uuid"
+        )
     }
 
     /// Insert per-turn durations, deduping by uuid (INSERT OR IGNORE). Separate
@@ -271,10 +307,14 @@ mod tests {
 
     /// Codex can place the model context AFTER the token events, so a collect
     /// pass may write a row with model "unknown" that a later pass can resolve.
-    /// The collect-path ingest must rewrite EXACTLY those rows (model +
-    /// pricing_model + cost) when the parser re-emits them corrected, and flag
-    /// the corrected row's day dirty so the push path recomputes the artifact.
-    /// Rows whose model is already known are never touched.
+    /// The events-path ingest (re-scan self-heal backstop: a lost cursor makes
+    /// the parser re-emit rows an earlier pass wrote) must rewrite EXACTLY
+    /// those rows (model + pricing_model + cost) when the parser re-emits them
+    /// corrected, and flag the corrected row's day dirty so the push path
+    /// recomputes the artifact. Rows whose model is already known are never
+    /// touched. (The corrections channel — the protocol's primary path — is
+    /// covered by [`ingest_corrections_marking_dirty_rewrites_only_unknown_rows`];
+    /// both share `collect_guarded_upsert_sql`.)
     #[test]
     fn ingest_marking_dirty_corrects_unknown_model_rows_only() {
         let s = mem();
@@ -340,6 +380,79 @@ mod tests {
             rust_decimal::Decimal::try_from(0.0001).unwrap(),
             "cost untouched"
         );
+    }
+
+    /// The unknown-model self-heal protocol's STORE HALF, pinned on the
+    /// corrections entry (the parser half is `CollectResult::corrections`):
+    /// a correction — same uuid as a row an earlier pass wrote, model now
+    /// resolved — rewrites model + pricing_model + the cost columns and flags
+    /// the day dirty. The re-offer on the NEXT pass (the parser re-offers
+    /// corrections every pass, since it cannot tell which pre-model rows an
+    /// earlier pass wrote — legacy pre-fix rows included) is a NO-OP once the
+    /// row carries the model, and a correction for an already-known row never
+    /// touches it.
+    #[test]
+    fn ingest_corrections_marking_dirty_rewrites_only_unknown_rows() {
+        let s = mem();
+        let day = "2026-08-07";
+        // Pass-1 rows: one written "unknown" (healable), one already known.
+        let unknown = rec("codex:thread-v1:t1:1", day, "unknown", "dev1", 100, 10, 0.0);
+        let known = rec(
+            "codex:thread-v1:t1:2",
+            day,
+            "gpt-5.6-sol",
+            "dev1",
+            200,
+            20,
+            0.0,
+        );
+        s.ingest_marking_dirty(&[unknown.clone(), known.clone()])
+            .unwrap();
+
+        // Pass 2: the parser re-offers both rows as corrections (it cannot
+        // distinguish them); the guard rewrites ONLY the still-"unknown" one.
+        let mut corrected = unknown.clone();
+        corrected.model = "gpt-5.6-sol".into();
+        corrected.pricing_model = "gpt-5.6-sol".into();
+        corrected.cost = CostBreakdown {
+            input_usd: rust_decimal::Decimal::try_from(0.0001).unwrap(),
+            total_usd: rust_decimal::Decimal::try_from(0.0001).unwrap(),
+            ..corrected.cost
+        };
+        let mut reemit_known = known.clone();
+        reemit_known.cost = CostBreakdown {
+            input_usd: rust_decimal::Decimal::try_from(9.99).unwrap(),
+            total_usd: rust_decimal::Decimal::try_from(9.99).unwrap(),
+            ..known.cost
+        };
+        let landed = s
+            .ingest_corrections_marking_dirty(&[corrected.clone(), reemit_known])
+            .unwrap();
+        assert_eq!(landed.len(), 1, "only the still-'unknown' row is rewritten");
+        let rows = s.usage_for_day_device(day, "dev1").unwrap();
+        let healed = rows.iter().find(|r| r.uuid == unknown.uuid).unwrap();
+        assert_eq!(healed.model, "gpt-5.6-sol");
+        assert_eq!(healed.pricing_model, "gpt-5.6-sol");
+        assert_eq!(
+            healed.cost.total_usd,
+            rust_decimal::Decimal::try_from(0.0001).unwrap()
+        );
+        let known_row = rows.iter().find(|r| r.uuid == known.uuid).unwrap();
+        assert_eq!(
+            known_row.cost.total_usd,
+            rust_decimal::Decimal::ZERO,
+            "an already-known row is never touched by a correction"
+        );
+        // The corrected day is dirty: the local artifact holds the stale row.
+        assert!(s.dirty_days().unwrap().contains(&day.to_string()));
+
+        // Pass 3: the parser re-offers the SAME correction again — the row now
+        // carries the model, so the guarded upsert is a no-op (this is how
+        // every-pass re-offers and legacy pre-fix rows resolve idempotently).
+        let again = s.ingest_corrections_marking_dirty(&[corrected]).unwrap();
+        assert_eq!(again.len(), 0, "re-offered correction is a no-op");
+        let rows = s.usage_for_day_device(day, "dev1").unwrap();
+        assert_eq!(rows.len(), 2, "no duplication from re-offers");
     }
 
     /// The PULL path must keep DO NOTHING semantics: re-ingesting a row never

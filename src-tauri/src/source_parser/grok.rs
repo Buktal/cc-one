@@ -164,6 +164,7 @@ fn parse_grok_file(file: &Path, text: &str, start_line: i64) -> FileParseOutcome
         Some("summary.json") => parse_grok_summary(file, text),
         _ => FileParseOutcome {
             events: Vec::new(),
+            corrections: Vec::new(),
             turn_durations: Vec::new(),
             sessions: Vec::new(),
             messages: Vec::new(),
@@ -213,6 +214,7 @@ fn parse_grok_updates(file: &Path, text: &str, start_line: i64) -> FileParseOutc
     }
     FileParseOutcome {
         events,
+        corrections: Vec::new(),
         turn_durations: Vec::new(),
         sessions: Vec::new(),
         messages: Vec::new(),
@@ -313,6 +315,7 @@ fn parse_grok_summary(file: &Path, text: &str) -> FileParseOutcome {
     let session = raw_session_from_summary(file, text);
     FileParseOutcome {
         events: Vec::new(),
+        corrections: Vec::new(),
         turn_durations: Vec::new(),
         sessions: vec![session],
         messages: Vec::new(),
@@ -503,6 +506,7 @@ fn parse_grok_chat_history(file: &Path, text: &str, start_line: i64) -> FilePars
     };
     FileParseOutcome {
         events: Vec::new(),
+        corrections: Vec::new(),
         turn_durations: Vec::new(),
         sessions,
         messages,
