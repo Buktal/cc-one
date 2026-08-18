@@ -71,7 +71,11 @@ export interface SessionListFilter {
    * null = "no constraint".
    */
   project?: string | null
-  /** Substring search over the display title and project path (backend LIKE). */
+  /**
+   * Substring search over the display title, the project path, and every
+   * message body (backend LIKE — bodies are probed across all devices of the
+   * session, the same union the merged transcript shows).
+   */
   search?: string | null
 }
 

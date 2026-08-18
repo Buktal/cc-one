@@ -194,9 +194,11 @@ export const commands = {
 	model: string | null,
 	/**
 	 *  Substring search over the display title (custom title when set, else the
-	 *  original) and the project path — case-insensitive, literal (LIKE
-	 *  metacharacters are escaped). `None`/empty = no constraint. Lives
-	 *  backend-side because paged results make client-side filtering
+	 *  original), the project path, and every message body
+	 *  (`session_messages.content`, probed across ALL devices of the session —
+	 *  the same union the merged transcript read shows) — case-insensitive,
+	 *  literal (LIKE metacharacters are escaped). `None`/empty = no constraint.
+	 *  Lives backend-side because paged results make client-side filtering
 	 *  inconsistent (it would only search the loaded page).
 	 */
 	search: string | null,
@@ -239,9 +241,11 @@ export const commands = {
 	model: string | null,
 	/**
 	 *  Substring search over the display title (custom title when set, else the
-	 *  original) and the project path — case-insensitive, literal (LIKE
-	 *  metacharacters are escaped). `None`/empty = no constraint. Lives
-	 *  backend-side because paged results make client-side filtering
+	 *  original), the project path, and every message body
+	 *  (`session_messages.content`, probed across ALL devices of the session —
+	 *  the same union the merged transcript read shows) — case-insensitive,
+	 *  literal (LIKE metacharacters are escaped). `None`/empty = no constraint.
+	 *  Lives backend-side because paged results make client-side filtering
 	 *  inconsistent (it would only search the loaded page).
 	 */
 	search: string | null,
@@ -903,9 +907,11 @@ export type SessionFilter = {
 	model: string | null,
 	/**
 	 *  Substring search over the display title (custom title when set, else the
-	 *  original) and the project path — case-insensitive, literal (LIKE
-	 *  metacharacters are escaped). `None`/empty = no constraint. Lives
-	 *  backend-side because paged results make client-side filtering
+	 *  original), the project path, and every message body
+	 *  (`session_messages.content`, probed across ALL devices of the session —
+	 *  the same union the merged transcript read shows) — case-insensitive,
+	 *  literal (LIKE metacharacters are escaped). `None`/empty = no constraint.
+	 *  Lives backend-side because paged results make client-side filtering
 	 *  inconsistent (it would only search the loaded page).
 	 */
 	search: string | null,

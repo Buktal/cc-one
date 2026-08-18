@@ -577,16 +577,30 @@ fn build_session_where(filter: Option<&SessionFilter>) -> (String, Vec<SqlValue>
         let q = q.trim();
         if !q.is_empty() {
             // Substring search over the DISPLAY title (custom title wins, same
-            // COALESCE as the SELECT) and the project path. Like the client-
-            // side filter it replaces, the match is case-insensitive and
-            // literal — the pattern escapes LIKE wildcards so `%`/`_` in the
-            // query never act as metacharacters.
+            // COALESCE as the SELECT), the project path, and every message BODY
+            // (`session_messages.content`). Like the client-side filter it
+            // replaces, the match is case-insensitive and literal — the pattern
+            // escapes LIKE wildcards so `%`/`_` in the query never act as
+            // metacharacters. The body probe is an EXISTS at session-id grain,
+            // deliberately NOT scoped to `s.device_id`: the transcript a row
+            // opens is `query_session_transcript`, which merges ALL devices'
+            // messages for the id (deduped by uuid, self winning) — so the
+            // search must see the same union, or a hit could open a transcript
+            // that doesn't contain it (a peer's pulled snapshot often holds
+            // messages self's local file lacks, and vice versa). The uuid-level
+            // self-wins collapse only ever drops same-uuid duplicates (the same
+            // source event), so the union is the merged transcript for matching
+            // purposes. `idx_session_messages_sid` serves the probe.
             let pattern = like_pattern(q);
             conds.push(
                 "(COALESCE(NULLIF(s.custom_title,''), s.title_orig) LIKE ? ESCAPE '\\' \
-                 OR s.project_dir LIKE ? ESCAPE '\\')"
+                 OR s.project_dir LIKE ? ESCAPE '\\' \
+                 OR EXISTS (SELECT 1 FROM session_messages m \
+                            WHERE m.session_id = s.id \
+                            AND m.content LIKE ? ESCAPE '\\'))"
                     .into(),
             );
+            params.push(SqlValue::Text(pattern.clone()));
             params.push(SqlValue::Text(pattern.clone()));
             params.push(SqlValue::Text(pattern));
         }
@@ -1144,6 +1158,132 @@ mod tests {
         assert_eq!(alpha.session_count, 1, "a-old excluded by the window");
         assert_eq!(alpha.request_count, 1, "its usage dropped with it");
         assert!((alpha.total_cost_usd - 0.5).abs() < 1e-9);
+    }
+
+    /// Cross-session full-text search: the `search` filter also matches message
+    /// BODIES, on the production paths (paged list + sidebar counts share
+    /// `build_session_where`). Case-insensitive and literal — a `%` in the query
+    /// matches a literal `%` in a body, never acts as a wildcard.
+    #[test]
+    fn session_filter_search_matches_message_bodies() {
+        let s = mem();
+        seed_session(&s, "s1", "dev", "2026-08-01T10:00:00.000Z");
+        seed_session(&s, "s2", "dev", "2026-08-02T10:00:00.000Z");
+        let mut hit = msg("u1", "s1", SessionMessageRole::User, "2026-08-01T10:00:00Z");
+        hit.content = "the tokamak calibration notes".into();
+        let mut pct = msg("u2", "s2", SessionMessageRole::User, "2026-08-02T10:00:00Z");
+        pct.content = "shipment 100% done".into();
+        s.ingest_session_messages_marking_dirty("dev", &[hit, pct])
+            .unwrap();
+
+        let ids = |q: &str| -> Vec<String> {
+            s.query_sessions_page(&SessionQuery {
+                filter: Some(SessionFilter {
+                    search: Some(q.into()),
+                    ..Default::default()
+                }),
+                limit: 50,
+                offset: 0,
+            })
+            .unwrap()
+            .into_iter()
+            .map(|r| r.id)
+            .collect()
+        };
+        assert_eq!(
+            ids("tokamak"),
+            ["s1"],
+            "body-only hit surfaces the session (title/project miss)"
+        );
+        assert_eq!(ids("TOKAMAK"), ["s1"], "body match is case-insensitive");
+        assert_eq!(
+            ids("00%"),
+            ["s2"],
+            "literal % in a body match, not a wildcard"
+        );
+        assert!(ids("glorb").is_empty(), "no body/title/project match");
+        // Sidebar counts go through the same clause — they must agree with the
+        // paged list, or the paginator would contradict the rows it counts.
+        let counts = s
+            .count_sessions(
+                Some(&SessionFilter {
+                    search: Some("tokamak".into()),
+                    ..Default::default()
+                }),
+                "local",
+            )
+            .unwrap();
+        assert_eq!(counts.total, 1, "counts see the body hit too");
+    }
+
+    /// The body probe reuses the transcript MERGE semantics: a message that
+    /// exists only under a PEER's device id (a pulled snapshot row) still
+    /// matches the session, because the transcript the row opens
+    /// (`query_session_transcript`) merges all devices' messages for the id.
+    /// A device-scoped probe would miss it and show a hit-less list while the
+    /// opened transcript contains the match. Pinned end-to-end here: the
+    /// Local-tab shape (device_scope = self) matches, and the merged transcript
+    /// actually holds the peer-only message.
+    #[test]
+    fn session_filter_search_sees_peer_device_message_bodies() {
+        let s = mem();
+        // Self collected the session; its own slice does NOT contain the term.
+        seed_session(&s, "s1", "dev", "2026-08-01T10:00:00.000Z");
+        let mut own = msg("u1", "s1", SessionMessageRole::User, "2026-08-01T10:00:00Z");
+        own.content = "own-device chatter".into();
+        s.ingest_session_messages_marking_dirty("dev", &[own])
+            .unwrap();
+        // A peer's favorited snapshot carries an extra message self never saw —
+        // imported through the production pull path, under the PEER's device id.
+        let mut extra = msg(
+            "p1",
+            "s1",
+            SessionMessageRole::Assistant,
+            "2026-08-01T11:00:00Z",
+        );
+        extra.content = "the zeppelin docking checklist".into();
+        s.import_session_snapshot(
+            "peer1",
+            &SessionSnapshotMeta {
+                v: SESSION_SNAPSHOT_VERSION,
+                id: "s1".into(),
+                source: "claude_code".into(),
+                project_dir: "/proj".into(),
+                title_orig: "Title".into(),
+                started_at: "2026-08-01T00:00:00.000Z".into(),
+                last_active_at: "2026-08-01T12:00:00.000Z".into(),
+                agent_type: String::new(),
+                favorited: true,
+                synced_group_id: String::new(),
+            },
+            &[extra],
+        )
+        .unwrap();
+
+        let filter = SessionFilter {
+            device_scope: Some("dev".into()),
+            search: Some("zeppelin".into()),
+            ..Default::default()
+        };
+        let rows = s
+            .query_sessions_page(&SessionQuery {
+                filter: Some(filter),
+                limit: 50,
+                offset: 0,
+            })
+            .unwrap();
+        assert_eq!(
+            rows.iter().map(|r| r.id.as_str()).collect::<Vec<_>>(),
+            ["s1"],
+            "self's row matches via the peer-only body (Local-tab shape)"
+        );
+        // The consistency premise this pins: opening the session really does
+        // show the peer-only message in the merged transcript.
+        let merged = s.query_session_transcript("s1", "dev").unwrap();
+        assert!(
+            merged.iter().any(|m| m.content.contains("zeppelin")),
+            "merged transcript holds the peer message the search matched"
+        );
     }
 
     /// The other policy half: `import_session_snapshot` (pull) uses

@@ -200,11 +200,19 @@ pub(super) const SESSION_MESSAGES_COLS_DDL: &str = "\
     content TEXT NOT NULL, \
     PRIMARY KEY (device_id, uuid)";
 
-/// The transcript read path resolves a session by `(device_id, session_id)` and
-/// orders by `(ts, uuid)` — this index serves it directly.
+/// Two access paths, two indexes:
+/// * `(device_id, session_id)` serves the transcript read path, which resolves
+///   a session by `(device_id, session_id)` and orders by `(ts, uuid)`.
+/// * `(session_id)` alone serves the cross-session full-text search's EXISTS
+///   probe (`m.session_id = s.id`, device-agnostic on purpose — the merged
+///   transcript spans devices). The composite index can't serve it: probing by
+///   its SECOND column degrades to a full `session_messages` scan PER session
+///   row (~4 s on a real 42k-message store vs ~26 ms with this index).
 pub(super) const SESSION_MESSAGES_INDEXES: &str = "\
     CREATE INDEX IF NOT EXISTS idx_session_messages_session \
-        ON session_messages(device_id, session_id);";
+        ON session_messages(device_id, session_id); \
+    CREATE INDEX IF NOT EXISTS idx_session_messages_sid \
+        ON session_messages(session_id);";
 
 /// `provider` — user-created providers (供应商). `settings_config` and `meta`
 /// are raw JSON *text* (the store round-trips them without parsing); the API
