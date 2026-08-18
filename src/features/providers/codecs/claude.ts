@@ -137,6 +137,27 @@ export function withBasicFields(
   }
 }
 
+/**
+ * Save-time normalization of the basic form fields in a settingsConfig text:
+ * the endpoint is trimmed (typing an in-progress value is not fought mid-edit
+ * — the persisted snapshot carries no trailing space), an empty endpoint /
+ * key removes the stale env entry, and the key lives under the selected auth
+ * spelling only. Everything the form does not own survives untouched. The
+ * fields are re-read from the text they are written into — the form owns no
+ * mirrored field state — so a template-variable-materialized text (e.g.
+ * Bedrock's `${AWS_REGION}` endpoint) normalizes on its materialized values,
+ * never on a stale pre-materialization copy, and no placeholder sneaks back
+ * into the saved snapshot (the backend rejects unfilled placeholders at
+ * switch time).
+ */
+export function normalizeBasicFieldsInText(configText: string): string {
+  return withBasicFieldsInText(configText, {
+    endpoint: configEndpoint(configText).trim(),
+    apiKey: configApiKey(configText),
+    authField: configAuthField(configText),
+  })
+}
+
 // ------------------------------------------------------- model roles + 1M --
 
 /** The five model roles Claude Code routes to. Each role carries its own

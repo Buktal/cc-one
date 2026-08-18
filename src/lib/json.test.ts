@@ -2,7 +2,12 @@
 // provider form sheet's settingsConfig sync (lib/json.ts).
 
 import { describe, expect, it } from "vitest"
-import { formatJson, parseJsonObject, tidyJson } from "@/lib/json"
+import {
+  formatJson,
+  guardedRewrite,
+  parseJsonObject,
+  tidyJson,
+} from "@/lib/json"
 
 describe("parseJsonObject", () => {
   it("parses a plain object", () => {
@@ -89,5 +94,43 @@ describe("tidyJson", () => {
   it("is idempotent", () => {
     const once = tidyJson('{"b":1,"a":2}')
     expect(tidyJson(once)).toBe(once)
+  })
+})
+
+describe("guardedRewrite", () => {
+  it("applies the rewrite while the text parses to an object", () => {
+    const next = guardedRewrite('{"env": {"a": "old"}}', (prev) =>
+      prev.replace("old", "new"),
+    )
+    expect(next).toBe('{"env": {"a": "new"}}')
+  })
+
+  it("returns null for a syntax error — the in-progress edit is never clobbered", () => {
+    // 表单写回守卫（guardedWrite）的不变量：半截 JSON 上拒绝写入，而不是用
+    // 归一后的裸对象替换掉正在编辑的文本。
+    const next = guardedRewrite('{"env": ', () =>
+      JSON.stringify({ env: {} }, null, 2),
+    )
+    expect(next).toBeNull()
+  })
+
+  it("returns null for a non-object top level", () => {
+    expect(guardedRewrite("[1,2]", (p) => p)).toBeNull()
+    expect(guardedRewrite('"a bare string"', (p) => p)).toBeNull()
+  })
+
+  it("treats empty text as a writable blank snapshot", () => {
+    expect(guardedRewrite("", () => '{"env":{}}')).toBe('{"env":{}}')
+    expect(guardedRewrite("   ", (prev) => prev.trim())).toBe("")
+  })
+
+  it("never invokes the update on broken text", () => {
+    let called = false
+    const result = guardedRewrite('{"env": ', () => {
+      called = true
+      return "{}"
+    })
+    expect(result).toBeNull()
+    expect(called).toBe(false)
   })
 })

@@ -91,6 +91,21 @@ function sortKeysShallow(value: unknown): unknown {
   return out
 }
 
+/** Apply a rewrite to a JSON-object text only while it parses to an object;
+ *  `null` when it does not. The provider form's write seam (`guardedWrite` in
+ *  provider-form-sheet): a field edit must never clobber an in-progress JSON
+ *  editor edit — while the text is broken the write is refused, so the broken
+ *  text stays intact for the linter to flag instead of being replaced by a
+ *  bare normalized object. Empty text counts as `{}` (a blank snapshot is
+ *  writable, mirroring `parseJsonObject`). */
+export function guardedRewrite(
+  text: string,
+  update: (prev: string) => string,
+): string | null {
+  if (!parseJsonObject(text).ok) return null
+  return update(text)
+}
+
 /** 整理 JSON 片段（「整理」按钮）：格式化 + 键字母序排序（顶层 + env 内键，
  *  ADR-0011）。先容错排版（jsonc-parser，输入可能是 jsonc / 尾逗号），再尝试
  *  严格解析——若合法则排序键 + stringify；若非法（含注释等）回退到 formatJson

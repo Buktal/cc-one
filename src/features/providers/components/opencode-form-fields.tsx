@@ -24,6 +24,8 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select"
+import { Field } from "@/features/providers/components/form-fields"
+import { ModelPickSelect } from "@/features/providers/components/model-pick-select"
 import {
   openCodeApiKey,
   openCodeBaseUrl,
@@ -283,31 +285,11 @@ export function OpenCodeFormFields({
         <p className="text-muted-foreground text-xs">
           {t("providers.form.openCodeModelsHint")}
         </p>
-        {fetchedModels.length > 0 ? (
-          <Select
-            onValueChange={(m) => typeof m === "string" && onPickModel(m)}
-          >
-            <SelectTrigger
-              className="font-mono text-xs"
-              aria-label={t("providers.form.fetchModels.geminiPlaceholder")}
-            >
-              <SelectValue
-                placeholder={t("providers.form.fetchModels.geminiPlaceholder")}
-              />
-            </SelectTrigger>
-            <SelectContent>
-              {fetchedModels.map((model) => (
-                <SelectItem
-                  key={model}
-                  value={model}
-                  className="font-mono text-xs"
-                >
-                  {model}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-        ) : null}
+        <ModelPickSelect
+          models={fetchedModels}
+          placeholder={t("providers.form.fetchModels.geminiPlaceholder")}
+          onPick={onPickModel}
+        />
         <div className="flex flex-col gap-2">
           {modelRows.map((row) => (
             <div key={row.id} className="flex items-center gap-2">
@@ -350,21 +332,6 @@ export function OpenCodeFormFields({
         </Button>
       </div>
     </>
-  )
-}
-
-function Field({
-  label,
-  children,
-}: {
-  label: string
-  children: React.ReactNode
-}) {
-  return (
-    <div className="flex flex-col gap-1.5">
-      <Label className="text-muted-foreground text-xs">{label}</Label>
-      {children}
-    </div>
   )
 }
 

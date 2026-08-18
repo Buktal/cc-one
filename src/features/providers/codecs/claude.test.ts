@@ -12,6 +12,7 @@ import {
   configRoleModel,
   configRoleName,
   hasOneM,
+  normalizeBasicFieldsInText,
   parseSettingsConfig,
   providerApiKey,
   providerEndpoint,
@@ -926,6 +927,121 @@ describe("withBasicFields with a selected auth field", () => {
     expect(JSON.parse(next)).toEqual({
       env: { ANTHROPIC_BASE_URL: "https://x.dev", ANTHROPIC_API_KEY: "k" },
     })
+    expect(configAuthField(next)).toBe("api_key")
+  })
+})
+
+describe("normalizeBasicFieldsInText", () => {
+  it("trims trailing spaces from the endpoint at save", () => {
+    const next = normalizeBasicFieldsInText(
+      JSON.stringify({ env: { ANTHROPIC_BASE_URL: "https://x.dev  " } }),
+    )
+    expect(configEndpoint(next)).toBe("https://x.dev")
+  })
+
+  it("preserves everything the form does not own", () => {
+    const next = normalizeBasicFieldsInText(
+      JSON.stringify({
+        includeCoAuthoredBy: false,
+        env: {
+          ANTHROPIC_BASE_URL: "  https://x.dev ",
+          ANTHROPIC_AUTH_TOKEN: "sk",
+          ANTHROPIC_MODEL: "keep-me",
+          ANTHROPIC_DEFAULT_SONNET_MODEL_NAME: "我的主力",
+        },
+      }),
+    )
+    expect(JSON.parse(next)).toEqual({
+      includeCoAuthoredBy: false,
+      env: {
+        ANTHROPIC_BASE_URL: "https://x.dev",
+        ANTHROPIC_AUTH_TOKEN: "sk",
+        ANTHROPIC_MODEL: "keep-me",
+        ANTHROPIC_DEFAULT_SONNET_MODEL_NAME: "我的主力",
+      },
+    })
+  })
+
+  it("removes an empty endpoint / key at save", () => {
+    const next = normalizeBasicFieldsInText(
+      JSON.stringify({
+        env: {
+          ANTHROPIC_BASE_URL: "  ",
+          ANTHROPIC_AUTH_TOKEN: "",
+          ANTHROPIC_MODEL: "keep-me",
+        },
+      }),
+    )
+    expect(JSON.parse(next)).toEqual({ env: { ANTHROPIC_MODEL: "keep-me" } })
+  })
+
+  it("keeps the key under the selected auth spelling only", () => {
+    const next = normalizeBasicFieldsInText(
+      JSON.stringify({ env: { ANTHROPIC_API_KEY: "sk-legacy" } }),
+    )
+    expect(configAuthField(next)).toBe("api_key")
+    expect(configApiKey(next)).toBe("sk-legacy")
+  })
+
+  it("normalizes a materialized snapshot — no placeholder sneaks back through the endpoint", () => {
+    // 旧镜像态把物化前的占位符端点写回快照（物化不完整，后端切换时会拦截
+    // 未物化占位符）；归一重新读同一文本，物化后的端点原样保留。
+    const next = normalizeBasicFieldsInText(
+      JSON.stringify({
+        env: {
+          ANTHROPIC_BASE_URL:
+            "https://bedrock-runtime.ap-northeast-1.amazonaws.com",
+          ANTHROPIC_AUTH_TOKEN: "sk",
+        },
+      }),
+    )
+    expect(configEndpoint(next)).toBe(
+      "https://bedrock-runtime.ap-northeast-1.amazonaws.com",
+    )
+  })
+})
+
+describe("form round-trip: sibling fields derive from prev（镜像态消除后的生产路径）", () => {
+  // 无镜像态下组件的写回形态：改一个字段时，其余字段从 prev 派生读回——与旧
+  // 镜像态同值（镜像与文本解析态等价时）。这些断言钉住生产路径的确切表达式，
+  // 与「编辑不吞半截 JSON」的 guardedRewrite 一起构成写回的测试面。
+
+  it("an endpoint edit preserves the key value and the selected auth spelling", () => {
+    const text = JSON.stringify({
+      env: { ANTHROPIC_BASE_URL: "old", ANTHROPIC_API_KEY: "sk" },
+    })
+    const next = withBasicFieldsInText(text, {
+      endpoint: "new",
+      apiKey: configApiKey(text),
+      authField: configAuthField(text),
+    })
+    expect(JSON.parse(next)).toEqual({
+      env: { ANTHROPIC_BASE_URL: "new", ANTHROPIC_API_KEY: "sk" },
+    })
+    expect(configAuthField(next)).toBe("api_key")
+  })
+
+  it("an apiKey edit preserves the endpoint and the auth spelling", () => {
+    const text = JSON.stringify({
+      env: {
+        ANTHROPIC_BASE_URL: "https://x.dev",
+        ANTHROPIC_AUTH_TOKEN: "old",
+      },
+    })
+    const next = withBasicFieldsInText(text, {
+      endpoint: configEndpoint(text),
+      apiKey: "new",
+      authField: configAuthField(text),
+    })
+    expect(configEndpoint(next)).toBe("https://x.dev")
+    expect(configApiKey(next)).toBe("new")
+    expect(configAuthField(next)).toBe("auth_token")
+  })
+
+  it("an auth-field toggle derives the source spelling from prev", () => {
+    const text = JSON.stringify({ env: { ANTHROPIC_AUTH_TOKEN: "sk" } })
+    const next = switchAuthField(text, configAuthField(text), "api_key")
+    expect(JSON.parse(next)).toEqual({ env: { ANTHROPIC_API_KEY: "sk" } })
     expect(configAuthField(next)).toBe("api_key")
   })
 })

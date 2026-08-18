@@ -1,29 +1,25 @@
 // Provider editor as a Sheet (side panel) — new and edit both flow through
-// here. The basic form owns the name, the endpoint and the API key (written
-// under a switchable auth field — AUTH_TOKEN by default, API_KEY for legacy
-// spellings), plus the template-variable inputs on top when the snapshot
-// carries `${VAR}` placeholders (the Bedrock presets); the model mapping
-// section owns the five role models (Sonnet / Opus / Haiku / Fable / Subagent),
-// their display names and the 1M toggles, plus the one-click apply button and
-// the model-list fetch button (fetches the current provider's models into a
-// dropdown; picking one refills all five roles, failures are bucketed into a
-// toast). On
-// save the form maps everything onto the provider's settingsConfig snapshot via
-// the derive.ts helpers (withBasicFields preserves every field the form
-// doesn't own), then calls the upsert mutation and closes.
+// here. The sheet owns the shared skeleton: the name field (BasicSection), the
+// fetch-model plumbing (runFetchModels + per-app arg extraction) that every
+// app's field section shares, and the settings JSON editor at the bottom.
+// Each app's own fields render through a per-app partition: claude →
+// ClaudeFormFields (template vars / endpoint / auth / model mapping),
+// opencode → OpenCodeFormFields; codex / gemini / grok stay inline below
+// (their blocks are small, the seam is the same).
 //
-// The settings.json editor at the bottom makes the JSON snapshot the single
-// source of truth: editing the JSON re-derives the endpoint / API key / auth
-// field and the role rows (they are a quick view of `env`), and editing a field
-// merges it back into the JSON. The merge is guarded by `parseJsonObject` —
-// while the JSON text does not parse to an object, field edits only update the
-// field state and the in-progress JSON edit is never clobbered; once it
-// parses again the fields re-derive. Save still goes through withBasicFields,
-// so the field values win for the keys they own and everything else survives
-// verbatim.
+// configText (the settingsConfig JSON text) is the single source of truth:
+// every field reads straight from it via the codec derive functions — there
+// is no mirrored field state to keep in sync — and every write goes through
+// `guardedWrite`, which refuses to merge a field edit back while the JSON text
+// does not parse to an object (half-broken JSON is never swallowed: the
+// editor's in-progress edit survives until it parses again). The round-trip
+// rules live in the codecs (codecs/claude.ts etc.) as pure functions; the
+// guard itself is lib/json's `guardedRewrite`. On save the snapshot is
+// normalized via the codec helpers, which preserve every field the form does
+// not own.
 
-import { RefreshCw, Wand2 } from "lucide-react"
-import { Fragment, useEffect, useMemo, useState } from "react"
+import { RefreshCw } from "lucide-react"
+import { useEffect, useState } from "react"
 import { useTranslation } from "react-i18next"
 import { toast } from "sonner"
 import {
@@ -34,16 +30,8 @@ import { JsonEditor } from "@/components/json-editor"
 import { SectionHeader } from "@/components/section-header"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
-import { Checkbox } from "@/components/ui/checkbox"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select"
 import {
   Sheet,
   SheetContent,
@@ -51,20 +39,20 @@ import {
   SheetHeader,
   SheetTitle,
 } from "@/components/ui/sheet"
-import { Switch } from "@/components/ui/switch"
 import { Textarea } from "@/components/ui/textarea"
+import { ClaudeFormFields } from "@/features/providers/components/claude-form-fields"
+import {
+  BasicSection,
+  Field,
+} from "@/features/providers/components/form-fields"
+import { ModelPickSelect } from "@/features/providers/components/model-pick-select"
 import { OpenCodeFormFields } from "@/features/providers/components/opencode-form-fields"
 import { PresetPicker } from "@/features/providers/components/preset-picker"
-import type { ModelRoleId } from "@/features/providers/derive"
 import {
-  type AuthField,
-  authFieldKey,
   codexApiKey,
   codexConfigToml,
   configApiKey,
-  configAuthField,
   configEndpoint,
-  configRoleFields,
   emptyProvider,
   extractTemplateVars,
   geminiApiKey,
@@ -73,27 +61,18 @@ import {
   grokConfigToml,
   MODEL_ROLES,
   metaTemplateValues,
+  normalizeBasicFieldsInText,
   openCodeApiKey,
   openCodeBaseUrl,
-  providerApiKey,
-  providerEndpoint,
   providerFromPreset,
   providerLiveManaged,
   replaceTemplateVarsInText,
   restoreTemplatePlaceholders,
-  stripOneM,
-  switchAuthField,
-  withAllRolesFromFirstInText,
-  withAllRolesInText,
-  withBasicFields,
-  withBasicFieldsInText,
   withCodexApiKey,
   withCodexConfigToml,
   withGeminiEnv,
   withGrokConfigToml,
   withMetaTemplateValues,
-  withRoleModelInText,
-  withRoleNameInText,
   withRoleOneMInText,
 } from "@/features/providers/derive"
 import {
@@ -107,7 +86,7 @@ import {
 } from "@/features/providers/presets"
 import { useMutateWithToast } from "@/hooks/use-toast-mutation"
 import { toStructuredError } from "@/lib/error"
-import { parseJsonObject } from "@/lib/json"
+import { guardedRewrite, parseJsonObject } from "@/lib/json"
 import { cn } from "@/lib/utils"
 
 import type { App, Provider } from "@/types/generated/bindings"
@@ -149,11 +128,6 @@ export function ProviderFormSheet({
       : emptyProvider(effectiveApp))
   const [name, setName] = useState(base.name)
   const [configText, setConfigText] = useState(base.settingsConfig)
-  const [endpoint, setEndpoint] = useState(providerEndpoint(base))
-  const [apiKey, setApiKey] = useState(providerApiKey(base))
-  const [authField, setAuthField] = useState<AuthField>(
-    configAuthField(base.settingsConfig),
-  )
   const [templateValues, setTemplateValues] = useState<Record<string, string>>(
     metaTemplateValues(base.meta),
   )
@@ -191,9 +165,6 @@ export function ProviderFormSheet({
             baseText,
           ),
     )
-    setEndpoint(providerEndpoint(b))
-    setApiKey(providerApiKey(b))
-    setAuthField(configAuthField(b.settingsConfig))
     setTemplateValues(values)
     // 自动应用开关：新建/复制默认开（编辑任一模型同步全部角色），编辑已有
     // 供应商默认关（不动用户配置）。
@@ -202,90 +173,15 @@ export function ProviderFormSheet({
     setFetchedModels([])
   }, [editing, preset, open, effectiveApp])
 
-  // JSON → form fields: whenever the snapshot text changes (editor edit or a
-  // field merge), the env-backed fields mirror it. A text that doesn't parse
-  // to an object keeps the fields as-is — the linter flags the red line, and
-  // clobbering the fields with an empty derive would hide a broken edit.
-  // Codex / Gemini 的字段直接从 configText 派生渲染（无镜像 state），本同步
-  // 只服务 Claude 专属字段。
-  useEffect(() => {
-    if (effectiveApp !== "claude") return
-    const result = parseJsonObject(configText)
-    if (!result.ok) return
-    setEndpoint(configEndpoint(configText))
-    setApiKey(configApiKey(configText))
-    setAuthField(configAuthField(configText))
-  }, [configText, effectiveApp])
-
-  // The five model roles are derived straight from the snapshot text (no
-  // mirrored state to keep in sync): reads are pure, and every write goes
-  // through the derive helpers below, so the JSON editor and the role rows can
-  // never disagree. Garbage text derives to empty rows and blocks writes until
-  // it parses again.
-  const roleRows = useMemo(
-    () =>
-      MODEL_ROLES.map((role) => ({
-        role,
-        fields: configRoleFields(configText, role.id),
-      })),
-    [configText],
-  )
-
-  const canApplyAll = useMemo(() => {
-    if (!parseJsonObject(configText).ok) return false
-    return withAllRolesFromFirstInText(configText) !== null
-  }, [configText])
-
-  /** configText 为真相源 + 写回收口（架构扫描候选⑥）：仅当外层 settingsConfig
-   *  JSON 合法时函数式回写（半截 JSON 不会被吞）——所有字段写回经此单一归属，
-   *  handler 不再各自重复 parse 守卫。返回是否真的写了（调用方据此决定
-   *  toast 等副作用）。 */
+  /** configText 为真相源 + 写回收口：仅当外层 settingsConfig JSON 合法时回写
+   *  （半截 JSON 不会被吞——守卫在 lib/json 的 guardedRewrite，可测）——所有
+   *  字段写回经此单一归属，handler 不再各自重复 parse 守卫。返回是否真的写
+   *  了（调用方据此决定 toast 等副作用）。 */
   function guardedWrite(update: (prev: string) => string): boolean {
-    if (!parseJsonObject(configText).ok) return false
-    setConfigText((prev) => update(prev))
+    const next = guardedRewrite(configText, update)
+    if (next === null) return false
+    setConfigText(next)
     return true
-  }
-
-  function onEndpointChange(value: string) {
-    setEndpoint(value)
-    // 端点变了，旧端点拉到的模型列表不再可靠，清空下拉。
-    setFetchedModels([])
-    guardedWrite((prev) =>
-      withBasicFieldsInText(prev, { endpoint: value, apiKey, authField }),
-    )
-  }
-
-  function onApiKeyChange(value: string) {
-    setApiKey(value)
-    guardedWrite((prev) =>
-      withBasicFieldsInText(prev, { endpoint, apiKey: value, authField }),
-    )
-  }
-
-  function onRoleModelChange(role: ModelRoleId, value: string) {
-    // 自动应用开关开着时：编辑任一角色模型 → 同步全部角色（withAllRolesInText
-    // 处理 Haiku 去标记、显示名跟随）。关着则只改当前角色。
-    guardedWrite((prev) =>
-      autoSync
-        ? withAllRolesInText(prev, value)
-        : withRoleModelInText(prev, role, value),
-    )
-  }
-
-  function onRoleNameChange(role: ModelRoleId, value: string) {
-    guardedWrite((prev) => withRoleNameInText(prev, role, value))
-  }
-
-  function onRoleOneMChange(role: ModelRoleId, oneM: boolean) {
-    guardedWrite((prev) => withRoleOneMInText(prev, role, oneM))
-  }
-
-  function onApplyAll() {
-    const next = withAllRolesFromFirstInText(configText)
-    if (next === null) return
-    if (guardedWrite(() => next)) {
-      toast.success(t("providers.toast.applyAllSuccess"))
-    }
   }
 
   /** 一次 fetch_models 调用的完整参数（app + 端点 + 认证 + modelsUrl 覆写）。
@@ -339,8 +235,8 @@ export function ProviderFormSheet({
     | { ok: false; missing: "endpoint" | "key" } {
     switch (app) {
       case "claude": {
-        const baseUrl = endpoint.trim()
-        const key = apiKey.trim()
+        const baseUrl = configEndpoint(configText).trim()
+        const key = configApiKey(configText).trim()
         if (!baseUrl) return { ok: false, missing: "endpoint" }
         if (!key) return { ok: false, missing: "key" }
         return {
@@ -416,25 +312,11 @@ export function ProviderFormSheet({
     void onFetchModelsFor("opencode")
   }
 
-  /** Claude 下拉选中一个模型 → 回填五个角色（与「一键设置」同一写入引擎）。 */
-  function onPickModel(model: string) {
-    if (guardedWrite((prev) => withAllRolesInText(prev, model))) {
-      toast.success(t("providers.toast.applyAllSuccess"))
-    }
-  }
-
   /** Gemini 下拉选中一个模型 → 写入 GEMINI_MODEL（Gemini 只有一个模型字段）。 */
   function onPickGeminiModel(model: string) {
     if (guardedWrite((prev) => withGeminiEnv(prev, { GEMINI_MODEL: model }))) {
       toast.success(t("providers.toast.fetchModels.modelSet"))
     }
-  }
-
-  function onAuthFieldChange(to: AuthField) {
-    if (to === authField) return
-    setAuthField(to)
-    // 值搬到新键、旧键删除——切换不丢 key 也不留双拼写。
-    guardedWrite((prev) => switchAuthField(prev, authField, to))
   }
 
   function onTemplateVarChange(name: string, value: string) {
@@ -445,9 +327,9 @@ export function ProviderFormSheet({
     setTemplateValues((prev) => ({ ...prev, [name]: value }))
   }
 
-  // Codex / Gemini 字段直写 configText（与 Claude 的 onEndpointChange 同一模式：
-  // 仅当外层 settingsConfig JSON 合法时回写，半截 JSON 不会被吞——守卫经
-  // guardedWrite 单一归属）。这两类应用无镜像 state——输入框直接读 derive
+  // Codex / Gemini / Grok 字段直写 configText（与 claude 分区同一模式：仅当
+  // 外层 settingsConfig JSON 合法时回写，半截 JSON 不会被吞——守卫经
+  // guardedWrite 单一归属）。这几类应用无镜像 state——输入框直接读 derive
   // 函数，写回经 derive 写入 configText。
   function onCodexApiKeyChange(value: string) {
     guardedWrite((prev) => withCodexApiKey(prev, value))
@@ -470,7 +352,7 @@ export function ProviderFormSheet({
   }
 
   function onGeminiBaseUrlChange(value: string) {
-    // 端点变了，旧端点拉到的模型列表不再可靠，清空下拉（与 Claude 的
+    // 端点变了，旧端点拉到的模型列表不再可靠，清空下拉（与 claude 分区的
     // onEndpointChange 同一处理）。
     setFetchedModels([])
     guardedWrite((prev) =>
@@ -490,74 +372,43 @@ export function ProviderFormSheet({
       })
       return
     }
-    // Codex / Gemini：字段已直写 configText，configText 即真相源，直接持久化。
-    if (effectiveApp !== "claude") {
-      const next = {
-        ...base,
-        settingsConfig: configText,
-        app: effectiveApp,
-        name: name.trim(),
+    // Claude：把模板变量物化进快照；仍残留 `${VAR}` 说明有变量未填——拒绝
+    // 保存，避免把字面量占位符写进 live 配置（后端切换时同样拦截）。物化后
+    // 做字段归一（normalizeBasicFieldsInText：端点收尾 trim——输入过程中不
+    // trim，保存才 trim；空端点 / 空 key 清键）——字段值已直写 configText，
+    // 归一从物化后的文本重读，不再经 withBasicFields 二次合并。其它 app：
+    // configText 即真相源，原样持久化。
+    let settingsConfig = configText
+    let meta = base.meta
+    if (effectiveApp === "claude") {
+      settingsConfig = replaceTemplateVarsInText(configText, templateValues)
+      const unfilled = extractTemplateVars(settingsConfig)
+      if (unfilled.length > 0) {
+        toast.error(
+          t("providers.toast.unfilledTemplateVars", {
+            vars: unfilled.map((v) => `\${${v}}`).join(", "),
+          }),
+        )
+        return
       }
-      const ok = await runWithToast(save, next, {
-        success: { key: "providers.toast.saved", vars: { name: name.trim() } },
-        failed: { key: "providers.toast.saveFailed" },
-      })
-      if (ok) onSaved()
-      return
+      settingsConfig = normalizeBasicFieldsInText(settingsConfig)
+      // 模板变量值随 meta 记录，重编时预填输入框（live 文件不落 meta）。
+      meta = withMetaTemplateValues(base.meta, templateValues)
     }
-    // 把模板变量物化进快照；仍残留 `${VAR}` 说明有变量未填——拒绝保存，避免
-    // 切换时把字面量占位符写进 live 配置。
-    const materialized = replaceTemplateVarsInText(configText, templateValues)
-    const unfilled = extractTemplateVars(materialized)
-    if (unfilled.length > 0) {
-      toast.error(
-        t("providers.toast.unfilledTemplateVars", {
-          vars: unfilled.map((v) => `\${${v}}`).join(", "),
-        }),
-      )
-      return
+    const next = {
+      ...base,
+      settingsConfig,
+      meta,
+      app: effectiveApp,
+      name: name.trim(),
     }
-    // Rebuild the snapshot from the working JSON text (preserving everything
-    // the form doesn't own), then attach the edited name and ship the upsert.
-    // The endpoint is trimmed here, not on every keystroke, so typing an
-    // in-progress value (trailing spaces mid-edit) isn't fought by the input.
-    // The template values ride along in the app-side meta so a later edit can
-    // pre-fill the inputs (the live file never sees meta).
-    const next = withBasicFields(
-      {
-        ...base,
-        settingsConfig: materialized,
-        meta: withMetaTemplateValues(base.meta, templateValues),
-      },
-      { endpoint: endpoint.trim(), apiKey, authField },
-    )
-    const ok = await runWithToast(
-      save,
-      { ...next, name: name.trim() },
-      {
-        success: { key: "providers.toast.saved", vars: { name: name.trim() } },
-        failed: { key: "providers.toast.saveFailed" },
-      },
-    )
+    const ok = await runWithToast(save, next, {
+      success: { key: "providers.toast.saved", vars: { name: name.trim() } },
+      failed: { key: "providers.toast.saveFailed" },
+    })
     if (ok) onSaved()
   }
 
-  // 模板变量输入区：快照文本里出现的 `${VAR}` 占位符 + meta 里记录的已填值
-  // （重编时占位符已物化，输入框仍要显示）。无模板变量的普通供应商整段隐藏。
-  const templateVarNames = Array.from(
-    new Set([
-      ...extractTemplateVars(configText),
-      ...Object.keys(templateValues),
-    ]),
-  )
-  // key 输入区显示条件：快照带模板变量（云厂商的认证走模板变量）或分类为官方
-  // /云厂商时隐藏，普通供应商照常显示。草稿分类继承预设（providerFromPreset），
-  // 编辑态 base.category 即已存分类——无需再回看 preset。
-  const category = base.category
-  const showKeyFields =
-    templateVarNames.length === 0 &&
-    category !== "official" &&
-    category !== "cloud_provider"
   // 双栏左栏（预设选择器）只在新建 / 复制态 + 该 app 有内置预设时挂载：编辑
   // 已有供应商（id 非空）不挂；opencode 附加模式 presetsForApp 返回空也不挂。
   // 复制态点选预设 = 用预设草稿替换副本（base 优先级：editing 先于 preset，
@@ -636,355 +487,131 @@ export function ProviderFormSheet({
           {/* 表单流：px-6 与头/脚对齐，py-3 上下呼吸。不再有卡片面——
               分区靠 SectionHeader 小标题 + 间距，不靠盒子。 */}
           <div className="flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto px-6 py-3">
-            {effectiveApp === "claude" && templateVarNames.length > 0 ? (
-              /* 与其他分区同一语言：SectionHeader 小标题 + 说明文字，不套
-                 盒子（分区靠间距与字号，不靠底块——与模型映射一致）。变量
-                 多时 2 列网格紧凑排列。 */
+            {effectiveApp === "claude" ? (
+              <ClaudeFormFields
+                configText={configText}
+                onChange={guardedWrite}
+                fetching={fetching}
+                fetchedModels={fetchedModels}
+                onFetchModels={onFetchModels}
+                onEndpointEdited={() => setFetchedModels([])}
+                name={name}
+                onNameChange={setName}
+                templateValues={templateValues}
+                onTemplateVarChange={onTemplateVarChange}
+                autoSync={autoSync}
+                onAutoSyncChange={setAutoSync}
+                category={base.category}
+              />
+            ) : (
               <>
-                <SectionHeader className="mt-0">
-                  {t("providers.form.templateVars")}
-                </SectionHeader>
-                <p className="text-muted-foreground -mt-1.5 text-xs">
-                  {t("providers.form.templateVarsHint")}
-                </p>
-                <div className="grid grid-cols-2 gap-x-3 gap-y-2">
-                  {templateVarNames.map((name) => (
-                    <Field key={name} label={name}>
+                <BasicSection name={name} onNameChange={setName} />
+                {effectiveApp === "codex" ? (
+                  <>
+                    <Field label={t("providers.form.apiKey")}>
                       <Input
-                        value={templateValues[name] ?? ""}
-                        onChange={(e) =>
-                          onTemplateVarChange(name, e.target.value)
-                        }
+                        type="password"
+                        value={codexApiKey(configText)}
+                        onChange={(e) => onCodexApiKeyChange(e.target.value)}
+                        placeholder={t("providers.form.apiKeyPlaceholder")}
                         spellCheck={false}
                       />
                     </Field>
-                  ))}
-                </div>
-              </>
-            ) : null}
-            <SectionHeader>{t("providers.form.section.basic")}</SectionHeader>
-            <Field label={t("providers.form.name")}>
-              <Input
-                value={name}
-                onChange={(e) => setName(e.target.value)}
-                placeholder={t("providers.form.namePlaceholder")}
-              />
-            </Field>
-            {effectiveApp === "claude" ? (
-              <Field label={t("providers.form.endpoint")}>
-                <Input
-                  value={endpoint}
-                  onChange={(e) => onEndpointChange(e.target.value)}
-                  placeholder="https://api.example.com"
-                  spellCheck={false}
-                />
-              </Field>
-            ) : null}
-            {effectiveApp === "claude" && showKeyFields ? (
-              <div className="flex items-end gap-2">
-                <Field
-                  label={t("providers.form.authField")}
-                  className="shrink-0"
-                >
-                  <Select
-                    value={authField}
-                    onValueChange={(v) => {
-                      if (v) onAuthFieldChange(v as AuthField)
-                    }}
-                  >
-                    <SelectTrigger
-                      className="w-56 font-mono text-xs"
-                      aria-label={t("providers.form.authField")}
-                    >
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="auth_token">
-                        {authFieldKey("auth_token")}
-                      </SelectItem>
-                      <SelectItem value="api_key">
-                        {authFieldKey("api_key")}
-                      </SelectItem>
-                    </SelectContent>
-                  </Select>
-                </Field>
-                <Field
-                  label={t("providers.form.apiKey")}
-                  className="min-w-0 flex-1"
-                >
-                  <Input
-                    type="password"
-                    value={apiKey}
-                    onChange={(e) => onApiKeyChange(e.target.value)}
-                    placeholder={t("providers.form.apiKeyPlaceholder")}
-                    spellCheck={false}
-                  />
-                </Field>
-              </div>
-            ) : null}
-            {effectiveApp === "codex" ? (
-              <>
-                <Field label={t("providers.form.apiKey")}>
-                  <Input
-                    type="password"
-                    value={codexApiKey(configText)}
-                    onChange={(e) => onCodexApiKeyChange(e.target.value)}
-                    placeholder={t("providers.form.apiKeyPlaceholder")}
-                    spellCheck={false}
-                  />
-                </Field>
-                <Field label={t("providers.form.codexConfig")}>
-                  <Textarea
-                    value={codexConfigToml(configText)}
-                    onChange={(e) => onCodexConfigChange(e.target.value)}
-                    rows={12}
-                    spellCheck={false}
-                    className="font-mono text-xs"
-                  />
-                  <p className="text-muted-foreground text-xs">
-                    {t("providers.form.codexConfigHint")}
-                  </p>
-                </Field>
-              </>
-            ) : null}
-            {effectiveApp === "gemini" ? (
-              <>
-                <Field label={t("providers.form.apiKey")}>
-                  <Input
-                    type="password"
-                    value={geminiApiKey(configText)}
-                    onChange={(e) => onGeminiApiKeyChange(e.target.value)}
-                    placeholder={t("providers.form.apiKeyPlaceholder")}
-                    spellCheck={false}
-                  />
-                </Field>
-                <div className="flex flex-col gap-1.5">
-                  <div className="flex items-center justify-between">
-                    <Label className="text-muted-foreground text-xs">
-                      {t("providers.form.geminiModel")}
-                    </Label>
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      onClick={onFetchGeminiModels}
-                      disabled={fetching}
-                    >
-                      <RefreshCw
-                        className={cn("size-3.5", fetching && "animate-spin")}
+                    <Field label={t("providers.form.codexConfig")}>
+                      <Textarea
+                        value={codexConfigToml(configText)}
+                        onChange={(e) => onCodexConfigChange(e.target.value)}
+                        rows={12}
+                        spellCheck={false}
+                        className="font-mono text-xs"
                       />
-                      {fetching
-                        ? t("providers.form.fetchModels.fetching")
-                        : t("providers.form.fetchModels.fetch")}
-                    </Button>
-                  </div>
-                  <Input
-                    value={geminiModel(configText)}
-                    onChange={(e) => onGeminiModelChange(e.target.value)}
-                    spellCheck={false}
-                  />
-                  {fetchedModels.length > 0 ? (
-                    <Select
-                      onValueChange={(model) => {
-                        if (typeof model === "string") onPickGeminiModel(model)
-                      }}
-                    >
-                      <SelectTrigger
-                        className="font-mono text-xs"
-                        aria-label={t(
-                          "providers.form.fetchModels.geminiPlaceholder",
-                        )}
-                      >
-                        <SelectValue
-                          placeholder={t(
-                            "providers.form.fetchModels.geminiPlaceholder",
-                          )}
-                        />
-                      </SelectTrigger>
-                      <SelectContent>
-                        {fetchedModels.map((model) => (
-                          <SelectItem
-                            key={model}
-                            value={model}
-                            className="font-mono text-xs"
-                          >
-                            {model}
-                          </SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
-                  ) : null}
-                </div>
-                <Field label={t("providers.form.geminiBaseUrl")}>
-                  <Input
-                    value={geminiBaseUrl(configText)}
-                    onChange={(e) => onGeminiBaseUrlChange(e.target.value)}
-                    placeholder="https://generativelanguage.googleapis.com"
-                    spellCheck={false}
-                  />
-                </Field>
-              </>
-            ) : null}
-            {effectiveApp === "grok" ? (
-              <Field label={t("providers.form.grokConfig")}>
-                <Textarea
-                  value={grokConfigToml(configText)}
-                  onChange={(e) => onGrokConfigChange(e.target.value)}
-                  rows={12}
-                  spellCheck={false}
-                  className="font-mono text-xs"
-                />
-                <p className="text-muted-foreground text-xs">
-                  {t("providers.form.grokConfigHint")}
-                </p>
-              </Field>
-            ) : null}
-            {effectiveApp === "opencode" ? (
-              <OpenCodeFormFields
-                configText={configText}
-                onChange={setConfigText}
-                fetching={fetching}
-                fetchedModels={fetchedModels}
-                onFetchModels={onFetchOpenCodeModels}
-              />
-            ) : null}
-            {effectiveApp === "claude" ? (
-              <>
-                {/* 分区标题与操作按钮同处一行（SectionHeader 的 action 槽），
-                  与「基本信息 / 高级配置」同一分区语言。 */}
-                <SectionHeader
-                  action={
-                    <div className="flex items-center gap-2">
-                      {/* 自动应用开关：开着时编辑任一角色模型自动同步全部角色
-                        （新建/复制默认开，编辑默认关）。与「一键设置」并存——
-                        开关管持续行为，按钮管一次性统一。 */}
-                      <label
-                        htmlFor="model-auto-sync"
-                        className="flex cursor-pointer items-center gap-1.5 text-xs text-muted-foreground"
-                      >
-                        <Switch
-                          id="model-auto-sync"
-                          checked={autoSync}
-                          onCheckedChange={setAutoSync}
-                        />
-                        {t("providers.form.autoSync")}
-                      </label>
-                      <Button
-                        variant="outline"
-                        size="sm"
-                        onClick={onFetchModels}
-                        disabled={fetching}
-                      >
-                        <RefreshCw
-                          className={cn("size-3.5", fetching && "animate-spin")}
-                        />
-                        {fetching
-                          ? t("providers.form.fetchModels.fetching")
-                          : t("providers.form.fetchModels.fetch")}
-                      </Button>
-                      <Button
-                        variant="outline"
-                        size="sm"
-                        onClick={onApplyAll}
-                        disabled={!canApplyAll}
-                      >
-                        <Wand2 className="size-3.5" />
-                        {t("providers.form.applyAll")}
-                      </Button>
-                    </div>
-                  }
-                >
-                  {t("providers.form.modelMapping")}
-                </SectionHeader>
-                <p className="text-muted-foreground -mt-1.5 text-xs">
-                  {t("providers.form.modelMappingHint")}
-                </p>
-                {fetchedModels.length > 0 ? (
-                  <div className="max-w-sm">
-                    <Select
-                      onValueChange={(model) => {
-                        if (typeof model === "string") onPickModel(model)
-                      }}
-                    >
-                      <SelectTrigger
-                        className="font-mono text-xs"
-                        aria-label={t("providers.form.fetchModels.placeholder")}
-                      >
-                        <SelectValue
-                          placeholder={t(
-                            "providers.form.fetchModels.placeholder",
-                          )}
-                        />
-                      </SelectTrigger>
-                      <SelectContent>
-                        {fetchedModels.map((model) => (
-                          <SelectItem
-                            key={model}
-                            value={model}
-                            className="font-mono text-xs"
-                          >
-                            {model}
-                          </SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
-                  </div>
+                      <p className="text-muted-foreground text-xs">
+                        {t("providers.form.codexConfigHint")}
+                      </p>
+                    </Field>
+                  </>
                 ) : null}
-                {/* 角色表：列头 + 一行一角色（角色名+1M | 显示名 | 请求
-                    模型）。表格形而非灰盒子——列对齐让 5 行角色可纵向扫读，
-                    行距压缩一半（原每角色占两行）；不加行分隔线（减线）。
-                    列头保持 11px semibold（表列标签尺度，独立于分区标题）。 */}
-                <div className="grid grid-cols-[minmax(8rem,9.5rem)_1fr_1fr] items-center gap-x-3 gap-y-2">
-                  <div className="text-muted-foreground text-[11px] font-semibold">
-                    {t("providers.form.role")}
-                  </div>
-                  <div className="text-muted-foreground text-[11px] font-semibold">
-                    {t("providers.form.displayName")}
-                  </div>
-                  <div className="text-muted-foreground text-[11px] font-semibold">
-                    {t("providers.form.requestModel")}
-                  </div>
-                  {roleRows.map(({ role, fields }) => (
-                    <Fragment key={role.id}>
-                      <div className="flex h-8 items-center justify-between gap-1">
-                        <span className="text-muted-foreground text-xs">
-                          {t(`providers.form.role.${role.id}`)}
-                        </span>
-                        {role.supportsOneM ? (
-                          <label
-                            htmlFor={`model-role-one-m-${role.id}`}
-                            className="flex cursor-pointer items-center gap-1 text-xs text-muted-foreground"
-                          >
-                            <Checkbox
-                              id={`model-role-one-m-${role.id}`}
-                              checked={fields.oneM}
-                              onCheckedChange={(checked) =>
-                                onRoleOneMChange(role.id, checked)
-                              }
-                            />
-                            {t("providers.form.oneM")}
-                          </label>
-                        ) : null}
+                {effectiveApp === "gemini" ? (
+                  <>
+                    <Field label={t("providers.form.apiKey")}>
+                      <Input
+                        type="password"
+                        value={geminiApiKey(configText)}
+                        onChange={(e) => onGeminiApiKeyChange(e.target.value)}
+                        placeholder={t("providers.form.apiKeyPlaceholder")}
+                        spellCheck={false}
+                      />
+                    </Field>
+                    <div className="flex flex-col gap-1.5">
+                      <div className="flex items-center justify-between">
+                        <Label className="text-muted-foreground text-xs">
+                          {t("providers.form.geminiModel")}
+                        </Label>
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          onClick={onFetchGeminiModels}
+                          disabled={fetching}
+                        >
+                          <RefreshCw
+                            className={cn(
+                              "size-3.5",
+                              fetching && "animate-spin",
+                            )}
+                          />
+                          {fetching
+                            ? t("providers.form.fetchModels.fetching")
+                            : t("providers.form.fetchModels.fetch")}
+                        </Button>
                       </div>
                       <Input
-                        value={fields.name}
-                        onChange={(e) =>
-                          onRoleNameChange(role.id, e.target.value)
-                        }
-                        placeholder={stripOneM(fields.model)}
+                        value={geminiModel(configText)}
+                        onChange={(e) => onGeminiModelChange(e.target.value)}
                         spellCheck={false}
                       />
+                      <ModelPickSelect
+                        models={fetchedModels}
+                        placeholder={t(
+                          "providers.form.fetchModels.geminiPlaceholder",
+                        )}
+                        onPick={onPickGeminiModel}
+                      />
+                    </div>
+                    <Field label={t("providers.form.geminiBaseUrl")}>
                       <Input
-                        value={fields.model}
-                        onChange={(e) =>
-                          onRoleModelChange(role.id, e.target.value)
-                        }
+                        value={geminiBaseUrl(configText)}
+                        onChange={(e) => onGeminiBaseUrlChange(e.target.value)}
+                        placeholder="https://generativelanguage.googleapis.com"
                         spellCheck={false}
                       />
-                    </Fragment>
-                  ))}
-                </div>
+                    </Field>
+                  </>
+                ) : null}
+                {effectiveApp === "grok" ? (
+                  <Field label={t("providers.form.grokConfig")}>
+                    <Textarea
+                      value={grokConfigToml(configText)}
+                      onChange={(e) => onGrokConfigChange(e.target.value)}
+                      rows={12}
+                      spellCheck={false}
+                      className="font-mono text-xs"
+                    />
+                    <p className="text-muted-foreground text-xs">
+                      {t("providers.form.grokConfigHint")}
+                    </p>
+                  </Field>
+                ) : null}
+                {effectiveApp === "opencode" ? (
+                  <OpenCodeFormFields
+                    configText={configText}
+                    onChange={setConfigText}
+                    fetching={fetching}
+                    fetchedModels={fetchedModels}
+                    onFetchModels={onFetchOpenCodeModels}
+                  />
+                ) : null}
               </>
-            ) : null}
+            )}
             <SectionHeader>
               {t("providers.form.section.advanced")}
             </SectionHeader>
@@ -1009,24 +636,5 @@ export function ProviderFormSheet({
         </SheetFooter>
       </SheetContent>
     </Sheet>
-  )
-}
-
-// 表单章节标题：上方 hairline + 小标题，给长表单（基本信息 / 认证 / 模型映射
-// / 高级配置）可扫读的视觉锚点。border-t 兼作段落分隔。
-function Field({
-  label,
-  className,
-  children,
-}: {
-  label: string
-  className?: string
-  children: React.ReactNode
-}) {
-  return (
-    <div className={cn("flex flex-col gap-1.5", className)}>
-      <Label className="text-muted-foreground text-xs">{label}</Label>
-      {children}
-    </div>
   )
 }
