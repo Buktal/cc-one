@@ -27,7 +27,6 @@ import {
   Pencil,
   Upload,
 } from "lucide-react"
-import { EXTRACT_GROUP_KINDS } from "@/i18n/dynamic-keys"
 import { useEffect, useRef, useState } from "react"
 import { useTranslation } from "react-i18next"
 import { toast } from "sonner"
@@ -59,6 +58,7 @@ import {
   pairModelNameKeys,
   snippetCoveredKeys,
 } from "@/features/providers/derive"
+import type { EXTRACT_GROUP_KINDS } from "@/i18n/dynamic-keys"
 import { toStructuredError } from "@/lib/error"
 
 import type { App, LiveImportPreviewEntry } from "@/types/generated/bindings"
