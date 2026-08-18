@@ -9,6 +9,7 @@ use crate::error::{AppError, AppResult};
 use crate::model::{App, Provider};
 use crate::provider::export_import::ProviderImportMode;
 use crate::provider::export_import::ProviderImportReport;
+use crate::provider::live_adapter::SnippetLayer;
 use crate::provider::live_opencode;
 
 /// Emit `providers_changed` so the frontend's provider queries invalidate.
@@ -82,17 +83,15 @@ pub fn reorder_providers_cmd(
 }
 
 /// 切换供应商（核心动作）：按 (app, id) 查 provider → 按应用分派写盘 →
-/// 记该应用的激活状态。写盘分派 `write_live(app, provider, snippet)`：claude
-/// 走 JSON 受控合并进 `~/.claude/settings.json`，codex 走 TOML 受控合并 +
-/// auth.json，gemini 走 env 整块替换 + settings.json 受控合并。各分支语义
-/// 一致：只替换受控字段、非受控字段（hooks / MCP / permissions / model /
-/// mcp_servers 等）从 live 原地保留，不整文件覆盖、不做 Backfill。
-///
-/// 通用片段按应用分派合并层（ADR-0010）：claude/gemini 在 settings_config 层
-/// 并入（合并前先叠片段；claude 另拦截未物化模板变量——gemini 的 `.env` 由
-/// dotenv 展开 `${VAR}` 是合法引用，不拦）；codex/grok 在写盘层补缺失（片段
-/// 随 `snippet` 传给 `write_live`，受控合并后补进 live 文件——否则被白名单
-/// 滤掉→零效果）。「保存」只写 DB（save_provider_cmd），本命令才真正写盘。
+/// 记该应用的激活状态。写盘分派 `write_live(app, provider, snippet)` 与片段
+/// 合并层（ADR-0010）都收口在 `provider::live_adapter` 的 per-app 方法（单一
+/// seam，见 [`App::snippet_layer`] / [`App::validates_template_vars`]）：
+/// claude/gemini 片段在 settings_config 层并入（先叠片段再写盘），codex/grok
+/// 在写盘层补缺失（片段随 `snippet` 透传 `write_live`，受控合并后补进 live
+/// 文件——否则被白名单滤掉→零效果）。各分支语义一致：只替换受控字段、非受控
+/// 字段（hooks / MCP / permissions / model / mcp_servers 等）从 live 原地保留，
+/// 不整文件覆盖、不做 Backfill。「保存」只写 DB（save_provider_cmd），本命令
+/// 才真正写盘。
 #[tauri::command]
 #[specta::specta]
 pub async fn switch_provider_cmd(
@@ -113,25 +112,24 @@ pub async fn switch_provider_cmd(
         if app.is_additive_mode() {
             return super::live_import::ensure_opencode_in_live(&store, provider);
         }
-        // 单激活：按应用分派片段合并层（ADR-0010）——claude/gemini = settings_config
-        // 层（片段先并入供应商配置、再随受控写盘落地）；codex/grok = 写盘层（受控
-        // 合并之后、片段补缺失进 live 文件——否则被写盘白名单滤掉→片段零效果）。
-        // 片段按 provider 归属的应用读取（claude 池读 claude 片段，存量迁移后即原
-        // 全局片段，行为不变）。snippet_for 返回 owned，读 guard 随语句结束释放。
+        // 单激活：片段合并层按应用的 ADR-0010 策略分派（策略本身收口在
+        // live_adapter::App::snippet_layer，单一 seam——claude/gemini =
+        // settings_config 层、codex/grok = 写盘层）。片段按 provider 归属的应用
+        // 读取（claude 池读 claude 片段，存量迁移后即原全局片段，行为不变）。
+        // snippet_for 返回 owned，读 guard 随语句结束释放。
         let snippet_record = config.get().snippet_for(app);
-        let write_provider = match app {
-            // settings_config 层片段（claude/gemini）：片段先并入供应商配置，再随
-            // 受控写盘落地。
-            App::Claude | App::Gemini => {
+        let write_provider = match app.snippet_layer() {
+            // settings_config 层（claude/gemini）：片段先并入供应商配置，再随
+            // 受控写盘落地。claude 的 settings.json 是字面量 JSON：${VAR} 占位符
+            // 会原样写进 live = 废配置，切换前拦下（gemini 的 .env 由 dotenv
+            // 展开 ${VAR} 是合法引用，不拦——见 App::validates_template_vars）。
+            SnippetLayer::SettingsConfig => {
                 let settings_config = crate::provider::snippet::apply_snippet(
                     &provider.settings_config,
                     &snippet_record.content,
                     snippet_record.enabled,
                 )?;
-                // claude 的 settings.json 是字面量 JSON：${VAR} 占位符会原样写进
-                // live = 废配置，切换前拦下。gemini 的 .env 由 dotenv 展开 ${VAR}
-                // （合法引用，gemini 预设也不用模板变量），不拦。
-                if app == App::Claude {
+                if app.validates_template_vars() {
                     crate::provider::live::validate_no_unfilled_template_vars(&settings_config)?;
                 }
                 Provider {
@@ -139,15 +137,15 @@ pub async fn switch_provider_cmd(
                     ..provider.clone()
                 }
             }
-            // codex/grok 走写盘层（片段随 write_snippet 传给 write_live，受控合并
-            // 后补缺失进 live 文件）。
-            _ => provider.clone(),
+            // 写盘层（codex/grok）与无片段（opencode，先于此处返回）：供应商配置
+            // 原样进写盘，片段随 write_snippet 走写盘层补缺失。
+            SnippetLayer::WriteLayer | SnippetLayer::NoSnippet => provider.clone(),
         };
         // 写盘层片段（codex/grok）：启用 → 片段内容，否则空串（switch_*_live
-        // 空串即无操作）。claude/gemini 一律空串（其片段已在 settings_config 层
-        // 处理）。
-        let write_snippet = match app {
-            App::Codex | App::Grok if snippet_record.enabled => snippet_record.content.clone(),
+        // 空串即无操作）。settings_config 层应用一律空串（其片段已在上面并入
+        // 供应商配置）。
+        let write_snippet = match app.snippet_layer() {
+            SnippetLayer::WriteLayer if snippet_record.enabled => snippet_record.content.clone(),
             _ => String::new(),
         };
         crate::provider::live::write_live(app, &write_provider, &write_snippet)?;
@@ -212,15 +210,14 @@ pub fn import_providers_cmd(
     Ok(report)
 }
 
-/// 获取供应商的可用模型列表。`app` 决定端点格式：claude / codex 走 OpenAI
-/// 兼容 `GET /v1/models`，gemini 走 Google 原生 `GET /v1beta/models`。WebView
-/// fetch 撞 CORS，所以请求由后端发（ureq）。claude / codex 路径里 `models_url`
-/// 非空时精确覆写候选列表（只试这一个）；否则对 baseURL 构造候选 URL（版本段
-/// 识别 + 兼容子路径剥离，见 `provider::model_fetch::candidate_models_urls`），
-/// 按序尝试首个成功。gemini 路径端点形状固定（`gemini_models_url` 构造单一
-/// URL），`models_url` 不参与。错误串带稳定前缀标签（AUTH_FAILED /
-/// ENDPOINT_CLOSED / TIMEOUT / BAD_FORMAT / NETWORK），两条路径同一套标签，
-/// 前端按标签分桶提示。
+/// 获取供应商的可用模型列表。端点协议按应用分派收口在 `live_adapter` 的
+/// [`App::fetch_models`]（单一 seam）：gemini 走 Google 原生
+/// `GET /v1beta/models`（端点形状固定，`models_url` 不参与）；其余 app 走
+/// OpenAI 兼容 `GET /v1/models`（`models_url` 非空时精确覆写候选列表；否则
+/// 对 baseURL 构造候选 URL，按序尝试首个成功，见 `provider::model_fetch`）。
+/// WebView fetch 撞 CORS，所以请求由后端发（ureq）。错误串带稳定前缀标签
+/// （AUTH_FAILED / ENDPOINT_CLOSED / TIMEOUT / BAD_FORMAT / NETWORK），两条
+/// 路径同一套标签，前端按标签分桶提示。
 #[tauri::command]
 #[specta::specta]
 pub async fn fetch_models_cmd(
@@ -230,11 +227,7 @@ pub async fn fetch_models_cmd(
     models_url: Option<String>,
 ) -> AppResult<Vec<String>> {
     tauri::async_runtime::spawn_blocking(move || {
-        if app == App::Gemini {
-            crate::provider::model_fetch::fetch_gemini_models(&base_url, &api_key)
-        } else {
-            crate::provider::model_fetch::fetch_models(&base_url, &api_key, models_url.as_deref())
-        }
+        app.fetch_models(&base_url, &api_key, models_url.as_deref())
     })
     .await
     .map_err(|e| AppError::Internal(format!("fetch_models task failed: {e}")))?

@@ -3,7 +3,7 @@
 //! `provider::live_opencode`，本模块是文件 IO + store 写库的命令层薄壳。
 
 use std::collections::{HashMap, HashSet};
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use tauri::State;
 
@@ -12,7 +12,7 @@ use super::AppState;
 use crate::db::Store;
 use crate::error::{AppError, AppResult};
 use crate::model::{App, Provider, ProviderCategory};
-use crate::provider::{import_live, live, live_codex, live_gemini, live_grok, live_opencode};
+use crate::provider::{import_live, live, live_opencode};
 
 // ---------------- 附加模式（OpenCode）写盘命令 ----------------
 
@@ -81,44 +81,28 @@ fn import_single_activate_from_live(
     import_live::upsert_by_name(store, app, &snap, &crate::time::now_iso())
 }
 
-/// 按 app 读 live 文件文本（顺序固定：claude=[settings.json]，codex=[config.toml,
-/// auth.json]，gemini=[.env, settings.json]，grok=[config.toml]）。opencode 无单份
-/// live 配置概念 → `None`。路径解析错误 → `Err`（与既有读盘语义一致）。快照与
-/// 片段提取共用这一份「app → 路径」映射（单一事实来源）。
+/// 按 app 读 live 文件文本：路径映射收口在 `live_adapter` 的
+/// [`App::live_paths`]（单一事实来源——写盘 / 快照 / 片段提取共用）。
+/// opencode 无单份 live 配置概念 → `None`。
 pub(super) fn read_live_texts(app: App) -> AppResult<Option<Vec<String>>> {
-    let paths: Vec<AppResult<PathBuf>> = match app {
-        App::Claude => vec![live::claude_settings_path()],
-        App::Codex => vec![
-            live_codex::codex_config_path(),
-            live_codex::codex_auth_path(),
-        ],
-        App::Gemini => vec![
-            live_gemini::gemini_env_path(),
-            live_gemini::gemini_settings_path(),
-        ],
-        App::Grok => vec![live_grok::grok_config_path()],
-        App::OpenCode => return Ok(None),
+    let Some(paths) = app.live_paths()? else {
+        return Ok(None);
     };
     let mut texts = Vec::with_capacity(paths.len());
     for p in paths {
-        texts.push(live::read_live_settings(&p?)?);
+        texts.push(live::read_live_settings(&p)?);
     }
     Ok(Some(texts))
 }
 
-/// 按 app 读 live 文件(s) + 反向解析为快照。opencode → `unreachable`（走
-/// opencode 专属路径）。
+/// 按 app 读 live 文件(s) + 反向解析为快照（分派在 `live_adapter` 的
+/// [`App::snapshot_from_texts`]）。opencode → `unreachable`（走 opencode
+/// 专属路径）。
 fn read_live_snapshot(app: App) -> AppResult<Option<import_live::LiveImportSnapshot>> {
     let Some(texts) = read_live_texts(app)? else {
         return Ok(None);
     };
-    Ok(match app {
-        App::Claude => import_live::claude_live_to_snapshot(&texts[0]),
-        App::Codex => import_live::codex_live_to_snapshot(&texts[0], &texts[1]),
-        App::Gemini => import_live::gemini_live_to_snapshot(&texts[0], &texts[1]),
-        App::Grok => import_live::grok_live_to_snapshot(&texts[0]),
-        App::OpenCode => unreachable!("opencode 走 import_opencode_from_live"),
-    })
+    Ok(app.snapshot_from_texts(&texts))
 }
 
 /// 单激活应用「从 live 导入」预览：快照 → 0/1 条 entry（key = name，is_new 按

@@ -19,15 +19,19 @@
 //! config.json（`ConfigData::common_config_snippets`，存取走
 //! [`ConfigData::snippet_for`] / [`ConfigData::set_snippet`]；存量单条已迁移
 //! 到 claude 键），与激活状态同属本机配置——config.json 从不进 git、不随
-//! 同步仓库走，因此本模块不碰任何 sync 文件。写盘合并按应用分派（codex /
-//! gemini 的合并语义）归后续批次，本模块只负责合并纯函数本身。
+//! 同步仓库走，因此本模块不碰任何 sync 文件。片段校验与合并的**按应用分派**
+//! 收口在 `live_adapter` 的 [`App::validate_snippet`] /
+//! [`App::merge_extracted_snippet`]（per-app 行为单一 seam），本模块只负责
+//! 合并 / 校验纯函数本身（claude / gemini 的 JSON 侧校验：
+//! [`validate_claude_snippet`] / [`validate_gemini_snippet`]；codex / grok 的
+//! TOML 侧在各自 live_* 模块）。
 //!
-//! 校验：`validate_snippet` 供 set 命令用——非法 JSON 或非对象 → `Err`；
-//! 空/纯空白合法（合并时视为 `{}`，即无操作）。写盘时启用的片段解析不了 →
-//! `Err`（切换失败）：宁可显式失败，也不静默丢片段效果。
+//! 校验：`validate_claude_snippet` / `validate_gemini_snippet` 供 set 命令经
+//! seam 调用——非法 JSON 或非对象 → `Err`；空/纯空白合法（合并时视为 `{}`，
+//! 即无操作）。写盘时启用的片段解析不了 → `Err`（切换失败）：宁可显式失败，
+//! 也不静默丢片段效果。
 
 use crate::error::{AppError, AppResult};
-use crate::model::App;
 use crate::provider::live::{parse_object, CONTROLLED_FIELDS};
 
 /// TOML 片段整理（「整理」按钮）：用 taplo（保留注释的规范 formatter，VS Code
@@ -52,8 +56,9 @@ pub fn apply_snippet(settings_config: &str, snippet: &str, enabled: bool) -> App
 /// [`live::merge_live_settings`] 的清洗输出一致）。
 ///
 /// 写盘层兜底：片段携带凭据键 → `Err`——claude/gemini 的凭据拦截不只在 set
-/// 时（[`validate_snippet`]），绕过 set 直接走合并/写盘的路径也拦（与 codex/
-/// grok 的 `merge_*_snippet` 双层同构：set 拦 + 合并纯函数兜底）。
+/// 时（[`validate_claude_snippet`] / [`validate_gemini_snippet`]，经 seam 分派），
+/// 绕过 set 直接走合并/写盘的路径也拦（与 codex/grok 的 `merge_*_snippet`
+/// 双层同构：set 拦 + 合并纯函数兜底）。
 ///
 /// 边界：`snippet` 为空串/纯空白 → 视为 `{}`（启用但没写内容 = 无操作）；
 /// `snippet` 非法 JSON 或非对象 → `Err`；`settings_config` 非法 JSON 或非对象
@@ -96,42 +101,34 @@ pub fn merge_snippet_into_settings(settings_config: &str, snippet: &str) -> AppR
     Ok(serde_json::to_string_pretty(&target)?)
 }
 
-/// 片段校验（set 命令用，按应用分派）：
-/// - claude / gemini：合法 JSON 对象（空串=空片段）；拒绝凭据键（env 是认证
-///   通道，见 ADR-0010）；gemini 另拒端点键 `GOOGLE_GEMINI_BASE_URL`、只认
-///   `env` 子对象（其余顶层键/扁平键合并时零效果，明确拒绝而非静默通过）、
-///   要求 env 值为非空字符串。
-/// - codex / grok：合法 TOML；拒绝受控身份键（凭据键不禁——`mcp_servers` 不
-///   经 LLM 端点）。
-/// - opencode：附加模式无片段概念 → `Ok`。
-pub fn validate_snippet(app: App, snippet: &str) -> AppResult<()> {
-    match app {
-        App::Claude => {
-            let obj = parse_snippet_or_empty(snippet)?;
-            reject_sensitive_keys(&obj, "claude")
-        }
-        App::Gemini => {
-            let obj = parse_snippet_or_empty(snippet)?;
-            // gemini 片段只认 env 子对象：合并层只把片段 env 补进
-            // settingsConfig.env（再整块写 .env），其余顶层键既不进 .env 也不
-            // 进 settings.json——扁平键（如 {"GEMINI_MODEL":"m"}）静默通过 =
-            // 用户以为配好了实际零效果，明确拒绝并指因。
-            if let Some(map) = obj.as_object() {
-                for key in map.keys() {
-                    if key != "env" {
-                        return Err(AppError::Config(format!(
-                            "gemini 通用片段只认 env 子对象，顶层键 `{key}` 不会生效（请写进 {{\"env\":{{...}}}}）"
-                        )));
-                    }
-                }
+/// claude 片段校验（set 命令经 `live_adapter` seam 调用，分派见
+/// [`App::validate_snippet`]）：合法 JSON 对象（空串=空片段）；拒绝凭据键
+/// （env 是认证通道，见 ADR-0010）。
+pub(crate) fn validate_claude_snippet(snippet: &str) -> AppResult<()> {
+    let obj = parse_snippet_or_empty(snippet)?;
+    reject_sensitive_keys(&obj, "claude")
+}
+
+/// gemini 片段校验（set 命令经 `live_adapter` seam 调用）：只认 `env` 子对象
+/// （其余顶层键/扁平键合并时零效果，明确拒绝而非静默通过）、拒凭据键与端点键
+/// `GOOGLE_GEMINI_BASE_URL`、要求 env 值为非空字符串。
+pub(crate) fn validate_gemini_snippet(snippet: &str) -> AppResult<()> {
+    let obj = parse_snippet_or_empty(snippet)?;
+    // gemini 片段只认 env 子对象：合并层只把片段 env 补进
+    // settingsConfig.env（再整块写 .env），其余顶层键既不进 .env 也不
+    // 进 settings.json——扁平键（如 {"GEMINI_MODEL":"m"}）静默通过 =
+    // 用户以为配好了实际零效果，明确拒绝并指因。
+    if let Some(map) = obj.as_object() {
+        for key in map.keys() {
+            if key != "env" {
+                return Err(AppError::Config(format!(
+                    "gemini 通用片段只认 env 子对象，顶层键 `{key}` 不会生效（请写进 {{\"env\":{{...}}}}）"
+                )));
             }
-            reject_sensitive_keys(&obj, "gemini")?;
-            validate_gemini_extras(&obj)
         }
-        App::Codex => crate::provider::live_codex::validate_codex_snippet(snippet),
-        App::Grok => crate::provider::live_grok::validate_grok_snippet(snippet),
-        App::OpenCode => Ok(()),
     }
+    reject_sensitive_keys(&obj, "gemini")?;
+    validate_gemini_extras(&obj)
 }
 
 /// 扫描 JSON 片段的键（顶层 + env 子对象）是否含凭据模式键（
@@ -438,8 +435,8 @@ mod tests {
         );
     }
 
-    /// 写盘层兜底：凭据拦截不只在 set（validate_snippet），绕过 set 直接合并
-    /// 的路径也拒（与 codex/grok 的 merge_*_snippet 双层同构）。
+    /// 写盘层兜底：凭据拦截不只在 set（App::validate_snippet），绕过 set 直接
+    /// 合并的路径也拒（与 codex/grok 的 merge_*_snippet 双层同构）。
     #[test]
     fn write_layer_rejects_credential_keys_outside_set_path() {
         let r = merge_snippet_into_settings(
@@ -455,105 +452,6 @@ mod tests {
             matches!(r2, Err(AppError::Config(_))),
             "apply_snippet 写盘入口同样拒绝顶层凭据键"
         );
-    }
-
-    /// gemini 片段只认 env 子对象：扁平键/其它顶层键合并时零效果，校验层
-    /// 明确拒绝并指因（而非静默通过让用户以为配好了）。
-    #[test]
-    fn validate_gemini_snippet_rejects_flat_and_non_env_top_level_keys() {
-        // 扁平键（env 键直接写在顶层）——零效果，拒绝。
-        assert!(
-            validate_snippet(App::Gemini, r#"{"GEMINI_MODEL": "m"}"#).is_err(),
-            "扁平键零效果，必须拒绝"
-        );
-        // 其它顶层键（claude 风格开关在 gemini 下同样零效果）——拒绝。
-        assert!(validate_snippet(App::Gemini, r#"{"includeCoAuthoredBy": false}"#).is_err());
-        // 合法形状：只有 env 子对象。
-        assert!(validate_snippet(App::Gemini, r#"{"env": {"GEMINI_MODEL": "m"}}"#).is_ok());
-    }
-
-    #[test]
-    fn validate_snippet_accepts_object_and_empty() {
-        assert!(validate_snippet(App::Claude, r#"{"includeCoAuthoredBy": false}"#).is_ok());
-        assert!(validate_snippet(App::Claude, "").is_ok());
-        assert!(validate_snippet(App::Claude, "   ").is_ok());
-    }
-
-    #[test]
-    fn validate_snippet_rejects_invalid_and_non_object() {
-        assert!(matches!(
-            validate_snippet(App::Claude, "{nope"),
-            Err(AppError::Config(_))
-        ));
-        assert!(matches!(
-            validate_snippet(App::Claude, r#"[1]"#),
-            Err(AppError::Config(_))
-        ));
-    }
-
-    #[test]
-    fn validate_claude_snippet_rejects_credentials() {
-        // env 里的凭据键拒绝（env 是认证通道）。
-        assert!(
-            validate_snippet(App::Claude, r#"{"env": {"ANTHROPIC_AUTH_TOKEN": "sk-x"}}"#).is_err()
-        );
-        assert!(
-            validate_snippet(App::Claude, r#"{"env": {"ANTHROPIC_API_KEY": "sk-x"}}"#).is_err()
-        );
-        // 顶层凭据键也拒。
-        assert!(validate_snippet(App::Claude, r#"{"apiKey": "x"}"#).is_err());
-        // 非凭据键放行（模型/端点/开关——供应商赢下无害）。
-        assert!(validate_snippet(
-            App::Claude,
-            r#"{"env": {"ANTHROPIC_MODEL": "m", "ANTHROPIC_BASE_URL": "u"}}"#
-        )
-        .is_ok());
-    }
-
-    #[test]
-    fn validate_gemini_snippet_rejects_credentials_endpoint_and_empty() {
-        // 凭据键拒绝（GEMINI_API_KEY 命中 _API_KEY）。
-        assert!(validate_snippet(App::Gemini, r#"{"env": {"GEMINI_API_KEY": "k"}}"#).is_err());
-        // 端点键拒绝。
-        assert!(
-            validate_snippet(App::Gemini, r#"{"env": {"GOOGLE_GEMINI_BASE_URL": "u"}}"#).is_err()
-        );
-        // env 值非字符串拒绝。
-        assert!(validate_snippet(App::Gemini, r#"{"env": {"GEMINI_MODEL": 123}}"#).is_err());
-        // env 值空串拒绝。
-        assert!(validate_snippet(App::Gemini, r#"{"env": {"GEMINI_MODEL": "  "}}"#).is_err());
-        // 合法：非凭据、非端点、非空字符串。
-        assert!(validate_snippet(
-            App::Gemini,
-            r#"{"env": {"GEMINI_MODEL": "gemini-2.5-flash"}}"#
-        )
-        .is_ok());
-    }
-
-    #[test]
-    fn validate_codex_and_grok_snippet_delegate_identity_rejection() {
-        // codex：身份键拒绝（TOML），非受控键放行（含 mcp_servers 凭据）。
-        assert!(validate_snippet(App::Codex, r#"model = "x""#).is_err());
-        assert!(validate_snippet(
-            App::Codex,
-            r#"[mcp_servers.github]
-command = "npx"
-env = { GITHUB_PERSONAL_ACCESS_TOKEN = "ghp_x" }"#
-        )
-        .is_ok());
-        // grok：身份键拒绝（cc-one profile / models.default）。
-        assert!(validate_snippet(
-            App::Grok,
-            r#"[model.cc-one]
-model = "x""#
-        )
-        .is_err());
-        assert!(validate_snippet(
-            App::Grok,
-            r#"[mcp_servers.github]
-command = "npx""#
-        )
-        .is_ok());
     }
 
     #[test]

@@ -6,7 +6,6 @@ use super::live_import::read_live_texts;
 use super::AppState;
 use crate::error::{AppError, AppResult};
 use crate::model::{App, CommonConfigSnippet};
-use crate::provider::import_live;
 
 /// 读某应用的通用配置片段（内容 + 启用开关）。按应用各存一份（claude /
 /// codex / gemini），存本机 config.json。缺省键按应用回退默认（claude 为
@@ -31,7 +30,7 @@ pub fn set_common_config_snippet_cmd(
     json: String,
     enabled: bool,
 ) -> AppResult<CommonConfigSnippet> {
-    crate::provider::snippet::validate_snippet(app, &json)?;
+    app.validate_snippet(&json)?;
     let snippet = CommonConfigSnippet {
         enabled,
         content: json,
@@ -52,26 +51,21 @@ pub async fn format_toml_cmd(text: String) -> AppResult<String> {
 
 // ---------------- 导入后提取通用配置片段（T6）----------------
 
-/// 按 app 读 live 文件(s)，提取「可共享键」为片段内容（无可提取 → None）。
-/// opencode 无片段概念 → None。gemini 只需 env（settings.json 的非受控键进片段
-/// 零效果，见 `gemini_extract_snippet`）。
+/// 按 app 读 live 文件(s)，提取「可共享键」为片段内容（分派在
+/// `live_adapter` 的 [`App::extract_snippet`]；无可提取 → None）。opencode 无
+/// 片段概念 → None。gemini 只需 env（settings.json 的非受控键进片段零效果）。
 fn read_live_snippet_extract(app: App) -> AppResult<Option<String>> {
     let Some(texts) = read_live_texts(app)? else {
         return Ok(None);
     };
-    Ok(match app {
-        App::Claude => import_live::claude_extract_snippet(&texts[0]),
-        App::Gemini => import_live::gemini_extract_snippet(&texts[0]),
-        App::Codex => import_live::codex_extract_snippet(&texts[0]),
-        App::Grok => import_live::grok_extract_snippet(&texts[0]),
-        App::OpenCode => unreachable!("opencode 无片段概念（read_live_texts 已返回 None）"),
-    })
+    Ok(app.extract_snippet(&texts))
 }
 
 /// 导入后「提取为通用片段」（T6，ADR-0012）：读该应用 live 配置的可共享键，
-/// 合并进现有片段（已有键不覆盖，沿用 ADR-0010 只补缺失）。启停状态不变——
-/// 提取是内容操作，不改用户显式的启停选择（原实现强制 enabled=true 会覆盖
-/// 显式停用）。合并结果经与手动保存同一条校验（`validate_snippet` 单一入口，
+/// 合并进现有片段（已有键不覆盖，沿用 ADR-0010 只补缺失，分派在
+/// `live_adapter` 的 [`App::merge_extracted_snippet`]）。启停状态不变——提取是
+/// 内容操作，不改用户显式的启停选择（原实现强制 enabled=true 会覆盖显式
+/// 停用）。合并结果经与手动保存同一条校验（[`App::validate_snippet`] 单一入口，
 /// 提取器滤凭据/端点/空值后这里是兜底）。无可提取 → 现有片段原样。非静默——
 /// 前端先检测候选、用户确认才调本命令。返回更新后的片段。
 #[tauri::command]
@@ -84,8 +78,8 @@ pub fn extract_snippet_from_live_cmd(
     let Some(extracted) = read_live_snippet_extract(app)? else {
         return Ok(current);
     };
-    let content = import_live::merge_extracted_snippet(app, &current.content, &extracted)?;
-    crate::provider::snippet::validate_snippet(app, &content)?;
+    let content = app.merge_extracted_snippet(&current.content, &extracted)?;
+    app.validate_snippet(&content)?;
     let snippet = CommonConfigSnippet {
         enabled: current.enabled,
         content,

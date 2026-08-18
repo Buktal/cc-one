@@ -279,15 +279,6 @@ pub fn write_gemini_live_at(
     Ok(())
 }
 
-/// 真实路径入口：写 `~/.gemini/.env` + `~/.gemini/settings.json`。
-pub fn write_gemini_live(settings_config: &str) -> AppResult<()> {
-    write_gemini_live_at(
-        &gemini_env_path()?,
-        &gemini_settings_path()?,
-        settings_config,
-    )
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -842,7 +833,8 @@ mod tests {
     /// gemini 通用片段经 settings_config 层并入 .env（#50）：apply_snippet 把片段
     /// env 键级补缺失进供应商 settingsConfig（供应商已有键保留），再走既有写盘
     /// 整块写 .env——片段键随整块落地。跑 switch_provider_cmd 的 gemini 分支所调
-    /// 的两个纯函数链（apply_snippet → write_gemini_live），验证生产路径。
+    /// 的两个纯函数链（apply_snippet → 经 seam 的 write_gemini_live_at），验证
+    /// 生产路径。
     #[test]
     fn snippet_env_flows_into_env_file_via_settings_config_layer() {
         let tmp = tempfile::tempdir().unwrap();

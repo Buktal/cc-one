@@ -81,3 +81,7 @@ winreg = "0.52"
 [dev-dependencies]
 # Test-only temp dirs for db / config / ingest / source_parser tests (S1).
 tempfile = "3"
+# Test-only TOML 语义比较（write⇄import 往返测试）：只读解析成 `toml::Value`
+# 判等——生产用 toml_edit 是保注释编辑，测试只要语义，标准只读解析器正好；
+# 0.8 已在依赖树里（传递依赖），不引入新版本。
+toml = "0.8"

@@ -394,25 +394,6 @@ pub fn grok_extract_snippet(config_toml: &str) -> Option<String> {
     }
 }
 
-/// 把提取的片段内容合并进现有片段（只补缺失，沿用 ADR-0010 语义——已有键不
-/// 覆盖）：claude / gemini（JSON）用 `snippet::merge_snippet_into_settings`（现有
-/// 片段为 target、提取为补丁）；codex / grok（TOML）用 `fill_missing_table`。
-/// 返回合并后的片段文本。
-pub fn merge_extracted_snippet(app: App, existing: &str, extracted: &str) -> AppResult<String> {
-    match app {
-        App::Claude | App::Gemini => {
-            crate::provider::snippet::merge_snippet_into_settings(existing, extracted)
-        }
-        App::Codex | App::Grok => {
-            let mut doc = live::parse_toml_or_empty(existing, "existing snippet")?;
-            let ext = live::parse_toml_or_empty(extracted, "extracted snippet")?;
-            live::fill_missing_table(doc.as_table_mut(), ext.as_table());
-            Ok(doc.to_string())
-        }
-        App::OpenCode => Ok(extracted.to_string()),
-    }
-}
-
 /// 把快照 upsert 进库（按 name 去重）：同 app 同 name → 更新 settings_config /
 /// name / updated_at（保留 id / 展示字段），否则新建（空 id 交 `save_provider`
 /// 生成 hex）。返回写入条数（0 或 1）。
@@ -801,27 +782,4 @@ command = "npx"
         assert!(!content.contains("default ="), "models 指针不提取");
     }
 
-    #[test]
-    fn merge_extracted_fills_missing_only() {
-        // claude：现有片段已有键保留，提取只补缺失。
-        let merged = merge_extracted_snippet(
-            App::Claude,
-            r#"{"env":{"ANTHROPIC_MODEL":"mine"}}"#,
-            r#"{"env":{"ANTHROPIC_MODEL":"extracted","ANTHROPIC_BASE_URL":"https://x"},"includeCoAuthoredBy":false}"#,
-        )
-        .unwrap();
-        let v: Value = serde_json::from_str(&merged).unwrap();
-        assert_eq!(v["env"]["ANTHROPIC_MODEL"], "mine", "已有键不覆盖");
-        assert_eq!(v["env"]["ANTHROPIC_BASE_URL"], "https://x", "缺失键补上");
-        assert_eq!(v["includeCoAuthoredBy"], serde_json::json!(false));
-        // codex（TOML）：同样只补缺失。
-        let merged_toml = merge_extracted_snippet(
-            App::Codex,
-            "[mcp_servers.a]\ncommand = \"x\"",
-            "[mcp_servers.a]\ncommand = \"overwrite\"\n[mcp_servers.b]\ncommand = \"y\"",
-        )
-        .unwrap();
-        assert!(merged_toml.contains("command = \"x\""), "已有 server 保留");
-        assert!(merged_toml.contains("[mcp_servers.b]"), "缺失 server 补上");
-    }
 }

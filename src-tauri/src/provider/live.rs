@@ -1,9 +1,11 @@
 //! Provider 写盘（live）：受控合并 + 备份 + 原子写。
 //!
-//! 写盘分派点 `write_live(app, provider)`（claude / codex / gemini 三分支）
-//! 见本文件下方；codex 分支的 TOML 合并 + auth.json 在 `live_codex` 模块。
-//! 以下写盘语义是 claude 分支（JSON 受控合并）的精确规格，codex/gemini 各自
-//! 沿用同一套「受控合并 / 非受控保留 / 备份 / 原子写」语义：
+//! 写盘分派 `write_live(app, provider, snippet)` 经 `live_adapter` 的
+//! `App::write_live`（per-app 行为单一 seam，见 `live_adapter.rs`）按应用分派：
+//! claude 分支在本文件，codex / gemini / grok 分支在 `live_codex` /
+//! `live_gemini` / `live_grok` 模块。以下写盘语义是 claude 分支（JSON 受控
+//! 合并）的精确规格，其它 app 各自沿用同一套「受控合并 / 非受控保留 / 备份 /
+//! 原子写」语义：
 //!
 //! 写盘语义（必须精确实现）：
 //! - **受控字段**（Provider 接管，切换时整块替换/合并）：`env` 块 +
@@ -182,57 +184,17 @@ pub(crate) fn atomic_write_file(path: &Path, content: &str) -> AppResult<()> {
     Ok(())
 }
 
-/// 写盘分派（`write_live(app, provider, snippet)`）：按应用选择写盘实现，各自保持
-/// 「只合并受控字段、非受控原地保留、写前备份、原子写」——
-/// - claude：JSON 受控合并进 `~/.claude/settings.json`（本模块）。片段已在
-///   调用方（`switch_provider_cmd`）的 settings_config 层并入，此处 `snippet`
-///   不用。
-/// - codex：TOML 受控合并进 `~/.codex/config.toml` + 受控写
-///   `~/.codex/auth.json`（`live_codex` 模块）。片段在**写盘层**补缺失
-///   （merge 只搬身份键、丢弃其余，settings_config 层合会被滤掉→零效果，
-///   见 ADR-0010），故 `snippet` 透传给 `switch_codex_live`。
-/// - gemini：`.env` 整块替换 + `settings.json` 受控合并
-///   （`live_gemini` 模块，含 `selectedType` 认证标记）。片段走 settings_config
-///   层（#50），此处 `snippet` 暂不用。
-/// - grok：TOML 受控合并进 `~/.grok/config.toml`（`live_grok` 模块，
-///   单文件无 auth；cc one 固定写 `[model."cc-one"]` profile + 设
-///   `models.default`，用户其它 profile / mcp_servers 原样保留）。片段在**写盘
-///   层**补缺失（同 codex 理由，见 ADR-0010），故 `snippet` 透传给
-///   `switch_grok_live`。
+/// 写盘分派：按应用解析 live 文件路径（[`App::live_paths`]，opencode 附加模式
+/// 无单份概念 → 空路径，其分支在 [`App::write_live`] 里防御性报错），交给
+/// per-app 写盘实现（单一 seam，见 `live_adapter.rs`）。各分支保持「只合并
+/// 受控字段、非受控原地保留、写前备份、原子写」，具体规格见各 live_* 模块与
+/// `live_adapter` 的声明表。
 ///
-/// `snippet` 为写盘层片段内容（codex/grok），空串即无操作；非写盘层应用忽略。
+/// `snippet` 为写盘层片段内容（codex/grok，ADR-0010），空串即无操作；非写盘层
+/// 应用忽略（其片段已在调用方 settings_config 层并入）。
 pub fn write_live(app: App, provider: &Provider, snippet: &str) -> AppResult<()> {
-    match app {
-        App::Claude => {
-            let path = claude_settings_path()?;
-            switch_live_settings(&path, &provider.settings_config)
-        }
-        App::Codex => {
-            let config_path = crate::provider::live_codex::codex_config_path()?;
-            let auth_path = crate::provider::live_codex::codex_auth_path()?;
-            crate::provider::live_codex::switch_codex_live(
-                &config_path,
-                &auth_path,
-                &provider.settings_config,
-                snippet,
-            )
-        }
-        App::Gemini => crate::provider::live_gemini::write_gemini_live(&provider.settings_config),
-        App::Grok => {
-            let config_path = crate::provider::live_grok::grok_config_path()?;
-            crate::provider::live_grok::switch_grok_live(
-                &config_path,
-                &provider.settings_config,
-                snippet,
-            )
-        }
-        // OpenCode 是附加模式，不走 write_live（单激活专属）——增删/切换走
-        // set/remove_opencode_provider，由命令层按 is_additive_mode 分派。这里
-        // 返回 Err 作防御：误调时明确报错，而非走单激活路径或 panic。
-        App::OpenCode => Err(AppError::Config(
-            "opencode is additive mode; use set/remove_opencode_provider, not write_live".into(),
-        )),
-    }
+    let paths = app.live_paths()?.unwrap_or_default();
+    app.write_live(&paths, provider, snippet)
 }
 
 /// 切换写盘全流程（薄壳，按序调用）：读 live → 受控合并（含清洗）→ 无变化
