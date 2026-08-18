@@ -1218,7 +1218,10 @@ mod tests {
         };
         crate::collect::ingest::ingest_sessions(&store, dev, &[sys], &[msg]).unwrap();
         store.set_session_favorited(dev, "sx", true).unwrap();
-        assert!(push_usage(&store, &paths, &cfg).unwrap(), "first push ships");
+        assert!(
+            push_usage(&store, &paths, &cfg).unwrap(),
+            "first push ships"
+        );
         assert!(
             store.dirty_sessions().unwrap().is_empty(),
             "successful push clears the session"

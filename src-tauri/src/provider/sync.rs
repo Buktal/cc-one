@@ -688,11 +688,13 @@ mod tests {
         let row = s.get_provider(App::Codex, "aaaaaaaa").unwrap().unwrap();
         let cfg: serde_json::Value = serde_json::from_str(&row.settings_config).unwrap();
         assert_eq!(
-            cfg["config"], serde_json::json!("model = \"gpt-6\""),
+            cfg["config"],
+            serde_json::json!("model = \"gpt-6\""),
             "peer 结构导入"
         );
         assert_eq!(
-            cfg["auth"]["OPENAI_API_KEY"], serde_json::json!("sk-codex-local"),
+            cfg["auth"]["OPENAI_API_KEY"],
+            serde_json::json!("sk-codex-local"),
             "local codex auth key merged back"
         );
     }
@@ -785,10 +787,7 @@ mod tests {
 
         let row = s.get_provider(App::Claude, "aaaaaaaa").unwrap().unwrap();
         let cfg: serde_json::Value = serde_json::from_str(&row.settings_config).unwrap();
-        assert_eq!(
-            cfg["env"]["AWS_REGION"], "eu-west-1",
-            "peer 结构导入"
-        );
+        assert_eq!(cfg["env"]["AWS_REGION"], "eu-west-1", "peer 结构导入");
         let meta: serde_json::Value = serde_json::from_str(&row.meta).unwrap();
         assert_eq!(
             meta["templateValues"]["AWS_ACCESS_KEY_ID"], "AKIA123",

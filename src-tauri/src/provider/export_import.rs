@@ -267,7 +267,10 @@ mod tests {
                 .settings_config,
         )
         .unwrap();
-        assert!(codex["auth"].get("OPENAI_API_KEY").is_none(), "codex auth 必须剥");
+        assert!(
+            codex["auth"].get("OPENAI_API_KEY").is_none(),
+            "codex auth 必须剥"
+        );
         assert_eq!(
             codex["config"],
             serde_json::json!("model = \"gpt-5.6\""),
@@ -281,9 +284,14 @@ mod tests {
                 .settings_config,
         )
         .unwrap();
-        assert!(opencode["options"].get("apiKey").is_none(), "opencode apiKey 必须剥");
         assert!(
-            opencode["options"]["headers"].get("Authorization").is_none(),
+            opencode["options"].get("apiKey").is_none(),
+            "opencode apiKey 必须剥"
+        );
+        assert!(
+            opencode["options"]["headers"]
+                .get("Authorization")
+                .is_none(),
             "认证头必须剥"
         );
         assert_eq!(

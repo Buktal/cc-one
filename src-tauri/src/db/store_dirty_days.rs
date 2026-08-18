@@ -412,7 +412,12 @@ mod tests {
         seed_session(&s, "s1", dev, "2026-08-15T10:00:00.000Z");
         s.ingest_session_messages_marking_dirty(
             dev,
-            &[msg("m1", "s1", SessionMessageRole::User, "2026-07-13T10:00:00Z")],
+            &[msg(
+                "m1",
+                "s1",
+                SessionMessageRole::User,
+                "2026-07-13T10:00:00Z",
+            )],
         )
         .unwrap();
         assert_eq!(s.dirty_days().unwrap().len(), 1);
@@ -442,7 +447,12 @@ mod tests {
             .unwrap();
         s.ingest_session_messages_marking_dirty(
             dev,
-            &[msg("m2", "s1", SessionMessageRole::User, "2026-07-13T10:00:01Z")],
+            &[msg(
+                "m2",
+                "s1",
+                SessionMessageRole::User,
+                "2026-07-13T10:00:01Z",
+            )],
         )
         .unwrap();
         s.clear_dirty_flags_if_unchanged(
@@ -486,7 +496,12 @@ mod tests {
         seed_session(&s, "s1", dev, "2026-08-15T10:00:00.000Z");
         s.ingest_session_messages_marking_dirty(
             dev,
-            &[msg("m1", "s1", SessionMessageRole::User, "2026-07-13T10:00:00Z")],
+            &[msg(
+                "m1",
+                "s1",
+                SessionMessageRole::User,
+                "2026-07-13T10:00:00Z",
+            )],
         )
         .unwrap();
         // A second usage row lands AFTER the snapshot ⇒ the day's count

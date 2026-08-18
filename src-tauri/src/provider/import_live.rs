@@ -852,8 +852,13 @@ command = "npx"
     #[test]
     fn import_opencode_creates_providers_with_live_key_and_managed_flag() {
         let s = mem();
-        let n = import_opencode_from_live_text(&s, App::OpenCode, opencode_live_json(), &HashMap::new())
-            .unwrap();
+        let n = import_opencode_from_live_text(
+            &s,
+            App::OpenCode,
+            opencode_live_json(),
+            &HashMap::new(),
+        )
+        .unwrap();
         assert_eq!(n, 2);
         let providers = s.list_providers_for(App::OpenCode).unwrap();
         assert_eq!(providers.len(), 2);
@@ -1000,5 +1005,4 @@ command = "npx"
         let sc: Value = serde_json::from_str(&rows[0].settings_config).unwrap();
         assert_eq!(sc["env"]["ANTHROPIC_MODEL"], "m2", "settings_config 更新");
     }
-
 }

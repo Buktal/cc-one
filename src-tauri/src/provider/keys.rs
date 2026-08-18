@@ -71,9 +71,9 @@ pub fn strip_settings_config(raw: &str, what: &str) -> AppResult<String> {
     }
     let mut v: Value = serde_json::from_str(trimmed)
         .map_err(|e| AppError::Config(format!("{what} settingsConfig is not valid JSON: {e}")))?;
-    let obj = v.as_object_mut().ok_or_else(|| {
-        AppError::Config(format!("{what} settingsConfig is not a JSON object"))
-    })?;
+    let obj = v
+        .as_object_mut()
+        .ok_or_else(|| AppError::Config(format!("{what} settingsConfig is not a JSON object")))?;
     let mut stripped = false;
     for loc in ["env", "auth"] {
         if let Some(map) = obj.get_mut(loc) {
@@ -161,7 +161,9 @@ pub fn strip_meta(raw: &str, what: &str) -> AppResult<String> {
 /// 重序列化。
 pub fn restore_settings_config(local: &str, peer: &str) -> AppResult<String> {
     let mut peer_value: Value = serde_json::from_str(peer.trim()).map_err(|e| {
-        AppError::Config(format!("peer provider settingsConfig is not valid JSON: {e}"))
+        AppError::Config(format!(
+            "peer provider settingsConfig is not valid JSON: {e}"
+        ))
     })?;
     let peer_obj = peer_value.as_object_mut().ok_or_else(|| {
         AppError::Config("peer provider settingsConfig is not a JSON object".into())
@@ -172,7 +174,9 @@ pub fn restore_settings_config(local: &str, peer: &str) -> AppResult<String> {
         .any(|loc| peer_obj.get(*loc).is_some_and(Value::is_object))
     {
         let local_value: Value = serde_json::from_str(local.trim()).map_err(|e| {
-            AppError::Config(format!("local provider settingsConfig is not valid JSON: {e}"))
+            AppError::Config(format!(
+                "local provider settingsConfig is not valid JSON: {e}"
+            ))
         })?;
         let local_obj = local_value.as_object().ok_or_else(|| {
             AppError::Config("local provider settingsConfig is not a JSON object".into())
@@ -233,9 +237,9 @@ pub fn restore_meta(local: &str, peer: &str) -> AppResult<String> {
             .map_err(|e| AppError::Config(format!("{what} meta is not valid JSON: {e}")))
     };
     let mut peer_meta = parse(peer, "peer provider")?;
-    let peer_obj = peer_meta.as_object_mut().ok_or_else(|| {
-        AppError::Config("peer provider meta is not a JSON object".into())
-    })?;
+    let peer_obj = peer_meta
+        .as_object_mut()
+        .ok_or_else(|| AppError::Config("peer provider meta is not a JSON object".into()))?;
     let local_meta = parse(local, "local provider")?;
     let mut changed = false;
     if let Some(local_values) = local_meta
@@ -324,7 +328,8 @@ mod tests {
     /// 也有 templateValues 时才回填，正是这个缺口丢 Bedrock 的 AK/SK）。
     #[test]
     fn restore_recreates_template_values_strip_dropped_whole() {
-        let meta = r#"{"templateValues":{"AWS_ACCESS_KEY_ID":"AKIA1","AWS_SECRET_ACCESS_KEY":"sk-3"}}"#;
+        let meta =
+            r#"{"templateValues":{"AWS_ACCESS_KEY_ID":"AKIA1","AWS_SECRET_ACCESS_KEY":"sk-3"}}"#;
         let stripped = strip_meta(meta, "provider").unwrap();
         assert_eq!(
             value(&stripped),
@@ -362,10 +367,7 @@ mod tests {
             "结构以 peer 为准"
         );
         assert_eq!(v["env"]["ANTHROPIC_AUTH_TOKEN"], "sk-1", "密钥位置回填");
-        assert!(
-            v["env"].get("ANTHROPIC_MODEL").is_none(),
-            "非密钥键不发明"
-        );
+        assert!(v["env"].get("ANTHROPIC_MODEL").is_none(), "非密钥键不发明");
 
         // peer 没有 options（strip 从不移除 options 对象 → 只可能是手工文件）
         // → 不回填 local 的 options.apiKey。

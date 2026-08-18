@@ -29,7 +29,9 @@ use std::collections::{BTreeMap, BTreeSet};
 use crate::config::{ConfigData, Paths};
 use crate::db::{DaySnapshot, SessionCounts, Store};
 use crate::error::AppResult;
-use crate::sessions::snapshot_policy::{decide_snapshot_action, presence_mismatches, SnapshotAction};
+use crate::sessions::snapshot_policy::{
+    decide_snapshot_action, presence_mismatches, SnapshotAction,
+};
 
 // ---------------------------------------------------------------------------
 // usage — per-day usage + turns Artifacts
@@ -48,10 +50,8 @@ pub fn usage_materialize(
     let dirty = store.dirty_days()?;
     let mut day_snapshots: Vec<DaySnapshot> = Vec::with_capacity(dirty.len());
     for day in &dirty {
-        let usage =
-            crate::collect::artifact::recompute_usage_day(store, paths, device_id, day)?;
-        let turns =
-            crate::collect::artifact::recompute_turns_day(store, paths, device_id, day)?;
+        let usage = crate::collect::artifact::recompute_usage_day(store, paths, device_id, day)?;
+        let turns = crate::collect::artifact::recompute_turns_day(store, paths, device_id, day)?;
         day_snapshots.push(DaySnapshot {
             day: day.clone(),
             usage_rows: usage,
@@ -101,15 +101,14 @@ pub fn sessions_materialize(
     let mut recomputed: Vec<SessionCounts> = Vec::with_capacity(dirty_sessions.len());
     let mut removed: Vec<String> = Vec::new();
     for sid in &dirty_sessions {
-        let favorited = store.get_session_favorited(device_id, sid)?.unwrap_or(false);
+        let favorited = store
+            .get_session_favorited(device_id, sid)?
+            .unwrap_or(false);
         match decide_snapshot_action(favorited) {
             // favorited ⇒ the snapshot must exist: recompute it from the store.
             SnapshotAction::Write => {
                 let count = crate::sessions::session_snapshot::recompute_session_snapshot(
-                    store,
-                    paths,
-                    device_id,
-                    sid,
+                    store, paths, device_id, sid,
                 )?;
                 recomputed.push(SessionCounts {
                     session_id: sid.clone(),
@@ -127,7 +126,10 @@ pub fn sessions_materialize(
             }
         }
     }
-    Ok(SessionsMaterialized { recomputed, removed })
+    Ok(SessionsMaterialized {
+        recomputed,
+        removed,
+    })
 }
 
 /// Pull-side import: import peers' session snapshots into the store and
@@ -487,7 +489,9 @@ mod tests {
             presence_mismatches(&still_present, &peer_favorited).favorites_without_files
         };
         assert_eq!(to_unfavorite, vec!["s1".to_string()]);
-        store_b.bulk_unfavorite_sessions(peer, &to_unfavorite).unwrap();
+        store_b
+            .bulk_unfavorite_sessions(peer, &to_unfavorite)
+            .unwrap();
         assert!(
             store_b.favorited_session_ids(peer).unwrap().is_empty(),
             "peer's vanished snapshot propagated an un-favorite"

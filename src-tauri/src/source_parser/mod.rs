@@ -458,6 +458,7 @@ pub(super) struct DirectoryShape {
 ///     sorting);
 ///   - symlinks are never followed (not even symlinked files);
 ///   - unreadable subtrees are skipped entry-wise.
+///
 /// Per-parser code only declares its directory shapes and a filename
 /// predicate.
 pub(super) fn discover_files(
@@ -633,9 +634,7 @@ mod tests {
     fn discover_missing_or_empty_root_yields_empty_not_error() {
         let base = tempfile::tempdir().unwrap();
         // Missing root: an absent source dir is not an error.
-        assert!(
-            discover_files(&[shape(base.path().join("nope"), None)], is_jsonl_file).is_empty()
-        );
+        assert!(discover_files(&[shape(base.path().join("nope"), None)], is_jsonl_file).is_empty());
         // Existing but empty root: same.
         let empty = base.path().join("empty");
         std::fs::create_dir_all(&empty).unwrap();
@@ -660,11 +659,17 @@ mod tests {
             v
         }
         assert_eq!(
-            names(&discover_files(&[shape(root.clone(), Some(1))], is_jsonl_file)),
+            names(&discover_files(
+                &[shape(root.clone(), Some(1))],
+                is_jsonl_file
+            )),
             vec!["a.jsonl"]
         );
         assert_eq!(
-            names(&discover_files(&[shape(root.clone(), Some(2))], is_jsonl_file)),
+            names(&discover_files(
+                &[shape(root.clone(), Some(2))],
+                is_jsonl_file
+            )),
             vec!["a.jsonl", "b.jsonl"]
         );
         assert_eq!(
@@ -699,7 +704,11 @@ mod tests {
         if symlink_dir(&root.join("real"), &root.join("linkdir")).is_err() {
             return;
         }
-        if symlink_file(&root.join("real").join("x.jsonl"), &root.join("linkfile.jsonl")).is_err()
+        if symlink_file(
+            &root.join("real").join("x.jsonl"),
+            &root.join("linkfile.jsonl"),
+        )
+        .is_err()
         {
             return;
         }

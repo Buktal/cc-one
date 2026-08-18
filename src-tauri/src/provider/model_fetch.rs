@@ -635,7 +635,10 @@ mod tests {
 
         /// 收到的全部请求原文（顺序与到达一致；验证认证头 / 路径用）。
         fn request_texts(&self) -> Vec<String> {
-            self.requests.lock().expect("requests mutex poisoned").clone()
+            self.requests
+                .lock()
+                .expect("requests mutex poisoned")
+                .clone()
         }
     }
 
@@ -647,7 +650,10 @@ mod tests {
         let mut buf = [0u8; 4096];
         let _ = stream.read(&mut buf);
         let text = String::from_utf8_lossy(&buf).into_owned();
-        requests.lock().expect("requests mutex poisoned").push(text.clone());
+        requests
+            .lock()
+            .expect("requests mutex poisoned")
+            .push(text.clone());
         let path = text
             .lines()
             .next()
@@ -747,7 +753,10 @@ mod tests {
     fn skeleton_all_candidates_404_maps_to_endpoint_tag() {
         let server = TestServer::start(&[("/a", 404, "nope"), ("/b", 404, "nope")]);
         let msg = fetch_err_msg(fetch_with_spec(
-            skeleton_spec(vec![server.endpoint("/a"), server.endpoint("/b")], "sk-test"),
+            skeleton_spec(
+                vec![server.endpoint("/a"), server.endpoint("/b")],
+                "sk-test",
+            ),
             FETCH_TIMEOUT,
         ));
         assert!(
@@ -1027,6 +1036,9 @@ mod tests {
         fetch_gemini_models(&server.endpoint(""), "AIza-test").unwrap();
         let req = server.request_texts().join("\n").to_lowercase();
         assert!(req.contains("x-goog-api-key: aiza-test"), "got: {req}");
-        assert!(!req.contains("authorization"), "gemini 不带 Bearer 头: {req}");
+        assert!(
+            !req.contains("authorization"),
+            "gemini 不带 Bearer 头: {req}"
+        );
     }
 }

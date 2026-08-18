@@ -31,7 +31,9 @@ use std::path::PathBuf;
 
 use crate::error::{AppError, AppResult};
 use crate::model::{App, Provider};
-use crate::provider::{import_live, live, live_codex, live_gemini, live_grok, model_fetch, snippet};
+use crate::provider::{
+    import_live, live, live_codex, live_gemini, live_grok, model_fetch, snippet,
+};
 
 /// ADR-0010 片段合并层策略（注释 → 代码的唯一表达）。
 ///
@@ -282,7 +284,11 @@ mod tests {
 
     /// 断言快照的 settings_config 与目标语义相等（按 app 形状：JSON 全等 /
     /// auth JSON + config TOML）。
-    fn assert_snapshot_matches_target(app: App, snap: &import_live::LiveImportSnapshot, target: &str) {
+    fn assert_snapshot_matches_target(
+        app: App,
+        snap: &import_live::LiveImportSnapshot,
+        target: &str,
+    ) {
         match app {
             App::Claude | App::Gemini => {
                 assert_eq!(parsed(&snap.settings_config), parsed(target), "{app:?}");
@@ -358,7 +364,8 @@ mod tests {
                 .unwrap(),
                 App::OpenCode => unreachable!(),
             }
-            app.write_live(&paths, &provider_for(app, target), "").unwrap();
+            app.write_live(&paths, &provider_for(app, target), "")
+                .unwrap();
             let texts: Vec<String> = paths
                 .iter()
                 .map(|p| live::read_live_settings(p).unwrap())
@@ -378,7 +385,8 @@ mod tests {
         for (app, _) in round_trip_targets() {
             let tmp = tempfile::tempdir().unwrap();
             let paths = temp_live_paths(app, tmp.path());
-            app.write_live(&paths, &provider_for(app, "{}"), "").unwrap();
+            app.write_live(&paths, &provider_for(app, "{}"), "")
+                .unwrap();
             let texts: Vec<String> = paths
                 .iter()
                 .map(|p| live::read_live_settings(p).unwrap())
@@ -474,7 +482,8 @@ mod tests {
                 .find(|(a, _)| *a == app)
                 .unwrap()
                 .1;
-            app.write_live(&paths, &provider_for(app, target), "").unwrap();
+            app.write_live(&paths, &provider_for(app, target), "")
+                .unwrap();
             app.write_live(
                 &paths2,
                 &provider_for(app, target),
@@ -496,7 +505,9 @@ mod tests {
     /// claude 片段校验经 seam：拒凭据键、放行非凭据键、空串合法。
     #[test]
     fn validate_claude_snippet_via_seam() {
-        assert!(App::Claude.validate_snippet(r#"{"includeCoAuthoredBy": false}"#).is_ok());
+        assert!(App::Claude
+            .validate_snippet(r#"{"includeCoAuthoredBy": false}"#)
+            .is_ok());
         assert!(App::Claude.validate_snippet("").is_ok());
         assert!(App::Claude.validate_snippet("   ").is_ok());
         assert!(matches!(
@@ -508,23 +519,17 @@ mod tests {
             Err(AppError::Config(_))
         ));
         // env 里的凭据键拒绝（env 是认证通道）；顶层凭据键也拒。
-        assert!(
-            App::Claude
-                .validate_snippet(r#"{"env": {"ANTHROPIC_AUTH_TOKEN": "sk-x"}}"#)
-                .is_err()
-        );
-        assert!(
-            App::Claude
-                .validate_snippet(r#"{"env": {"ANTHROPIC_API_KEY": "sk-x"}}"#)
-                .is_err()
-        );
+        assert!(App::Claude
+            .validate_snippet(r#"{"env": {"ANTHROPIC_AUTH_TOKEN": "sk-x"}}"#)
+            .is_err());
+        assert!(App::Claude
+            .validate_snippet(r#"{"env": {"ANTHROPIC_API_KEY": "sk-x"}}"#)
+            .is_err());
         assert!(App::Claude.validate_snippet(r#"{"apiKey": "x"}"#).is_err());
         // 非凭据键放行（模型/端点/开关——供应商赢下无害）。
-        assert!(
-            App::Claude
-                .validate_snippet(r#"{"env": {"ANTHROPIC_MODEL": "m", "ANTHROPIC_BASE_URL": "u"}}"#)
-                .is_ok()
-        );
+        assert!(App::Claude
+            .validate_snippet(r#"{"env": {"ANTHROPIC_MODEL": "m", "ANTHROPIC_BASE_URL": "u"}}"#)
+            .is_ok());
     }
 
     /// gemini 片段校验经 seam：只认 env 子对象（扁平键/其它顶层键零效果 →
@@ -532,24 +537,32 @@ mod tests {
     #[test]
     fn validate_gemini_snippet_via_seam() {
         assert!(
-            App::Gemini.validate_snippet(r#"{"GEMINI_MODEL": "m"}"#).is_err(),
+            App::Gemini
+                .validate_snippet(r#"{"GEMINI_MODEL": "m"}"#)
+                .is_err(),
             "扁平键零效果，必须拒绝"
         );
-        assert!(App::Gemini.validate_snippet(r#"{"includeCoAuthoredBy": false}"#).is_err());
-        assert!(App::Gemini.validate_snippet(r#"{"env": {"GEMINI_MODEL": "m"}}"#).is_ok());
-        assert!(App::Gemini.validate_snippet(r#"{"env": {"GEMINI_API_KEY": "k"}}"#).is_err());
-        assert!(
-            App::Gemini
-                .validate_snippet(r#"{"env": {"GOOGLE_GEMINI_BASE_URL": "u"}}"#)
-                .is_err()
-        );
-        assert!(App::Gemini.validate_snippet(r#"{"env": {"GEMINI_MODEL": 123}}"#).is_err());
-        assert!(App::Gemini.validate_snippet(r#"{"env": {"GEMINI_MODEL": "  "}}"#).is_err());
-        assert!(
-            App::Gemini
-                .validate_snippet(r#"{"env": {"GEMINI_MODEL": "gemini-2.5-flash"}}"#)
-                .is_ok()
-        );
+        assert!(App::Gemini
+            .validate_snippet(r#"{"includeCoAuthoredBy": false}"#)
+            .is_err());
+        assert!(App::Gemini
+            .validate_snippet(r#"{"env": {"GEMINI_MODEL": "m"}}"#)
+            .is_ok());
+        assert!(App::Gemini
+            .validate_snippet(r#"{"env": {"GEMINI_API_KEY": "k"}}"#)
+            .is_err());
+        assert!(App::Gemini
+            .validate_snippet(r#"{"env": {"GOOGLE_GEMINI_BASE_URL": "u"}}"#)
+            .is_err());
+        assert!(App::Gemini
+            .validate_snippet(r#"{"env": {"GEMINI_MODEL": 123}}"#)
+            .is_err());
+        assert!(App::Gemini
+            .validate_snippet(r#"{"env": {"GEMINI_MODEL": "  "}}"#)
+            .is_err());
+        assert!(App::Gemini
+            .validate_snippet(r#"{"env": {"GEMINI_MODEL": "gemini-2.5-flash"}}"#)
+            .is_ok());
     }
 
     /// codex / grok 片段校验经 seam：身份键拒绝（TOML），非受控键放行（含
@@ -557,29 +570,25 @@ mod tests {
     #[test]
     fn validate_codex_and_grok_snippet_via_seam() {
         assert!(App::Codex.validate_snippet(r#"model = "x""#).is_err());
-        assert!(
-            App::Codex
-                .validate_snippet(
-                    r#"[mcp_servers.github]
+        assert!(App::Codex
+            .validate_snippet(
+                r#"[mcp_servers.github]
 command = "npx"
 env = { GITHUB_PERSONAL_ACCESS_TOKEN = "ghp_x" }"#
-                )
-                .is_ok()
-        );
-        assert!(
-            App::Grok
-                .validate_snippet(r#"[model.cc-one]
-model = "x""#)
-                .is_err()
-        );
-        assert!(
-            App::Grok
-                .validate_snippet(
-                    r#"[mcp_servers.github]
+            )
+            .is_ok());
+        assert!(App::Grok
+            .validate_snippet(
+                r#"[model.cc-one]
+model = "x""#
+            )
+            .is_err());
+        assert!(App::Grok
+            .validate_snippet(
+                r#"[mcp_servers.github]
 command = "npx""#
-                )
-                .is_ok()
-        );
+            )
+            .is_ok());
     }
 
     /// T6 提取片段并入现有片段经 seam：只补缺失（已有键不覆盖）——JSON 侧
@@ -618,7 +627,10 @@ command = "npx""#
         assert!(merged_toml.contains("[mcp_servers.b]"), "缺失 server 补上");
         // grok 同 TOML 语义。
         let grok = App::Grok
-            .merge_extracted_snippet("[tui]\ntheme = \"dark\"", "[tui]\nextra = 1\n[mcp_servers.b]\ncommand = \"y\"")
+            .merge_extracted_snippet(
+                "[tui]\ntheme = \"dark\"",
+                "[tui]\nextra = 1\n[mcp_servers.b]\ncommand = \"y\"",
+            )
             .unwrap();
         assert!(grok.contains("theme = \"dark\""), "已有键保留: {grok}");
         assert!(grok.contains("extra = 1"), "缺失子键补上: {grok}");
