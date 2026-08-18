@@ -8,6 +8,8 @@
 // 在 entry 顶层（与 npm/options 平级），是 `model_id → { name, ... }` 的 map——
 // 与 fetch_models 拉回的字符串数组（下拉用）不是一回事。
 
+import { parseJsonObjectLenient } from "@/lib/json"
+
 /** OpenCode entry 的一条模型：`models.<id> = { name?, ... }`。UI 第一版只编辑
  *  name，子条目里的其余字段（contextWindow 等）不暴露。 */
 export type OpenCodeModelEntry = { name?: string }
@@ -28,20 +30,7 @@ export type OpenCodeConfig = {
  *  → `{}`——表单遇到手改坏的快照也不崩，写回时按归一结果继续。与
  *  `parseCodexConfig` / `parseGrokConfig` 同一「先 parse 再说」形态。 */
 export function parseOpenCodeEntry(text: string): Record<string, unknown> {
-  if (!text) return {}
-  try {
-    const parsed: unknown = JSON.parse(text)
-    if (
-      typeof parsed !== "object" ||
-      parsed === null ||
-      Array.isArray(parsed)
-    ) {
-      return {}
-    }
-    return parsed as Record<string, unknown>
-  } catch {
-    return {}
-  }
+  return parseJsonObjectLenient(text) ?? {}
 }
 
 /** 读 entry 的 `options` 子对象（容错为 `{}`）：非对象 options（手写垃圾）按空

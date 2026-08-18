@@ -7,6 +7,8 @@
 // 否则 → 登录态版（selectedType="oauth"，保留 Google 登录）。`config` 在
 // 这里作为原始 JSON 文本返回，便于编辑器编辑。
 
+import { parseJsonObjectLenient } from "@/lib/json"
+
 type GeminiConfig = { env: Record<string, string>; config: string }
 
 /** 解析 Gemini settingsConfig 文本为 `{env, config}`。config 字段以原始 JSON
@@ -14,36 +16,23 @@ type GeminiConfig = { env: Record<string, string>; config: string }
  *  宽容：空 / 垃圾 / 非对象 → `{env:{}, config:""}`；非对象 env 当 `{}`、非
  *  对象 config 当 `""` 处理——表单遇到手改坏的快照也不崩。 */
 export function parseGeminiConfig(text: string): GeminiConfig {
-  if (!text) return { env: {}, config: "" }
-  try {
-    const parsed: unknown = JSON.parse(text)
-    if (
-      typeof parsed !== "object" ||
-      parsed === null ||
-      Array.isArray(parsed)
-    ) {
-      return { env: {}, config: "" }
-    }
-    const obj = parsed as { env?: unknown; config?: unknown }
-    const env =
-      obj.env !== null && typeof obj.env === "object" && !Array.isArray(obj.env)
-        ? Object.fromEntries(
-            Object.entries(obj.env as Record<string, unknown>).filter(
-              (entry): entry is [string, string] =>
-                typeof entry[1] === "string",
-            ),
-          )
-        : {}
-    const config =
-      obj.config !== null &&
-      typeof obj.config === "object" &&
-      !Array.isArray(obj.config)
-        ? JSON.stringify(obj.config)
-        : ""
-    return { env, config }
-  } catch {
-    return { env: {}, config: "" }
-  }
+  const obj = parseJsonObjectLenient(text)
+  if (!obj) return { env: {}, config: "" }
+  const env =
+    obj.env !== null && typeof obj.env === "object" && !Array.isArray(obj.env)
+      ? Object.fromEntries(
+          Object.entries(obj.env as Record<string, unknown>).filter(
+            (entry): entry is [string, string] => typeof entry[1] === "string",
+          ),
+        )
+      : {}
+  const config =
+    obj.config !== null &&
+    typeof obj.config === "object" &&
+    !Array.isArray(obj.config)
+      ? JSON.stringify(obj.config)
+      : ""
+  return { env, config }
 }
 
 /** 读 Gemini settingsConfig 的 `env.GEMINI_API_KEY`（API Key 版的判据 + 凭据）。 */
@@ -94,21 +83,7 @@ export function withGeminiConfigJson(text: string, configJson: string): string {
   if (!configJson) {
     return JSON.stringify({ env }, null, 2)
   }
-  try {
-    const parsed = JSON.parse(configJson) as unknown
-    if (
-      parsed === null ||
-      typeof parsed !== "object" ||
-      Array.isArray(parsed)
-    ) {
-      return text
-    }
-    return JSON.stringify(
-      { env, config: parsed as Record<string, unknown> },
-      null,
-      2,
-    )
-  } catch {
-    return text
-  }
+  const parsed = parseJsonObjectLenient(configJson)
+  if (!parsed) return text
+  return JSON.stringify({ env, config: parsed }, null, 2)
 }

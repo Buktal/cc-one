@@ -12,6 +12,7 @@ import {
   configRoleModel,
   configRoleName,
   hasOneM,
+  parseSettingsConfig,
   providerApiKey,
   providerEndpoint,
   providerModel,
@@ -49,6 +50,24 @@ function envOf(configText: string | null): Record<string, string> {
 function configWith(env: Record<string, string>): string {
   return JSON.stringify({ env })
 }
+
+describe("parseSettingsConfig", () => {
+  it("garbage, empty or non-object top level → {} (corrupt snapshots don't throw)", () => {
+    expect(parseSettingsConfig("")).toEqual({})
+    expect(parseSettingsConfig("not-json")).toEqual({})
+    expect(parseSettingsConfig("[1,2]")).toEqual({})
+    expect(parseSettingsConfig('"a bare string"')).toEqual({})
+  })
+
+  it("a non-object env (string, array) is dropped to {}", () => {
+    expect(parseSettingsConfig(JSON.stringify({ env: "garbage" }))).toEqual({
+      env: {},
+    })
+    expect(parseSettingsConfig(JSON.stringify({ env: [1, 2] }))).toEqual({
+      env: {},
+    })
+  })
+})
 
 describe("providerEndpoint / providerApiKey / providerModel", () => {
   it("reads the basic fields out of the settingsConfig env block", () => {

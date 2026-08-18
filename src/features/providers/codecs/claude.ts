@@ -6,6 +6,7 @@
 // 切换拼写由 `switchAuthField` 一族承担。写盘合并的权威在 Rust（live.rs）；这里
 // 是表单侧的行为镜像，纯函数、可测。
 
+import { parseJsonObjectLenient } from "@/lib/json"
 import type { Provider } from "@/types/generated/bindings"
 
 // The env keys the basic form knows about. The auth key has two spellings
@@ -34,23 +35,16 @@ type SettingsConfig = { env?: Record<string, string> }
  *  an array — anything a hand-edited snapshot could hold) is dropped to `{}`
  *  so the write-back never spreads e.g. a string into character-index keys. */
 export function parseSettingsConfig(config: string): SettingsConfig {
-  if (!config) return {}
-  try {
-    const parsed: unknown = JSON.parse(config)
-    if (typeof parsed !== "object" || parsed === null) return {}
-    const cfg = parsed as SettingsConfig
-    if (
-      cfg.env !== undefined &&
-      (typeof cfg.env !== "object" ||
-        cfg.env === null ||
-        Array.isArray(cfg.env))
-    ) {
-      return { ...cfg, env: {} }
-    }
-    return cfg
-  } catch {
-    return {}
+  const obj = parseJsonObjectLenient(config)
+  if (!obj) return {}
+  const cfg = obj as SettingsConfig
+  if (
+    cfg.env !== undefined &&
+    (typeof cfg.env !== "object" || cfg.env === null || Array.isArray(cfg.env))
+  ) {
+    return { ...cfg, env: {} }
   }
+  return cfg
 }
 
 function envValue(configText: string, key: string): string {

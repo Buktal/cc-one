@@ -35,6 +35,32 @@ export function parseJsonObject(text: string): JsonObjectResult {
   }
 }
 
+/** 容错 parse JSON 文本为对象：空串 / 语法错误 / 非对象顶层（数组、标量）→
+ *  `undefined`，调用方归一为自己的默认值。与 `parseJsonObject` 的严格判错
+ *  契约相对——这是 provider codec 族「吞垃圾归默认」（坏快照不崩表单）的
+ *  共享骨架：claude/codex/gemini/grok/opencode 的 parse* 与 derive 的
+ *  parseMeta 都经此，容错语义只有一份实现。注意 `snippet.ts` 的
+ *  `parseSnippetInput` 不用它——那里的契约刻意严格（空与垃圾必须分得清，
+ *  垃圾配置不能误报「片段将补 X」），与「吞垃圾」的宽容版不可混用。 */
+export function parseJsonObjectLenient(
+  text: string,
+): Record<string, unknown> | undefined {
+  if (!text) return undefined
+  try {
+    const parsed: unknown = JSON.parse(text)
+    if (
+      typeof parsed !== "object" ||
+      parsed === null ||
+      Array.isArray(parsed)
+    ) {
+      return undefined
+    }
+    return parsed as Record<string, unknown>
+  } catch {
+    return undefined
+  }
+}
+
 /** 容错格式化：与 VS Code 的 JSON 编辑器同款（jsonc-parser tokenizer 重排，
  *  不依赖完整 parse）——2 空格缩进展开成多行；语法错误 / 注释 / 尾逗号等
  *  无效内容也能展开成可读结构（字符串字面量里的逗号、括号不受影响）。

@@ -8,6 +8,7 @@
 // 需要打开这个聚合文件。
 
 import type { ProviderPreset } from "@/features/providers/presets"
+import { parseJsonObjectLenient } from "@/lib/json"
 import type { App, Provider } from "@/types/generated/bindings"
 
 export * from "./codecs/claude"
@@ -108,23 +109,18 @@ type ProviderMeta = {
  *  meta never throws the sheet open. A non-object `templateValues` is dropped
  *  to `{}`. */
 export function parseMeta(metaText: string): ProviderMeta {
-  if (!metaText) return {}
-  try {
-    const parsed: unknown = JSON.parse(metaText)
-    if (typeof parsed !== "object" || parsed === null) return {}
-    const meta = parsed as ProviderMeta
-    if (
-      meta.templateValues !== undefined &&
-      (typeof meta.templateValues !== "object" ||
-        meta.templateValues === null ||
-        Array.isArray(meta.templateValues))
-    ) {
-      return { ...meta, templateValues: {} }
-    }
-    return meta
-  } catch {
-    return {}
+  const parsed = parseJsonObjectLenient(metaText)
+  if (!parsed) return {}
+  const meta = parsed as ProviderMeta
+  if (
+    meta.templateValues !== undefined &&
+    (typeof meta.templateValues !== "object" ||
+      meta.templateValues === null ||
+      Array.isArray(meta.templateValues))
+  ) {
+    return { ...meta, templateValues: {} }
   }
+  return meta
 }
 
 /** The template-variable values recorded in the meta (string entries only —

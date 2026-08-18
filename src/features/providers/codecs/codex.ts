@@ -6,39 +6,28 @@
 // ~/.codex/config.toml（用户手动的非受控字段原样保留）。纯函数：写盘语义
 // 的镜像，但更宽容（坏输入不抛、归一为空），用于表单读写。
 
+import { parseJsonObjectLenient } from "@/lib/json"
+
 type CodexConfig = { auth: Record<string, string>; config: string }
 
 /** 解析 Codex settingsConfig 文本为 `{auth, config}`。宽容：空 / 垃圾 / 非对象
  *  → `{auth:{}, config:""}`；非对象 auth 当 `{}`、非字符串 config 当 `""`
  *  处理——表单遇到手改坏的快照也不崩，写回时按归一结果继续。 */
 export function parseCodexConfig(text: string): CodexConfig {
-  if (!text) return { auth: {}, config: "" }
-  try {
-    const parsed: unknown = JSON.parse(text)
-    if (
-      typeof parsed !== "object" ||
-      parsed === null ||
-      Array.isArray(parsed)
-    ) {
-      return { auth: {}, config: "" }
-    }
-    const obj = parsed as { auth?: unknown; config?: unknown }
-    const auth =
-      obj.auth !== null &&
-      typeof obj.auth === "object" &&
-      !Array.isArray(obj.auth)
-        ? Object.fromEntries(
-            Object.entries(obj.auth as Record<string, unknown>).filter(
-              (entry): entry is [string, string] =>
-                typeof entry[1] === "string",
-            ),
-          )
-        : {}
-    const config = typeof obj.config === "string" ? obj.config : ""
-    return { auth, config }
-  } catch {
-    return { auth: {}, config: "" }
-  }
+  const obj = parseJsonObjectLenient(text)
+  if (!obj) return { auth: {}, config: "" }
+  const auth =
+    obj.auth !== null &&
+    typeof obj.auth === "object" &&
+    !Array.isArray(obj.auth)
+      ? Object.fromEntries(
+          Object.entries(obj.auth as Record<string, unknown>).filter(
+            (entry): entry is [string, string] => typeof entry[1] === "string",
+          ),
+        )
+      : {}
+  const config = typeof obj.config === "string" ? obj.config : ""
+  return { auth, config }
 }
 
 /** 读 Codex settingsConfig 的 `auth.OPENAI_API_KEY`（API Key 版的凭据）。 */
