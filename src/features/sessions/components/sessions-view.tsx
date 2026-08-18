@@ -12,10 +12,7 @@ import dayjs from "dayjs"
 import relativeTime from "dayjs/plugin/relativeTime"
 import { MessagesSquare, Search, Star } from "lucide-react"
 import { useTranslation } from "react-i18next"
-import {
-  DateRangeChip,
-  type DateRangePreset,
-} from "@/components/date-range-chip"
+import { DateRangeChip } from "@/components/date-range-chip"
 import { FilterSelect } from "@/components/filter-select"
 import { PaginationBar } from "@/components/pagination-bar"
 import { QueryState } from "@/components/query-state"
@@ -89,9 +86,6 @@ export function SessionsView() {
             onPreset={b.setRangePreset}
             onFromDay={b.setFromDay}
             onToDay={b.setToDay}
-            presets={RANGE_PRESETS}
-            allTimeKey="sessions.filter.allTime"
-            dateRangeKey="sessions.filter.dateRange"
           />
         </div>
         {/* Search rides line 1 beside the tabs on narrow containers (order 3)
@@ -492,10 +486,3 @@ const SOURCE_OPTIONS: readonly FilterOption[] = SOURCE_TAGS.map((src) => ({
   value: src,
   label: sessionSourceLabel(src),
 }))
-
-const RANGE_PRESETS: DateRangePreset[] = [
-  { value: "today", key: "sessions.filter.today" },
-  { value: "7d", key: "sessions.filter.last7d" },
-  { value: "30d", key: "sessions.filter.last30d" },
-  { value: "all", key: "sessions.filter.all" },
-]

@@ -47,6 +47,7 @@ import {
 } from "@/components/ui/tooltip"
 import type { PricingSortKey } from "@/features/pricing/derive"
 import { usePricingTable } from "@/features/pricing/use-pricing-table"
+import { useConfirmDelete } from "@/hooks/use-confirm-delete"
 import { useMutateWithToast } from "@/hooks/use-toast-mutation"
 import { formatCostAmount } from "@/lib/format"
 
@@ -64,7 +65,6 @@ export function PricingView() {
     isLoading,
     error,
     remove,
-    removing,
     search,
     setSearch,
     sortKey,
@@ -79,12 +79,10 @@ export function PricingView() {
 
   const [editing, setEditing] = useState<PricingEntry | null>(null)
   const [dialogOpen, setDialogOpen] = useState(false)
-  // 待删除条目（非 null 时弹确认框）；确认后成功才清空——保持打开直到完成。
-  const [deleting, setDeleting] = useState<PricingEntry | null>(null)
-
-  async function onConfirmDelete() {
-    if (deleting && (await remove(deleting.model_key))) setDeleting(null)
-  }
+  // 删除确认（busy / 关闭时序收敛在 useConfirmDelete，holdOpen：成功才关框）。
+  const confirmDelete = useConfirmDelete<PricingEntry>({
+    onDelete: (entry) => remove(entry.model_key),
+  })
 
   function openNew() {
     setEditing(emptyEntry())
@@ -330,7 +328,9 @@ export function PricingView() {
                                   <Button
                                     variant="ghost"
                                     size="icon-sm"
-                                    onClick={() => setDeleting(e)}
+                                    onClick={() =>
+                                      confirmDelete.requestDelete(e)
+                                    }
                                     aria-label={t("common.delete")}
                                   />
                                 }
@@ -371,20 +371,19 @@ export function PricingView() {
       />
 
       <ConfirmDialog
-        open={deleting !== null}
+        open={confirmDelete.deleting !== null}
         onOpenChange={(o) => {
-          // busy 由 usePricingTable 的 remove 在成功/失败路径自行重置（prop
-          // 驱动的关闭不触发本回调）；用户取消时 busy 恒为 false（删除中按钮
-          // 已 disabled），无需在此清理。
-          if (!o) setDeleting(null)
+          if (!o) confirmDelete.cancel()
         }}
-        title={t("confirm.deleteTitle", { name: deleting?.model_key ?? "" })}
+        title={t("confirm.deleteTitle", {
+          name: confirmDelete.deleting?.model_key ?? "",
+        })}
         description={t("pricing.confirm.deleteDesc", {
-          name: deleting?.model_key ?? "",
+          name: confirmDelete.deleting?.model_key ?? "",
         })}
         confirmLabel={t("common.delete")}
-        busy={removing}
-        onConfirm={() => void onConfirmDelete()}
+        busy={confirmDelete.busy}
+        onConfirm={() => void confirmDelete.onConfirmDelete()}
       />
     </div>
   )

@@ -313,6 +313,96 @@ function useIsPortrait() {
   return portrait
 }
 
+// 状态簇 variant 组件 —— 同一组「模式 / 设备 / 版本」状态在三处表面各画一遍
+// （portrait 顶栏 TopNav、portrait 状态条 StatusBar、landscape 侧栏 footer
+// deck），逐字重复的部分收成这三个组件；每处表面只保留自己的布局与文案拼装。
+
+/** 同步 / 单机模式徽标 pill —— StatusBar 与侧栏 footer 展开态共用。 */
+function ModeBadge({ synced, label }: { synced: boolean; label: string }) {
+  return (
+    <span
+      className={cn(
+        "inline-flex items-center rounded-full px-2.5 py-0.5 text-[11px] font-medium",
+        synced ? "bg-muted text-primary" : "bg-muted text-muted-foreground",
+      )}
+    >
+      {label}
+    </span>
+  )
+}
+
+/** 设备在线状态点（role=img + 完整状态串的 tooltip）—— TopNav 与侧栏 footer
+ *  折叠态共用；label / tooltipSide / className 按所在表面注入。 */
+function DeviceStatusDot({
+  synced,
+  label,
+  tooltipSide = "right",
+  className,
+}: {
+  synced: boolean
+  label: string
+  tooltipSide?: "right" | "bottom"
+  className?: string
+}) {
+  return (
+    <Tooltip>
+      <TooltipTrigger
+        render={
+          <span
+            role="img"
+            aria-label={label}
+            className={cn(
+              "size-2 rounded-full",
+              synced ? "bg-primary" : "bg-muted-foreground/40",
+              className,
+            )}
+          />
+        }
+      />
+      <TooltipContent side={tooltipSide}>{label}</TooltipContent>
+    </Tooltip>
+  )
+}
+
+/** 更新区簇 —— changelog 按钮 + 版本号 + 更新指示；StatusBar 与侧栏 footer
+ *  展开态共用。 */
+function ChangelogVersion({
+  version,
+  openReleases,
+  tooltipSide,
+}: {
+  version?: string
+  openReleases: () => void
+  tooltipSide?: "right" | "bottom"
+}) {
+  const { t } = useTranslation()
+  return (
+    <>
+      <Tooltip>
+        <TooltipTrigger
+          render={
+            <button
+              type="button"
+              onClick={() => void openReleases()}
+              aria-label={t("shell.changelog")}
+              className="text-muted-foreground hover:text-foreground inline-flex size-3.5 items-center justify-center transition-colors"
+            />
+          }
+        >
+          <BookText className="size-3.5" />
+        </TooltipTrigger>
+        <TooltipContent side={tooltipSide}>
+          {t("shell.changelogGithub")}
+        </TooltipContent>
+      </Tooltip>
+      {version ? (
+        <span className="text-muted-foreground text-[10px]">v{version}</span>
+      ) : null}
+      <UpdateIndicator />
+    </>
+  )
+}
+
 // Portrait navigation bar — replaces the left sidebar when the window is
 // taller than it is wide. Same card surface and accent-tint selected state as
 // the sidebar, but spans the full width: logo, the seven views as icon buttons
@@ -356,23 +446,11 @@ function TopNav({
         ))}
       </nav>
       <div className="ml-auto flex items-center gap-1">
-        <Tooltip>
-          <TooltipTrigger
-            render={
-              <span
-                role="img"
-                aria-label={`${modeLabel} · ${deviceName}`}
-                className={cn(
-                  "size-2 rounded-full",
-                  synced ? "bg-primary" : "bg-muted-foreground/40",
-                )}
-              />
-            }
-          />
-          <TooltipContent side="bottom">
-            {`${modeLabel} · ${deviceName}`}
-          </TooltipContent>
-        </Tooltip>
+        <DeviceStatusDot
+          synced={synced}
+          label={`${modeLabel} · ${deviceName}`}
+          tooltipSide="bottom"
+        />
         <CollectIconButton
           label={collectLabel}
           collecting={collecting}
@@ -411,35 +489,148 @@ function StatusBar({
         <span className="font-medium">{deviceName}</span>
       </span>
       <div className="ml-auto flex items-center gap-2">
-        <span
-          className={cn(
-            "inline-flex items-center rounded-full px-2.5 py-0.5 text-[11px] font-medium",
-            synced ? "bg-muted text-primary" : "bg-muted text-muted-foreground",
-          )}
+        <ModeBadge synced={synced} label={modeLabel} />
+        <ChangelogVersion version={version} openReleases={openReleases} />
+      </div>
+    </div>
+  )
+}
+
+// 侧栏 footer deck 的两个变体（collapsed / expanded）——此前是一个 ~120 行
+// 的 collapsed ? : 大分支；变体各自收成组件，状态簇复用上面的 variant 组件。
+// 展开态顶部是采集控制（freshness + 全宽按钮），折叠态退成图标；下方是设备 /
+// 模式 / 版本状态簇与主题 / 折叠控制。
+
+/** 折叠态 deck：图标采集 + 状态点 + 主题 / 折叠（状态点已含设备在线信号，
+ *  不带 freshness 文案）。 */
+function FooterDeckCollapsed({
+  collectLabel,
+  collecting,
+  onCollect,
+  synced,
+  modeLabel,
+  deviceName,
+  deviceId,
+  onToggleCollapse,
+}: {
+  collectLabel: string
+  collecting: boolean
+  onCollect: () => void
+  synced: boolean
+  modeLabel: string
+  deviceName: string
+  /** 完整设备 id（机器码）——状态点 tooltip 的第三段。 */
+  deviceId: string
+  onToggleCollapse: () => void
+}) {
+  return (
+    <>
+      {/* Icon-only collect — the freshness text can't fit a 16-wide sidebar;
+          the device status dot already signals online. brand keeps it at
+          primary tier among the ghost footer icons. */}
+      <div className="mb-3 flex flex-col items-center">
+        <CollectIconButton
+          label={collectLabel}
+          collecting={collecting}
+          onCollect={onCollect}
+          brand
+        />
+      </div>
+      <Separator className="mb-3" />
+      <div className="flex flex-col items-center">
+        <DeviceStatusDot
+          synced={synced}
+          label={`${modeLabel} · ${deviceName} · ${deviceId}`}
+          className="mb-5"
+        />
+        <div className="flex flex-col items-center gap-2">
+          <ThemeToggle />
+          <CollapseButton collapsed onClick={onToggleCollapse} />
+        </div>
+      </div>
+    </>
+  )
+}
+
+/** 展开态 deck：freshness + 全宽采集按钮，下方是设备名 / 模式徽标 / 更新区
+ *  状态簇与主题 / 折叠控制。 */
+function FooterDeckExpanded({
+  collectLabel,
+  collecting,
+  onCollect,
+  synced,
+  modeLabel,
+  deviceName,
+  deviceId,
+  version,
+  openReleases,
+  onToggleCollapse,
+}: {
+  collectLabel: string
+  collecting: boolean
+  onCollect: () => void
+  synced: boolean
+  modeLabel: string
+  deviceName: string
+  deviceId: string
+  version?: string
+  openReleases: () => void
+  onToggleCollapse: () => void
+}) {
+  const { t } = useTranslation()
+  return (
+    <>
+      <div className="mb-3 flex flex-col gap-2">
+        <DataFreshness stacked />
+        <Button
+          size="sm"
+          className="w-full"
+          disabled={collecting}
+          onClick={onCollect}
         >
-          {modeLabel}
-        </span>
+          <Activity />
+          {collectLabel}
+        </Button>
+      </div>
+      <Separator className="mb-3" />
+      <div className="flex flex-col gap-1 px-1 text-xs">
+        <div className="text-muted-foreground/60 text-[10px] tracking-wide">
+          {t("shell.thisDevice")}
+        </div>
+        {/* The raw device id is a machine code for troubleshooting — not daily
+            UI. Hover the name to read it (same access as the collapsed
+            sidebar's status-dot title). */}
         <Tooltip>
           <TooltipTrigger
             render={
-              <button
-                type="button"
-                onClick={() => void openReleases()}
-                aria-label={t("shell.changelog")}
-                className="text-muted-foreground hover:text-foreground inline-flex size-3.5 items-center justify-center transition-colors"
-              />
+              <div className="truncate">
+                <span className="text-muted-foreground">
+                  {t("shell.deviceName")}
+                </span>
+                <span className="font-medium">{deviceName}</span>
+              </div>
             }
-          >
-            <BookText className="size-3.5" />
-          </TooltipTrigger>
-          <TooltipContent>{t("shell.changelogGithub")}</TooltipContent>
+          />
+          <TooltipContent side="right">
+            {t("shell.deviceId")} {deviceId}
+          </TooltipContent>
         </Tooltip>
-        {version ? (
-          <span className="text-muted-foreground text-[10px]">v{version}</span>
-        ) : null}
-        <UpdateIndicator />
+        <div className="mt-1 flex items-center justify-between gap-2">
+          <ModeBadge synced={synced} label={modeLabel} />
+          <div className="flex items-center gap-1.5">
+            <ChangelogVersion
+              version={version}
+              openReleases={openReleases}
+              tooltipSide="right"
+            />
+          </div>
+        </div>
+        <div className="mt-2 flex items-center justify-between border-border/60 border-t pt-2">
+          <ThemeToggle />
+          <CollapseButton collapsed={false} onClick={onToggleCollapse} />
+        </div>
       </div>
-    </div>
+    </>
   )
 }
 
@@ -462,21 +653,15 @@ export function Shell({ children }: { children: React.ReactNode }) {
 
   const modeLabel = t(synced ? "shell.synced" : "shell.standalone")
   const deviceName = info?.display_name || t("common.unnamed")
+  const deviceId = info?.device_id ?? "—"
+  const toggleCollapse = () => setCollapsed((c) => !c)
 
   // Collect / sync — the single entry point now that the per-view ControlBar /
   // ControlCard / sessions buttons were removed. multiDevice only tunes the
-  // success-toast wording (same semantics as the old ControlCard).
+  // success-toast wording (same semantics as the old ControlCard). 按钮文案
+  // （collecting × multiDevice 四态）随动作一起由 useCollectAction 提供。
   const multiDevice = useDeviceOptions().length > 0
-  const { onCollect, collecting } = useCollectAction(multiDevice)
-  const collectLabel = t(
-    collecting
-      ? multiDevice
-        ? "usage.collect.syncing"
-        : "usage.collect.collecting"
-      : multiDevice
-        ? "usage.collect.sync"
-        : "usage.collect.collect",
-  )
+  const { onCollect, collecting, collectLabel } = useCollectAction(multiDevice)
 
   return (
     <div className="bg-app text-foreground flex h-screen w-screen flex-col overflow-hidden">
@@ -626,127 +811,29 @@ export function Shell({ children }: { children: React.ReactNode }) {
 
             <div className="shrink-0 p-3">
               {collapsed ? (
-                /* Icon-only collect — the freshness text can't fit a 16-wide
-                 sidebar; the device status dot already signals online. brand
-                 keeps it at primary tier among the ghost footer icons. */
-                <div className="mb-3 flex flex-col items-center">
-                  <CollectIconButton
-                    label={collectLabel}
-                    collecting={collecting}
-                    onCollect={onCollect}
-                    brand
-                  />
-                </div>
+                <FooterDeckCollapsed
+                  collectLabel={collectLabel}
+                  collecting={collecting}
+                  onCollect={onCollect}
+                  synced={synced}
+                  modeLabel={modeLabel}
+                  deviceName={deviceName}
+                  deviceId={deviceId}
+                  onToggleCollapse={toggleCollapse}
+                />
               ) : (
-                <div className="mb-3 flex flex-col gap-2">
-                  <DataFreshness stacked />
-                  <Button
-                    size="sm"
-                    className="w-full"
-                    disabled={collecting}
-                    onClick={onCollect}
-                  >
-                    <Activity />
-                    {collectLabel}
-                  </Button>
-                </div>
-              )}
-              <Separator className="mb-3" />
-              {collapsed ? (
-                <div className="flex flex-col items-center">
-                  <Tooltip>
-                    <TooltipTrigger
-                      render={
-                        <span
-                          role="img"
-                          aria-label={`${modeLabel} · ${deviceName} · ${info?.device_id ?? "—"}`}
-                          className={cn(
-                            "mb-5 size-2 rounded-full",
-                            synced ? "bg-primary" : "bg-muted-foreground/40",
-                          )}
-                        />
-                      }
-                    />
-                    <TooltipContent side="right">
-                      {`${modeLabel} · ${deviceName} · ${info?.device_id ?? "—"}`}
-                    </TooltipContent>
-                  </Tooltip>
-                  <div className="flex flex-col items-center gap-2">
-                    <ThemeToggle />
-                    <CollapseButton
-                      collapsed={collapsed}
-                      onClick={() => setCollapsed((c) => !c)}
-                    />
-                  </div>
-                </div>
-              ) : (
-                <div className="flex flex-col gap-1 px-1 text-xs">
-                  <div className="text-muted-foreground/60 text-[10px] tracking-wide">
-                    {t("shell.thisDevice")}
-                  </div>
-                  {/* The raw device id is a machine code for troubleshooting —
-                      not daily UI. Hover the name to read it (same access as
-                      the collapsed sidebar's status-dot title). */}
-                  <Tooltip>
-                    <TooltipTrigger
-                      render={
-                        <div className="truncate">
-                          <span className="text-muted-foreground">
-                            {t("shell.deviceName")}
-                          </span>
-                          <span className="font-medium">{deviceName}</span>
-                        </div>
-                      }
-                    />
-                    <TooltipContent side="right">
-                      {t("shell.deviceId")} {info?.device_id ?? "—"}
-                    </TooltipContent>
-                  </Tooltip>
-                  <div className="mt-1 flex items-center justify-between gap-2">
-                    <span
-                      className={cn(
-                        "inline-flex items-center rounded-full px-2.5 py-0.5 text-[11px] font-medium",
-                        synced
-                          ? "bg-muted text-primary"
-                          : "bg-muted text-muted-foreground",
-                      )}
-                    >
-                      {modeLabel}
-                    </span>
-                    <div className="flex items-center gap-1.5">
-                      <Tooltip>
-                        <TooltipTrigger
-                          render={
-                            <button
-                              type="button"
-                              onClick={() => void openReleases()}
-                              aria-label={t("shell.changelog")}
-                              className="text-muted-foreground hover:text-foreground inline-flex size-3.5 items-center justify-center transition-colors"
-                            />
-                          }
-                        >
-                          <BookText className="size-3.5" />
-                        </TooltipTrigger>
-                        <TooltipContent side="right">
-                          {t("shell.changelogGithub")}
-                        </TooltipContent>
-                      </Tooltip>
-                      {info?.version ? (
-                        <span className="text-muted-foreground text-[10px]">
-                          v{info.version}
-                        </span>
-                      ) : null}
-                      <UpdateIndicator />
-                    </div>
-                  </div>
-                  <div className="mt-2 flex items-center justify-between border-border/60 border-t pt-2">
-                    <ThemeToggle />
-                    <CollapseButton
-                      collapsed={collapsed}
-                      onClick={() => setCollapsed((c) => !c)}
-                    />
-                  </div>
-                </div>
+                <FooterDeckExpanded
+                  collectLabel={collectLabel}
+                  collecting={collecting}
+                  onCollect={onCollect}
+                  synced={synced}
+                  modeLabel={modeLabel}
+                  deviceName={deviceName}
+                  deviceId={deviceId}
+                  version={info?.version}
+                  openReleases={openReleases}
+                  onToggleCollapse={toggleCollapse}
+                />
               )}
             </div>
           </aside>

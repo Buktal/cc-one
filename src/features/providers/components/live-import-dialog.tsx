@@ -59,7 +59,7 @@ import {
   snippetCoveredKeys,
 } from "@/features/providers/derive"
 import type { EXTRACT_GROUP_KINDS } from "@/i18n/dynamic-keys"
-import { toStructuredError } from "@/lib/error"
+import { rawErrorText } from "@/lib/error"
 
 import type { App, LiveImportPreviewEntry } from "@/types/generated/bindings"
 
@@ -77,14 +77,6 @@ const LIVE_FILE: Record<App, string> = {
   gemini: ".env",
   grok: "config.toml",
   opencode: "opencode.json",
-}
-
-/** mutation 错误 → 人类可读消息（AppError 的 data 优先，与 CC-Switch 导入一致）。 */
-function errorMessage(error: unknown): string {
-  const structured = toStructuredError(error)
-  return structured?.kind === "app"
-    ? structured.data
-    : (structured?.message ?? String(error))
 }
 
 export function LiveImportDialog({
@@ -127,7 +119,7 @@ export function LiveImportDialog({
     void (async () => {
       const result = await preview(app)
       if (result.error) {
-        setPhase({ kind: "error", message: errorMessage(result.error) })
+        setPhase({ kind: "error", message: rawErrorText(result.error) })
         return
       }
       if (result.data.kind === "missing") {
@@ -142,7 +134,7 @@ export function LiveImportDialog({
     if (phase.kind !== "ready") return
     const result = await importFromLive({ app, nameOverrides })
     if (result.error) {
-      setPhase({ kind: "error", message: errorMessage(result.error) })
+      setPhase({ kind: "error", message: rawErrorText(result.error) })
       return
     }
     setPhase({ kind: "result", imported: result.data, entries: phase.entries })

@@ -19,7 +19,7 @@ import {
 } from "@/components/ui/dialog"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
-import { toStructuredError } from "@/lib/error"
+import { rawErrorText } from "@/lib/error"
 import type {
   App,
   CcSwitchImportReport,
@@ -67,12 +67,8 @@ export function CcSwitchImportDialog({
     setReport(null)
     const result = await importCc({ app, mode, dbPath: dbPath.trim() || null })
     if (result.error) {
-      const structured = toStructuredError(result.error)
-      setError(
-        structured?.kind === "app"
-          ? structured.data
-          : (structured?.message ?? String(result.error)),
-      )
+      // mutation 错误 → 人类可读消息（AppError 的 data 优先，rawErrorText 单一归属）。
+      setError(rawErrorText(result.error))
       return
     }
     setReport(result.data)

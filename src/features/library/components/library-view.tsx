@@ -23,7 +23,6 @@ import {
   Trash2,
   X,
 } from "lucide-react"
-import { useState } from "react"
 import { useTranslation } from "react-i18next"
 import { ConfirmDialog } from "@/components/confirm-dialog"
 import { EmptyState } from "@/components/empty-state"
@@ -47,6 +46,7 @@ import {
   TooltipTrigger,
 } from "@/components/ui/tooltip"
 import { deviceOptionLabel } from "@/features/usage/use-device-options"
+import { useConfirmDelete } from "@/hooks/use-confirm-delete"
 import { formatSize } from "@/lib/format"
 import { cn } from "@/lib/utils"
 import type { LibraryEntry } from "@/types/generated/bindings"
@@ -89,21 +89,22 @@ export function LibraryView() {
     drill,
     goUp,
     onExport,
-    onDelete,
+    onDelete: deleteEntry,
     startRename,
     commitRename,
     preview,
     setPreview,
   } = useLibraryBrowser()
 
-  // 待删除条目（非 null 弹确认框）。先关再删：行内已有 busyRelPath spinner，
-  // 确认后立刻关框、由行级 busy 接管（无需 busy 态）。
-  const [deleting, setDeleting] = useState<LibraryEntry | null>(null)
-  function onConfirmDelete() {
-    const entry = deleting
-    setDeleting(null)
-    if (entry) void onDelete(entry)
-  }
+  // 删除确认（busy / 关闭时序收敛在 useConfirmDelete）。先关再删：行内已有
+  // busyRelPath spinner，closeFirst 模式确认后立刻关框、由行级 busy 接管。
+  const confirmDelete = useConfirmDelete<LibraryEntry>({
+    holdOpen: false,
+    onDelete: async (entry) => {
+      await deleteEntry(entry)
+      return true
+    },
+  })
 
   return (
     <div className="flex min-h-0 flex-1 flex-col gap-4">
@@ -443,7 +444,9 @@ export function LibraryView() {
                                       size="icon-sm"
                                       aria-label={t("library.row.delete")}
                                       disabled={busy}
-                                      onClick={() => setDeleting(e)}
+                                      onClick={() =>
+                                        confirmDelete.requestDelete(e)
+                                      }
                                     />
                                   }
                                 >
@@ -515,16 +518,18 @@ export function LibraryView() {
       ) : null}
 
       <ConfirmDialog
-        open={deleting !== null}
+        open={confirmDelete.deleting !== null}
         onOpenChange={(open) => {
-          if (!open) setDeleting(null)
+          if (!open) confirmDelete.cancel()
         }}
-        title={t("confirm.deleteTitle", { name: deleting?.name ?? "" })}
+        title={t("confirm.deleteTitle", {
+          name: confirmDelete.deleting?.name ?? "",
+        })}
         description={t("library.confirm.deleteDesc", {
-          name: deleting?.name ?? "",
+          name: confirmDelete.deleting?.name ?? "",
         })}
         confirmLabel={t("common.delete")}
-        onConfirm={onConfirmDelete}
+        onConfirm={() => void confirmDelete.onConfirmDelete()}
       />
     </div>
   )

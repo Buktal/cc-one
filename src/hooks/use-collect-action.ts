@@ -13,6 +13,21 @@ import { useAppInfoQuery, useCollectMutation } from "@/app/store/api"
 import { useFreshness } from "@/hooks/use-freshness"
 import { useMutateWithToast } from "@/hooks/use-toast-mutation"
 
+/** 采集按钮的文案 key（单一归属——shell 侧栏 / 顶栏按钮与 request-log 空态
+ *  CTA 共用）：collecting × multiDevice 两维——synced 模式的进行中文案是
+ *  「同步中」而非「采集中」。空闲态文案由调用方注入（侧栏「采集 / 同步」，
+ *  空态 CTA 用「采集本地日志」引导首次入库）。 */
+export function collectLabelKey(
+  collecting: boolean,
+  multiDevice: boolean,
+  idleKey: string,
+): string {
+  if (collecting) {
+    return multiDevice ? "usage.collect.syncing" : "usage.collect.collecting"
+  }
+  return idleKey
+}
+
 export function useCollectAction(multiDevice: boolean) {
   const { t } = useTranslation()
   const { markCollected, markSynced } = useFreshness()
@@ -39,5 +54,13 @@ export function useCollectAction(multiDevice: boolean) {
     markCollected()
     if (synced) markSynced()
   }
-  return { onCollect, collecting }
+  /** 采集按钮文案（侧栏版）：collecting × multiDevice 四态。 */
+  const collectLabel = t(
+    collectLabelKey(
+      collecting,
+      multiDevice,
+      multiDevice ? "usage.collect.sync" : "usage.collect.collect",
+    ),
+  )
+  return { onCollect, collecting, collectLabel }
 }

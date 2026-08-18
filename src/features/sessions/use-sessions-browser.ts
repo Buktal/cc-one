@@ -34,9 +34,10 @@ import {
   useSetSessionSyncedGroupMutation,
 } from "@/app/store/api"
 import { useAppDispatch, useAppSelector } from "@/app/store/hooks"
-import { type FilterState, patchFilter } from "@/app/store/slices/filterSlice"
+import { patchFilter } from "@/app/store/slices/filterSlice"
 import { setView } from "@/app/store/slices/viewSlice"
 import { deviceOptionLabel } from "@/features/usage/use-device-options"
+import { useDateRangeFilter } from "@/hooks/use-date-range-filter"
 import { useDebouncedValue } from "@/hooks/use-debounced-value"
 import { usePagedBrowser } from "@/hooks/use-paged-browser"
 import { useMutateWithToast } from "@/hooks/use-toast-mutation"
@@ -127,9 +128,11 @@ export function useSessionsBrowser() {
   const filter = useAppSelector((s) => s.filter.filter)
   const source = filter.source
   const model = filter.model
-  const rangePreset = filter.range_preset
-  const fromDay = filter.from_day
-  const toDay = filter.to_day
+  // 时间范围筛选：与 usage 视图共用同一份 filterSlice 写语义（ADR-0008）——
+  // 动态预设只存 preset、不存具体日期；日历选日期转 custom。读写经
+  // useDateRangeFilter 单一归属（补丁形状在 filterSlice 的 presetPatch /
+  // dayPatch）。
+  const dateRange = useDateRangeFilter()
   const deviceScope = filter.device_scope
   // Setters patch the shared slice so the view's contract (b.setSource / …) is
   // unchanged — the values now flow through Redux instead of local state.
@@ -170,18 +173,6 @@ export function useSessionsBrowser() {
   const synced = appInfo?.mode === "synced"
   const effectiveTrack: GroupTrack = tab === "local" ? "local" : "synced"
 
-  // Time-range setters patch the shared slice. A dynamic preset stores no
-  // concrete date; manual date edits flip to "custom" with literal
-  // days.
-  function setRangePreset(p: FilterState["range_preset"]): void {
-    dispatch(patchFilter({ range_preset: p, from_day: "", to_day: "" }))
-  }
-  function patchFromDay(d: string): void {
-    dispatch(patchFilter({ range_preset: "custom", from_day: d }))
-  }
-  function patchToDay(d: string): void {
-    dispatch(patchFilter({ range_preset: "custom", to_day: d }))
-  }
   // No timestamp derivation or cross-midnight timer here: the session endpoints
   // take a SessionScopeSpec (no timestamp) and derive the bounds in their
   // queryFn at query time. Midnight rollover rides the collect-
@@ -617,12 +608,12 @@ export function useSessionsBrowser() {
     setSelectedGroupId,
     effectiveTrack,
     // toolbar filters (time range · device)
-    rangePreset,
-    fromDay,
-    toDay,
-    setRangePreset,
-    setFromDay: patchFromDay,
-    setToDay: patchToDay,
+    rangePreset: dateRange.preset,
+    fromDay: dateRange.fromDay,
+    toDay: dateRange.toDay,
+    setRangePreset: dateRange.onPreset,
+    setFromDay: dateRange.onFromDay,
+    setToDay: dateRange.onToDay,
     deviceScope,
     setDeviceScope,
     deviceOptions,

@@ -1,12 +1,13 @@
 // DateRangeChip — 共享时间范围 popover: 一排预设按钮 (今天 / 7天 / 30天 /
 // 全部) + 日历弹层选范围. 纯展示: 调用方拥有值 (preset / fromDay / toDay) 与
 // 回调 (onPreset / onFromDay / onToDay), 所以这一份组件同时支撑 usage 的
-// ControlBar (值经 Redux filterSlice 读写) 与 sessions 工具栏 (本地 hook
-// state). i18n key 由调用方传入, 各视图保留自己的翻译命名空间 —— JSX 与
-// 标签拼装逻辑只此一份 (此前两处各抄一份).
+// ControlBar (值经 Redux filterSlice 读写) 与 sessions 工具栏 (经
+// useDateRangeFilter 同一份 slice 写语义). 预设按钮清单与 chip 标签回退 key
+// 也在本组件 (usage.control.* 命名空间, 两处工具栏的三语文案逐字相同——此前
+// sessions 与 usage 各抄一份预设表, 收进本组件单一归属).
 //
 // `onPreset` 只回传 preset 值本身; 由调用方负责同时落具体 day 边界
-// (presetDays) —— 本组件不碰任何状态, 只上报点击.
+// (presetPatch) —— 本组件不碰任何状态, 只上报点击.
 //
 // 日历 (shadcn Calendar / react-day-picker range mode): 选中日期即回调
 // onFromDay / onToDay (与旧原生 date input 的 onChange 同语义), 调用方转入
@@ -37,13 +38,28 @@ const DATE_FNS_LOCALES: Record<string, Locale> = {
 }
 
 /** 可选预设 —— "custom" 由日历选日期隐式触发, 永不作为按钮出现. */
-export type SelectablePreset = Exclude<Preset, "custom">
+type SelectablePreset = Exclude<Preset, "custom">
 
-/** 一个预设按钮: 值 + 其 i18n key. 各视图自带 key 列表注入. */
-export interface DateRangePreset {
+/** 一个预设按钮: 值 + 其 i18n key. */
+interface DateRangePreset {
   value: SelectablePreset
   key: string
 }
+
+/** 预设按钮清单（单一归属——usage 与 sessions 工具栏共用同一份, 三语文案
+ *  逐字相同）. */
+const PRESETS: DateRangePreset[] = [
+  { value: "today", key: "usage.control.today" },
+  { value: "7d", key: "usage.control.last7d" },
+  { value: "30d", key: "usage.control.last30d" },
+  { value: "all", key: "usage.control.all" },
+]
+
+/** chip 标签在 preset === "all" 时的文案 key（「全部时间」）. */
+const ALL_TIME_KEY = "usage.control.allTime"
+
+/** 当前 preset 在 PRESETS 里找不到匹配项时回退的 chip 标签 key. */
+const DATE_RANGE_KEY = "usage.control.dateRange"
 
 export interface DateRangeChipProps {
   preset: Preset
@@ -52,12 +68,6 @@ export interface DateRangeChipProps {
   onPreset: (p: Preset) => void
   onFromDay: (d: string) => void
   onToDay: (d: string) => void
-  /** 预设按钮 (值 + i18n key) —— 按给定顺序渲染. */
-  presets: ReadonlyArray<DateRangePreset>
-  /** chip 标签的「全部时间」回退 i18n key. */
-  allTimeKey: string
-  /** 当前 preset 在 presets 里找不到匹配项时回退的 i18n key. */
-  dateRangeKey: string
   /** popover 相对触发器的对齐. */
   align?: "start" | "end"
 }
@@ -69,9 +79,6 @@ export function DateRangeChip({
   onPreset,
   onFromDay,
   onToDay,
-  presets,
-  allTimeKey,
-  dateRangeKey,
   align = "start",
 }: DateRangeChipProps) {
   const { t, i18n } = useTranslation()
@@ -84,14 +91,14 @@ export function DateRangeChip({
   })
   const label =
     preset === "all"
-      ? t(allTimeKey)
+      ? t(ALL_TIME_KEY)
       : preset !== "custom"
-        ? t(presets.find((p) => p.value === preset)?.key ?? dateRangeKey)
+        ? t(PRESETS.find((p) => p.value === preset)?.key ?? DATE_RANGE_KEY)
         : fromDay || toDay
           ? fromDay === toDay
             ? fromDay || "…"
             : `${fromDay || "…"} → ${toDay || "…"}`
-          : t(allTimeKey)
+          : t(ALL_TIME_KEY)
 
   return (
     <Popover>
@@ -108,7 +115,7 @@ export function DateRangeChip({
       />
       <PopoverContent align={align} className="w-auto p-3">
         <div className="bg-muted mb-1 inline-flex items-center gap-0.5 rounded-md p-0.5">
-          {presets.map((p) => (
+          {PRESETS.map((p) => (
             <button
               key={p.value}
               type="button"

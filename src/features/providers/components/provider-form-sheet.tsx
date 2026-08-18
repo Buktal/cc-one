@@ -85,7 +85,7 @@ import {
   presetsForApp,
 } from "@/features/providers/presets"
 import { useMutateWithToast } from "@/hooks/use-toast-mutation"
-import { toStructuredError } from "@/lib/error"
+import { rawErrorText } from "@/lib/error"
 import { guardedRewrite, parseJsonObject } from "@/lib/json"
 import { cn } from "@/lib/utils"
 
@@ -200,13 +200,9 @@ export function ProviderFormSheet({
   async function runFetchModels(args: FetchModelsArgs): Promise<void> {
     const result = await fetchModels(args)
     if (result.error) {
-      // RTK unions SerializedError in for internal failures; the repo seam
-      // `toStructuredError` reduces either shape to its raw message string.
-      const structured = toStructuredError(result.error)
-      const message =
-        structured?.kind === "app"
-          ? structured.data
-          : (structured?.message ?? String(result.error))
+      // RTK unions SerializedError in for internal failures; `rawErrorText`
+      // reduces either shape to the backend-visible text (AppError data first).
+      const message = rawErrorText(result.error)
       const { kind, detail } = bucketFetchModelsError(message)
       toast.error(t(`providers.toast.fetchModels.${kind}`), {
         description: detail,

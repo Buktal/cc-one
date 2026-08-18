@@ -18,10 +18,7 @@ import {
 } from "@/app/store/api"
 import { useAppDispatch, useAppSelector } from "@/app/store/hooks"
 import { ALL_TIME_FILTER, patchFilter } from "@/app/store/slices/filterSlice"
-import {
-  type DateRangePreset,
-  DateRangeChip as SharedDateRangeChip,
-} from "@/components/date-range-chip"
+import { DateRangeChip as SharedDateRangeChip } from "@/components/date-range-chip"
 import { FilterSelect } from "@/components/filter-select"
 import { Button } from "@/components/ui/button"
 import {
@@ -31,6 +28,7 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card"
+import { useDateRangeFilter } from "@/hooks/use-date-range-filter"
 import { facetOptions } from "@/lib/filter-options"
 import { usePersistedState } from "@/lib/persistence"
 import { cn } from "@/lib/utils"
@@ -39,13 +37,6 @@ import { useDeviceOptions } from "../use-device-options"
 import { DeviceScopeControl } from "./device-scope-control"
 
 const CONTROL_COLLAPSE_KEY = "cc-one:control-collapsed"
-
-const PRESETS: DateRangePreset[] = [
-  { value: "today", key: "usage.control.today" },
-  { value: "7d", key: "usage.control.last7d" },
-  { value: "30d", key: "usage.control.last30d" },
-  { value: "all", key: "usage.control.all" },
-]
 
 function Row({ label, children }: { label: string; children: ReactNode }) {
   return (
@@ -59,30 +50,19 @@ function Row({ label, children }: { label: string; children: ReactNode }) {
 /** 日期范围 chip —— 把 Redux filterSlice 适配成受控共享组件 (ControlCard 默认
  *  右对齐, ControlBar 左对齐). 数据语义与 sessions 工具栏版一致: 动态预设
  *  (today/7d/30d) 只存 preset、不存具体日期 (日期在 queryFn 实时派生);
- *  日历选日期转 custom 并存具体值. 共享的 JSX / 标签拼装在
- *  @/components/date-range-chip, 此处只做 slice 读写适配. */
+ *  日历选日期转 custom 并存具体值. 共享的 JSX / 标签拼装 / 预设清单在
+ *  @/components/date-range-chip, slice 读写经 useDateRangeFilter 单一归属
+ *  (补丁形状在 filterSlice 的 presetPatch / dayPatch). */
 function DateRangeChip({ align = "end" }: { align?: "start" | "end" }) {
-  const dispatch = useAppDispatch()
-  const filter = useAppSelector((s) => s.filter.filter)
+  const range = useDateRangeFilter()
   return (
     <SharedDateRangeChip
-      preset={filter.range_preset}
-      fromDay={filter.from_day}
-      toDay={filter.to_day}
-      onPreset={(p) =>
-        // A dynamic preset stores no concrete date — clear from_day/to_day so
-        // the cache key stays stable across a day.
-        dispatch(patchFilter({ range_preset: p, from_day: "", to_day: "" }))
-      }
-      onFromDay={(d) =>
-        dispatch(patchFilter({ range_preset: "custom", from_day: d }))
-      }
-      onToDay={(d) =>
-        dispatch(patchFilter({ range_preset: "custom", to_day: d }))
-      }
-      presets={PRESETS}
-      allTimeKey="usage.control.allTime"
-      dateRangeKey="usage.control.dateRange"
+      preset={range.preset}
+      fromDay={range.fromDay}
+      toDay={range.toDay}
+      onPreset={range.onPreset}
+      onFromDay={range.onFromDay}
+      onToDay={range.onToDay}
       align={align}
     />
   )

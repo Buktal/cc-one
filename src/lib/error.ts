@@ -63,6 +63,18 @@ function rawErrorMessage(e: unknown): string {
   return typeof e === "string" ? e : ""
 }
 
+/** Extract the raw, already-final text of an error for display: an AppError's
+ *  `data` (the backend's message payload) when the error is structured,
+ *  otherwise the raw message, with `String(e)` as a last resort. Unlike
+ *  `describeError` / `toStructuredError` (which return "" / null and leave the
+ *  fallback to the caller), this is the shared fallback chain of the mutation
+ *  error paths — never "". Three copies of this chain (provider-form-sheet /
+ *  live-import-dialog / cc-switch-import-dialog) converge here. */
+export function rawErrorText(e: unknown): string {
+  const s = toStructuredError(e)
+  return s?.kind === "app" ? s.data : (s?.message ?? String(e))
+}
+
 /** Translate a structured error at the render boundary. `app` → the matching
  *  `errors.<type>` i18n key (with `data` interpolation); `raw` → the string
  *  unchanged. */

@@ -14,7 +14,12 @@
 
 import { createSlice, type PayloadAction } from "@reduxjs/toolkit"
 
-import { type DayRange, dayRangeToTs, effectiveDays } from "@/lib/date-range"
+import {
+  type DayRange,
+  dayRangeToTs,
+  effectiveDays,
+  type Preset,
+} from "@/lib/date-range"
 import type { UsageFilter } from "@/types/generated/bindings"
 
 export interface FilterState extends DayRange {
@@ -56,6 +61,22 @@ export const DEFAULT_FILTER: FilterState = {
 export const ALL_TIME_FILTER: FilterState = {
   ...DEFAULT_FILTER,
   range_preset: "all",
+}
+
+/** 时间范围写的切片补丁（ADR-0008 的写侧，单一归属）：动态预设不存具体日期
+ *  ——选预设即清空 from_day/to_day（cache key 一天内稳定，日期在 queryFn 实
+ *  时派生）；日期编辑转 custom 并存字面值。DateRangeChip 的两处调用
+ *  （usage 与 sessions 工具栏，经 useDateRangeFilter）都经这两个补丁写 slice，
+ *  不再各写各的 dispatch 链。 */
+export function presetPatch(p: Preset): Partial<FilterState> {
+  return { range_preset: p, from_day: "", to_day: "" }
+}
+
+export function dayPatch(
+  field: "from_day" | "to_day",
+  day: string,
+): Partial<FilterState> {
+  return { range_preset: "custom", [field]: day }
 }
 
 /** Convert internal FilterState (empty = no constraint) → API UsageFilter (null).

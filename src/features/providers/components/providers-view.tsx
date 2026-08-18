@@ -62,6 +62,7 @@ import {
   providerModel,
 } from "@/features/providers/derive"
 import { useProvidersBrowser } from "@/features/providers/use-providers-browser"
+import { useConfirmDelete } from "@/hooks/use-confirm-delete"
 import { useMutateWithToast } from "@/hooks/use-toast-mutation"
 import { usePersistedState } from "@/lib/persistence"
 import { cn } from "@/lib/utils"
@@ -110,19 +111,8 @@ export function ProvidersView() {
 
   const [sheetOpen, setSheetOpen] = useState(false)
   const [editing, setEditing] = useState<Provider | null>(null)
-  // 待删除供应商（非 null 弹确认框）；删除成功才清空——保持打开直到完成。
-  const [deleting, setDeleting] = useState<Provider | null>(null)
-  const [deletingBusy, setDeletingBusy] = useState(false)
-  async function onConfirmDelete() {
-    if (!deleting) return
-    setDeletingBusy(true)
-    const ok = await onDelete(deleting)
-    // 成功也重置 busy：关闭由 prop（setDeleting(null)）驱动，不触发
-    // onOpenChange（Radix 只在用户交互时回调）——保持 true 会让下次打开
-    // 弹窗时按钮一直转圈。关闭动画里闪回一帧按钮文案无关紧要。
-    setDeletingBusy(false)
-    if (ok) setDeleting(null)
-  }
+  // 删除确认（busy / 关闭时序收敛在 useConfirmDelete，holdOpen：成功才关框）。
+  const confirmDelete = useConfirmDelete<Provider>({ onDelete })
   const [transfer, setTransfer] = useState<TransferKind | null>(null)
   const [ccswitchOpen, setCcswitchOpen] = useState(false)
   // 「从本机配置文件导入」预览弹窗（全部应用，ADR-0012）。
@@ -421,7 +411,7 @@ export function ProvidersView() {
                       liveManaged={providerLiveManaged(p)}
                       onEdit={() => openEdit(p)}
                       onDuplicate={() => openDuplicate(p)}
-                      onDelete={() => setDeleting(p)}
+                      onDelete={() => confirmDelete.requestDelete(p)}
                       onSwitch={() => onSwitch(p)}
                       onAddToLive={() => void onAddToLive(p)}
                       onRemoveFromLive={() => void onRemoveFromLive(p)}
@@ -513,20 +503,19 @@ export function ProvidersView() {
       />
 
       <ConfirmDialog
-        open={deleting !== null}
+        open={confirmDelete.deleting !== null}
         onOpenChange={(open) => {
-          // busy 由 onConfirmDelete 在成功/失败路径自行重置（prop 驱动的
-          // 关闭不触发本回调）；用户取消时 busy 恒为 false（删除中按钮已
-          // disabled），无需在此清理。
-          if (!open) setDeleting(null)
+          if (!open) confirmDelete.cancel()
         }}
-        title={t("confirm.deleteTitle", { name: deleting?.name ?? "" })}
+        title={t("confirm.deleteTitle", {
+          name: confirmDelete.deleting?.name ?? "",
+        })}
         description={t("providers.confirm.deleteDesc", {
-          name: deleting?.name ?? "",
+          name: confirmDelete.deleting?.name ?? "",
         })}
         confirmLabel={t("common.delete")}
-        busy={deletingBusy}
-        onConfirm={() => void onConfirmDelete()}
+        busy={confirmDelete.busy}
+        onConfirm={() => void confirmDelete.onConfirmDelete()}
       />
     </div>
   )

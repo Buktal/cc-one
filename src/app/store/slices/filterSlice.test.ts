@@ -1,10 +1,13 @@
 import dayjs from "dayjs"
 import { describe, expect, it } from "vitest"
 
-import {
+import filterReducer, {
   ALL_TIME_FILTER,
   DEFAULT_FILTER,
+  dayPatch,
   type FilterState,
+  patchFilter,
+  presetPatch,
   toFilter,
 } from "@/app/store/slices/filterSlice"
 import { dayStr } from "@/lib/date-range"
@@ -102,5 +105,58 @@ describe("toFilter", () => {
     const f = toFilter(base({ range_preset: "7d" }))
     expect(f.from_ts).toBe(dayjs(dayStr(-6)).startOf("day").toISOString())
     expect(f.to_ts).toBe(dayjs(dayStr()).endOf("day").toISOString())
+  })
+})
+
+describe("presetPatch / dayPatch (DateRangeChip write semantics, ADR-0008)", () => {
+  // Production path: the shared DateRangeChip surfaces (usage ControlCard /
+  // ControlBar and the sessions toolbar) dispatch exactly these patches via
+  // useDateRangeFilter — the "dynamic presets store no concrete date" rule is
+  // a contract here, not a comment in two views.
+
+  it("preset selection stores the preset with no concrete date", () => {
+    const next = filterReducer(
+      { filter: DEFAULT_FILTER },
+      patchFilter(presetPatch("7d")),
+    )
+    expect(next.filter).toEqual({ ...DEFAULT_FILTER, range_preset: "7d" })
+  })
+
+  it("preset selection clears stale stored days", () => {
+    const stale: FilterState = {
+      ...DEFAULT_FILTER,
+      range_preset: "custom",
+      from_day: "2026-08-01",
+      to_day: "2026-08-02",
+    }
+    const next = filterReducer(
+      { filter: stale },
+      patchFilter(presetPatch("today")),
+    )
+    expect(next.filter).toEqual({ ...DEFAULT_FILTER, range_preset: "today" })
+  })
+
+  it("a from-day edit flips to custom and stores the literal day", () => {
+    const next = filterReducer(
+      { filter: DEFAULT_FILTER },
+      patchFilter(dayPatch("from_day", "2026-08-01")),
+    )
+    expect(next.filter).toEqual({
+      ...DEFAULT_FILTER,
+      range_preset: "custom",
+      from_day: "2026-08-01",
+    })
+  })
+
+  it("a to-day edit flips to custom independently", () => {
+    const next = filterReducer(
+      { filter: DEFAULT_FILTER },
+      patchFilter(dayPatch("to_day", "2026-08-02")),
+    )
+    expect(next.filter).toEqual({
+      ...DEFAULT_FILTER,
+      range_preset: "custom",
+      to_day: "2026-08-02",
+    })
   })
 })

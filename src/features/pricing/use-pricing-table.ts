@@ -67,25 +67,16 @@ export function usePricingTable() {
     setSortDir(next.sortDir)
   }
 
-  const [removing, setRemoving] = useState(false)
-
-  /** Delete trigger: toasts the outcome and exposes a busy flag for the confirm
-   *  dialog (pattern mirrors sessions' deleteGroup). On success the offset is
-   *  clamped back into the now-shorter list — deleting the last row of the last
-   *  page would otherwise leave `paged` empty with the header hanging bare.
-   *
-   *  Busy is reset on both success and failure: the dialog closes via prop
-   *  (setDeleting(null)), which never fires the view's onOpenChange (Radix only
-   *  calls it on user interaction) — leaving busy true would make the next
-   *  open spin forever. A one-frame flash-back during the close animation is
-   *  harmless. */
+  /** Delete trigger: toasts the outcome and returns success. On success the
+   *  offset is clamped back into the now-shorter list — deleting the last row
+   *  of the last page would otherwise leave `paged` empty with the header
+   *  hanging bare. Busy 不在此管理——确认框的 busy / 关闭时序收敛在
+   *  useConfirmDelete（见 pricing-view）。 */
   async function remove(key: string): Promise<boolean> {
-    setRemoving(true)
     const ok = await runWithToast(removeMut, key, {
       success: { key: "pricing.toast.deleted", vars: { name: key } },
       failed: { key: "pricing.toast.deleteFailed" },
     })
-    setRemoving(false)
     if (ok) {
       // `filtered` 是删除前的列表；删除后恰少一行——夹到最后一页开头（公式
       // 在控制器的 clamp / lastPageStart，单一测试面）。
@@ -98,7 +89,6 @@ export function usePricingTable() {
     isLoading,
     error,
     remove,
-    removing,
     search,
     setSearch,
     sortKey,

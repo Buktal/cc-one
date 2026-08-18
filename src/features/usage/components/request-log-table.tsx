@@ -38,7 +38,7 @@ import {
   costIsNotable,
   groupRowsByDay,
 } from "@/features/usage/derive"
-import { useCollectAction } from "@/hooks/use-collect-action"
+import { collectLabelKey, useCollectAction } from "@/hooks/use-collect-action"
 import { usePagedBrowser } from "@/hooks/use-paged-browser"
 import {
   formatCost,
@@ -100,9 +100,15 @@ export function RequestLogTable({ filter }: { filter: FilterState }) {
           emptyIcon={FileText}
           emptyLabel={t("usage.logs.empty")}
           emptyAction={{
-            label: collecting
-              ? t("usage.collect.collecting")
-              : t("usage.collect.collectLocal"),
+            // 文案 key 与 sidebar 同一归属（collectLabelKey，collecting 态两处
+            // 共用）；空闲态注入空态 CTA 自己的「采集本地日志」引导首次入库。
+            label: t(
+              collectLabelKey(
+                collecting,
+                multiDevice,
+                "usage.collect.collectLocal",
+              ),
+            ),
             onClick: onCollect,
             disabled: collecting,
           }}

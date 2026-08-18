@@ -4,6 +4,7 @@ import { describe, expect, it } from "vitest"
 import {
   describeError,
   localizeStructuredError,
+  rawErrorText,
   toStructuredError,
 } from "@/lib/error"
 
@@ -93,6 +94,35 @@ describe("toStructuredError", () => {
     expect(toStructuredError(null)).toBeNull()
     expect(toStructuredError({})).toBeNull()
     expect(toStructuredError(42)).toBeNull()
+  })
+})
+
+describe("rawErrorText (mutation-error display chain)", () => {
+  // Production path: provider-form-sheet / live-import-dialog /
+  // cc-switch-import-dialog surface mutation errors through this seam.
+
+  it("prefers the AppError data (the backend's message payload)", () => {
+    expect(rawErrorText({ type: "Config", data: "bad token" })).toBe(
+      "bad token",
+    )
+  })
+
+  it("falls back to the raw message of a thrown Error / serialised shape", () => {
+    expect(rawErrorText(new Error("boom"))).toBe("boom")
+    expect(rawErrorText({ message: "network down" })).toBe("network down")
+    expect(rawErrorText({ data: "rate limited" })).toBe("rate limited")
+    expect(rawErrorText({ error: "denied" })).toBe("denied")
+  })
+
+  it("passes a bare string through verbatim", () => {
+    expect(rawErrorText("plain string")).toBe("plain string")
+  })
+
+  it("never returns empty — String() is the last-resort fallback", () => {
+    expect(rawErrorText(null)).toBe("null")
+    expect(rawErrorText(undefined)).toBe("undefined")
+    expect(rawErrorText(42)).toBe("42")
+    expect(rawErrorText({})).toBe("[object Object]")
   })
 })
 
