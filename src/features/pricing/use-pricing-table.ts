@@ -13,8 +13,8 @@ import {
   nextSortState,
   type PricingSortKey,
 } from "@/features/pricing/derive"
+import { usePagedBrowser } from "@/hooks/use-paged-browser"
 import { useMutateWithToast } from "@/hooks/use-toast-mutation"
-import { paginate } from "@/lib/pagination"
 
 /** Client-side page size — the full list is already loaded; rendering all of
  * it at once jank-scrolls once it grows past a few hundred entries. 20 matches
@@ -24,9 +24,9 @@ export const PAGE_SIZE = 20
 
 /**
  * Pricing table controller. Owns the data query, the search/sort/pagination
- * state, and the delete trigger. `setSearch` and `onSort` both reset the offset
- * to page 1 (the previous inline behaviour) so the user always lands on the
- * first page of the freshly filtered/sorted result set.
+ * state, and the delete trigger. 分页（offset / 页统计 / 翻页 / 删除后夹紧）
+ * 走共享控制器 usePagedBrowser（架构扫描候选⑧）：search 与排序变化 → 回第
+ * 1 页由 scope 身份变化结构性触发，不再在 setter 里手写 setOffset(0)。
  */
 export function usePricingTable() {
   const { data: entries = [], isLoading, error } = usePricingQuery()
@@ -36,37 +36,35 @@ export function usePricingTable() {
   const [search, setSearchState] = useState("")
   const [sortKey, setSortKey] = useState<PricingSortKey | null>(null)
   const [sortDir, setSortDir] = useState<"asc" | "desc">("asc")
-  const [offset, setOffset] = useState(0)
 
   const filtered = useMemo(
     () => filterAndSortPricing(entries, search, sortKey, sortDir),
     [entries, search, sortKey, sortDir],
   )
 
+  // 分页控制器（架构扫描候选⑧）：offset / 切片 / 翻页 / 删除后夹紧单一归
+  // 属。search / 排序变化 → 回第 1 页（scope 身份变化，结构性规则）；entries
+  // （查询数据）不在 scope——数据刷新不重置页，与原先行为一致。
+  const browser = usePagedBrowser({
+    scope: { search, sortKey, sortDir },
+    pageSize: PAGE_SIZE,
+    total: filtered.length,
+  })
   const total = filtered.length
-  const { totalPages, page } = paginate(total, offset, PAGE_SIZE)
-  const paged = filtered.slice(offset, offset + PAGE_SIZE)
+  const paged = browser.pageItems(filtered)
 
-  // setSearch resets the offset so the user lands on page 1 of the new result
-  // set — matches the original inline onChange behaviour.
+  // setSearch 不再手写 setOffset(0)：search 是 scope 维度，身份变化由控制器
+  // 结构性重置回第 1 页。
   function setSearch(value: string) {
     setSearchState(value)
-    setOffset(0)
   }
 
-  // onSort applies the pure nextSortState decision (same column flips, a new
-  // column defaults to asc) and resets the offset so the chosen column is
-  // visible from page 1.
+  // onSort 应用纯函数 nextSortState 的决策（同列翻转、新列默认 asc）；回第
+  // 1 页同样由 scope 身份变化触发（sortKey/sortDir 是 scope 维度）。
   function onSort(k: PricingSortKey) {
     const next = nextSortState(sortKey, sortDir, k)
     setSortKey(next.sortKey)
     setSortDir(next.sortDir)
-    setOffset(0)
-  }
-
-  /** 1-based page jump for the shared PaginationBar. */
-  function goToPage(p: number) {
-    setOffset(Math.max(0, (p - 1) * PAGE_SIZE))
   }
 
   const [removing, setRemoving] = useState(false)
@@ -89,15 +87,9 @@ export function usePricingTable() {
     })
     setRemoving(false)
     if (ok) {
-      // `filtered` here is the pre-delete list; the post-delete list is
-      // exactly one row shorter, so clamp to the last page's start offset.
-      const remaining = filtered.length - 1
-      setOffset((o) =>
-        Math.min(
-          o,
-          Math.max(0, Math.floor((remaining - 1) / PAGE_SIZE) * PAGE_SIZE),
-        ),
-      )
+      // `filtered` 是删除前的列表；删除后恰少一行——夹到最后一页开头（公式
+      // 在控制器的 clamp / lastPageStart，单一测试面）。
+      browser.clamp(filtered.length - 1)
     }
     return ok
   }
@@ -113,9 +105,9 @@ export function usePricingTable() {
     sortDir,
     onSort,
     total,
-    page,
-    totalPages,
+    page: browser.page,
+    totalPages: browser.totalPages,
     paged,
-    goToPage,
+    goToPage: browser.goToPage,
   }
 }

@@ -20,8 +20,8 @@ import {
   useScanLibraryQuery,
 } from "@/app/store/api"
 import { deviceOptionLabel } from "@/features/usage/use-device-options"
+import { usePagedBrowser } from "@/hooks/use-paged-browser"
 import { useMutateWithToast } from "@/hooks/use-toast-mutation"
-import { paginate } from "@/lib/pagination"
 import type { LibraryEntry } from "@/types/generated/bindings"
 import {
   buildBreadcrumb,
@@ -44,11 +44,6 @@ export function useLibraryBrowser() {
   // Client-side name filter over the current directory's scan (the backend
   // returns a full directory, so filtering needs no Rust changes).
   const [search, setSearch] = useState("")
-  // Page offset into the current directory's entry list. Reset when the
-  // navigation or the search changes — a different directory / narrower
-  // filter can be shorter than the page we were on (mirrors the
-  // sessions/logs filter-reset pattern).
-  const [offset, setOffset] = useState(0)
   const [dragging, setDragging] = useState(false)
   const [pendingPaths, setPendingPaths] = useState<string[] | null>(null)
   const [preview, setPreview] = useState<LibraryEntry | null>(null)
@@ -69,32 +64,23 @@ export function useLibraryBrowser() {
     deviceScope: scope,
     subpath,
   })
-  // Reset the page when the directory or the search changes — a shallower
-  // directory / narrower filter can leave a stale offset past its end (the
-  // slice would render empty).
-  // biome-ignore lint/correctness/useExhaustiveDependencies: intentional — reset page on navigation; the body needs no scope/subpath/search values
-  useEffect(() => {
-    setOffset(0)
-  }, [deviceScope, subpath, search])
-
   // Search filter first, then the page the table renders. A directory's
   // entry list is a small fs scan (unlike the SQL-backed sessions/logs), so
   // filtering + slicing client-side is the right altitude — the DOM is the
-  // thing that grows, and this caps it at one page. Paging controls match the
-  // other tables' (LIBRARY_PAGE_SIZE + the shared paginate math).
+  // thing that grows, and this caps it at one page.
   const filteredEntries = useMemo(
     () => filterEntriesByName(entries, search),
     [entries, search],
   )
-  const visibleEntries = filteredEntries.slice(
-    offset,
-    offset + LIBRARY_PAGE_SIZE,
-  )
-  const { totalPages, page } = paginate(
-    filteredEntries.length,
-    offset,
-    LIBRARY_PAGE_SIZE,
-  )
+  // 分页控制器（架构扫描候选⑧）：offset / 切片 / 翻页单一归属；导航或搜索
+  // 变化 → 回第 1 页（scope 身份变化，结构性规则——scope 里新增维度自动参
+  // 与）。
+  const browser = usePagedBrowser({
+    scope: { deviceScope, subpath, search },
+    pageSize: LIBRARY_PAGE_SIZE,
+    total: filteredEntries.length,
+  })
+  const visibleEntries = browser.pageItems(filteredEntries)
   // Same source as the logs/dashboard device picker (listDevices), but NOT
   // filtered down to ≤1 — Library always lists every known device, even this
   // machine alone, so the picker is never empty.
@@ -231,10 +217,9 @@ export function useLibraryBrowser() {
     // scan data
     entries: visibleEntries,
     totalCount: filteredEntries.length,
-    page,
-    totalPages,
-    offset,
-    setOffset,
+    page: browser.page,
+    totalPages: browser.totalPages,
+    goToPage: browser.goToPage,
     isLoading,
     scanError,
     refetchScan,

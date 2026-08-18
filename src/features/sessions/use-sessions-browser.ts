@@ -38,9 +38,9 @@ import { type FilterState, patchFilter } from "@/app/store/slices/filterSlice"
 import { setView } from "@/app/store/slices/viewSlice"
 import { deviceOptionLabel } from "@/features/usage/use-device-options"
 import { useDebouncedValue } from "@/hooks/use-debounced-value"
+import { usePagedBrowser } from "@/hooks/use-paged-browser"
 import { useMutateWithToast } from "@/hooks/use-toast-mutation"
 import { facetOptions } from "@/lib/filter-options"
-import { paginate } from "@/lib/pagination"
 import { usePersistedState } from "@/lib/persistence"
 import type { SessionGroup, SessionRow } from "@/types/generated/bindings"
 import {
@@ -137,11 +137,6 @@ export function useSessionsBrowser() {
   const setModel = (v: string) => dispatch(patchFilter({ model: v }))
   const setDeviceScope = (v: string) =>
     dispatch(patchFilter({ device_scope: v }))
-  // Page offset into the filtered set (absolute row offset, like the request
-  // log). Reset to page 1 whenever any filter dimension changes — otherwise a
-  // narrower filter (search / range / source / model / device / group switch)
-  // can land on an empty page.
-  const [offset, setOffset] = useState(0)
   const [selectedGroupId, setSelectedGroupId] = useState<string>(ALL_GROUPS)
   const [favOverrides, setFavOverrides] = useState<Record<string, boolean>>({})
   const [pendingGroup, setPendingGroup] = useState<string | null>(null)
@@ -169,15 +164,6 @@ export function useSessionsBrowser() {
   useEffect(() => {
     setSelectedGroupId(ALL_GROUPS)
   }, [tab])
-
-  // Reset the page when any filter dimension changes. The common dimensions
-  // live in the shared filterSlice now, so `filter` (a stable Redux reference
-  // that only changes identity when a dimension actually changes) covers them;
-  // the sessions-only dimensions (tab / search / group) are listed alongside.
-  // biome-ignore lint/correctness/useExhaustiveDependencies: intentional — reset page on filter change; the body needs no dimension values
-  useEffect(() => {
-    setOffset(0)
-  }, [filter, tab, debouncedSearch, selectedGroupId])
 
   const { data: appInfo } = useAppInfoQuery()
   const selfDeviceId = appInfo?.device_id ?? ""
@@ -227,13 +213,6 @@ export function useSessionsBrowser() {
     () => facetOptions(distinctModels, model),
     [distinctModels, model],
   )
-  // Paged session list (mirrors the request-log table). Skipped until
-  // selfDeviceId resolves so the local tab never queries with an empty
-  // device_scope.
-  const sessionsQuery = useListSessionsQuery(
-    { ...scope, limit: SESSIONS_PAGE_SIZE, offset },
-    { skip: !selfDeviceId },
-  )
   // 两套计数，语义不同：
   // - 侧栏计数（分组分布 + 「全部」行）：**全局聚合，不含选中分组**——选中
   //   分组只是过滤右侧列表，侧栏分布不该跟着变（否则切到 A 组时 B/C/D 的
@@ -250,6 +229,24 @@ export function useSessionsBrowser() {
   )
   const sidebarCounts = sidebarCountsQuery.data ?? { total: 0, groups: [] }
   const viewCounts = viewCountsQuery.data ?? { total: 0, groups: [] }
+
+  // 分页控制器（架构扫描候选⑧）：offset / 页统计 / 翻页单一归属。scope 身份
+  // 变化 → 回第 1 页——结构性规则，scope 里新增维度自动参与，不再手列依赖
+  // 清单（此前 4 组互不相同的手列数组各自编码同一不变量）。统计用视图计数
+  // （viewCounts，跟随分组过滤）；侧栏「全部」行用全局计数。
+  const browser = usePagedBrowser({
+    scope,
+    pageSize: SESSIONS_PAGE_SIZE,
+    total: viewCounts.total,
+  })
+  // Paged session list (mirrors the request-log table). Skipped until
+  // selfDeviceId resolves so the local tab never queries with an empty
+  // device_scope.
+  const sessionsQuery = useListSessionsQuery(
+    { ...scope, limit: SESSIONS_PAGE_SIZE, offset: browser.offset },
+    { skip: !selfDeviceId },
+  )
+
   const groupsQuery = useListGroupsQuery()
   const groups = groupsQuery.data ?? []
   const { data: devices = [] } = useDevicesQuery()
@@ -323,15 +320,6 @@ export function useSessionsBrowser() {
   // tab/toolbar/search AND the sidebar group selection, time-desc ordered.
   const visibleSessions = sessionsQuery.data ?? []
 
-  // Page stats for the footer control (clamped so a shrunken result set can't
-  // leave the paginator pointing past the end). 分页用视图计数（viewCounts，
-  // 跟随分组过滤）；侧栏「全部」行用全局计数（sidebarCounts.total）。
-  const { totalPages, page } = paginate(
-    viewCounts.total,
-    offset,
-    SESSIONS_PAGE_SIZE,
-  )
-
   // sessions lookup by composite key — O(1) resolve for the derived preview.
   // Reuses the favKey shape ("device_id/id") so favorite + preview agree on
   // identity (a session is uniquely (device_id, id)). Only the current page
@@ -387,11 +375,11 @@ export function useSessionsBrowser() {
       neighborNav(
         visibleSessions,
         previewKey ? favKey(previewKey) : null,
-        offset,
+        browser.offset,
         SESSIONS_PAGE_SIZE,
         viewCounts.total,
       ),
-    [visibleSessions, previewKey, offset, viewCounts.total],
+    [visibleSessions, previewKey, browser.offset, viewCounts.total],
   )
 
   function openNeighbor(delta: 1 | -1): void {
@@ -407,7 +395,7 @@ export function useSessionsBrowser() {
     // when the new data arrives. Bounded by neighborNav's canPrev/canNext, so
     // the button is disabled when there is nowhere to go.
     pendingNeighbor.current = { delta, fromKey: favKey(preview) }
-    setOffset(offset + delta * SESSIONS_PAGE_SIZE)
+    browser.shiftPages(delta)
   }
 
   // Consume the pending page-edge step when the new page's data lands. Guarded
@@ -649,10 +637,9 @@ export function useSessionsBrowser() {
     // 总数（跟随当前分组过滤的列表范围）。
     totalCount: sidebarCounts.total,
     viewTotal: viewCounts.total,
-    page,
-    totalPages,
-    offset,
-    setOffset,
+    page: browser.page,
+    totalPages: browser.totalPages,
+    goToPage: browser.goToPage,
     groupCounts,
     ungroupedCount: ungroupedN,
     // device labels (favorites tab)

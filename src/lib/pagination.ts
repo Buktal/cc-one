@@ -23,6 +23,20 @@ export function paginate(
   return { totalPages, page }
 }
 
+/** 1-based page → row offset. The single page↔offset conversion — the paged
+ *  views used to hand-write `(p - 1) * PAGE_SIZE` at every PaginationBar
+ *  wiring site (architecture-sweep candidate ⑧ converges them here). */
+export function pageOffset(page: number, pageSize: number): number {
+  return Math.max(0, (page - 1) * pageSize)
+}
+
+/** Offset clamp target when a result set shrinks: the first offset of the last
+ *  page, so deleting the last row of the last page lands on the last page's
+ *  first row instead of a page past the end. `total` ≤ 0 → 0. */
+export function lastPageStart(total: number, pageSize: number): number {
+  return (Math.max(1, Math.ceil(total / pageSize)) - 1) * pageSize
+}
+
 /** A page number, or an ellipsis gap marker. */
 export type PageNumber = number | "…"
 

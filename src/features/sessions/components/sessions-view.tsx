@@ -45,7 +45,7 @@ import type { SessionRow } from "@/types/generated/bindings"
 import { favKey, type SessionTab } from "../derive"
 import { highlight } from "../highlight"
 import { sessionAgentKind, sessionSourceLabel } from "../source-labels"
-import { SESSIONS_PAGE_SIZE, useSessionsBrowser } from "../use-sessions-browser"
+import { useSessionsBrowser } from "../use-sessions-browser"
 import { GroupCreateDialog } from "./group-create-dialog"
 import { GroupSidebar } from "./group-sidebar"
 import { SessionDetailSheet } from "./session-detail-sheet"
@@ -219,7 +219,7 @@ export function SessionsView() {
               totalPages={b.totalPages}
               total={b.viewTotal}
               loading={b.isFetching}
-              onPageChange={(p) => b.setOffset((p - 1) * SESSIONS_PAGE_SIZE)}
+              onPageChange={b.goToPage}
             />
           </CardContent>
         </Card>

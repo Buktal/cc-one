@@ -51,7 +51,7 @@ import { formatSize } from "@/lib/format"
 import { cn } from "@/lib/utils"
 import type { LibraryEntry } from "@/types/generated/bindings"
 import { kindIcon } from "../kind-icon"
-import { LIBRARY_PAGE_SIZE, useLibraryBrowser } from "../use-library-browser"
+import { useLibraryBrowser } from "../use-library-browser"
 import { PreviewSheet } from "./preview-sheet"
 import { UploadDialog } from "./upload-dialog"
 
@@ -64,7 +64,7 @@ export function LibraryView() {
     totalCount,
     page,
     totalPages,
-    setOffset,
+    goToPage,
     isLoading,
     scanError,
     refetchScan,
@@ -469,13 +469,12 @@ export function LibraryView() {
           </QueryState>
 
           {/* Paged footer — the shared PaginationBar (page info left, numbered
-            pages with ellipsis jumps right; disabled states agree with the
-            slice size via LIBRARY_PAGE_SIZE). */}
+            pages with ellipsis jumps right). */}
           <PaginationBar
             page={page}
             totalPages={totalPages}
             total={totalCount}
-            onPageChange={(p) => setOffset((p - 1) * LIBRARY_PAGE_SIZE)}
+            onPageChange={goToPage}
           />
         </CardContent>
       </Card>

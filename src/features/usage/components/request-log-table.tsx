@@ -11,7 +11,7 @@
 // so the user isn't bounced to the command bar to seed the first rows.
 
 import { FileText } from "lucide-react"
-import { Fragment, type ReactNode, useEffect, useState } from "react"
+import { Fragment, type ReactNode, useState } from "react"
 import { useTranslation } from "react-i18next"
 
 import { useCountQuery, useLogsQuery } from "@/app/store/api"
@@ -39,6 +39,7 @@ import {
   groupRowsByDay,
 } from "@/features/usage/derive"
 import { useCollectAction } from "@/hooks/use-collect-action"
+import { usePagedBrowser } from "@/hooks/use-paged-browser"
 import {
   formatCost,
   formatDay,
@@ -46,7 +47,6 @@ import {
   formatTime,
   formatTokens,
 } from "@/lib/format"
-import { paginate } from "@/lib/pagination"
 import { tokenTotal } from "@/lib/usage"
 import { cn } from "@/lib/utils"
 import type { UsageLogRow } from "@/types/generated/bindings"
@@ -58,16 +58,17 @@ const PAGE_SIZE = 20
 export function RequestLogTable({ filter }: { filter: FilterState }) {
   const { t } = useTranslation()
   const deviceLabel = useDeviceLabelMap()
-  const [offset, setOffset] = useState(0)
   const [expandedId, setExpandedId] = useState<string | null>(null)
-  // Reset to page 1 and collapse any expanded row when the filter changes —
-  // a narrower filter (e.g. fewer rows after switching model/device) can land
-  // on an empty page, and the expanded row's page may no longer exist.
-  // biome-ignore lint/correctness/useExhaustiveDependencies: intentional — offset/expanded reset on filter change; the body needs no filter value
-  useEffect(() => {
-    setOffset(0)
-    setExpandedId(null)
-  }, [filter])
+  const { data: total = 0 } = useCountQuery(filter)
+  // 分页控制器（架构扫描候选⑧）：offset / 翻页单一归属；filter 身份变化 →
+  // 回第 1 页并收起展开行（行所在页可能已不存在）——与 offset 重置同一触发
+  // 点。
+  const browser = usePagedBrowser({
+    scope: filter,
+    pageSize: PAGE_SIZE,
+    total,
+    onScopeReset: () => setExpandedId(null),
+  })
   const {
     data: rows = [],
     isLoading,
@@ -76,16 +77,14 @@ export function RequestLogTable({ filter }: { filter: FilterState }) {
   } = useLogsQuery({
     filter,
     limit: PAGE_SIZE,
-    offset,
+    offset: browser.offset,
   })
-  const { data: total = 0 } = useCountQuery(filter)
   // 空状态 CTA 复用 sidebar 同一份采集动作 (useCollectAction) —— 不再在此
   // 手写 mutation + toast, 避免分叉 (上一份手写副本就漏了数据新鲜度戳记
   // markCollected/markSynced). multiDevice 决定成功 toast 措辞, 与 shell 一致.
   const multiDevice = useDeviceOptions().length > 0
   const { onCollect, collecting } = useCollectAction(multiDevice)
 
-  const { totalPages, page } = paginate(total, offset, PAGE_SIZE)
   const dayGroups = groupRowsByDay(rows)
 
   return (
@@ -159,11 +158,11 @@ export function RequestLogTable({ filter }: { filter: FilterState }) {
         </QueryState>
 
         <PaginationBar
-          page={page}
-          totalPages={totalPages}
+          page={browser.page}
+          totalPages={browser.totalPages}
           total={total}
           loading={isFetching}
-          onPageChange={(p) => setOffset((p - 1) * PAGE_SIZE)}
+          onPageChange={browser.goToPage}
         />
       </CardContent>
     </Card>
