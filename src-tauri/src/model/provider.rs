@@ -6,8 +6,9 @@
 //! [`App`]; the merge/dedup key across sync and export/import is `(app, id)`,
 //! so the same vendor appears as separate entries in each app's pool (their
 //! live config formats differ). The snapshot is the single authority — every
-//! form field, preset and snippet reads/writes it — and API keys live inside
-//! its `env` block (`ANTHROPIC_AUTH_TOKEN` / `ANTHROPIC_API_KEY`). Both
+//! form field, preset and snippet reads/writes it — and API keys live in
+//! app-specific locations inside it (`env` / `auth` / `options`, see
+//! [`crate::provider::keys`], the single source of truth). Both
 //! `settingsConfig` and `meta` cross the boundary as raw JSON *text*: the
 //! store persists them as TEXT as-is, and the future CodeMirror editor edits
 //! that text directly, so nothing here parses or prettifies it (that is the
@@ -16,7 +17,7 @@
 use serde::{Deserialize, Serialize};
 use specta::Type;
 
-use crate::error::{AppError, AppResult};
+use crate::error::AppResult;
 
 /// The app (应用) a provider pool belongs to. Each app owns an independent
 /// provider pool, per-app active state and per-app common-config snippet.
@@ -168,141 +169,31 @@ pub(crate) fn generate_provider_id() -> String {
     crate::sessions::generate_local_group_id()
 }
 
-/// Secret env-var keys stripped from `settingsConfig` before it leaves this
-/// device (the synced `providers.json`): API keys live in the `env` block
-/// (claude `ANTHROPIC_*` / gemini `GEMINI_API_KEY`) or the `auth` object
-/// (codex `OPENAI_API_KEY`) and must never enter the repo. `AWS_REGION` is
-/// deliberately NOT here — it is a non-secret region code (or a `${VAR}`
-/// template-variable placeholder), not a credential. This list is the single
-/// source of truth: `Provider::redacted`, the sync merge, and the export path
-/// (`provider::export_import`) all route through it.
-pub const SECRET_ENV_KEYS: &[&str] = &[
-    "ANTHROPIC_AUTH_TOKEN",
-    "ANTHROPIC_API_KEY",
-    "AWS_SECRET_ACCESS_KEY",
-    "AWS_ACCESS_KEY_ID",
-    "OPENAI_API_KEY",
-    "GEMINI_API_KEY",
-];
-
-/// HTTP 认证头白名单（小写形式，匹配时大小写不敏感）：OpenCode 官方示例把
-/// bearer token 放 `options.headers.Authorization`，是独立于 `options.apiKey`
-/// 的认证路径，必须随同步投影一起剥掉。元数据头（`Helicone-*` 等可观测性
-/// 标签）不是凭据，不在此列，保留。
-pub const SECRET_HEADER_KEYS: &[&str] = &["authorization", "x-api-key", "proxy-authorization"];
-
 impl Provider {
-    /// The sync-safe projection: [`SECRET_ENV_KEYS`] removed from three places —
-    /// the `settingsConfig` `env` object, the `settingsConfig` `auth` object
-    /// (codex providers carry `OPENAI_API_KEY` there — the auth.json mirror),
-    /// and the `meta.templateValues` object. The `env` block is where claude
-    /// API keys normally live; `meta.templateValues` is the frontend's record
-    /// of filled `${VAR}` template variables, and the Bedrock presets route
-    /// AK/SK through those, so a redaction that stops at `env` would still
-    /// publish credentials. Blank config passes through unchanged (nothing to
-    /// strip); a config or meta that carries a secret key is re-serialized
-    /// deterministically (serde_json's default `Value` map sorts keys), so the
-    /// written file is byte-stable across pushes. Returns `Err` when the config
-    /// is not valid JSON / not an object / has a non-object `env` or `auth`, or
-    /// the meta cannot be parsed to an object — a provider whose secrets cannot
-    /// be proven absent must not be published (the sync writer skips it).
+    /// The sync-safe projection: the key locations defined in
+    /// [`crate::provider::keys`] — `settingsConfig`'s `env` / `auth` objects,
+    /// opencode's `options.apiKey` / `options.headers` auth-header whitelist,
+    /// and `meta.templateValues` (the frontend's record of filled `${VAR}`
+    /// template variables, which is how the Bedrock presets carry AK/SK) —
+    /// are stripped from this row. Thin shell over
+    /// [`crate::provider::keys::strip_settings_config`] /
+    /// [`crate::provider::keys::strip_meta`]: a surface that carries no
+    /// secret is kept verbatim (byte-stable across pushes); one that did
+    /// carry a secret is re-serialized deterministically (serde_json's
+    /// default `Value` map sorts keys). Returns `Err` when the config is not
+    /// valid JSON / not an object / has a non-object `env` or `auth`, or the
+    /// meta cannot be parsed — a provider whose secrets cannot be proven
+    /// absent must not be published (the sync writer skips it).
     pub fn redacted(&self) -> AppResult<Provider> {
-        let trimmed = self.settings_config.trim();
-        if trimmed.is_empty() {
-            return Ok(self.clone());
-        }
-        let mut v: serde_json::Value = serde_json::from_str(trimmed).map_err(|e| {
-            AppError::Config(format!("provider settingsConfig is not valid JSON: {e}"))
-        })?;
-        let obj = v.as_object_mut().ok_or_else(|| {
-            AppError::Config("provider settingsConfig is not a JSON object".into())
-        })?;
-        let mut stripped = false;
-        if let Some(env) = obj.get_mut("env") {
-            let env = env.as_object_mut().ok_or_else(|| {
-                AppError::Config("provider settingsConfig env is not a JSON object".into())
-            })?;
-            for key in SECRET_ENV_KEYS {
-                if env.remove(*key).is_some() {
-                    stripped = true;
-                }
-            }
-        }
-        // Codex 供应商的 `auth` 对象是 auth.json 的镜像，`OPENAI_API_KEY`
-        // 住在里面——同样受密钥清单约束，剥离规则与 `env` 一致：非对象
-        // auth 无法证明密钥缺失，宁可不发布。
-        if let Some(auth) = obj.get_mut("auth") {
-            let auth = auth.as_object_mut().ok_or_else(|| {
-                AppError::Config("provider settingsConfig auth is not a JSON object".into())
-            })?;
-            for key in SECRET_ENV_KEYS {
-                if auth.remove(*key).is_some() {
-                    stripped = true;
-                }
-            }
-        }
-        // OpenCode 供应商的密钥走 `options.apiKey`（与 claude 的 `env` / codex 的
-        // `auth` 是不同的 schema 路径）；OpenCode 官方示例还把 bearer token 放在
-        // `options.headers.Authorization`，是独立于 apiKey 的认证路径。剥
-        // `options.apiKey` 整个移除；`options.headers` 走认证头白名单（大小写不
-        // 敏感——HTTP header 本就大小写不敏感），元数据头（`Helicone-*` 等可观测
-        // 性标签）不是凭据，保留。`options` 非对象 → 跳过（不像 `env`/`auth` 报
-        // 错：options 不是所有 app 的必备字段，非对象 options 无密钥泄露风险，不
-        // 应阻止 claude/codex 等不带 options 的 provider 发布）。
-        if let Some(options) = obj.get_mut("options").and_then(|o| o.as_object_mut()) {
-            if options.remove("apiKey").is_some() {
-                stripped = true;
-            }
-            if let Some(headers) = options.get_mut("headers").and_then(|h| h.as_object_mut()) {
-                let to_strip: Vec<String> = headers
-                    .keys()
-                    .filter(|k| SECRET_HEADER_KEYS.contains(&k.to_ascii_lowercase().as_str()))
-                    .cloned()
-                    .collect();
-                for k in to_strip {
-                    headers.remove(&k);
-                    stripped = true;
-                }
-            }
-        }
-        // Template variables recorded in meta (raw JSON text, frontend-owned)
-        // can carry the same secret keys — strip them too. Unparseable meta
-        // never proves them absent.
-        let meta_trimmed = self.meta.trim();
-        let mut meta: serde_json::Value = if meta_trimmed.is_empty() {
-            serde_json::json!({})
-        } else {
-            serde_json::from_str(meta_trimmed)
-                .map_err(|e| AppError::Config(format!("provider meta is not valid JSON: {e}")))?
-        };
-        let mut meta_stripped = false;
-        if let Some(values) = meta
-            .get_mut("templateValues")
-            .and_then(|tv| tv.as_object_mut())
-        {
-            for key in SECRET_ENV_KEYS {
-                if values.remove(*key).is_some() {
-                    meta_stripped = true;
-                }
-            }
-            // Stripped everything ⇒ drop the now-empty record instead of
-            // publishing `{"templateValues":{}}` noise.
-            if meta_stripped && values.is_empty() {
-                if let Some(meta_obj) = meta.as_object_mut() {
-                    meta_obj.remove("templateValues");
-                }
-            }
-        }
-        if !stripped && !meta_stripped {
+        let settings_config =
+            crate::provider::keys::strip_settings_config(&self.settings_config, "provider")?;
+        let meta = crate::provider::keys::strip_meta(&self.meta, "provider")?;
+        if settings_config == self.settings_config && meta == self.meta {
             return Ok(self.clone());
         }
         let mut p = self.clone();
-        if stripped {
-            p.settings_config = serde_json::to_string_pretty(&v)?;
-        }
-        if meta_stripped {
-            p.meta = serde_json::to_string_pretty(&meta)?;
-        }
+        p.settings_config = settings_config;
+        p.meta = meta;
         Ok(p)
     }
 
@@ -357,6 +248,7 @@ fn json_text_eq(a: &str, b: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::provider::keys::SECRET_ENV_KEYS;
 
     #[test]
     fn category_db_str_roundtrips() {

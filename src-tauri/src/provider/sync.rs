@@ -14,13 +14,13 @@
 //! it must not mis-merge it by id.
 //!
 //! **API keys never enter the file.** Every provider is
-//! [`Provider::redacted`] on write: the four `SECRET_ENV_KEYS` are stripped
-//! from `settingsConfig`'s `env` **and** from `meta.templateValues` — the
-//! frontend's record of filled `${VAR}` template variables, which is how the
-//! Bedrock presets carry AK/SK (`AWS_REGION` — a region code or a `${VAR}`
-//! placeholder — is not a credential and stays). Each device's keys live only
-//! in its local DB; the active provider is local-only too (config.json) and
-//! never touches this file.
+//! [`Provider::redacted`] on write — the five key locations (settingsConfig
+//! `env` / `auth`, opencode `options.apiKey` / `options.headers` auth-header
+//! whitelist, `meta.templateValues`) are stripped per [`crate::provider::keys`],
+//! the single source of truth for where secrets live (`AWS_REGION` — a region
+//! code or a `${VAR}` placeholder — is not a credential and stays). Each
+//! device's keys live only in its local DB; the active provider is local-only
+//! too (config.json) and never touches this file.
 //!
 //! Sync orchestration lives in `sync::flow` (this module holds no git
 //! knowledge): **push** (`push_usage`) calls [`write_own_providers`] to
@@ -33,17 +33,17 @@
 //!
 //! Import is latest-wins on `updated_at` and NEVER drops a local key
 //! ([`merge_local_keys`]): the peer's key-stripped structure wins, but the
-//! local row's secret env keys are merged back in. Since `save_provider`
-//! advances `updated_at` only on structural change, the comparison is a true
-//! structural freshness check — a key fill on one device can never mask a
-//! peer's later edit. `sort_index` (display order) stays a local preference:
-//! `import_provider` keeps the local row's value, so pulls never shuffle the
-//! user's order.
+//! local row's secret values — every location in [`crate::provider::keys`] —
+//! are merged back in. Since `save_provider` advances `updated_at` only on
+//! structural change, the comparison is a true structural freshness check —
+//! a key fill on one device can never mask a peer's later edit. `sort_index`
+//! (display order) stays a local preference: `import_provider` keeps the
+//! local row's value, so pulls never shuffle the user's order.
 
 use crate::config::Paths;
 use crate::db::Store;
-use crate::error::{AppError, AppResult};
-use crate::model::{Provider, SECRET_ENV_KEYS};
+use crate::error::AppResult;
+use crate::model::Provider;
 
 /// The providers.json schema version this binary reads (sessions-snapshot
 /// style `v` gate). Files with a HIGHER `v` are skipped whole on read — this
@@ -169,90 +169,27 @@ pub fn read_all_peer_providers(paths: &Paths, self_device_id: &str) -> AppResult
     Ok(merge_providers_latest_wins(all))
 }
 
-/// Re-apply a local row's secret env keys onto a peer's key-stripped version:
+/// Re-apply a local row's secret values onto a peer's key-stripped version:
 /// the pull-side key guard. The peer's structure wins, but this device's
-/// locally-filled keys are merged back in — an import can update structure
-/// but never leave the local key empty by overwriting it with the peer's
-/// keyless copy. The same guard covers `meta.templateValues` (the frontend's
-/// record of filled `${VAR}` template variables — the Bedrock presets route
-/// AK/SK through those, and the sync write strips them, so the peer's copy is
-/// keyless there too).
+/// locally-filled credentials are merged back in — an import can update
+/// structure but never leave a local credential empty by overwriting it with
+/// the peer's keyless copy. The key locations and their strip/restore
+/// semantics are defined in [`crate::provider::keys`] (single source of
+/// truth); this function is a thin shell that restores both surfaces.
+/// (It used to restore only `env` / `templateValues` — a pull that imported a
+/// peer's codex / opencode structure silently zeroed the local `auth` key and
+/// `options.apiKey` / whitelist headers.)
 ///
-/// Both configs must parse (a blank/unparseable side ⇒ `Err`, and the caller
-/// skips that import): a peer version we can't merge into is not imported
-/// over a local row, and a local row whose key location we can't see is never
-/// replaced. A local row without an `env` object (missing, or not an object)
-/// contributes no keys instead of erroring: secret keys live only inside an
-/// `env` object, so a missing one means there is nothing to preserve — and
-/// refusing the import would freeze this row forever behind any peer edit,
-/// so its structure would never receive the peer's later updates. The same
-/// tolerance applies to `meta.templateValues` — a missing or non-object
-/// template-values record contributes nothing and never blocks the import.
+/// `Err` ⇒ the caller skips the import: a peer version we can't merge into
+/// is not imported over a local row, and a local row whose key locations we
+/// can't see is never replaced.
 fn merge_local_keys(local: &Provider, peer: &Provider) -> AppResult<Provider> {
-    let parse = |raw: &str, what: &str| -> AppResult<serde_json::Value> {
-        serde_json::from_str(raw.trim())
-            .map_err(|e| AppError::Config(format!("{what} settingsConfig is not valid JSON: {e}")))
-    };
-    let mut config = parse(&peer.settings_config, "peer provider")?;
-    let config_obj = config.as_object_mut().ok_or_else(|| {
-        AppError::Config("peer provider settingsConfig is not a JSON object".into())
-    })?;
-    if let Some(env) = config_obj.get_mut("env").and_then(|e| e.as_object_mut()) {
-        let local_config = parse(&local.settings_config, "local provider")?;
-        // 本机行没有 env 对象（缺失或非对象）→ 没有可回填的 key：密钥只住在
-        // env 对象里，缺了就是没有可丢的 key——贡献零 key，让 peer 结构照常
-        // 导入，不阻塞该行接收后续结构更新。
-        if let Some(local_env) = local_config.get("env").and_then(|e| e.as_object()) {
-            for key in SECRET_ENV_KEYS {
-                if let Some(v) = local_env.get(*key) {
-                    env.insert((*key).to_string(), v.clone());
-                }
-            }
-        }
-    }
-    // 同一 guard 覆盖 meta.templateValues。peer meta 解析失败 → 无法证明其
-    // 无密钥，拒绝导入（宁可不导）；本机 meta 解析失败同理——本机 key 位置
-    // 不可见就不替换。
-    let parse_meta = |raw: &str, what: &str| -> AppResult<serde_json::Value> {
-        let trimmed = raw.trim();
-        if trimmed.is_empty() {
-            return Ok(serde_json::json!({}));
-        }
-        serde_json::from_str(trimmed)
-            .map_err(|e| AppError::Config(format!("{what} meta is not valid JSON: {e}")))
-    };
-    let mut peer_meta = parse_meta(&peer.meta, "peer provider")?;
-    let peer_meta_obj = peer_meta
-        .as_object_mut()
-        .ok_or_else(|| AppError::Config("peer provider meta is not a JSON object".into()))?;
-    let mut meta_changed = false;
-    let local_meta = parse_meta(&local.meta, "local provider")?;
-    if let (Some(peer_values), Some(local_values)) = (
-        peer_meta_obj
-            .get_mut("templateValues")
-            .and_then(|tv| tv.as_object_mut()),
-        local_meta
-            .get("templateValues")
-            .and_then(|tv| tv.as_object()),
-    ) {
-        for key in SECRET_ENV_KEYS {
-            if let Some(v) = local_values.get(*key) {
-                peer_values.insert((*key).to_string(), v.clone());
-                meta_changed = true;
-            }
-        }
-        if meta_changed {
-            if peer_values.is_empty() {
-                peer_meta_obj.remove("templateValues");
-            }
-            let mut merged = peer.clone();
-            merged.settings_config = serde_json::to_string_pretty(&config)?;
-            merged.meta = serde_json::to_string_pretty(&peer_meta)?;
-            return Ok(merged);
-        }
-    }
     let mut merged = peer.clone();
-    merged.settings_config = serde_json::to_string_pretty(&config)?;
+    merged.settings_config = crate::provider::keys::restore_settings_config(
+        &local.settings_config,
+        &peer.settings_config,
+    )?;
+    merged.meta = crate::provider::keys::restore_meta(&local.meta, &peer.meta)?;
     Ok(merged)
 }
 
@@ -292,6 +229,7 @@ mod tests {
     use crate::config::Paths;
     use crate::db::testutil::mem;
     use crate::model::{App, ProviderCategory};
+    use crate::provider::keys::SECRET_ENV_KEYS;
     use std::path::PathBuf;
 
     fn provider(id: &str, name: &str, settings_config: &str, updated_at: &str) -> Provider {
@@ -708,6 +646,157 @@ mod tests {
         assert_eq!(
             meta["templateValues"]["AWS_SECRET_ACCESS_KEY"], "top-secret",
             "local secret template values never overwritten"
+        );
+    }
+
+    /// codex 形状：pull 导入 peer 结构后，local 的 `auth.OPENAI_API_KEY`
+    /// 必须回填——曾经只回填 env / templateValues 两处，codex 的 auth 被
+    /// peer 的无密副本静默清空（真实缺陷的防回归）。
+    #[test]
+    fn import_peer_providers_merges_local_codex_auth_key_back() {
+        let s = mem();
+        let tmp = tempfile::tempdir().unwrap();
+        let paths = Paths::resolve(tmp.path());
+        let local = Provider {
+            app: App::Codex,
+            ..provider(
+                "aaaaaaaa",
+                "Codex-Provider",
+                r#"{"auth":{"OPENAI_API_KEY":"sk-codex-local"},"config":"model = \"gpt-5.6\""}"#,
+                "2026-08-01T00:00:00.000Z",
+            )
+        };
+        s.import_provider(&local).unwrap();
+        // Peer 文件：更新的结构（新模型），auth 无密（同步写剥掉了
+        // OPENAI_API_KEY，auth 对象本身保留）。
+        write_file(
+            &paths,
+            "bbccddee0011",
+            &[Provider {
+                app: App::Codex,
+                ..provider(
+                    "aaaaaaaa",
+                    "Codex-Provider",
+                    r#"{"auth":{},"config":"model = \"gpt-6\""}"#,
+                    "2026-08-02T00:00:00.000Z",
+                )
+            }],
+        );
+
+        import_peer_providers(&s, &paths, "aabbccddeeff").unwrap();
+
+        let row = s.get_provider(App::Codex, "aaaaaaaa").unwrap().unwrap();
+        let cfg: serde_json::Value = serde_json::from_str(&row.settings_config).unwrap();
+        assert_eq!(
+            cfg["config"], serde_json::json!("model = \"gpt-6\""),
+            "peer 结构导入"
+        );
+        assert_eq!(
+            cfg["auth"]["OPENAI_API_KEY"], serde_json::json!("sk-codex-local"),
+            "local codex auth key merged back"
+        );
+    }
+
+    /// opencode 形状：pull 导入 peer 结构后，local 的 `options.apiKey` 与
+    /// `options.headers` 白名单条目必须回填；元数据头（非凭据）以 peer 为准。
+    #[test]
+    fn import_peer_providers_merges_local_opencode_keys_back() {
+        let s = mem();
+        let tmp = tempfile::tempdir().unwrap();
+        let paths = Paths::resolve(tmp.path());
+        let local = Provider {
+            app: App::OpenCode,
+            ..provider(
+                "aaaaaaaa",
+                "DeepSeek",
+                r#"{"npm":"@ai-sdk/openai-compatible","options":{"baseURL":"https://old.dev","apiKey":"sk-local","headers":{"Authorization":"Bearer local-tok","Helicone-Auth":"meta"}}}"#,
+                "2026-08-01T00:00:00.000Z",
+            )
+        };
+        s.import_provider(&local).unwrap();
+        // Peer 文件：更新的 baseURL；apiKey 被剥、Authorization 白名单头被剥，
+        // 元数据头 Helicone-Auth 保留（同步写的真实投影形状）。
+        write_file(
+            &paths,
+            "bbccddee0011",
+            &[Provider {
+                app: App::OpenCode,
+                ..provider(
+                    "aaaaaaaa",
+                    "DeepSeek",
+                    r#"{"npm":"@ai-sdk/openai-compatible","options":{"baseURL":"https://api.deepseek.com","headers":{"Helicone-Auth":"meta"}}}"#,
+                    "2026-08-02T00:00:00.000Z",
+                )
+            }],
+        );
+
+        import_peer_providers(&s, &paths, "aabbccddeeff").unwrap();
+
+        let row = s.get_provider(App::OpenCode, "aaaaaaaa").unwrap().unwrap();
+        let cfg: serde_json::Value = serde_json::from_str(&row.settings_config).unwrap();
+        assert_eq!(
+            cfg["options"]["baseURL"], "https://api.deepseek.com",
+            "peer 结构导入"
+        );
+        assert_eq!(
+            cfg["options"]["apiKey"], "sk-local",
+            "local apiKey merged back"
+        );
+        assert_eq!(
+            cfg["options"]["headers"]["Authorization"], "Bearer local-tok",
+            "local whitelist header merged back"
+        );
+        assert_eq!(
+            cfg["options"]["headers"]["Helicone-Auth"], "meta",
+            "peer 的元数据头保留"
+        );
+    }
+
+    /// peer 的 meta 在同步写时把全密钥的 templateValues 整体移除后，pull 仍
+    /// 要把 local 的 AK/SK 建回来——restore 重建被 strip 移除的空记录。
+    #[test]
+    fn import_peer_providers_recreates_all_secret_template_values() {
+        let s = mem();
+        let tmp = tempfile::tempdir().unwrap();
+        let paths = Paths::resolve(tmp.path());
+        let local = provider_with_meta(
+            "aaaaaaaa",
+            "Bedrock",
+            r#"{"env":{"ANTHROPIC_BASE_URL":"https://bedrock-runtime.${AWS_REGION}.amazonaws.com","AWS_REGION":"us-east-1"}}"#,
+            r#"{"templateValues":{"AWS_ACCESS_KEY_ID":"AKIA123","AWS_SECRET_ACCESS_KEY":"top-secret"}}"#,
+            "2026-08-01T00:00:00.000Z",
+        );
+        s.import_provider(&local).unwrap();
+        // Peer 文件：更新的 region；templateValues 只有密钥 → 同步写整体移除
+        // 了该记录，meta 变空。
+        write_file(
+            &paths,
+            "bbccddee0011",
+            &[provider_with_meta(
+                "aaaaaaaa",
+                "Bedrock",
+                r#"{"env":{"ANTHROPIC_BASE_URL":"https://bedrock-runtime.${AWS_REGION}.amazonaws.com","AWS_REGION":"eu-west-1"}}"#,
+                r#"{}"#,
+                "2026-08-02T00:00:00.000Z",
+            )],
+        );
+
+        import_peer_providers(&s, &paths, "aabbccddeeff").unwrap();
+
+        let row = s.get_provider(App::Claude, "aaaaaaaa").unwrap().unwrap();
+        let cfg: serde_json::Value = serde_json::from_str(&row.settings_config).unwrap();
+        assert_eq!(
+            cfg["env"]["AWS_REGION"], "eu-west-1",
+            "peer 结构导入"
+        );
+        let meta: serde_json::Value = serde_json::from_str(&row.meta).unwrap();
+        assert_eq!(
+            meta["templateValues"]["AWS_ACCESS_KEY_ID"], "AKIA123",
+            "全密钥 templateValues 被整体移除后重建，AK 回来"
+        );
+        assert_eq!(
+            meta["templateValues"]["AWS_SECRET_ACCESS_KEY"], "top-secret",
+            "SK 回来"
         );
     }
 

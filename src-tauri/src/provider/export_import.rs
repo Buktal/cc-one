@@ -78,10 +78,11 @@ pub struct ImportPlan {
 }
 
 /// 全部供应商 → 导出文档 JSON 文本。`include_keys=false` 时对每个 provider
-/// 调 [`Provider::redacted`]（剥 `SECRET_ENV_KEYS`，覆盖 settingsConfig 的
-/// `env` 与 meta.templateValues 两处；剥不了 → `Err` 拒绝导出——宁可不导，
-/// 不能导出无法证明无密钥的配置）；`include_keys=true` 时 settingsConfig
-/// 原样保留（往返后字节一致）。
+/// 调 [`Provider::redacted`]（密钥位置清单在 [`crate::provider::keys`]：剥
+/// settingsConfig 的 `env` / `auth`、opencode 的 `options.apiKey` /
+/// `options.headers` 认证头白名单与 meta.templateValues；剥不了 → `Err` 拒绝
+/// 导出——宁可不导，不能导出无法证明无密钥的配置）；`include_keys=true` 时
+/// settingsConfig 原样保留（往返后字节一致）。
 pub fn export_document(
     providers: &[Provider],
     include_keys: bool,
@@ -188,7 +189,8 @@ pub fn apply_import(
 mod tests {
     use super::*;
     use crate::db::testutil::mem;
-    use crate::model::{App, ProviderCategory, SECRET_ENV_KEYS};
+    use crate::model::{App, ProviderCategory};
+    use crate::provider::keys::SECRET_ENV_KEYS;
 
     /// 构造一份带 env 密钥的 settingsConfig 文本（含非密钥 env 键和顶层字段，
     /// 模拟真实快照）。
@@ -314,6 +316,67 @@ mod tests {
         for key in SECRET_ENV_KEYS {
             assert!(!text.contains(key), "{key} 不得出现在导出文档");
         }
+    }
+
+    /// 导出剥 key 走与同步投影相同的五处清单：codex 的 auth 与 opencode 的
+    /// options.apiKey / 认证头白名单同样被剥——清单已收敛到 provider::keys，
+    /// redacted 是唯一剥点（曾只覆盖 env 与 templateValues）。
+    #[test]
+    fn export_without_keys_strips_codex_and_opencode_locations() {
+        let ps = [
+            Provider {
+                app: App::Codex,
+                ..provider(
+                    "a",
+                    "Codex-A",
+                    r#"{"auth":{"OPENAI_API_KEY":"sk-codex"},"config":"model = \"gpt-5.6\""}"#,
+                )
+            },
+            Provider {
+                app: App::OpenCode,
+                ..provider(
+                    "b",
+                    "OpenCode-B",
+                    r#"{"npm":"@ai-sdk/openai-compatible","options":{"baseURL":"https://api.deepseek.com","apiKey":"sk-opencode","headers":{"Authorization":"Bearer tok","Helicone-Auth":"meta"}}}"#,
+                )
+            },
+        ];
+        let text = export_document(&ps, false, "ts").unwrap();
+        assert!(!text.contains("sk-codex"));
+        assert!(!text.contains("sk-opencode"));
+        assert!(!text.contains("Bearer tok"));
+        let doc = parsed(&text);
+        let codex: serde_json::Value = serde_json::from_str(
+            &doc.providers
+                .iter()
+                .find(|p| p.app == App::Codex)
+                .unwrap()
+                .settings_config,
+        )
+        .unwrap();
+        assert!(codex["auth"].get("OPENAI_API_KEY").is_none(), "codex auth 必须剥");
+        assert_eq!(
+            codex["config"],
+            serde_json::json!("model = \"gpt-5.6\""),
+            "非密钥字段保留"
+        );
+        let opencode: serde_json::Value = serde_json::from_str(
+            &doc.providers
+                .iter()
+                .find(|p| p.app == App::OpenCode)
+                .unwrap()
+                .settings_config,
+        )
+        .unwrap();
+        assert!(opencode["options"].get("apiKey").is_none(), "opencode apiKey 必须剥");
+        assert!(
+            opencode["options"]["headers"].get("Authorization").is_none(),
+            "认证头必须剥"
+        );
+        assert_eq!(
+            opencode["options"]["headers"]["Helicone-Auth"], "meta",
+            "元数据头保留"
+        );
     }
 
     #[test]
