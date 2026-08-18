@@ -7,11 +7,25 @@
 
 import dayjs, { type Dayjs } from "dayjs"
 
+import {
+  FILTER_DIMENSIONS,
+  type FilterState,
+} from "@/app/store/slices/filterSlice"
 import type {
   ModelStatsRow,
   TrendPoint,
   UsageStats,
 } from "@/types/generated/bindings"
+
+/** Stable cache id for a FilterState (so each filter scope caches
+ *  independently). Built from the logical dimensions only — a dynamic preset
+ *  stores no date, so the id stays stable across a day and the bounds roll via
+ *  the collect-interval refresh chain. Concatenates every FilterState
+ *  dimension (FILTER_DIMENSIONS) — derive.test.ts fails if one is missed, so
+ *  differing dimension values can never silently share a cache entry. */
+export function filterId(f: FilterState): string {
+  return FILTER_DIMENSIONS.map((k) => f[k]).join("|")
+}
 
 /** A zero-valued trend point used to pad empty hour buckets. */
 export function zeroTrendPoint(day: string): TrendPoint {

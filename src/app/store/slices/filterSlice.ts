@@ -23,6 +23,21 @@ export interface FilterState extends DayRange {
   device_scope: string
 }
 
+/** Every FilterState dimension, in cache-key concatenation order. Cache keys
+ *  derived from a FilterState — filterId (features/usage/derive.ts) and
+ *  sessionSpecId (features/sessions/derive.ts) — must cover all of these;
+ *  features/usage/derive.test.ts turns red when a new dimension is added here
+ *  but missed there, so differing dimension values can never silently share a
+ *  cache entry. */
+export const FILTER_DIMENSIONS = [
+  "range_preset",
+  "from_day",
+  "to_day",
+  "model",
+  "source",
+  "device_scope",
+] as const satisfies readonly (keyof FilterState)[]
+
 /** Default filter — "today", unconstrained otherwise. Not persisted: each app
  *  start begins here. */
 export const DEFAULT_FILTER: FilterState = {

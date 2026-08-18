@@ -1,6 +1,7 @@
-// Redux store assembly. Single consolidated RTK Query API
-// (`vaultApi`) holds every Tauri command endpoint — no feature-injection
-// side-effect imports.
+// Redux store assembly. Every Tauri command endpoint lives on the single RTK
+// Query API (`vaultApi`, created in ./api-core); the endpoints are injected
+// per feature (src/features/*/api.ts) and ./api.ts re-exports every hook, so
+// this module only wires the reducer + middleware.
 //
 // The filter slice is deliberately NOT persisted: each app start resets to the
 // default "today" filter, matching CC-Switch. Time-range / model /

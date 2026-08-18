@@ -4,7 +4,10 @@
 // isolation (architecture.md: "关键不变量用代码表达") — the hook wires these to
 // React state + RTK Query, these own the math.
 
-import type { FilterState } from "@/app/store/slices/filterSlice"
+import {
+  FILTER_DIMENSIONS,
+  type FilterState,
+} from "@/app/store/slices/filterSlice"
 import { dayRangeToTs, effectiveDays } from "@/lib/date-range"
 import { ALL_FILTER } from "@/lib/source-tags"
 import type {
@@ -170,7 +173,10 @@ export function buildSessionFilter(spec: SessionScopeSpec): SessionFilter {
 /**
  * Stable cache id for a sessions scope (mirrors filterId on the usage side):
  * built from the logical dimensions only, so a dynamic preset stays stable
- * across a day and the bounds roll via the refresh chain.
+ * across a day and the bounds roll via the refresh chain. Concatenates the
+ * scope's own dimensions plus every FilterState dimension (FILTER_DIMENSIONS)
+ * — derive.test.ts fails if one is missed, so differing dimension values can
+ * never silently share a cache entry.
  */
 export function sessionSpecId(spec: SessionScopeSpec): string {
   return [
@@ -178,12 +184,7 @@ export function sessionSpecId(spec: SessionScopeSpec): string {
     spec.selfDeviceId,
     spec.selectedGroupId,
     spec.search ?? "",
-    spec.filter.range_preset,
-    spec.filter.from_day,
-    spec.filter.to_day,
-    spec.filter.model,
-    spec.filter.source,
-    spec.filter.device_scope,
+    ...FILTER_DIMENSIONS.map((k) => spec.filter[k]),
   ].join("|")
 }
 

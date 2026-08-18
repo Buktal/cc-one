@@ -4,6 +4,10 @@
 
 import { describe, expect, it } from "vitest"
 
+import {
+  DEFAULT_FILTER,
+  FILTER_DIMENSIONS,
+} from "@/app/store/slices/filterSlice"
 import type {
   SessionGroup,
   SessionMessage,
@@ -23,7 +27,9 @@ import {
   neighborNav,
   nextFavValue,
   reorderGroupIds,
+  type SessionScopeSpec,
   sessionSpan,
+  sessionSpecId,
   sessionTabFilter,
   spanLabelKey,
   transcriptMatches,
@@ -705,5 +711,48 @@ describe("transcriptMatches", () => {
     const text = `${"x".repeat(100)} needle`
     const [hit] = transcriptMatches([msg(text)], "needle")
     expect(hit.snippet.endsWith("needle")).toBe(true)
+  })
+})
+
+// ------------------------------------------------------- cache keys --------
+
+describe("sessionSpecId — cache-key dimension completeness", () => {
+  const scope = (): SessionScopeSpec => ({
+    filter: { ...DEFAULT_FILTER },
+    tab: "local",
+    selfDeviceId: "dev-self",
+    selectedGroupId: "",
+    search: null,
+  })
+
+  it("covers every FilterState dimension (no silent cache sharing)", () => {
+    for (const dim of FILTER_DIMENSIONS) {
+      const base = scope()
+      const other: SessionScopeSpec = {
+        ...base,
+        filter: { ...base.filter, [dim]: "x" },
+      }
+      expect(
+        sessionSpecId(other),
+        `filter.${dim} must be part of sessionSpecId or two scopes share one cache entry`,
+      ).not.toBe(sessionSpecId(base))
+    }
+  })
+
+  it("covers the session-only dimensions", () => {
+    const cases: Array<{ label: string; patch: Partial<SessionScopeSpec> }> = [
+      { label: "tab", patch: { tab: "favorites" } },
+      { label: "selfDeviceId", patch: { selfDeviceId: "dev-other" } },
+      { label: "selectedGroupId", patch: { selectedGroupId: "g1" } },
+      { label: "search", patch: { search: "query" } },
+    ]
+    for (const { label, patch } of cases) {
+      const base = scope()
+      const other: SessionScopeSpec = { ...base, ...patch }
+      expect(
+        sessionSpecId(other),
+        `${label} must be part of sessionSpecId or two scopes share one cache entry`,
+      ).not.toBe(sessionSpecId(base))
+    }
   })
 })

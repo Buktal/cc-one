@@ -2,8 +2,14 @@ import dayjs from "dayjs"
 import { describe, expect, it } from "vitest"
 
 import {
+  DEFAULT_FILTER,
+  FILTER_DIMENSIONS,
+  type FilterState,
+} from "@/app/store/slices/filterSlice"
+import {
   classifyStopReason,
   costIsNotable,
+  filterId,
   groupRowsByDay,
   hourlySnapshot,
   modelMetricValue,
@@ -330,5 +336,25 @@ describe("groupRowsByDay", () => {
     expect(groupRowsByDay([row("garbage"), row("garbage")])[0].dayKey).toBe(
       "garbage",
     )
+  })
+})
+
+// ------------------------------------------------------- cache keys --------
+
+describe("filterId — cache-key dimension completeness", () => {
+  it("the dimension registry covers every FilterState field", () => {
+    expect(new Set(FILTER_DIMENSIONS)).toEqual(
+      new Set(Object.keys(DEFAULT_FILTER)),
+    )
+  })
+
+  it("each dimension changes the cache id (no silent cache sharing)", () => {
+    for (const dim of FILTER_DIMENSIONS) {
+      const other: FilterState = { ...DEFAULT_FILTER, [dim]: "x" }
+      expect(
+        filterId(other),
+        `${dim} must be part of filterId or two filters share one cache entry`,
+      ).not.toBe(filterId(DEFAULT_FILTER))
+    }
   })
 })
