@@ -2,7 +2,10 @@
 //! Google 原生路径（`GET /v1beta/models`，Gemini）。
 //!
 //! WebView 里 fetch 会撞 CORS，所以请求必须由后端发（ureq，与
-//! `pricing::fetch_litellm` 同一 HTTP 栈）。OpenAI 兼容路径的候选 URL 构造
+//! `pricing::fetch_litellm` 同一 HTTP 栈）。两条路径共享同一执行骨架
+//! （[`fetch_with_spec`]）：协议差异（URL 候选 / 认证头 / 解析器）全部收进
+//! [`ModelsFetchSpec`]，骨架只做「发请求 + 按状态码/传输错误分桶」——请求
+//! 循环与分桶代码只有一份。OpenAI 兼容路径的候选 URL 构造
 //! （[`candidate_models_urls`]）是纯函数：modelsUrl 覆写 → baseURL 拼
 //! `/v1/models` → 版本段识别（`/v1` 结尾拼 `/models`）→ 兼容子路径剥离 →
 //! 去重保序最多 3 条——全部可单测，不碰网络。请求按候选顺序尝试，首个成功
@@ -147,36 +150,45 @@ fn strip_compat_suffix(base_url: &str) -> Option<&str> {
     None
 }
 
-/// 获取供应商的可用模型列表（模型 id，按 id 排序）。按候选顺序尝试，首个
-/// 成功立即返回。失败错误串带模块文档里的前缀标签，前端按标签分桶提示。
-pub fn fetch_models(
-    base_url: &str,
-    api_key: &str,
-    models_url: Option<&str>,
-) -> AppResult<Vec<String>> {
-    fetch_models_with_timeout(base_url, api_key, models_url, FETCH_TIMEOUT)
+/// 一次模型列表请求的协议规格：协议差异（URL 候选 / 认证头 / 解析器）全部
+/// 收进这里，执行骨架 [`fetch_with_spec`] 只负责「发请求 + 按状态码/传输
+/// 错误分桶」——两条协议（OpenAI 兼容 / Google 原生）不再各写各的请求循环。
+struct ModelsFetchSpec<'a> {
+    /// 候选 URL（按序尝试）：404/405 试下一个候选，全部失败 → ENDPOINT_CLOSED
+    /// （OpenAI 兼容路径 = [`candidate_models_urls`] 构造；Gemini = 单一
+    /// [`gemini_models_url`]，无候选遍历但同一「全部候选失败」分桶）。
+    urls: Vec<String>,
+    /// 认证头（名称, 值）：OpenAI 兼容 = `Authorization: Bearer <key>`；
+    /// Google 原生 = `x-goog-api-key: <key>`。值 trim 后为空 → AUTH_FAILED。
+    auth_header: (&'a str, String),
+    /// 2xx 响应体 → 模型 id 列表的解析器（协议专属，格式错误 → BAD_FORMAT）。
+    parse: fn(&str) -> AppResult<Vec<String>>,
 }
 
-/// `fetch_models` 的可测内层：超时作为参数注入，让超时用例不必真等 10 秒。
-fn fetch_models_with_timeout(
-    base_url: &str,
-    api_key: &str,
-    models_url: Option<&str>,
-    timeout: Duration,
-) -> AppResult<Vec<String>> {
-    if api_key.trim().is_empty() {
+/// 执行骨架（发请求 + 分桶，协议无关）：按序尝试候选 URL，首个 2xx 交协议
+/// 解析器；401/403 → AUTH_FAILED；404/405 → 记下继续试下一个候选，全部失败
+/// → ENDPOINT_CLOSED；其余状态码 → NETWORK；超时 → TIMEOUT；其余传输错误
+/// → NETWORK。前置检查：认证头值 trim 后为空 → AUTH_FAILED（不发请求）；
+/// 候选为空 → ENDPOINT_CLOSED（base url is empty）。分桶契约一份代码一份
+/// 测试（不再每协议各写一套）。
+fn fetch_with_spec(spec: ModelsFetchSpec, timeout: Duration) -> AppResult<Vec<String>> {
+    let ModelsFetchSpec {
+        urls,
+        auth_header,
+        parse,
+    } = spec;
+    let auth_value = auth_header.1.trim();
+    if auth_value.is_empty() {
         return Err(fetch_err(TAG_AUTH, "api key is empty"));
     }
-    let candidates = candidate_models_urls(base_url, models_url);
-    if candidates.is_empty() {
+    if urls.is_empty() {
         return Err(fetch_err(TAG_ENDPOINT, "base url is empty"));
     }
     let mut last_not_found = String::new();
-    let trimmed_key = api_key.trim();
-    for url in &candidates {
+    for url in &urls {
         let request = ureq::get(url)
             .timeout(timeout)
-            .set("Authorization", &format!("Bearer {trimmed_key}"))
+            .set(auth_header.0, auth_value)
             .set(
                 "User-Agent",
                 &format!("cc one/{}", env!("CARGO_PKG_VERSION")),
@@ -184,7 +196,7 @@ fn fetch_models_with_timeout(
         match request.call() {
             Ok(response) => {
                 let body = response.into_string().unwrap_or_default();
-                return parse_models_response(&body);
+                return parse(&body);
             }
             Err(ureq::Error::Status(status, response)) => {
                 let body = truncate_body(&response.into_string().unwrap_or_default());
@@ -211,6 +223,43 @@ fn fetch_models_with_timeout(
         TAG_ENDPOINT,
         format!("all candidates failed: {last_not_found}"),
     ))
+}
+
+/// 获取供应商的可用模型列表（模型 id，按 id 排序）。按候选顺序尝试，首个
+/// 成功立即返回。失败错误串带模块文档里的前缀标签，前端按标签分桶提示。
+pub fn fetch_models(
+    base_url: &str,
+    api_key: &str,
+    models_url: Option<&str>,
+) -> AppResult<Vec<String>> {
+    fetch_models_with_timeout(base_url, api_key, models_url, FETCH_TIMEOUT)
+}
+
+/// `fetch_models` 的可测内层：超时作为参数注入，让超时用例不必真等 10 秒。
+/// 协议规格 = 候选 URL（[`candidate_models_urls`]）+ `Authorization: Bearer`
+/// + OpenAI 兼容解析器；执行走共用骨架 [`fetch_with_spec`]。
+fn fetch_models_with_timeout(
+    base_url: &str,
+    api_key: &str,
+    models_url: Option<&str>,
+    timeout: Duration,
+) -> AppResult<Vec<String>> {
+    let key = api_key.trim();
+    // key 为空 → 认证头值置空（空值让骨架的前置检查分桶成 AUTH_FAILED——
+    // 没有 token 就没有 Bearer 头，值诚实反映「无凭据」）。
+    let auth_value = if key.is_empty() {
+        String::new()
+    } else {
+        format!("Bearer {key}")
+    };
+    fetch_with_spec(
+        ModelsFetchSpec {
+            urls: candidate_models_urls(base_url, models_url),
+            auth_header: ("Authorization", auth_value),
+            parse: parse_models_response,
+        },
+        timeout,
+    )
 }
 
 /// 解析 OpenAI 兼容的 /v1/models 响应体（`{ "data": [{ "id": … }] }`），按 id
@@ -326,59 +375,36 @@ pub fn parse_gemini_models_response(body: &str) -> AppResult<Vec<String>> {
 /// 获取 Gemini 供应商的可用模型列表（模型 id，按出现顺序去重）。构造单一
 /// 端点 URL → 发 `GET` 请求（ureq，同一 HTTP 栈 + 同一 10s 超时），带
 /// `x-goog-api-key` 头 → 按状态码分桶错误 → 2xx 走
-/// [`parse_gemini_models_response`]。错误标签与 [`fetch_models`] 完全一致。
+/// [`parse_gemini_models_response`]。错误标签与 [`fetch_models`] 完全一致——
+/// 执行也走同一骨架 [`fetch_with_spec`]（Gemini 端点单一：404/405 的「全部
+/// 候选失败」分桶与 OpenAI 路径的候选耗尽是同一分支）。
 pub fn fetch_gemini_models(base_url: &str, api_key: &str) -> AppResult<Vec<String>> {
     fetch_gemini_models_with_timeout(base_url, api_key, FETCH_TIMEOUT)
 }
 
 /// `fetch_gemini_models` 的可测内层：超时作为参数注入，让超时用例不必真等 10 秒。
+/// 协议规格 = 单一 URL（[`gemini_models_url`]）+ `x-goog-api-key` + Google
+/// 原生解析器；执行走共用骨架 [`fetch_with_spec`]。
 fn fetch_gemini_models_with_timeout(
     base_url: &str,
     api_key: &str,
     timeout: Duration,
 ) -> AppResult<Vec<String>> {
-    if api_key.trim().is_empty() {
-        return Err(fetch_err(TAG_AUTH, "api key is empty"));
-    }
-    let url = gemini_models_url(base_url);
-    let trimmed_key = api_key.trim();
-    let request = ureq::get(&url)
-        .timeout(timeout)
-        .set("x-goog-api-key", trimmed_key)
-        .set(
-            "User-Agent",
-            &format!("cc one/{}", env!("CARGO_PKG_VERSION")),
-        );
-    match request.call() {
-        Ok(response) => {
-            let body = response.into_string().unwrap_or_default();
-            parse_gemini_models_response(&body)
-        }
-        Err(ureq::Error::Status(status, response)) => {
-            let body = truncate_body(&response.into_string().unwrap_or_default());
-            // Gemini 端点单一无候选遍历：404/405 直接 ENDPOINT_CLOSED（不像 OpenAI
-            // 路径会试下一个候选）。其余状态码分桶与 fetch_models 一致。
-            match status {
-                401 | 403 => Err(fetch_err(TAG_AUTH, format!("HTTP {status}: {body}"))),
-                404 | 405 => Err(fetch_err(TAG_ENDPOINT, format!("HTTP {status}: {body}"))),
-                _ => Err(fetch_err(TAG_NETWORK, format!("HTTP {status}: {body}"))),
-            }
-        }
-        Err(e) => {
-            if is_timeout(&e) {
-                Err(fetch_err(TAG_TIMEOUT, e))
-            } else {
-                Err(fetch_err(TAG_NETWORK, e))
-            }
-        }
-    }
+    fetch_with_spec(
+        ModelsFetchSpec {
+            urls: vec![gemini_models_url(base_url)],
+            auth_header: ("x-goog-api-key", api_key.to_string()),
+            parse: parse_gemini_models_response,
+        },
+        timeout,
+    )
 }
 
 #[cfg(test)]
 mod tests {
     use std::io::{Read, Write};
     use std::net::TcpListener;
-    use std::sync::Arc;
+    use std::sync::{Arc, Mutex};
     use std::thread;
 
     use super::*;
@@ -560,7 +586,7 @@ mod tests {
         );
     }
 
-    // ---------------- fetch loop（本地真实 HTTP 服务器，跑完整生产路径）----
+    // ---------------- fetch 骨架（本地真实 HTTP 服务器，跑完整生产路径）----
 
     /// 取错误串（断言全部失败路径都是 FetchModels 变体）。
     fn fetch_err_msg(r: AppResult<Vec<String>>) -> String {
@@ -571,10 +597,12 @@ mod tests {
     }
 
     /// 极简 HTTP 测试服务器：按请求路径返回固定状态码 + 响应体，每连接处理
-    /// 一个请求后关闭。真实 HTTP 栈（ureq）打它跟打真端点无异——测试覆盖
+    /// 一个请求后关闭；同时记录收到的请求原文（验证认证头按协议发送）。
+    /// 真实 HTTP 栈（ureq）打它跟打真端点无异——测试覆盖
     /// 「候选遍历 → 状态分桶 → 解析」的完整生产路径。
     struct TestServer {
         url: String,
+        requests: Arc<Mutex<Vec<String>>>,
     }
 
     impl TestServer {
@@ -587,26 +615,39 @@ mod tests {
                     .map(|(p, s, b)| (p.to_string(), *s, b.to_string()))
                     .collect(),
             );
+            let requests: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
+            let requests_for_thread = Arc::clone(&requests);
             thread::spawn(move || {
                 for stream in listener.incoming() {
                     let Ok(stream) = stream else { break };
                     let routes = Arc::clone(&routes);
-                    thread::spawn(move || handle_request(stream, &routes));
+                    let requests = Arc::clone(&requests_for_thread);
+                    thread::spawn(move || handle_request(stream, &routes, &requests));
                 }
             });
-            Self { url }
+            Self { url, requests }
         }
 
         /// 该服务器上某路径的完整 URL。
         fn endpoint(&self, path: &str) -> String {
             format!("{}{}", self.url, path)
         }
+
+        /// 收到的全部请求原文（顺序与到达一致；验证认证头 / 路径用）。
+        fn request_texts(&self) -> Vec<String> {
+            self.requests.lock().expect("requests mutex poisoned").clone()
+        }
     }
 
-    fn handle_request(mut stream: std::net::TcpStream, routes: &[(String, u16, String)]) {
+    fn handle_request(
+        mut stream: std::net::TcpStream,
+        routes: &[(String, u16, String)],
+        requests: &Mutex<Vec<String>>,
+    ) {
         let mut buf = [0u8; 4096];
         let _ = stream.read(&mut buf);
-        let text = String::from_utf8_lossy(&buf);
+        let text = String::from_utf8_lossy(&buf).into_owned();
+        requests.lock().expect("requests mutex poisoned").push(text.clone());
         let path = text
             .lines()
             .next()
@@ -635,50 +676,79 @@ mod tests {
     /// 两条模型，故意乱序，断言按 id 排序返回。
     const MODELS_JSON: &str = r#"{"object":"list","data":[{"id":"b-model","object":"model"},{"id":"a-model","object":"model","owned_by":"test"}]}"#;
 
+    /// 骨架测试用 spec：候选 URL + Authorization 头 + OpenAI 兼容解析器
+    /// （协议规格里唯一被替换的是 URL 与解析器，分桶契约与协议无关）。
+    fn skeleton_spec(urls: Vec<String>, key: &str) -> ModelsFetchSpec<'static> {
+        ModelsFetchSpec {
+            urls,
+            auth_header: ("Authorization", format!("Bearer {key}")),
+            parse: parse_models_response,
+        }
+    }
+
+    /// 分桶契约 1×N（骨架一份测试，不再每协议各写一套）：
+    /// 2xx 交解析器；401/403 → AUTH_FAILED；404/405 试下一个候选、全部失败 →
+    /// ENDPOINT_CLOSED；其余状态码 → NETWORK；坏体 → BAD_FORMAT；空 key /
+    /// 空候选 → 发请求前分桶；超时 → TIMEOUT。
     #[test]
-    fn fetch_success_returns_sorted_ids() {
+    fn skeleton_success_parses_via_protocol_parser() {
         let server = TestServer::start(&[("/v1/models", 200, MODELS_JSON)]);
-        let models = fetch_models(&server.endpoint("/v1"), "sk-test", None).unwrap();
+        let models = fetch_with_spec(
+            skeleton_spec(vec![server.endpoint("/v1/models")], "sk-test"),
+            FETCH_TIMEOUT,
+        )
+        .unwrap();
         assert_eq!(models, vec!["a-model", "b-model"]);
     }
 
     #[test]
-    fn fetch_401_maps_to_auth_tag() {
+    fn skeleton_401_maps_to_auth_tag() {
         let server = TestServer::start(&[("/v1/models", 401, "{\"error\":\"invalid key\"}")]);
-        let msg = fetch_err_msg(fetch_models(&server.endpoint(""), "sk-test", None));
+        let msg = fetch_err_msg(fetch_with_spec(
+            skeleton_spec(vec![server.endpoint("/v1/models")], "sk-test"),
+            FETCH_TIMEOUT,
+        ));
         assert!(msg.starts_with("AUTH_FAILED: HTTP 401: "), "got: {msg}");
         assert!(msg.contains("invalid key"), "got: {msg}");
     }
 
     #[test]
-    fn fetch_403_maps_to_auth_tag() {
+    fn skeleton_403_maps_to_auth_tag() {
         let server = TestServer::start(&[("/v1/models", 403, "forbidden")]);
-        let msg = fetch_err_msg(fetch_models(&server.endpoint(""), "sk-test", None));
+        let msg = fetch_err_msg(fetch_with_spec(
+            skeleton_spec(vec![server.endpoint("/v1/models")], "sk-test"),
+            FETCH_TIMEOUT,
+        ));
         assert!(msg.starts_with("AUTH_FAILED: HTTP 403: "), "got: {msg}");
     }
 
     #[test]
-    fn fetch_continues_past_404_to_next_candidate() {
-        // 首个候选（/anthropic/v1/models）404 → 试第二个（根 /v1/models）→ 成功。
+    fn skeleton_404_continues_to_next_candidate() {
+        // 首个候选 404 → 试第二个 → 成功。
         let server = TestServer::start(&[
-            ("/anthropic/v1/models", 404, "<html>not found</html>"),
+            ("/a/v1/models", 404, "<html>not found</html>"),
             ("/v1/models", 200, MODELS_JSON),
         ]);
-        let models = fetch_models(&server.endpoint("/anthropic"), "sk-test", None).unwrap();
+        let models = fetch_with_spec(
+            skeleton_spec(
+                vec![
+                    server.endpoint("/a/v1/models"),
+                    server.endpoint("/v1/models"),
+                ],
+                "sk-test",
+            ),
+            FETCH_TIMEOUT,
+        )
+        .unwrap();
         assert_eq!(models, vec!["a-model", "b-model"]);
     }
 
     #[test]
-    fn fetch_all_candidates_404_maps_to_endpoint_tag() {
-        let server = TestServer::start(&[
-            ("/anthropic/v1/models", 404, "nope"),
-            ("/v1/models", 404, "nope"),
-            ("/models", 404, "nope"),
-        ]);
-        let msg = fetch_err_msg(fetch_models(
-            &server.endpoint("/anthropic"),
-            "sk-test",
-            None,
+    fn skeleton_all_candidates_404_maps_to_endpoint_tag() {
+        let server = TestServer::start(&[("/a", 404, "nope"), ("/b", 404, "nope")]);
+        let msg = fetch_err_msg(fetch_with_spec(
+            skeleton_spec(vec![server.endpoint("/a"), server.endpoint("/b")], "sk-test"),
+            FETCH_TIMEOUT,
         ));
         assert!(
             msg.starts_with("ENDPOINT_CLOSED: all candidates failed: "),
@@ -688,9 +758,12 @@ mod tests {
     }
 
     #[test]
-    fn fetch_405_maps_to_endpoint_tag() {
+    fn skeleton_405_maps_to_endpoint_tag() {
         let server = TestServer::start(&[("/v1/models", 405, "no get")]);
-        let msg = fetch_err_msg(fetch_models(&server.endpoint(""), "sk-test", None));
+        let msg = fetch_err_msg(fetch_with_spec(
+            skeleton_spec(vec![server.endpoint("/v1/models")], "sk-test"),
+            FETCH_TIMEOUT,
+        ));
         assert!(
             msg.starts_with("ENDPOINT_CLOSED: all candidates failed: HTTP 405"),
             "got: {msg}"
@@ -698,40 +771,60 @@ mod tests {
     }
 
     #[test]
-    fn fetch_other_status_maps_to_network_tag() {
+    fn skeleton_other_status_maps_to_network_tag() {
         let server = TestServer::start(&[("/v1/models", 500, "boom")]);
-        let msg = fetch_err_msg(fetch_models(&server.endpoint(""), "sk-test", None));
+        let msg = fetch_err_msg(fetch_with_spec(
+            skeleton_spec(vec![server.endpoint("/v1/models")], "sk-test"),
+            FETCH_TIMEOUT,
+        ));
         assert!(msg.starts_with("NETWORK: HTTP 500: "), "got: {msg}");
     }
 
     #[test]
-    fn fetch_garbage_body_maps_to_format_tag() {
+    fn skeleton_garbage_body_maps_to_format_tag() {
         let server = TestServer::start(&[("/v1/models", 200, "<html>captive portal</html>")]);
-        let msg = fetch_err_msg(fetch_models(&server.endpoint(""), "sk-test", None));
+        let msg = fetch_err_msg(fetch_with_spec(
+            skeleton_spec(vec![server.endpoint("/v1/models")], "sk-test"),
+            FETCH_TIMEOUT,
+        ));
         assert!(msg.starts_with("BAD_FORMAT: "), "got: {msg}");
     }
 
     #[test]
-    fn fetch_body_without_data_maps_to_format_tag() {
+    fn skeleton_body_without_data_maps_to_format_tag() {
         let server = TestServer::start(&[("/v1/models", 200, "{\"object\":\"list\"}")]);
-        let msg = fetch_err_msg(fetch_models(&server.endpoint(""), "sk-test", None));
+        let msg = fetch_err_msg(fetch_with_spec(
+            skeleton_spec(vec![server.endpoint("/v1/models")], "sk-test"),
+            FETCH_TIMEOUT,
+        ));
         assert!(msg.starts_with("BAD_FORMAT: "), "got: {msg}");
     }
 
     #[test]
-    fn fetch_missing_api_key_maps_to_auth_tag() {
-        let msg = fetch_err_msg(fetch_models("https://example.com", "", None));
+    fn skeleton_missing_api_key_maps_to_auth_tag() {
+        // 认证头值 trim 后为空（= 无凭据）→ 发请求前分桶 AUTH_FAILED。
+        let msg = fetch_err_msg(fetch_with_spec(
+            ModelsFetchSpec {
+                urls: vec!["https://example.com/v1/models".into()],
+                auth_header: ("Authorization", String::new()),
+                parse: parse_models_response,
+            },
+            FETCH_TIMEOUT,
+        ));
         assert!(msg.starts_with("AUTH_FAILED: "), "got: {msg}");
     }
 
     #[test]
-    fn fetch_empty_base_maps_to_endpoint_tag() {
-        let msg = fetch_err_msg(fetch_models("", "sk-test", None));
+    fn skeleton_empty_urls_maps_to_endpoint_tag() {
+        let msg = fetch_err_msg(fetch_with_spec(
+            skeleton_spec(vec![], "sk-test"),
+            FETCH_TIMEOUT,
+        ));
         assert!(msg.starts_with("ENDPOINT_CLOSED: "), "got: {msg}");
     }
 
     #[test]
-    fn fetch_timeout_maps_to_timeout_tag() {
+    fn skeleton_timeout_maps_to_timeout_tag() {
         // 服务器接受连接但永不响应，逼客户端在注入的短超时内失败。
         let listener = TcpListener::bind("127.0.0.1:0").expect("bind timeout server");
         let url = format!("http://{}", listener.local_addr().expect("local addr"));
@@ -742,13 +835,53 @@ mod tests {
                 thread::sleep(Duration::from_secs(30));
             }
         });
-        let msg = fetch_err_msg(fetch_models_with_timeout(
-            &url,
-            "sk-test",
-            None,
+        let msg = fetch_err_msg(fetch_with_spec(
+            skeleton_spec(vec![url], "sk-test"),
             Duration::from_millis(200),
         ));
         assert!(msg.starts_with("TIMEOUT: "), "got: {msg}");
+    }
+
+    // ---------------- 协议接线（两条路径各自喂骨架什么）----------------
+
+    /// OpenAI 兼容路径（生产入口）：候选 URL 按 baseURL 构造 → 遍历 → 成功。
+    #[test]
+    fn fetch_models_success_returns_sorted_ids() {
+        let server = TestServer::start(&[("/v1/models", 200, MODELS_JSON)]);
+        let models = fetch_models(&server.endpoint("/v1"), "sk-test", None).unwrap();
+        assert_eq!(models, vec!["a-model", "b-model"]);
+    }
+
+    /// OpenAI 兼容路径：首个候选（/anthropic/v1/models）404 → 试第二个
+    /// （根 /v1/models）→ 成功（候选构造与骨架「404 试下一个」端到端）。
+    #[test]
+    fn fetch_models_continues_past_404_to_next_candidate() {
+        let server = TestServer::start(&[
+            ("/anthropic/v1/models", 404, "<html>not found</html>"),
+            ("/v1/models", 200, MODELS_JSON),
+        ]);
+        let models = fetch_models(&server.endpoint("/anthropic"), "sk-test", None).unwrap();
+        assert_eq!(models, vec!["a-model", "b-model"]);
+    }
+
+    /// OpenAI 兼容路径：空 key / 空 base 在发请求前就分桶（骨架前置检查，
+    /// 经生产入口验证接线没漏）。
+    #[test]
+    fn fetch_models_preflight_errors_before_network() {
+        let msg = fetch_err_msg(fetch_models("https://example.com", "", None));
+        assert!(msg.starts_with("AUTH_FAILED: "), "got: {msg}");
+        let msg = fetch_err_msg(fetch_models("", "sk-test", None));
+        assert!(msg.starts_with("ENDPOINT_CLOSED: "), "got: {msg}");
+    }
+
+    /// 协议接线：OpenAI 兼容路径的认证头是 `Authorization: Bearer <key>`
+    /// （骨架的认证头参数来自这条路径的 spec）。
+    #[test]
+    fn fetch_models_sends_bearer_auth_header() {
+        let server = TestServer::start(&[("/v1/models", 200, MODELS_JSON)]);
+        fetch_models(&server.endpoint("/v1"), "sk-test", None).unwrap();
+        let req = server.request_texts().join("\n").to_lowercase();
+        assert!(req.contains("authorization: bearer sk-test"), "got: {req}");
     }
 
     #[test]
@@ -874,68 +1007,26 @@ mod tests {
         assert_eq!(models, vec!["gemini-2.0-flash-001", "gemini-1.5-pro"]);
     }
 
-    #[test]
-    fn gemini_fetch_401_maps_to_auth_tag() {
-        let server = TestServer::start(&[("/v1beta/models", 401, "{\"error\":\"invalid key\"}")]);
-        let msg = fetch_err_msg(fetch_gemini_models(&server.endpoint(""), "AIza-test"));
-        assert!(msg.starts_with("AUTH_FAILED: HTTP 401: "), "got: {msg}");
-        assert!(msg.contains("invalid key"), "got: {msg}");
-    }
-
-    #[test]
-    fn gemini_fetch_403_maps_to_auth_tag() {
-        let server = TestServer::start(&[("/v1beta/models", 403, "forbidden")]);
-        let msg = fetch_err_msg(fetch_gemini_models(&server.endpoint(""), "AIza-test"));
-        assert!(msg.starts_with("AUTH_FAILED: HTTP 403: "), "got: {msg}");
-    }
-
+    /// Gemini 端点单一：404 走骨架的「全部候选失败」分桶（ENDPOINT_CLOSED，
+    /// 与 OpenAI 路径的候选耗尽同一分支——分桶契约不按协议分叉）。
     #[test]
     fn gemini_fetch_404_maps_to_endpoint_tag() {
-        // Gemini 端点单一：404 直接 ENDPOINT_CLOSED（无候选遍历）。
         let server = TestServer::start(&[("/v1beta/models", 404, "nope")]);
         let msg = fetch_err_msg(fetch_gemini_models(&server.endpoint(""), "AIza-test"));
-        assert!(msg.starts_with("ENDPOINT_CLOSED: HTTP 404: "), "got: {msg}");
+        assert!(
+            msg.starts_with("ENDPOINT_CLOSED: all candidates failed: HTTP 404: "),
+            "got: {msg}"
+        );
     }
 
+    /// 协议接线：Google 原生路径的认证头是 `x-goog-api-key`（骨架的认证头
+    /// 参数来自这条路径的 spec）。
     #[test]
-    fn gemini_fetch_500_maps_to_network_tag() {
-        let server = TestServer::start(&[("/v1beta/models", 500, "boom")]);
-        let msg = fetch_err_msg(fetch_gemini_models(&server.endpoint(""), "AIza-test"));
-        assert!(msg.starts_with("NETWORK: HTTP 500: "), "got: {msg}");
-    }
-
-    #[test]
-    fn gemini_fetch_garbage_body_maps_to_format_tag() {
-        let server = TestServer::start(&[("/v1beta/models", 200, "<html>captive portal</html>")]);
-        let msg = fetch_err_msg(fetch_gemini_models(&server.endpoint(""), "AIza-test"));
-        assert!(msg.starts_with("BAD_FORMAT: "), "got: {msg}");
-    }
-
-    #[test]
-    fn gemini_fetch_missing_api_key_maps_to_auth_tag() {
-        let msg = fetch_err_msg(fetch_gemini_models(
-            "https://generativelanguage.googleapis.com",
-            "",
-        ));
-        assert!(msg.starts_with("AUTH_FAILED: "), "got: {msg}");
-    }
-
-    #[test]
-    fn gemini_fetch_timeout_maps_to_timeout_tag() {
-        let listener = TcpListener::bind("127.0.0.1:0").expect("bind timeout server");
-        let url = format!("http://{}", listener.local_addr().expect("local addr"));
-        thread::spawn(move || {
-            if let Ok((mut stream, _)) = listener.accept() {
-                let mut buf = [0u8; 4096];
-                let _ = stream.read(&mut buf);
-                thread::sleep(Duration::from_secs(30));
-            }
-        });
-        let msg = fetch_err_msg(fetch_gemini_models_with_timeout(
-            &url,
-            "AIza-test",
-            Duration::from_millis(200),
-        ));
-        assert!(msg.starts_with("TIMEOUT: "), "got: {msg}");
+    fn gemini_fetch_sends_x_goog_api_key_header() {
+        let server = TestServer::start(&[("/v1beta/models", 200, GEMINI_MODELS_JSON)]);
+        fetch_gemini_models(&server.endpoint(""), "AIza-test").unwrap();
+        let req = server.request_texts().join("\n").to_lowercase();
+        assert!(req.contains("x-goog-api-key: aiza-test"), "got: {req}");
+        assert!(!req.contains("authorization"), "gemini 不带 Bearer 头: {req}");
     }
 }

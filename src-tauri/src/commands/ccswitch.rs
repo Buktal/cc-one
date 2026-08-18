@@ -1,5 +1,5 @@
 //! 从 CC-Switch 导入供应商：定位本机配置（SQLite / 旧 JSON）→ 转换 → 复用
-//! `export_import::apply_import` 写库。
+//! `provider::import` 的 store 层 seam 写库。
 
 use std::path::PathBuf;
 
@@ -10,7 +10,7 @@ use super::providers::emit_providers_changed;
 use super::AppState;
 use crate::error::{AppError, AppResult};
 use crate::model::App;
-use crate::provider::export_import::{self, ProviderImportMode};
+use crate::provider::import::{ImportKeyStrategy, ProviderImportMode};
 use crate::provider::import_ccswitch;
 
 /// 定位本机 CC-Switch 配置：`custom` 优先；否则回退顺序 = 默认 `~/.cc-switch/
@@ -72,8 +72,9 @@ fn read_ccswitch_source(
     }
 }
 
-/// 「从 CC-Switch 导入」按钮：定位本机 CC-Switch 配置 → 读 + 转换供应商 → 复用
-/// `apply_import`（merge / overwrite）写本机库。**单应用语境**：`app` 是当前
+/// 「从 CC-Switch 导入」按钮：定位本机 CC-Switch 配置 → 读 + 转换供应商 → 直接
+/// 喂 store 层 seam（merge / overwrite）写本机库——不再序列化成导出文档绕道，
+/// 冲突键 (app, id)、只写本机 DB 由 seam 守住。**单应用语境**：`app` 是当前
 /// 视图的应用，只搬该应用的供应商（claude 视图不冒出 codex 供应商，见
 /// ADR-0012）。代理 / OAuth / 不支持应用的供应商跳过并进报告明细。找不到配置
 /// → 明确错误（前端展示友好提示）。
@@ -93,10 +94,11 @@ pub async fn import_from_ccswitch_cmd(
             let (providers, universals) = read_ccswitch_source(&db_path)?;
             let (imported, skipped) =
                 import_ccswitch::collect_ccswitch_imports(&providers, &universals, app, &now);
-            // 复用 export_import 的写库路径：序列化成导出文档喂 apply_import（不新造
-            // 冲突逻辑——冲突键 (app, id)、只写本机 DB 由它守住）。
-            let doc = export_import::export_document(&imported, true, &now)?;
-            let apply = export_import::apply_import(&store, &doc, mode)?;
+            let apply = crate::provider::import::import_providers(
+                &store,
+                &imported,
+                ImportKeyStrategy::AppId(mode),
+            )?;
             Ok(import_ccswitch::CcSwitchImportReport {
                 imported: apply.imported,
                 merge_skipped: apply.skipped,

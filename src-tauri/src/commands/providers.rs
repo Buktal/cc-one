@@ -7,8 +7,8 @@ use tauri::{Emitter, State};
 use super::AppState;
 use crate::error::{AppError, AppResult};
 use crate::model::{App, Provider};
-use crate::provider::export_import::ProviderImportMode;
-use crate::provider::export_import::ProviderImportReport;
+use crate::provider::import::ProviderImportMode;
+use crate::provider::import::ProviderImportReport;
 use crate::provider::live_adapter::SnippetLayer;
 use crate::provider::live_opencode;
 

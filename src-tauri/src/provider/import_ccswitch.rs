@@ -2,8 +2,9 @@
 //!
 //! CC-Switch 是同类工具，用户迁移到 cc one 时，已在 CC-Switch 配好的供应商
 //! （端点 / key / 模型）存在它本机的 SQLite（`~/.cc-switch/cc-switch.db`）里。
-//! 本模块把这些供应商**翻译**成 cc one 的 `Provider`，复用 `export_import::
-//! apply_import` 写库——不新造冲突逻辑。
+//! 本模块把这些供应商**翻译**成 cc one 的 `Provider`，由命令层直接喂
+//! [`crate::provider::import`] 的 store 层 seam 写库（AppId 策略）——不新造
+//! 冲突逻辑，也不经导出文档序列化绕道。
 //!
 //! **纯函数是测试接缝**：[`convert_ccswitch_provider`] 吃进一个 CC-Switch 供应
 //! 商（带 `app_type`），产出 [`ConvertOutcome`]；不碰数据库 / 网络 / 文件——读
@@ -137,7 +138,7 @@ pub enum SkipReason {
 #[derive(Debug, Clone, Serialize, Type)]
 #[serde(rename_all = "camelCase")]
 pub struct CcSwitchImportReport {
-    /// 实际写入数（来自 apply_import）。
+    /// 实际写入数（来自导入 seam 的 AppId 策略）。
     pub imported: u32,
     /// merge 模式下 (app, id) 冲突跳过数。
     pub merge_skipped: u32,

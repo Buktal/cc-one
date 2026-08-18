@@ -12,36 +12,25 @@
 //!
 //! 纯函数（测试接缝）：`export_document`（provider 列表 → 文档文本，可选走
 //! [`Provider::redacted`] 剥密钥）、`parse_export_document`（文档文本 →
-//! provider 列表，版本校验）、`plan_import`（merge / overwrite 冲突规划）。
-//! `apply_import` 是 store 层全流程，命令直接调它，测试也直接调它——测试跑
-//! 的就是生产路径。
-
-use std::collections::HashSet;
+//! provider 列表，版本校验）。`apply_import` 是文档导入的 store 层入口：解析
+//! 文档 → 冲突规划——规划本身是 [`crate::provider::import`] 的 store 层 seam
+//! （AppId 策略，导出文档 / CC-Switch / live 三条路径共用同一份冲突代码）。
+//! 命令直接调它，测试也直接调它——测试跑的就是生产路径。
 
 use serde::{Deserialize, Serialize};
-use specta::Type;
 
 use crate::db::Store;
 use crate::error::{AppError, AppResult};
 use crate::model::Provider;
+use crate::provider::import::{
+    import_providers, ImportKeyStrategy, ProviderImportMode, ProviderImportReport,
+};
 
 /// 当前导出文档版本。导入只认这个版本——未来格式演进时，旧版 app 读到新文档
 /// 会明确报错而不是静默错解。版本号**不因加 app 字段而升**：老文档（行无 app）
 /// 与新文档（行带 app）都是 v1——serde 对未知字段忽略，新读旧 = 全归 claude
 /// 池，旧读新 = app 字段被忽略；版本只在格式真的不兼容时才升。
 pub const EXPORT_VERSION: u32 = 1;
-
-/// 导入冲突模式：merge = 已有 `(app, id)` 跳过（保留双方，按 (app, id) 去重）；
-/// overwrite = 同 `(app, id)` 以导入为准（后者胜），本地独有保留（不做删除——
-/// 保守迁移）。两种模式都不还原导出方的排序：已存在行保留本地 `sort_index`
-/// （排序是本地偏好，导入不做重排），导入的新行追加在末尾（`save_provider`
-/// 语义）。
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Type)]
-#[serde(rename_all = "lowercase")]
-pub enum ProviderImportMode {
-    Merge,
-    Overwrite,
-}
 
 /// 导出文档：版本号 + 导出时间 + provider 列表。Provider 自身序列化已有
 /// `rename_all = "camelCase"`，直接复用（每行自带 `app` 字段）。不跨
@@ -53,28 +42,6 @@ pub struct ProviderExportDocument {
     pub version: u32,
     pub exported_at: String,
     pub providers: Vec<Provider>,
-}
-
-/// 导入结果计数，前端 toast 展示「导入 N 个、跳过 M 个」。用 `u32` 而非
-/// `usize`：本类型跨 Rust→JS 边界走 tauri-specta 的 typed 导出，specta 拒绝
-/// BigInt 型（`usize`/`u64`/`i64`…）字段以避免 JS 精度损失——用 `usize`
-/// 会让 bindings.ts 生成失败。计数是行数（一次导入顶多几条），`u32` 足够。
-#[derive(Debug, Clone, Serialize, Type)]
-#[serde(rename_all = "camelCase")]
-pub struct ProviderImportReport {
-    /// 实际写入的行数（merge = 新 (app, id)；overwrite = 全部导入行）。
-    pub imported: u32,
-    /// merge 模式下因 (app, id) 冲突被跳过的行数（overwrite 恒为 0）。
-    pub skipped: u32,
-}
-
-/// 一次导入的写入计划：`to_save` 是需要落库的行（existing 里没变的不重写，
-/// 避免 merge 导入把全部行的 `updated_at` 都刷新一遍），计数说明哪些导入行被
-/// 应用、哪些被跳过。
-pub struct ImportPlan {
-    pub to_save: Vec<Provider>,
-    pub imported: u32,
-    pub skipped: u32,
 }
 
 /// 全部供应商 → 导出文档 JSON 文本。`include_keys=false` 时对每个 provider
@@ -118,71 +85,17 @@ pub fn parse_export_document(json: &str) -> AppResult<Vec<Provider>> {
     Ok(doc.providers)
 }
 
-/// 冲突规划（纯函数）：按模式把 incoming 并入 existing，产出要落库的行。
-/// 冲突键是 `(app, id)`——同一 id 在不同应用池是两个独立条目。
-/// - merge：incoming 里 `(app, id)` 已存在 → 跳过（existing 原样保留，不
-///   改写）；其余（新键、空 id）→ 追加。空 id 行视为新建——没有冲突，由
-///   `save_provider` 生成新 id。
-/// - overwrite：同 `(app, id)` → 用 incoming 整行替换；新键 / 空 id → 追加；
-///   本地独有 → 保留（「覆盖 = 后者胜」按 upsert 实现，不做删除）。
-pub fn plan_import(
-    existing: &[Provider],
-    incoming: &[Provider],
-    mode: ProviderImportMode,
-) -> ImportPlan {
-    match mode {
-        ProviderImportMode::Merge => {
-            let existing_keys: HashSet<(String, String)> = existing
-                .iter()
-                .map(|p| (p.app.as_str().to_string(), p.id.clone()))
-                .collect();
-            let mut to_save = Vec::new();
-            let mut imported = 0;
-            let mut skipped = 0;
-            for p in incoming {
-                let key = (p.app.as_str().to_string(), p.id.clone());
-                if !p.id.is_empty() && existing_keys.contains(&key) {
-                    skipped += 1;
-                    continue;
-                }
-                to_save.push(p.clone());
-                imported += 1;
-            }
-            ImportPlan {
-                to_save,
-                imported,
-                skipped,
-            }
-        }
-        ProviderImportMode::Overwrite => {
-            let to_save = incoming.to_vec();
-            ImportPlan {
-                imported: to_save.len() as u32,
-                to_save,
-                skipped: 0,
-            }
-        }
-    }
-}
-
-/// 导入全流程（store 层，命令直接调这个）：解析文档 → 读现有列表 → 按模式
-/// 规划 → 逐条 `save_provider` 写回本机 DB。只写 DB——不碰任何同步文件，
-/// 导入的 key 只进本机库。
+/// 导入全流程（store 层，命令直接调这个）：解析文档 → 冲突规划（store 层
+/// seam 的 AppId 策略，merge / overwrite 语义见 [`crate::provider::import`]）
+/// → 逐条 `save_provider` 写回本机 DB。只写 DB——不碰任何同步文件，导入的
+/// key 只进本机库。
 pub fn apply_import(
     store: &Store,
     json: &str,
     mode: ProviderImportMode,
 ) -> AppResult<ProviderImportReport> {
     let incoming = parse_export_document(json)?;
-    let existing = store.list_providers()?;
-    let plan = plan_import(&existing, &incoming, mode);
-    for p in &plan.to_save {
-        store.save_provider(p.clone())?;
-    }
-    Ok(ProviderImportReport {
-        imported: plan.imported,
-        skipped: plan.skipped,
-    })
+    import_providers(store, &incoming, ImportKeyStrategy::AppId(mode))
 }
 
 #[cfg(test)]
@@ -414,52 +327,6 @@ mod tests {
         ));
     }
 
-    #[test]
-    fn plan_import_merge_skips_existing_ids_and_appends_new() {
-        let existing = [provider("a", "Alpha", "{}"), provider("b", "Beta", "{}")];
-        let incoming = [
-            provider("a", "Alpha-renamed", r#"{"env":{}}"#), // 冲突：跳过
-            provider("c", "Gamma", r#"{"env":{}}"#),         // 新 id：追加
-        ];
-        let plan = plan_import(&existing, &incoming, ProviderImportMode::Merge);
-        assert_eq!(plan.imported, 1);
-        assert_eq!(plan.skipped, 1);
-        assert_eq!(plan.to_save.len(), 1);
-        assert_eq!(plan.to_save[0].id, "c");
-        assert_eq!(plan.to_save[0].name, "Gamma");
-    }
-
-    #[test]
-    fn plan_import_merge_inserts_empty_id_rows_as_new() {
-        let existing = [provider("a", "Alpha", "{}")];
-        let incoming = [provider("", "Hand-made", r#"{"env":{}}"#)];
-        let plan = plan_import(&existing, &incoming, ProviderImportMode::Merge);
-        assert_eq!(plan.imported, 1);
-        assert_eq!(plan.skipped, 0);
-        assert_eq!(plan.to_save[0].id, "", "空 id 走 save_provider 生成新 id");
-    }
-
-    #[test]
-    fn plan_import_overwrite_replaces_same_id_appends_new_keeps_local_only() {
-        let existing = [
-            provider("a", "Alpha-old", "old"),
-            provider("b", "Beta", "{}"),
-        ];
-        let incoming = [
-            provider("a", "Alpha-new", r#"{"env":{}}"#), // 同 id：覆盖
-            provider("c", "Gamma", r#"{"env":{}}"#),     // 新 id：追加
-        ];
-        let plan = plan_import(&existing, &incoming, ProviderImportMode::Overwrite);
-        assert_eq!(plan.imported, 2);
-        assert_eq!(plan.skipped, 0);
-        assert_eq!(plan.to_save.len(), 2);
-        assert_eq!(plan.to_save[0].name, "Alpha-new", "同 id 后者胜");
-        assert_eq!(plan.to_save[0].settings_config, r#"{"env":{}}"#);
-        assert_eq!(plan.to_save[1].id, "c");
-        // 本地独有 id "b" 不在写入计划里 → 保留（不删除）。
-        assert!(!plan.to_save.iter().any(|p| p.id == "b"));
-    }
-
     /// 往返一致：导出（含 key）→ 清空 → 导入 → 列表与导出前一致（`updated_at`
     /// 除外——导入是重新写盘，刷新写时间）。
     #[test]
@@ -564,33 +431,6 @@ mod tests {
         let row = s.get_provider(App::Claude, &alpha.id).unwrap().unwrap();
         assert_eq!(row.updated_at, alpha.updated_at, "merge 冲突行不得重写");
         assert_eq!(row.settings_config, alpha.settings_config);
-    }
-
-    /// 冲突键是 (app, id)：同一 id 出现在两个应用池 → merge 不互相跳过，
-    /// overwrite 也不互相覆盖。
-    #[test]
-    fn plan_import_keeps_same_id_across_apps_separate() {
-        fn provider_for(app: App, id: &str, name: &str) -> Provider {
-            Provider {
-                app,
-                ..provider(id, name, r#"{"env":{}}"#)
-            }
-        }
-        let existing = [provider_for(App::Claude, "p1", "Claude-pool")];
-        let incoming = [
-            // 同 (app, id)：merge 跳过。
-            provider_for(App::Claude, "p1", "Claude-renamed"),
-            // 同 id、不同池：是独立条目，merge 追加。
-            provider_for(App::Codex, "p1", "Codex-pool"),
-        ];
-        let merge = plan_import(&existing, &incoming, ProviderImportMode::Merge);
-        assert_eq!(merge.imported, 1, "codex 池的 p1 是新条目");
-        assert_eq!(merge.skipped, 1, "claude 池的 p1 冲突跳过");
-        assert_eq!(merge.to_save[0].app, App::Codex);
-        assert_eq!(merge.to_save[0].name, "Codex-pool");
-
-        let overwrite = plan_import(&existing, &incoming, ProviderImportMode::Overwrite);
-        assert_eq!(overwrite.imported, 2, "两个池的行各自按 (app, id) 落");
     }
 
     /// 导出文档每行带 app 字段（版本号不升——v1 兼容新旧格式）；旧文档行

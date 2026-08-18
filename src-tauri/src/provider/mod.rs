@@ -11,11 +11,15 @@
 //! `keys`（密钥位置清单 + strip / restore 成对纯函数：push / 导出剥、pull
 //! 回填共用，见本目录 `keys.rs`）、`snippet`（通用配置片段：手写片段 + 启用
 //! 开关，写盘时合并进受控字段，存本机 config.json 不同步）、`export_import`
-//! （全部供应商导出 / 导入一份 JSON 文档，手动迁移，不走 git 同步），以及
-//! `model_fetch`（拉取供应商的模型列表：OpenAI 兼容 `GET /v1/models`，候选
-//! URL 构造是纯函数、失败错误串带分桶标签——见本目录 `model_fetch.rs`）。
+//! （全部供应商导出 / 导入一份 JSON 文档，手动迁移，不走 git 同步）、`import`
+//! （导入冲突规划 store 层 seam：归一化为 Provider 后按冲突键策略
+//! (app,id) / name / liveKey 去重落库——导出文档 / CC-Switch / live 三条
+//! 路径共用，见本目录 `import.rs`），以及 `model_fetch`（拉取供应商的模型
+//! 列表：OpenAI 兼容 `GET /v1/models`，候选 URL 构造是纯函数、失败错误串带
+//! 分桶标签——见本目录 `model_fetch.rs`）。
 
 pub mod export_import;
+pub mod import;
 pub mod import_ccswitch;
 pub mod import_live;
 pub mod keys;
