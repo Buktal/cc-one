@@ -39,6 +39,7 @@ import { setView } from "@/app/store/slices/viewSlice"
 import { deviceOptionLabel } from "@/features/usage/use-device-options"
 import { useDebouncedValue } from "@/hooks/use-debounced-value"
 import { useMutateWithToast } from "@/hooks/use-toast-mutation"
+import { facetOptions } from "@/lib/filter-options"
 import { paginate } from "@/lib/pagination"
 import { usePersistedState } from "@/lib/persistence"
 import type { SessionGroup, SessionRow } from "@/types/generated/bindings"
@@ -221,11 +222,11 @@ export function useSessionsBrowser() {
   // the endpoint, which derives bounds at query time.
   const modelFacetFilter = useMemo(() => ({ ...filter, model: "" }), [filter])
   const { data: distinctModels = [] } = useDistinctModelsQuery(modelFacetFilter)
-  const modelOptions = useMemo(() => {
-    const set = new Set(distinctModels)
-    if (model) set.add(model)
-    return [...set].sort()
-  }, [distinctModels, model])
+  // 并回规则（已选模型并入候选，窗口切换后下拉不空）收敛在 facetOptions。
+  const modelOptions = useMemo(
+    () => facetOptions(distinctModels, model),
+    [distinctModels, model],
+  )
   // Paged session list (mirrors the request-log table). Skipped until
   // selfDeviceId resolves so the local tab never queries with an empty
   // device_scope.

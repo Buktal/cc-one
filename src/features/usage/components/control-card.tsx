@@ -22,6 +22,7 @@ import {
   type DateRangePreset,
   DateRangeChip as SharedDateRangeChip,
 } from "@/components/date-range-chip"
+import { FilterSelect } from "@/components/filter-select"
 import { Button } from "@/components/ui/button"
 import {
   Card,
@@ -30,21 +31,12 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card"
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select"
+import { facetOptions } from "@/lib/filter-options"
 import { usePersistedState } from "@/lib/persistence"
-import { ALL_FILTER } from "@/lib/source-tags"
 import { cn } from "@/lib/utils"
 import { sourceLabel } from "../source-labels"
 import { useDeviceOptions } from "../use-device-options"
 import { DeviceScopeControl } from "./device-scope-control"
-
-const ALL = ALL_FILTER
 
 const CONTROL_COLLAPSE_KEY = "cc-one:control-collapsed"
 
@@ -114,40 +106,27 @@ function ModelChip({
   // filter 一天内引用稳定, 无需 dayStr() 触发器。
   const facetFilter = useMemo(() => ({ ...filter, model: "" }), [filter])
   const { data: models = [] } = useDistinctModelsQuery(facetFilter)
-  const options = useMemo(() => {
-    const set = new Set(models)
-    if (filter.model) set.add(filter.model)
-    return [...set].sort()
-  }, [models, filter.model])
+  // 并回规则（已选模型并入候选，窗口切换后下拉不空）收敛在 facetOptions。
+  const options = useMemo(
+    () =>
+      facetOptions(models, filter.model).map((m) => ({ value: m, label: m })),
+    [models, filter.model],
+  )
   const allLabel = bar ? t("usage.control.allModel") : t("usage.control.all")
   return (
-    <Select
-      value={filter.model || ALL}
-      onValueChange={(v) =>
-        dispatch(patchFilter({ model: v && v !== ALL ? v : "" }))
-      }
-    >
-      <SelectTrigger
-        className={cn(
-          "border-border bg-card hover:bg-hover h-8 w-36 rounded-md",
-          // 模型名最长且不可控 → 横排 (bar) 给最宽。
-          bar && "w-48",
-        )}
-        aria-label={t("usage.control.model")}
-      >
-        <SelectValue className="min-w-0">
-          {(value: string) => (value === ALL ? allLabel : value)}
-        </SelectValue>
-      </SelectTrigger>
-      <SelectContent alignItemWithTrigger={false} align={align}>
-        <SelectItem value={ALL}>{allLabel}</SelectItem>
-        {options.map((m) => (
-          <SelectItem key={m} value={m}>
-            {m}
-          </SelectItem>
-        ))}
-      </SelectContent>
-    </Select>
+    <FilterSelect
+      ariaLabel={t("usage.control.model")}
+      allLabel={allLabel}
+      options={options}
+      value={filter.model}
+      onChange={(v) => dispatch(patchFilter({ model: v }))}
+      className={cn(
+        "border-border bg-card hover:bg-hover h-8 w-36 rounded-md",
+        // 模型名最长且不可控 → 横排 (bar) 给最宽。
+        bar && "w-48",
+      )}
+      align={align}
+    />
   )
 }
 
@@ -167,42 +146,32 @@ function SourceChip({
   // 已选来源并回候选。跨天滚动靠采集间隔刷新, 见 ModelChip。
   const facetFilter = useMemo(() => ({ ...filter, source: "" }), [filter])
   const { data: sources = [] } = useDistinctSourcesQuery(facetFilter)
-  const options = useMemo(() => {
-    const set = new Set(sources)
-    if (filter.source) set.add(filter.source)
-    return [...set].sort()
-  }, [sources, filter.source])
+  // 并回规则（已选来源并入候选，窗口切换后下拉不空）收敛在 facetOptions。
+  const options = useMemo(
+    () =>
+      facetOptions(sources, filter.source).map((s) => ({
+        value: s,
+        label: sourceLabel(s),
+      })),
+    [sources, filter.source],
+  )
   const allLabel = bar ? t("usage.control.allSource") : t("usage.control.all")
   return (
-    <Select
-      value={filter.source || ALL}
-      onValueChange={(v) =>
-        dispatch(patchFilter({ source: v && v !== ALL ? v : "" }))
-      }
-    >
-      <SelectTrigger
-        className={cn(
-          // 纵卡 ControlCard 内与应用/设备下拉统一 w-36（模型名最长的容纳
-          // 宽度，三下拉等宽对齐）；横排 ControlBar 与 sessions 的来源/设备
-          // 下拉同宽 w-30。长名称由 line-clamp-1 截断。
-          "border-border bg-card hover:bg-hover h-8 w-36 rounded-md",
-          bar && "w-30",
-        )}
-        aria-label={t("usage.control.source")}
-      >
-        <SelectValue className="min-w-0">
-          {(value: string) => (value === ALL ? allLabel : sourceLabel(value))}
-        </SelectValue>
-      </SelectTrigger>
-      <SelectContent alignItemWithTrigger={false} align={align}>
-        <SelectItem value={ALL}>{allLabel}</SelectItem>
-        {options.map((s) => (
-          <SelectItem key={s} value={s}>
-            {sourceLabel(s)}
-          </SelectItem>
-        ))}
-      </SelectContent>
-    </Select>
+    <FilterSelect
+      ariaLabel={t("usage.control.source")}
+      allLabel={allLabel}
+      options={options}
+      value={filter.source}
+      onChange={(v) => dispatch(patchFilter({ source: v }))}
+      className={cn(
+        // 纵卡 ControlCard 内与应用/设备下拉统一 w-36（模型名最长的容纳
+        // 宽度，三下拉等宽对齐）；横排 ControlBar 与 sessions 的来源/设备
+        // 下拉同宽 w-30。长名称由 line-clamp-1 截断。
+        "border-border bg-card hover:bg-hover h-8 w-36 rounded-md",
+        bar && "w-30",
+      )}
+      align={align}
+    />
   )
 }
 

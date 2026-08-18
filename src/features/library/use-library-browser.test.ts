@@ -106,8 +106,11 @@ describe("useLibraryBrowser imports in a non-Tauri (node) environment", () => {
     expect(typeof mod.useLibraryBrowser).toBe("function")
   })
 
-  it("exports the ALL scope sentinel the view needs for rendering", async () => {
+  it("does not export the ALL sentinel — the caller domain stays empty-string", async () => {
+    // 哨兵收敛进共享 FilterSelect 后（见 @/components/filter-select 与
+    // @/lib/filter-options），hook 只接触「空串 = 全部设备」域；若有人把
+    // 哨兵重新导出到调用方，即破坏收敛边界。
     const mod = await import("./use-library-browser")
-    expect(mod.ALL).toBe("__all__")
+    expect("ALL" in mod).toBe(false)
   })
 })

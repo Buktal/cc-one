@@ -55,16 +55,10 @@ import { useTranslation } from "react-i18next"
 import { Virtuoso, type VirtuosoHandle } from "react-virtuoso"
 import { CopyButton } from "@/components/copy-button"
 import { EmptyState } from "@/components/empty-state"
+import { FilterSelect } from "@/components/filter-select"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select"
 import {
   Sheet,
   SheetContent,
@@ -94,18 +88,13 @@ import {
   spanLabelKey,
   transcriptMatches,
 } from "../derive"
-import { useSessionTitleRename } from "../use-sessions-browser"
 import { highlight } from "../highlight"
 import { sessionSourceLabel } from "../source-labels"
 import { initialTurnNav, reduceTurnNav, turnAnchors } from "../turn-nav"
+import { useSessionTitleRename } from "../use-sessions-browser"
 import { MarkdownContent, ToolContent } from "./markdown-content"
 
 dayjs.extend(relativeTime)
-
-/** A group-picker entry plus the special "no group" / "leave as-is" options.
- *  Mirrors the sidebar's ALL/UNGROUPED sentinels but the detail picker only
- *  needs "none" (clear the assignment) vs a real group. */
-const NO_GROUP = "__none__"
 
 /** How far below the transcript's top a jumped-to user turn lands. */
 const TURN_OFFSET = 72
@@ -387,34 +376,17 @@ function SessionHeader({
               ? t("sessions.row.unfavorite")
               : t("sessions.row.favorite")}
           </Button>
-          <Select
-            value={currentGroupId || NO_GROUP}
-            onValueChange={(v) =>
-              onSetGroup(v === NO_GROUP ? null : (v ?? null))
-            }
-          >
-            <SelectTrigger className="h-8 w-44" size="sm">
-              <SelectValue>
-                {(val: string) => {
-                  if (val === NO_GROUP) return t("sessions.detail.noGroup")
-                  return (
-                    trackGroups.find((g) => g.id === val)?.name ??
-                    t("sessions.detail.noGroup")
-                  )
-                }}
-              </SelectValue>
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value={NO_GROUP}>
-                {t("sessions.detail.noGroup")}
-              </SelectItem>
-              {trackGroups.map((g) => (
-                <SelectItem key={g.id} value={g.id}>
-                  {g.name}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
+          <FilterSelect
+            allLabel={t("sessions.detail.noGroup")}
+            options={trackGroups.map((g) => ({ value: g.id, label: g.name }))}
+            value={currentGroupId}
+            onChange={(v) => onSetGroup(v || null)}
+            className="h-8 w-44"
+            triggerSize="sm"
+            // 分组被删后会话仍可能挂着旧 group id：不在候选里时显示「无分组」
+            // 而非原值。
+            fallbackLabel={t("sessions.detail.noGroup")}
+          />
           {/* Explicit close — the sheet's own close button is disabled
             (showClose={false}), and an auditor opens and closes sessions in
             bursts; Esc / backdrop alone is too hidden. */}

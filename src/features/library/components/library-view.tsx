@@ -27,18 +27,12 @@ import { useState } from "react"
 import { useTranslation } from "react-i18next"
 import { ConfirmDialog } from "@/components/confirm-dialog"
 import { EmptyState } from "@/components/empty-state"
+import { FilterSelect } from "@/components/filter-select"
 import { PaginationBar } from "@/components/pagination-bar"
 import { QueryState } from "@/components/query-state"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Input } from "@/components/ui/input"
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select"
 import {
   Table,
   TableBody,
@@ -57,11 +51,7 @@ import { formatSize } from "@/lib/format"
 import { cn } from "@/lib/utils"
 import type { LibraryEntry } from "@/types/generated/bindings"
 import { kindIcon } from "../kind-icon"
-import {
-  ALL,
-  LIBRARY_PAGE_SIZE,
-  useLibraryBrowser,
-} from "../use-library-browser"
+import { LIBRARY_PAGE_SIZE, useLibraryBrowser } from "../use-library-browser"
 import { PreviewSheet } from "./preview-sheet"
 import { UploadDialog } from "./upload-dialog"
 
@@ -141,34 +131,19 @@ export function LibraryView() {
         ) : null}
 
         {atRoot ? (
-          <Select
+          /* w-30: 「全部设备」4 字 + padding 约 102px；长设备名由
+            SelectValue 的 line-clamp-1 截断。与其它模块的设备下拉同宽。 */
+          <FilterSelect
+            ariaLabel={t("library.scope.all")}
+            allLabel={t("library.scope.all")}
+            options={deviceOptions.map((o) => ({
+              value: o.id,
+              label: o.label,
+            }))}
             value={deviceScope}
-            onValueChange={(v) => setDeviceScope(v ?? ALL)}
-          >
-            {/* w-30: 「全部设备」4 字 + padding 约 102px；长设备名由
-              SelectValue 的 line-clamp-1 截断。与其它模块的设备下拉同宽。 */}
-            <SelectTrigger
-              className="border-border bg-card hover:bg-hover h-8 w-30 rounded-md"
-              aria-label={t("library.scope.all")}
-            >
-              <SelectValue className="min-w-0">
-                {(value: string) =>
-                  value === ALL
-                    ? t("library.scope.all")
-                    : (deviceOptions.find((o) => o.id === value)?.label ??
-                      value)
-                }
-              </SelectValue>
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value={ALL}>{t("library.scope.all")}</SelectItem>
-              {deviceOptions.map((o) => (
-                <SelectItem key={o.id} value={o.id}>
-                  {o.label}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
+            onChange={setDeviceScope}
+            className="border-border bg-card hover:bg-hover h-8 w-30 rounded-md"
+          />
         ) : null}
 
         {!atRoot ? (

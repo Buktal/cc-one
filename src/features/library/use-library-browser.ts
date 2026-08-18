@@ -22,7 +22,6 @@ import {
 import { deviceOptionLabel } from "@/features/usage/use-device-options"
 import { useMutateWithToast } from "@/hooks/use-toast-mutation"
 import { paginate } from "@/lib/pagination"
-import { ALL_FILTER } from "@/lib/source-tags"
 import type { LibraryEntry } from "@/types/generated/bindings"
 import {
   buildBreadcrumb,
@@ -31,10 +30,6 @@ import {
   upFromSubpath,
 } from "./derive"
 
-/** Sentinel for the "all devices" scope. Lives here so the component's scope
- *  picker and the hook's scope derivation share one definition. */
-export const ALL = ALL_FILTER
-
 /** Rows per page — the same density as the request-log and sessions tables.
  *  Exported for the view's paginator (disabled states must agree with the
  *  slice size — one source of truth). */
@@ -42,7 +37,9 @@ export const LIBRARY_PAGE_SIZE = 20
 
 export function useLibraryBrowser() {
   const { t } = useTranslation()
-  const [deviceScope, setDeviceScope] = useState<string>(ALL)
+  // 空串 = 「全部设备」：哨兵值由共享 FilterSelect 在组件内处理，状态只存
+  // 「空串 = 全部」域的纯设备 id。
+  const [deviceScope, setDeviceScope] = useState("")
   const [subpath, setSubpath] = useState("")
   // Client-side name filter over the current directory's scan (the backend
   // returns a full directory, so filtering needs no Rust changes).
@@ -60,7 +57,7 @@ export function useLibraryBrowser() {
   const [busyRelPath, setBusyRelPath] = useState<string | null>(null)
 
   const atRoot = subpath === ""
-  const scope = deviceScope === ALL ? "all" : deviceScope
+  const scope = deviceScope || "all"
   const showDevice = scope === "all"
 
   const {

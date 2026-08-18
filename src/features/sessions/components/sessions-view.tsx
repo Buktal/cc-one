@@ -16,19 +16,13 @@ import {
   DateRangeChip,
   type DateRangePreset,
 } from "@/components/date-range-chip"
+import { FilterSelect } from "@/components/filter-select"
 import { PaginationBar } from "@/components/pagination-bar"
 import { QueryState } from "@/components/query-state"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Input } from "@/components/ui/input"
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select"
 import {
   Table,
   TableBody,
@@ -43,8 +37,9 @@ import {
   TooltipContent,
   TooltipTrigger,
 } from "@/components/ui/tooltip"
+import type { FilterOption } from "@/lib/filter-options"
 import { formatCost, formatInt, formatTokens } from "@/lib/format"
-import { ALL_FILTER, SOURCE_TAGS } from "@/lib/source-tags"
+import { SOURCE_TAGS } from "@/lib/source-tags"
 import { cn } from "@/lib/utils"
 import type { SessionRow } from "@/types/generated/bindings"
 import { favKey, type SessionTab } from "../derive"
@@ -116,17 +111,38 @@ export function SessionsView() {
         {/* Secondary filters: full-width line 2 on narrow containers
           (w-full), inline before the search on wide ones. */}
         <div className="order-4 flex w-full min-w-0 flex-wrap items-center gap-2 @[60rem]:order-3 @[60rem]:w-auto">
-          <SourceSelect value={b.source} onChange={b.setSource} />
-          <ModelSelect
+          {/* w-30: 「全部应用」4 字 + padding 约 102px；具体应用名 (Claude
+            Code 等) 更长时由 SelectValue 的 line-clamp-1 截断。 */}
+          <FilterSelect
+            ariaLabel={t("sessions.filter.source")}
+            allLabel={t("sessions.filter.allSources")}
+            options={SOURCE_OPTIONS}
+            value={b.source}
+            onChange={b.setSource}
+            className="h-8 w-30"
+          />
+          <FilterSelect
+            ariaLabel={t("sessions.filter.model")}
+            allLabel={t("sessions.filter.allModels")}
+            options={b.modelOptions.map((m) => ({ value: m, label: m }))}
             value={b.model}
             onChange={b.setModel}
-            options={b.modelOptions}
+            className="h-8 w-40"
           />
+          {/* Device dropdown for the Favorites tab — narrows "all devices" to
+            one. w-30: 「全部设备」4 字 + padding 约 102px；长设备名由
+            line-clamp-1 截断。与来源下拉同宽，行内对齐。 */}
           {b.deviceOptions.length > 0 && b.tab === "favorites" ? (
-            <DeviceSelect
-              options={b.deviceOptions}
+            <FilterSelect
+              ariaLabel={t("sessions.filter.device")}
+              allLabel={t("sessions.filter.allDevices")}
+              options={b.deviceOptions.map((o) => ({
+                value: o.id,
+                label: o.label,
+              }))}
               value={b.deviceScope}
               onChange={b.setDeviceScope}
+              className="h-8 w-30"
             />
           ) : null}
         </div>
@@ -469,104 +485,13 @@ function SessionsTable({
   )
 }
 
-/** "All sources" sentinel for the source dropdown. */
-const ALL_SOURCES = ALL_FILTER
-
-/** "All devices" sentinel for the device dropdown. */
-const ALL_DEVICES = ALL_FILTER
-
 /** Fixed source options — the sources sessions are collected from. Brand
  *  names are stable, so they live here rather than in i18n (mirrors the usage
  *  view's source-labels); only the "all" option and labels are localized. */
-const SOURCE_OPTIONS: readonly string[] = SOURCE_TAGS
-
-function SourceSelect({
-  value,
-  onChange,
-}: {
-  value: string
-  onChange: (v: string) => void
-}) {
-  const { t } = useTranslation()
-  return (
-    <Select
-      value={value || ALL_SOURCES}
-      onValueChange={(v) => onChange(v === ALL_SOURCES ? "" : (v ?? ""))}
-    >
-      {/* w-30: 「全部应用」4 字 + padding 约 102px；具体应用名 (Claude Code
-        等) 更长时由 SelectValue 的 line-clamp-1 截断。 */}
-      <SelectTrigger
-        className="h-8 w-30"
-        aria-label={t("sessions.filter.source")}
-      >
-        <SelectValue className="min-w-0">
-          {(val: string) =>
-            val === ALL_SOURCES
-              ? t("sessions.filter.allSources")
-              : sessionSourceLabel(val)
-          }
-        </SelectValue>
-      </SelectTrigger>
-      <SelectContent>
-        <SelectItem value={ALL_SOURCES}>
-          {t("sessions.filter.allSources")}
-        </SelectItem>
-        {SOURCE_OPTIONS.map((src) => (
-          <SelectItem key={src} value={src}>
-            {sessionSourceLabel(src)}
-          </SelectItem>
-        ))}
-      </SelectContent>
-    </Select>
-  )
-}
-
-/** "All models" sentinel for the model dropdown. */
-const ALL_MODELS = ALL_FILTER
-
-/** Model dropdown — EXISTS semantics (a session that used the model at least
- *  once matches). Options come from the usage distinct-models query narrowed
- *  by the toolbar's time / source / device window (facet semantics — the model
- *  dimension never narrows its own list); the backend EXISTS filter narrows the
- *  session list itself. */
-function ModelSelect({
-  value,
-  onChange,
-  options,
-}: {
-  value: string
-  onChange: (v: string) => void
-  options: string[]
-}) {
-  const { t } = useTranslation()
-  return (
-    <Select
-      value={value || ALL_MODELS}
-      onValueChange={(v) => onChange(v === ALL_MODELS ? "" : (v ?? ""))}
-    >
-      <SelectTrigger
-        className="h-8 w-40"
-        aria-label={t("sessions.filter.model")}
-      >
-        <SelectValue className="min-w-0">
-          {(val: string) =>
-            val === ALL_MODELS ? t("sessions.filter.allModels") : val
-          }
-        </SelectValue>
-      </SelectTrigger>
-      <SelectContent>
-        <SelectItem value={ALL_MODELS}>
-          {t("sessions.filter.allModels")}
-        </SelectItem>
-        {options.map((m) => (
-          <SelectItem key={m} value={m}>
-            {m}
-          </SelectItem>
-        ))}
-      </SelectContent>
-    </Select>
-  )
-}
+const SOURCE_OPTIONS: readonly FilterOption[] = SOURCE_TAGS.map((src) => ({
+  value: src,
+  label: sessionSourceLabel(src),
+}))
 
 const RANGE_PRESETS: DateRangePreset[] = [
   { value: "today", key: "sessions.filter.today" },
@@ -574,47 +499,3 @@ const RANGE_PRESETS: DateRangePreset[] = [
   { value: "30d", key: "sessions.filter.last30d" },
   { value: "all", key: "sessions.filter.all" },
 ]
-
-/** Device dropdown for the Favorites tab — narrows "all devices" to one. */
-function DeviceSelect({
-  options,
-  value,
-  onChange,
-}: {
-  options: { id: string; label: string }[]
-  value: string
-  onChange: (v: string) => void
-}) {
-  const { t } = useTranslation()
-  return (
-    <Select
-      value={value || ALL_DEVICES}
-      onValueChange={(v) => onChange(v === ALL_DEVICES ? "" : (v ?? ""))}
-    >
-      {/* w-30: 「全部设备」4 字 + padding 约 102px；长设备名由 line-clamp-1
-        截断。与来源下拉同宽，行内对齐。 */}
-      <SelectTrigger
-        className="h-8 w-30"
-        aria-label={t("sessions.filter.device")}
-      >
-        <SelectValue className="min-w-0">
-          {(val: string) =>
-            val === ALL_DEVICES
-              ? t("sessions.filter.allDevices")
-              : (options.find((o) => o.id === val)?.label ?? val)
-          }
-        </SelectValue>
-      </SelectTrigger>
-      <SelectContent>
-        <SelectItem value={ALL_DEVICES}>
-          {t("sessions.filter.allDevices")}
-        </SelectItem>
-        {options.map((o) => (
-          <SelectItem key={o.id} value={o.id}>
-            {o.label}
-          </SelectItem>
-        ))}
-      </SelectContent>
-    </Select>
-  )
-}
