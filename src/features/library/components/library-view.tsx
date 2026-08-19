@@ -273,7 +273,29 @@ export function LibraryView() {
                         t,
                       )
                       return (
-                        <TableRow key={e.rel_path}>
+                        <TableRow
+                          key={e.rel_path}
+                          // 整行可点：目录钻入 / 文件预览（与名称按钮同一动
+                          // 作）。行内挂着重命名编辑器时整行不触发——点击输
+                          // 入框不该误开预览/钻入。
+                          className={cn(!isRenaming && "cursor-pointer")}
+                          onClick={() => {
+                            if (isRenaming) return
+                            if (e.kind === "dir") drill(e)
+                            else setPreview(e)
+                          }}
+                          onKeyDown={(ev) => {
+                            // target 守卫：行内按钮/输入框的 Enter 不带出行动作
+                            if (isRenaming || ev.target !== ev.currentTarget)
+                              return
+                            if (ev.key === "Enter" || ev.key === " ") {
+                              ev.preventDefault()
+                              if (e.kind === "dir") drill(e)
+                              else setPreview(e)
+                            }
+                          }}
+                          tabIndex={isRenaming ? undefined : 0}
+                        >
                           <TableCell>
                             {isRenaming ? (
                               /* w-full tracks the fixed table-fixed column, so
@@ -341,9 +363,14 @@ export function LibraryView() {
                                    scans at a glance (file-manager norm). */
                                   e.kind === "dir" && "font-medium",
                                 )}
-                                onClick={() =>
-                                  e.kind === "dir" ? drill(e) : setPreview(e)
-                                }
+                                onClick={(ev) => {
+                                  // 行已是触发器；按钮截停冒泡，避免
+                                  // drill/preview 被行处理器再触发一次
+                                  // （drill 两次会压两层导航历史）。
+                                  ev.stopPropagation()
+                                  if (e.kind === "dir") drill(e)
+                                  else setPreview(e)
+                                }}
                               >
                                 <Icon className="size-4 shrink-0" />
                                 <Tooltip>
@@ -404,7 +431,10 @@ export function LibraryView() {
                                       size="icon-sm"
                                       aria-label={t("library.row.export")}
                                       disabled={busy}
-                                      onClick={() => onExport(e)}
+                                      onClick={(ev) => {
+                                        ev.stopPropagation()
+                                        onExport(e)
+                                      }}
                                     />
                                   }
                                 >
@@ -426,7 +456,10 @@ export function LibraryView() {
                                       size="icon-sm"
                                       aria-label={t("library.row.rename")}
                                       disabled={busy}
-                                      onClick={() => startRename(e)}
+                                      onClick={(ev) => {
+                                        ev.stopPropagation()
+                                        startRename(e)
+                                      }}
                                     />
                                   }
                                 >
@@ -444,9 +477,10 @@ export function LibraryView() {
                                       size="icon-sm"
                                       aria-label={t("library.row.delete")}
                                       disabled={busy}
-                                      onClick={() =>
+                                      onClick={(ev) => {
+                                        ev.stopPropagation()
                                         confirmDelete.requestDelete(e)
-                                      }
+                                      }}
                                     />
                                   }
                                 >

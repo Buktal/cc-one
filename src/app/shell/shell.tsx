@@ -2,9 +2,9 @@
 // View switching via viewSlice (no react-router); the active view is rendered
 // by App. 顶栏 (CommandBar) 已移除 — 筛选/采集收敛进各 view 的 ControlCard /
 // ControlBar，主题切换与折叠 toggle 统一收进左下角 footer 控制台 (
-// 统一入口)，顶部仅留 logo 作品牌锚点，视图标题由导航
-// 选中态表达。Sidebar collapse persists to localStorage. 左栏视觉对齐原型 v10
-// (递减三色 mark / 绿字灰底选中 / 设备 pill)，main 区去掉 max-w 让看板与日志
+// 统一入口)，侧栏顶部无 logo 块（2026-08-18 移除，导航直达），视图标题由
+// 导航选中态表达。Sidebar collapse persists to localStorage. 左栏视觉对齐
+// 原型 v10 (绿字灰底选中 / 设备 pill)，main 区去掉 max-w 让看板与日志
 // 在宽屏铺满贴边 (窄内容如 settings 各自内部 max-w 居中)。
 
 import {
@@ -35,6 +35,7 @@ import {
 } from "@/components/ui/tooltip"
 import { useDeviceOptions } from "@/features/usage/use-device-options"
 import { useCollectAction } from "@/hooks/use-collect-action"
+import { useMediaQuery } from "@/hooks/use-media-query"
 import { usePersistedState } from "@/lib/persistence"
 import { cn } from "@/lib/utils"
 import { DataFreshness } from "./data-freshness"
@@ -74,52 +75,6 @@ const NAV_GROUPS: Array<{
 const NAV = NAV_GROUPS.flatMap((group) => group.items)
 
 const COLLAPSE_KEY = "cc-one:sidebar-collapsed"
-
-// Logo: the radial "One" mark in Claude Code terracotta — dark sidebar gets
-// the dark badge, light sidebar the light one, so the mark always stands off
-// its surface. Same mark as the app/tray icon (cc-one-dark / cc-one-light).
-function Logo({ collapsed }: { collapsed: boolean }) {
-  const { t } = useTranslation()
-  return (
-    <div
-      className={cn(
-        "flex items-center transition-[gap] duration-200",
-        collapsed ? "gap-0" : "gap-2.5",
-      )}
-    >
-      <img
-        src="/cc-one-dark.svg"
-        alt=""
-        className="hidden dark:block size-9 shrink-0"
-      />
-      <img
-        src="/cc-one-light.svg"
-        alt=""
-        className="block dark:hidden size-9 shrink-0"
-      />
-      <div
-        className={cn(
-          // Wordmark fades with the same timing as the nav labels — out on
-          // collapse, back in only after the width slide — and its max-width
-          // shrinks/grows in lockstep so it can't wrap or squeeze mid-slide.
-          // max-width interpolates (width:auto can't), and the comma-delayed
-          // transition (opacity first, then max-width) keeps the text
-          // invisible until the slide finishes. max-w-0 also collapses the
-          // wordmark fully for the portrait top bar's `<Logo collapsed />`.
-          "flex min-w-0 flex-col overflow-hidden leading-tight whitespace-nowrap transition-[max-width,opacity] duration-200",
-          collapsed
-            ? "max-w-0 opacity-0"
-            : "max-w-full opacity-100 delay-[200ms,0ms]",
-        )}
-      >
-        <span className="text-sm font-semibold">cc one</span>
-        <span className="text-muted-foreground text-[10px]">
-          {t("shell.logoSubtitle")}
-        </span>
-      </div>
-    </div>
-  )
-}
 
 function NavItem({
   item,
@@ -429,11 +384,9 @@ function TopNav({
 }) {
   return (
     <div className="bg-card border-border flex h-12 shrink-0 items-center gap-1 rounded-2xl border px-2">
-      <div className="px-1">
-        <Logo collapsed />
-      </div>
-      <Separator orientation="vertical" className="mx-1 h-6" />
-      <nav className="flex items-center gap-1">
+      {/* 无 logo（用户决策 2026-08-18，与侧栏同批）：竖屏顶栏直接从导航
+          icon 开始；间隔 gap-2 比折叠侧栏的紧排更松，横排才不显挤。 */}
+      <nav className="flex items-center gap-2">
         {NAV.map((item) => (
           <NavItem
             key={item.id}
@@ -649,6 +602,11 @@ export function Shell({ children }: { children: React.ReactNode }) {
     COLLAPSE_KEY,
     false,
   )
+  // 四栏工作台定稿 §5：1024 断点主导航自动收成图标条给内容让位——窄窗口下
+  // 手动展开无效（effective 折叠），宽窗口行为不变。量的是窗口宽度而非容器：
+  // 侧栏自身就是要收窄的元素，容器查询表达不了「窗口窄」。
+  const narrow = useMediaQuery("(max-width: 1023px)")
+  const effectiveCollapsed = collapsed || narrow
   const portrait = useIsPortrait()
 
   const modeLabel = t(synced ? "shell.synced" : "shell.standalone")
@@ -707,53 +665,33 @@ export function Shell({ children }: { children: React.ReactNode }) {
           <aside
             className={cn(
               "bg-card border-border flex shrink-0 flex-col rounded-2xl border transition-[width] duration-200",
-              collapsed ? "w-16" : "w-48",
+              effectiveCollapsed ? "w-16" : "w-48",
             )}
           >
-            {/* Logo row — the icon's position is driven by padding alone
-                (16px expanded, 14px collapsed = the exact centering position
-                in a 64px column), never justify-center: centering would track
-                the container's mid-line while the width slides, making the
-                icon drift left-then-right on collapse. */}
-            <div
-              className={cn(
-                "flex items-center py-4 transition-[padding] duration-200",
-                collapsed ? "px-[14px]" : "px-4",
-              )}
-            >
-              <Logo collapsed={collapsed} />
-            </div>
-
-            {/* mx-3: the logo row's px-4 already insets the icon, but the
-                rule should read as a hairline spanning the padded column,
-                not bleed to the frame — same inset as the footer rules.
-                data-horizontal:w-auto (same variant as the base class's
-                w-full) is required: a bare w-auto loses to the
-                data-horizontal:w-full selector (specificity (0,2,0) vs
-                (0,1,0)), which would leave width:100% + mx-3 overflowing
-                the frame. */}
-            <Separator className="mx-3 data-horizontal:w-auto" />
-
             {/* Nav column scrolls independently (scrollbar hidden) so the
                 footer's controls stay pinned and reachable in short
-                windows; the nav is the only part allowed to overflow. */}
+                windows; the nav is the only part allowed to overflow.
+                无 logo 块（用户决策 2026-08-18：侧栏与竖屏顶栏的 logo +
+                cc one 字标整块移除）——侧栏从导航直接开始，品牌标识只剩
+                窗口/托盘图标。 */}
             <div className="scrollbar-none min-h-0 flex-1 overflow-y-auto">
               {NAV_GROUPS.map((group, index) => (
                 <div
                   key={group.heading}
-                  // First group: the logo rule above is a hairline, not a
-                  // sibling group — pt-2 doubles the rule-to-heading gap
-                  // (heading's own pt-2 + this pt-2 = 16px); collapsed it
-                  // gives the icon stack the same breathing room below the
-                  // rule.
+                  // First group: pt-3 is the sidebar's top inset now that no
+                  // logo block sits above (rhythm matches the footer deck's
+                  // p-3); collapsed it gives the icon stack the same top
+                  // breathing room.
                   // Later groups: expanded the gap to the group above stays
                   // at the heading's pt-1 + nav p-2 = 12px (a second mt-3
                   // would double it — 成本定价 → 管理 read as far apart);
                   // collapsed has no heading text, so the mt-3 is the only
                   // separator between the two icon stacks.
-                  className={cn(index === 0 ? "pt-2" : collapsed ? "mt-3" : "")}
+                  className={cn(
+                    index === 0 ? "pt-3" : effectiveCollapsed ? "mt-3" : "",
+                  )}
                 >
-                  {collapsed ? null : (
+                  {effectiveCollapsed ? null : (
                     <div
                       className={cn(
                         // Same fade timing as the labels: out on collapse, in
@@ -767,7 +705,9 @@ export function Shell({ children }: { children: React.ReactNode }) {
                         // holds at 16px.
                         "overflow-hidden px-5 pb-1 text-[10px] font-medium tracking-wide text-muted-foreground/60 transition-opacity duration-150",
                         index === 0 ? "pt-2" : "pt-1",
-                        collapsed ? "opacity-0" : "opacity-100 delay-200",
+                        effectiveCollapsed
+                          ? "opacity-0"
+                          : "opacity-100 delay-200",
                       )}
                     >
                       {t(group.heading)}
@@ -776,7 +716,7 @@ export function Shell({ children }: { children: React.ReactNode }) {
                   <nav
                     className={cn(
                       "flex flex-col gap-1.5",
-                      collapsed ? "items-center p-2" : "p-2",
+                      effectiveCollapsed ? "items-center p-2" : "p-2",
                     )}
                   >
                     {group.items.map((item) => (
@@ -784,7 +724,7 @@ export function Shell({ children }: { children: React.ReactNode }) {
                         key={item.id}
                         item={item}
                         active={view === item.id}
-                        collapsed={collapsed}
+                        collapsed={effectiveCollapsed}
                         onClick={() => dispatch(setView(item.id))}
                       />
                     ))}
@@ -805,12 +745,12 @@ export function Shell({ children }: { children: React.ReactNode }) {
                 w-auto would lose the cascade to the base class's
                 data-horizontal:w-full (specificity (0,2,0) vs (0,1,0)) and
                 width:100% + mx-3 would overflow the frame's right edge. */}
-            {collapsed ? null : (
+            {effectiveCollapsed ? null : (
               <Separator className="mx-3 data-horizontal:w-auto" />
             )}
 
             <div className="shrink-0 p-3">
-              {collapsed ? (
+              {effectiveCollapsed ? (
                 <FooterDeckCollapsed
                   collectLabel={collectLabel}
                   collecting={collecting}

@@ -477,6 +477,142 @@ impl super::Store {
         rows.collect::<rusqlite::Result<Vec<_>>>()
             .map_err(AppError::from)
     }
+
+    /// The stats dimension at SESSION grain: every session (unpaged, list
+    /// order) with its usage four-buckets / hit rate / cost, its
+    /// `session_messages` row count, and its per-model token split. The
+    /// sessions workbench consumes this one read for everything the paged
+    /// list cannot answer — the left tree's node aggregates, the right rail's
+    /// per-session and per-project cards, and the duration buckets. Same
+    /// sources and rules as `query_project_stats` (live `usage_records`
+    /// aggregates via a LEFT JOIN so usage-less sessions still appear;
+    /// `project_identity` truncation at the decode seam) — only the grain
+    /// differs, so the two dimensions can never disagree on a session's
+    /// numbers. The SQL emits one row per (session, model); the fold below
+    /// merges them into one `SessionStatsRow` per session.
+    pub fn query_session_stats(
+        &self,
+        filter: Option<&SessionFilter>,
+    ) -> AppResult<Vec<SessionStatsRow>> {
+        let conn = self.conn.lock().expect("db mutex poisoned");
+        let (clause, params_vec) = build_session_where(filter);
+        let sql = format!(
+            "SELECT s.id, s.device_id, s.source, s.project_dir,
+                    COALESCE(NULLIF(s.custom_title,''), s.title_orig) AS title,
+                    s.favorited, s.local_group_id, s.synced_group_id,
+                    s.started_at, s.last_active_at, s.agent_type,
+                    COALESCE(u.request_count, 0),
+                    COALESCE(m.message_count, 0),
+                    COALESCE(u.input_tokens, 0),
+                    COALESCE(u.output_tokens, 0),
+                    COALESCE(u.cache_creation_tokens, 0),
+                    COALESCE(u.cache_read_tokens, 0),
+                    COALESCE(u.total_cost_usd, 0.0),
+                    u.model
+             FROM sessions s
+             LEFT JOIN (
+                SELECT session_id, device_id, model,
+                       COUNT(*) AS request_count,
+                       SUM(input_tokens) AS input_tokens,
+                       SUM(output_tokens) AS output_tokens,
+                       SUM(cache_creation_tokens) AS cache_creation_tokens,
+                       SUM(cache_read_tokens) AS cache_read_tokens,
+                       SUM(CAST(total_cost_usd AS REAL)) AS total_cost_usd
+                FROM usage_records GROUP BY session_id, device_id, model
+             ) u ON u.session_id = s.id AND u.device_id = s.device_id
+             LEFT JOIN (
+                SELECT session_id, device_id, COUNT(*) AS message_count
+                FROM session_messages GROUP BY session_id, device_id
+             ) m ON m.session_id = s.id AND m.device_id = s.device_id
+             {clause}
+             ORDER BY s.last_active_at DESC, s.device_id, s.id, u.model"
+        );
+        let mut stmt = conn.prepare(&sql)?;
+        let raw = stmt.query_map(params_from_iter(params_vec.iter()), |r| {
+            // Columns 13-16 are COALESCE'd to 0 for the usage-less LEFT JOIN
+            // row, so a plain read works; only u.model (18) is nullable.
+            let input = r.get::<_, i64>(13)?;
+            let output = r.get::<_, i64>(14)?;
+            let cache_creation = r.get::<_, i64>(15)?;
+            let cache_read = r.get::<_, i64>(16)?;
+            let model: Option<String> = r.get(18)?;
+            let project_dir: String = r.get(3)?;
+            let row = SessionStatsRow {
+                id: r.get(0)?,
+                device_id: r.get(1)?,
+                source: r.get(2)?,
+                // Same decode-seam truncation as `session_row`: the identity
+                // the list shows, so the tree buckets built on these rows
+                // match the project aggregate.
+                project_dir: project_identity(&project_dir).to_string(),
+                title: r.get(4)?,
+                favorited: r.get::<_, i64>(5)? != 0,
+                local_group_id: r.get(6)?,
+                synced_group_id: r.get(7)?,
+                started_at: r.get(8)?,
+                last_active_at: r.get(9)?,
+                agent_type: r.get(10)?,
+                request_count: r.get::<_, i64>(11)? as u32,
+                message_count: r.get::<_, i64>(12)? as u32,
+                input_tokens: input as u32,
+                output_tokens: output as u32,
+                cache_creation_tokens: cache_creation as u32,
+                cache_read_tokens: cache_read as u32,
+                cache_hit_rate: 0.0,
+                total_cost_usd: r.get(17)?,
+                models: Vec::new(),
+            };
+            let slice = SessionModelTokens {
+                model: model.unwrap_or_default(),
+                tokens: (input + output + cache_creation + cache_read) as u32,
+            };
+            Ok((row, slice))
+        })?;
+        let mut per_session: Vec<(SessionStatsRow, SessionModelTokens)> = raw
+            .collect::<rusqlite::Result<Vec<_>>>()
+            .map_err(AppError::from)?;
+
+        // Fold consecutive (session, model) rows into one row per session —
+        // the ORDER BY keeps a session's model rows adjacent, and the fold's
+        // key check makes an ordering regression surface as duplicate rows
+        // instead of silently merged sessions. Bucket sums, request count and
+        // cost accumulate across the model rows; message_count is identical
+        // on every row of the session (the join is session-grain).
+        let mut out: Vec<SessionStatsRow> = Vec::with_capacity(per_session.len());
+        for (row, slice) in per_session.drain(..) {
+            match out.last_mut() {
+                Some(prev) if prev.id == row.id && prev.device_id == row.device_id => {
+                    prev.request_count += row.request_count;
+                    prev.message_count = row.message_count;
+                    prev.input_tokens += row.input_tokens;
+                    prev.output_tokens += row.output_tokens;
+                    prev.cache_creation_tokens += row.cache_creation_tokens;
+                    prev.cache_read_tokens += row.cache_read_tokens;
+                    prev.total_cost_usd += row.total_cost_usd;
+                    prev.models.push(slice);
+                }
+                _ => {
+                    let mut row = row;
+                    row.models.push(slice);
+                    out.push(row);
+                }
+            }
+        }
+        for row in &mut out {
+            let tokens = TokenCounts {
+                input: row.input_tokens,
+                output: row.output_tokens,
+                cache_creation: row.cache_creation_tokens,
+                cache_read: row.cache_read_tokens,
+            };
+            row.cache_hit_rate = tokens.cache_hit_rate();
+            // Drop the usage-less phantom slice (empty model, zero tokens) so
+            // a session without usage renders "no model data", not a blank row.
+            row.models.retain(|m| !(m.model.is_empty() && m.tokens == 0));
+            row.models.sort_by(|a, b| b.tokens.cmp(&a.tokens));
+        }
+        Ok(out)
+    }
 }
 
 /// Decode a `session_messages` row in the canonical SELECT column order
@@ -1151,6 +1287,113 @@ mod tests {
             .is_empty());
         assert_eq!(s.count_sessions(Some(&none), "local").unwrap().total, 0);
         assert!(s.query_project_stats(Some(&none)).unwrap().is_empty());
+    }
+
+    /// The stats dimension at session grain: one row per session (folded from
+    /// its per-(session, model) SQL rows) carrying the session's identity, its
+    /// usage four-buckets / hit rate / cost, its message count, and its
+    /// per-model token split most-tokens-first. A session with NO usage still
+    /// appears with zeroed aggregates and no phantom model slice.
+    #[test]
+    fn session_stats_folds_model_rows_per_session() {
+        let s = mem();
+        seed_session_project(&s, "a1", "dev", "/proj/alpha", "2026-08-10T10:00:00.000Z");
+        seed_session_project(&s, "b1", "dev", "/proj/beta", "2026-08-11T10:00:00.000Z");
+        // Two usage records on a1 across two models: the fold must sum the
+        // buckets/cost/requests AND keep one model slice per model.
+        bound_rec(
+            &s,
+            "u1",
+            "a1",
+            TokenCounts {
+                input: 100,
+                output: 20,
+                cache_read: 70,
+                cache_creation: 10,
+            },
+            1.0,
+        );
+        let mut r = rec(
+            "u2",
+            "2026-08-15",
+            "glm-5.2-air",
+            "dev",
+            30,
+            0,
+            2.0,
+        );
+        r.session_id = "a1".into();
+        r.tokens = TokenCounts {
+            input: 30,
+            output: 0,
+            cache_read: 60,
+            cache_creation: 0,
+        };
+        s.ingest_marking_dirty(&[r]).unwrap();
+        // Two transcript messages for a1 — the message count follows
+        // session_messages, not usage_records.
+        s.ingest_session_messages_marking_dirty(
+            "dev",
+            &[
+                msg("m1", "a1", SessionMessageRole::User, "2026-07-13T10:00:00Z"),
+                msg("m2", "a1", SessionMessageRole::Assistant, "2026-07-13T10:00:01Z"),
+            ],
+        )
+        .unwrap();
+
+        let rows = s.query_session_stats(None).unwrap();
+        assert_eq!(rows.len(), 2, "one row per session, never per model");
+        // List order: most recent first (b1 08-11 before a1 08-10).
+        assert_eq!(rows[0].id, "b1");
+        assert_eq!(rows[0].request_count, 0);
+        assert_eq!(rows[0].message_count, 0);
+        assert_eq!(rows[0].total_cost_usd, 0.0);
+        assert_eq!(rows[0].cache_hit_rate, 0.0);
+        assert!(
+            rows[0].models.is_empty(),
+            "usage-less session renders no phantom model slice"
+        );
+
+        let a1 = &rows[1];
+        assert_eq!(a1.id, "a1");
+        assert_eq!(a1.request_count, 2);
+        assert_eq!(a1.message_count, 2);
+        assert_eq!(a1.input_tokens, 130);
+        assert_eq!(a1.output_tokens, 20);
+        assert_eq!(a1.cache_creation_tokens, 10);
+        assert_eq!(a1.cache_read_tokens, 130);
+        assert!((a1.total_cost_usd - 3.0).abs() < 1e-9);
+        // Same single formula the project grain reads:
+        // cache_read / (input + cache_creation + cache_read) = 130/270.
+        assert!((a1.cache_hit_rate - 130.0 / 270.0).abs() < 1e-9);
+        assert_eq!(
+            a1.models
+                .iter()
+                .map(|m| (m.model.as_str(), m.tokens))
+                .collect::<Vec<_>>(),
+            [("glm-5.2", 200), ("glm-5.2-air", 90)],
+            "per-model slices, most-tokens-first, bucket sums intact"
+        );
+    }
+
+    /// The session grain applies the same project-identity truncation as the
+    /// list decode seam and groups nothing — but its `project_dir` output must
+    /// match what the list shows, so a worktree session stats row carries the
+    /// PARENT project (the tree buckets the frontend builds on top stay
+    /// consistent with the project aggregate).
+    #[test]
+    fn session_stats_collapses_worktree_project_to_parent() {
+        let s = mem();
+        seed_session_project(
+            &s,
+            "s-agent",
+            "dev",
+            "D:\\Project\\O_CC_One\\.claude\\worktrees\\agent-a10c476b",
+            "2026-08-03T10:00:00.000Z",
+        );
+        let rows = s.query_session_stats(None).unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].project_dir, "D:\\Project\\O_CC_One");
     }
 
     /// The filter applies BEFORE grouping: a time range narrows which sessions

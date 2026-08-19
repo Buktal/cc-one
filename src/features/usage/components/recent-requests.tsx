@@ -21,7 +21,7 @@ import { cn } from "@/lib/utils"
 
 import { useDeviceLabelMap } from "../use-device-options"
 
-const LIMIT = 5
+const LIMIT = 10
 
 export function RecentRequests() {
   const { t } = useTranslation()

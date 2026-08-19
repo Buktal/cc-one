@@ -337,6 +337,59 @@ pub struct ProjectStatsRow {
     pub last_active_at: String,
 }
 
+/// One (model, total-tokens) share within a [`SessionStatsRow`] — the per-model
+/// slice the sessions workbench's model card renders. Tokens are the model's
+/// four-bucket sum within that session; the share denominator is the session's
+/// total (the frontend derives the percentage).
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, specta::Type)]
+pub struct SessionModelTokens {
+    /// Model name as usage_records store it (empty when a session has usage
+    /// rows with no model — kept as its own slice so the sums still add up).
+    pub model: String,
+    pub tokens: u32,
+}
+
+/// One session of the stats dimension: the session-list row's identity fields
+/// plus the usage aggregates the sessions workbench's right rail needs at
+/// SESSION grain (the project grain lives in [`ProjectStatsRow`]). Four-bucket
+/// totals / hit rate / cost are live aggregates over `usage_records` (the same
+/// single token source the list reads); `message_count` counts
+/// `session_messages` rows; `models` splits the session's tokens per model.
+/// Sessions with NO usage still appear (LEFT JOIN + COALESCE) — the rail's
+/// usage card shows zeros, and the tree counts the session.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, specta::Type)]
+pub struct SessionStatsRow {
+    pub id: String,
+    pub device_id: String,
+    pub source: String,
+    /// Project identity (worktree suffix collapsed — same decode rule as
+    /// [`SessionRow::project_dir`]).
+    pub project_dir: String,
+    /// Display title: `custom_title` when set, else `title_orig`.
+    pub title: String,
+    /// `""` = main session; non-empty = subagent type tag.
+    pub agent_type: String,
+    pub favorited: bool,
+    pub local_group_id: String,
+    pub synced_group_id: String,
+    pub started_at: String,
+    pub last_active_at: String,
+    /// Live aggregate over `usage_records`.
+    pub request_count: u32,
+    /// Rows in `session_messages` for this (session, device).
+    pub message_count: u32,
+    pub input_tokens: u32,
+    pub output_tokens: u32,
+    pub cache_creation_tokens: u32,
+    pub cache_read_tokens: u32,
+    /// Cache-hit ratio, [0,1] ([`TokenCounts::cache_hit_rate`]).
+    pub cache_hit_rate: f64,
+    /// Live aggregate: sum of cost.
+    pub total_cost_usd: f64,
+    /// Per-model token split, most-tokens-first.
+    pub models: Vec<SessionModelTokens>,
+}
+
 /// One group entry for the frontend, unified across the two tracks. Order is
 /// carried by the ARRAY order `list_groups_dto` returns (already sorted by
 /// position per track) — no redundant per-row sort key.

@@ -16,6 +16,7 @@ import type {
   SessionGroupCounts,
   SessionMessage,
   SessionRow,
+  SessionStatsRow,
 } from "@/types/generated/bindings"
 
 /**
@@ -143,6 +144,21 @@ export function sessionTabFilter(
 }
 
 /**
+ * The left tree's three tracks (定稿 docs/plans/sessions-workbench-redesign.md
+ * §1): 项目 = automatic project buckets, 分组 = manual local groups, 收藏 =
+ * synced groups over the cross-device favorites universe. The track replaces
+ * the old Local / Favorites tabs as the page's universe switch.
+ */
+export type TreeTrack = "projects" | "groups" | "favorites"
+
+/** The session universe a tree track reads: the project / group tracks show
+ *  this device's sessions (the old Local tab), the favorites track shows
+ *  favorited sessions across devices (the old Favorites tab). */
+export function trackUniverseTab(track: TreeTrack): SessionTab {
+  return track === "favorites" ? "favorites" : "local"
+}
+
+/**
  * A sessions query scope: the common dimensions (from filterSlice) + the
  * sessions-only dimensions (tab / group / search) + the self device id a
  * SessionFilter needs. Carries NO timestamp — bounds are derived in
@@ -156,6 +172,9 @@ export interface SessionScopeSpec {
   tab: SessionTab
   selfDeviceId: string
   selectedGroupId: string
+  /** Selected project identity (the tree's project track / the narrow-window
+   *  project dropdown); null = no project constraint. */
+  project: string | null
   search: string | null
 }
 
@@ -178,6 +197,7 @@ export function buildSessionFilter(spec: SessionScopeSpec): SessionFilter {
       toTs,
       deviceScope: spec.filter.device_scope || null,
       model: spec.filter.model || null,
+      project: spec.project,
       search: spec.search,
     },
     spec.selectedGroupId,
@@ -197,6 +217,7 @@ export function sessionSpecId(spec: SessionScopeSpec): string {
     spec.tab,
     spec.selfDeviceId,
     spec.selectedGroupId,
+    spec.project ?? "",
     spec.search ?? "",
     ...FILTER_DIMENSIONS.map((k) => spec.filter[k]),
   ].join("|")
@@ -414,6 +435,226 @@ export function applyGroupOrder(
   return [...groups].sort(
     (a, b) => (rank.get(a.id) ?? 1_000_000) - (rank.get(b.id) ?? 1_000_000),
   )
+}
+
+// ------------------------------------------------------- workbench stats ----
+
+/**
+ * The four token buckets the workbench aggregates over — the JS mirror of the
+ * Rust `TokenCounts` u32 four-pack the backend rows carry.
+ */
+export interface StatsTokens {
+  input: number
+  output: number
+  cache_creation: number
+  cache_read: number
+}
+
+/**
+ * Cache-hit ratio over the cacheable pool: cache_read / (input +
+ * cache_creation + cache_read). Mirrors the Rust `TokenCounts::cache_hit_rate`
+ * (the single implementation the backend rows read); kept here because the
+ * workbench aggregates rows client-side and a ratio is not additive — only
+ * the summed buckets can feed it. null when the pool is empty (no usage).
+ */
+export function tokensHitRate(t: StatsTokens): number | null {
+  const pool = t.input + t.cache_creation + t.cache_read
+  return pool > 0 ? t.cache_read / pool : null
+}
+
+/** A session's span in ms (last_active − started); null when absent or not
+ *  positive — the duration buckets skip those instead of counting garbage. */
+export function statsSpanMs(
+  s: Pick<SessionStatsRow, "started_at" | "last_active_at">,
+): number | null {
+  if (!s.started_at || !s.last_active_at) return null
+  const ms = Date.parse(s.last_active_at) - Date.parse(s.started_at)
+  return Number.isFinite(ms) && ms > 0 ? ms : null
+}
+
+/** One per-model share of an aggregate — tokens are the model's four-bucket
+ *  sum, `sessions` how many rows used it (the card's sub-line). */
+export interface ModelShare {
+  model: string
+  tokens: number
+  sessions: number
+}
+
+/** The workbench's right-rail aggregate over a set of session stats rows:
+ *  additive sums (buckets / requests / messages / cost), the derived hit rate
+ *  (NOT the mean of row rates — see tokensHitRate), per-model token shares,
+ *  and the duration-bucket counts (<15m / 15–60m / 1–3h / >3h). Pure so the
+ *  口径 invariants are testable. */
+export interface StatsAggregate {
+  sessions: number
+  requests: number
+  messages: number
+  tokens: StatsTokens
+  hitRate: number | null
+  cost: number
+  models: ModelShare[]
+  durationBuckets: [number, number, number, number]
+  /** Sum of the VALID session spans (ms) — the「累计时长」figure; null when
+   *  no row had a usable span (the caller renders a dash). */
+  totalSpanMs: number | null
+  lastActiveAt: string | null
+}
+
+export function aggregateStats(
+  rows: readonly SessionStatsRow[],
+): StatsAggregate {
+  const tokens = { input: 0, output: 0, cache_creation: 0, cache_read: 0 }
+  const byModel = new Map<string, ModelShare>()
+  const durationBuckets: [number, number, number, number] = [0, 0, 0, 0]
+  let requests = 0
+  let messages = 0
+  let cost = 0
+  let totalSpanMs = 0
+  let sawSpan = false
+  let last: string | null = null
+  for (const r of rows) {
+    requests += r.request_count
+    messages += r.message_count
+    tokens.input += r.input_tokens
+    tokens.output += r.output_tokens
+    tokens.cache_creation += r.cache_creation_tokens
+    tokens.cache_read += r.cache_read_tokens
+    cost += r.total_cost_usd ?? 0
+    // Rows arrive last-active-desc from the backend, but a filtered slice may
+    // come from anywhere — compare, don't trust the order.
+    if (r.last_active_at && (!last || r.last_active_at > last))
+      last = r.last_active_at
+    for (const m of r.models) {
+      const slot = byModel.get(m.model) ?? {
+        model: m.model,
+        tokens: 0,
+        sessions: 0,
+      }
+      slot.tokens += m.tokens
+      slot.sessions += 1
+      byModel.set(m.model, slot)
+    }
+    const span = statsSpanMs(r)
+    if (span !== null) {
+      sawSpan = true
+      totalSpanMs += span
+      const minutes = span / 60_000
+      durationBuckets[
+        minutes < 15 ? 0 : minutes < 60 ? 1 : minutes < 180 ? 2 : 3
+      ] += 1
+    }
+  }
+  return {
+    sessions: rows.length,
+    requests,
+    messages,
+    tokens,
+    hitRate: tokensHitRate(tokens),
+    cost,
+    models: [...byModel.values()].sort((a, b) => b.tokens - a.tokens),
+    durationBuckets,
+    totalSpanMs: sawSpan ? totalSpanMs : null,
+    lastActiveAt: last,
+  }
+}
+
+/** The project track's buckets: sessions grouped by project identity, each
+ *  bucket carrying its row slice (backend order — last-active desc), its
+ *  token total, and its newest last-active for the bucket ordering. Empty
+ *  project dirs bucket under "" (rendered as「无项目」). */
+export interface ProjectNodeData {
+  project: string
+  sessions: SessionStatsRow[]
+  tokens: number
+  lastActiveAt: string
+}
+
+export function projectNodes(
+  rows: readonly SessionStatsRow[],
+): ProjectNodeData[] {
+  const byProject = new Map<string, ProjectNodeData>()
+  for (const r of rows) {
+    const node = byProject.get(r.project_dir) ?? {
+      project: r.project_dir,
+      sessions: [],
+      tokens: 0,
+      lastActiveAt: r.last_active_at,
+    }
+    node.sessions.push(r)
+    node.tokens +=
+      r.input_tokens +
+      r.output_tokens +
+      r.cache_creation_tokens +
+      r.cache_read_tokens
+    if (r.last_active_at > node.lastActiveAt) node.lastActiveAt = r.last_active_at
+    byProject.set(r.project_dir, node)
+  }
+  return [...byProject.values()].sort((a, b) =>
+    b.lastActiveAt.localeCompare(a.lastActiveAt),
+  )
+}
+
+/**
+ * The group tracks' row bucketing: rows keyed by their group id, with every
+ * row whose id is empty OR not in `knownIds` falling into `ungrouped` — the
+ * same "stale id counts as ungrouped" rule `ungroupedCount` applies to the
+ * backend counts, kept in one place for the tree's session children.
+ */
+export function groupedRows<T>(
+  rows: readonly T[],
+  groupIdOf: (row: T) => string,
+  knownIds: ReadonlySet<string>,
+): { grouped: Map<string, T[]>; ungrouped: T[] } {
+  const grouped = new Map<string, T[]>()
+  const ungrouped: T[] = []
+  for (const r of rows) {
+    const id = groupIdOf(r)
+    if (!id || !knownIds.has(id)) ungrouped.push(r)
+    else {
+      const bucket = grouped.get(id)
+      if (bucket) bucket.push(r)
+      else grouped.set(id, [r])
+    }
+  }
+  return { grouped, ungrouped }
+}
+
+/** Display basename of a project dir — the tree / cards / tables show the
+ *  short name with the full path on hover (定稿 §痛点1). Handles both path
+ *  separators; a path that is all separators (or empty) has no basename and
+ *  renders as-is (the caller decides the「无项目」placeholder). */
+export function projectBasename(dir: string): string {
+  const trimmed = dir.replace(/[\\/]+$/, "")
+  const slash = Math.max(trimmed.lastIndexOf("/"), trimmed.lastIndexOf("\\"))
+  return slash === -1 ? trimmed : trimmed.slice(slash + 1)
+}
+
+/** Project a stats row onto the list-row shape — the tree's session children
+ *  are stats rows, but the detail view consumes SessionRow. The numbers come
+ *  from the same SQL aggregates the list reads (buckets summed = the list's
+ *  total_tokens; cost identical), so the projection is lossless for every
+ *  field the detail uses. */
+export function toSessionRow(r: SessionStatsRow): SessionRow {
+  return {
+    id: r.id,
+    device_id: r.device_id,
+    source: r.source,
+    project_dir: r.project_dir,
+    title: r.title,
+    agent_type: r.agent_type,
+    favorited: r.favorited,
+    local_group_id: r.local_group_id,
+    synced_group_id: r.synced_group_id,
+    started_at: r.started_at,
+    last_active_at: r.last_active_at,
+    request_count: r.request_count,
+    total_tokens:
+      r.input_tokens +
+      r.output_tokens +
+      r.cache_creation_tokens +
+      r.cache_read_tokens,
+    total_cost_usd: r.total_cost_usd,
+  }
 }
 
 // ------------------------------------------------------------- transcript --

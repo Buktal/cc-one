@@ -8,10 +8,12 @@ import { run, vaultApi } from "@/app/store/api-core"
 import { storeRead } from "@/app/store/tags"
 import type {
   LocalGroup,
+  ProjectStatsRow,
   SessionGroup,
   SessionGroupCounts,
   SessionMessage_Serialize,
   SessionRow,
+  SessionStatsRow,
   SyncedGroup,
 } from "@/types/generated/bindings"
 import { commands } from "@/types/generated/bindings"
@@ -25,6 +27,8 @@ import {
 export const {
   useListSessionsQuery,
   useSessionCountsQuery,
+  useSessionStatsQuery,
+  useProjectStatsQuery,
   useGetSessionQuery,
   useSessionTranscriptQuery,
   useSetSessionFavoritedMutation,
@@ -78,6 +82,27 @@ export const {
       queryFn: async ({ spec, track }) =>
         run(commands.countSessionsCmd(buildSessionFilter(spec), track)),
       providesTags: (_r, _e, { spec }) =>
+        storeRead({ type: "Sessions", id: sessionSpecId(spec) }),
+    }),
+    /** The workbench's stats read at session grain: every session under the
+     *  scope (unpaged) with its four-bucket usage / hit rate / cost, message
+     *  count, and per-model token split. Powers the left tree's node
+     *  aggregates and the right rail's cards — everything the paged list
+     *  cannot answer. Callers pass a selection-free scope (All groups, no
+     *  project) so the whole universe arrives once. */
+    sessionStats: b.query<SessionStatsRow[], SessionScopeSpec>({
+      queryFn: async (spec) =>
+        run(commands.querySessionStatsCmd(buildSessionFilter(spec))),
+      providesTags: (_r, _e, spec) =>
+        storeRead({ type: "Sessions", id: sessionSpecId(spec) }),
+    }),
+    /** The project dimension (#85): per-project buckets under the scope for
+     *  the tree's project nodes and the center's project stats head. Same
+     *  selection-free scope as sessionStats. */
+    projectStats: b.query<ProjectStatsRow[], SessionScopeSpec>({
+      queryFn: async (spec) =>
+        run(commands.queryProjectStatsCmd(buildSessionFilter(spec))),
+      providesTags: (_r, _e, spec) =>
         storeRead({ type: "Sessions", id: sessionSpecId(spec) }),
     }),
     /** One session row by its exact composite key — the "request log →

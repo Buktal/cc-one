@@ -361,12 +361,12 @@ function DetailRow({ r }: { r: UsageLogRow }) {
           </div>
           {/* 其余字段 — identity + context. 两列 grid：标签列等宽，所有行的
               值从同一位置开始（会话/请求 ID 是变长值，inline 布局会对不齐）。
-              行距 gap-y-0.5（2px）比左侧金额明细更紧——键值对字段密集，带
-              复制按钮的行视觉更重，收紧后上下不再显空。CopyButton 缩到
-              size-4 与 12px 字号行高等高（默认 icon-sm 是 size-8，会撑高
-              所在行）。会话 ID 与请求 ID 相邻成组（都能复制），随后是
+              行距压到最紧——leading-none（12px 文本不再撑 16px 行框）+
+              gap-y-0，键值对字段贴成一块密集的 spec 区，块与块之间不再
+              显空。带复制按钮的行由 CopyButton（size-4，16px）决定行高。
+              会话 ID 与请求 ID 相邻成组（都能复制），随后是
               迭代 / 档位 / 工具 / 计价模型。 */}
-          <div className="text-muted-foreground grid grid-cols-[auto_minmax(0,1fr)] items-center gap-x-3 gap-y-0.5 text-xs">
+          <div className="text-muted-foreground grid grid-cols-[auto_minmax(0,1fr)] items-center gap-x-3 gap-y-0 text-xs leading-none">
             {r.session_id ? (
               <>
                 <span className="font-medium">

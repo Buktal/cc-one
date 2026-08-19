@@ -12,8 +12,10 @@ import type {
   SessionGroup,
   SessionMessage,
   SessionRow,
+  SessionStatsRow,
 } from "@/types/generated/bindings"
 import {
+  aggregateStats,
   ALL_GROUPS,
   applyGroupOrder,
   canCreateSyncedGroup,
@@ -22,11 +24,14 @@ import {
   expandAllMessages,
   favKey,
   firstLine,
+  groupedRows,
   isAllCollapsed,
   isRowOpen,
   modelsUsed,
   neighborNav,
   nextFavValue,
+  projectBasename,
+  projectNodes,
   reorderGroupIds,
   roleDefaultsCollapsed,
   type SessionScopeSpec,
@@ -34,6 +39,7 @@ import {
   sessionSpecId,
   sessionTabFilter,
   spanLabelKey,
+  tokensHitRate,
   transcriptMatches,
   tryFormatJson,
   UNGROUPED,
@@ -755,6 +761,7 @@ describe("sessionSpecId — cache-key dimension completeness", () => {
     tab: "local",
     selfDeviceId: "dev-self",
     selectedGroupId: "",
+    project: null,
     search: null,
   })
 
@@ -777,6 +784,7 @@ describe("sessionSpecId — cache-key dimension completeness", () => {
       { label: "tab", patch: { tab: "favorites" } },
       { label: "selfDeviceId", patch: { selfDeviceId: "dev-other" } },
       { label: "selectedGroupId", patch: { selectedGroupId: "g1" } },
+      { label: "project", patch: { project: "/proj/alpha" } },
       { label: "search", patch: { search: "query" } },
     ]
     for (const { label, patch } of cases) {
@@ -787,5 +795,168 @@ describe("sessionSpecId — cache-key dimension completeness", () => {
         `${label} must be part of sessionSpecId or two scopes share one cache entry`,
       ).not.toBe(sessionSpecId(base))
     }
+  })
+})
+
+// ---------------------------------------------------- workbench stats ----
+
+/** Minimal factory over a zero-valued SessionStatsRow (mirrors the backend
+ *  shape; only the fields a case cares about get spelled out). */
+function statsRow(
+  overrides: Partial<SessionStatsRow> & Pick<SessionStatsRow, "id">,
+): SessionStatsRow {
+  return {
+    device_id: "dev-self",
+    source: "claude_code",
+    project_dir: "",
+    title: "",
+    agent_type: "",
+    favorited: false,
+    local_group_id: "",
+    synced_group_id: "",
+    started_at: "",
+    last_active_at: "",
+    request_count: 0,
+    message_count: 0,
+    input_tokens: 0,
+    output_tokens: 0,
+    cache_creation_tokens: 0,
+    cache_read_tokens: 0,
+    cache_hit_rate: 0,
+    total_cost_usd: 0,
+    models: [],
+    ...overrides,
+  }
+}
+
+describe("tokensHitRate", () => {
+  it("derives cache_read / (input + cache_creation + cache_read)", () => {
+    expect(
+      tokensHitRate({ input: 30, output: 99, cache_creation: 10, cache_read: 60 }),
+    ).toBeCloseTo(60 / 100)
+  })
+
+  it("null when the cacheable pool is empty (no usage)", () => {
+    expect(
+      tokensHitRate({ input: 0, output: 5, cache_creation: 0, cache_read: 0 }),
+    ).toBeNull()
+  })
+})
+
+describe("aggregateStats", () => {
+  it("sums additively, merges models, and derives the hit rate from summed buckets", () => {
+    const a = aggregateStats([
+      statsRow({
+        id: "s1",
+        request_count: 3,
+        message_count: 10,
+        input_tokens: 100,
+        output_tokens: 20,
+        cache_creation_tokens: 10,
+        cache_read_tokens: 70,
+        total_cost_usd: 1.5,
+        started_at: "2026-08-10T10:00:00Z",
+        last_active_at: "2026-08-10T11:00:00Z",
+        models: [
+          { model: "glm-5.2", tokens: 180 },
+          { model: "glm-5.2-air", tokens: 20 },
+        ],
+      }),
+      statsRow({
+        id: "s2",
+        request_count: 1,
+        message_count: 4,
+        input_tokens: 50,
+        output_tokens: 0,
+        cache_creation_tokens: 0,
+        cache_read_tokens: 50,
+        total_cost_usd: 0.5,
+        started_at: "2026-08-11T10:00:00Z",
+        last_active_at: "2026-08-11T10:40:00Z",
+        models: [{ model: "glm-5.2", tokens: 100 }],
+      }),
+    ])
+    expect(a.sessions).toBe(2)
+    expect(a.requests).toBe(4)
+    expect(a.messages).toBe(14)
+    expect(a.tokens).toEqual({
+      input: 150,
+      output: 20,
+      cache_creation: 10,
+      cache_read: 120,
+    })
+    expect(a.cost).toBeCloseTo(2.0)
+    // NOT the mean of row rates — the summed-bucket formula only.
+    expect(a.hitRate).toBeCloseTo(120 / 280)
+    expect(a.models).toEqual([
+      { model: "glm-5.2", tokens: 280, sessions: 2 },
+      { model: "glm-5.2-air", tokens: 20, sessions: 1 },
+    ])
+    // 1h and 40m spans land in the 15–60m and 1–3h buckets.
+    expect(a.durationBuckets).toEqual([0, 1, 1, 0])
+    expect(a.lastActiveAt).toBe("2026-08-11T10:40:00Z")
+  })
+
+  it("skips invalid spans instead of bucketing garbage", () => {
+    const a = aggregateStats([
+      statsRow({
+        id: "s1",
+        // Negative span (last before start) and missing timestamps.
+        started_at: "2026-08-12T10:00:00Z",
+        last_active_at: "2026-08-11T10:00:00Z",
+      }),
+      statsRow({ id: "s2" }),
+    ])
+    expect(a.durationBuckets).toEqual([0, 0, 0, 0])
+    // lastActiveAt tracks timestamps regardless of span validity — the
+    // negative-span row still has a valid last_active_at.
+    expect(a.lastActiveAt).toBe("2026-08-11T10:00:00Z")
+  })
+})
+
+describe("projectNodes", () => {
+  it("buckets by project identity and orders buckets by newest activity", () => {
+    const nodes = projectNodes([
+      statsRow({ id: "a1", project_dir: "/p/alpha", last_active_at: "2026-08-10" }),
+      statsRow({ id: "b1", project_dir: "/p/beta", last_active_at: "2026-08-12" }),
+      statsRow({
+        id: "a2",
+        project_dir: "/p/alpha",
+        last_active_at: "2026-08-08",
+        input_tokens: 30,
+        output_tokens: 10,
+      }),
+    ])
+    expect(nodes.map((n) => n.project)).toEqual(["/p/beta", "/p/alpha"])
+    expect(nodes[1].sessions.map((s) => s.id)).toEqual(["a1", "a2"])
+    expect(nodes[1].tokens).toBe(40)
+    expect(nodes[1].lastActiveAt).toBe("2026-08-10")
+  })
+})
+
+describe("groupedRows", () => {
+  it("keeps known ids grouped; empty and stale ids fall to ungrouped", () => {
+    const { grouped, ungrouped } = groupedRows(
+      [
+        { id: "s1", g: "g1" },
+        { id: "s2", g: "" },
+        { id: "s3", g: "gone" },
+        { id: "s4", g: "g2" },
+      ],
+      (r) => r.g,
+      new Set(["g1", "g2"]),
+    )
+    expect(grouped.get("g1")).toEqual([{ id: "s1", g: "g1" }])
+    expect(grouped.get("g2")).toEqual([{ id: "s4", g: "g2" }])
+    expect(ungrouped.map((r) => r.id)).toEqual(["s2", "s3"])
+  })
+})
+
+describe("projectBasename", () => {
+  it("takes the final path component on both separators", () => {
+    expect(projectBasename("D:\\Project\\O_CC_One")).toBe("O_CC_One")
+    expect(projectBasename("/home/user/vault-one")).toBe("vault-one")
+    expect(projectBasename("solo")).toBe("solo")
+    expect(projectBasename("D:\\proj\\")).toBe("proj")
   })
 })

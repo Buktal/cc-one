@@ -5,9 +5,8 @@
 // 文件。供应商显式配置优先，片段只补缺失键。
 //
 // 编辑器按应用切换语言：claude/gemini 用 JSON（客户端 JSON 校验 + 格式化），
-// codex/grok 用 TOML（仅高亮，合法性 + 身份键由后端校验）。卡片底部的提示按
-// 应用给不同信息——claude 对当前激活供应商做片段子集判定，codex/grok 列禁
-// 身份键。
+// codex/grok 用 TOML（仅高亮，合法性 + 身份键由后端校验）。卡片底部只留动态
+// 校验反馈（gemini 凭据键警告、claude/gemini 子集判定），无常驻说明文。
 
 import { useEffect, useState } from "react"
 import { useTranslation } from "react-i18next"
@@ -118,29 +117,28 @@ export function CommonConfigSnippetCard({ app }: { app: App }) {
         ? geminiSnippetMissingKeys(activeProvider.settingsConfig, content)
         : []
 
-  // 底部提示按应用：claude 子集判定；codex/grok 列禁身份键；gemini 动态检测
-  // 凭据/端点键（TS 镜像后端 is_sensitive_config_key，ADR-0010）——有则警告该键
-  // 保存将被拒，无则列允许的键。
+  // 底部提示只保留随内容变化的动态反馈：gemini 凭据/端点键警告（TS 镜像后端
+  // is_sensitive_config_key，ADR-0010）、claude/gemini 的子集判定（切换时将
+  // 补充哪些键 / 已全覆盖）。常驻静态说明（勿放账号信息、无激活供应商时的
+  // 生效说明等）已删——能放什么由校验反馈表达，不靠占着底部的说明文。
   const bottomHint = (() => {
-    if (app === "codex") return t("providers.snippet.codexIdentityHint")
-    if (app === "grok") return t("providers.snippet.grokIdentityHint")
     if (app === "gemini") {
       const issue = geminiSnippetIssue(content)
       if (issue) {
         return t("providers.snippet.geminiCredentialWarn", { key: issue })
       }
-      // 无凭据问题时与 claude 同款子集提示（片段 env 键将补进激活供应商）。
-      if (!activeProvider) return t("providers.snippet.noActiveHint")
+      if (!activeProvider) return ""
       return missingKeys.length > 0
         ? t("providers.snippet.deltaHint", { keys: missingKeys.join(", ") })
         : t("providers.snippet.coveredHint")
     }
     if (app === "claude") {
-      if (!activeProvider) return t("providers.snippet.noActiveHint")
+      if (!activeProvider) return ""
       return missingKeys.length > 0
         ? t("providers.snippet.deltaHint", { keys: missingKeys.join(", ") })
         : t("providers.snippet.coveredHint")
     }
+    // codex/grok 无动态判定（写盘层合并，前端看不到 live 全文）——无提示。
     return ""
   })()
 
@@ -184,10 +182,17 @@ export function CommonConfigSnippetCard({ app }: { app: App }) {
           className="min-h-40 flex-1"
         />
         <div className="flex items-center justify-between gap-2">
-          <span className="text-muted-foreground truncate text-xs">
-            {bottomHint}
-          </span>
-          <Button size="sm" disabled={saving || isLoading} onClick={onSave}>
+          {bottomHint ? (
+            <span className="text-muted-foreground truncate text-xs">
+              {bottomHint}
+            </span>
+          ) : null}
+          <Button
+            size="sm"
+            disabled={saving || isLoading}
+            onClick={onSave}
+            className="ml-auto"
+          >
             {saving ? t("common.saving") : t("providers.snippet.save")}
           </Button>
         </div>

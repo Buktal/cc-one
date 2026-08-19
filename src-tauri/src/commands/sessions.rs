@@ -6,7 +6,7 @@ use super::AppState;
 use crate::error::{AppError, AppResult};
 use crate::model::{
     LocalGroup, ProjectStatsRow, SessionFilter, SessionGroup, SessionGroupCounts, SessionMessage,
-    SessionQuery, SessionRow, SyncedGroup,
+    SessionQuery, SessionRow, SessionStatsRow, SyncedGroup,
 };
 use crate::sessions;
 
@@ -50,6 +50,19 @@ pub fn query_project_stats_cmd(
     filter: Option<SessionFilter>,
 ) -> AppResult<Vec<ProjectStatsRow>> {
     state.store.query_project_stats(filter.as_ref())
+}
+
+/// The stats dimension at session grain: every session under the filter with
+/// its usage four-buckets / hit rate / cost, message count, and per-model
+/// token split (see `Store::query_session_stats`). The sessions workbench's
+/// left tree and right stats rail consume this one read.
+#[tauri::command]
+#[specta::specta]
+pub fn query_session_stats_cmd(
+    state: State<'_, AppState>,
+    filter: Option<SessionFilter>,
+) -> AppResult<Vec<SessionStatsRow>> {
+    state.store.query_session_stats(filter.as_ref())
 }
 
 /// One session row by its exact composite key `(id, device_id)` — the

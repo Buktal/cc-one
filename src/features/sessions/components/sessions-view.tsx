@@ -1,7 +1,11 @@
-// Sessions view — 会话管理入口. Two tabs (Local / Favorites), each with its
-// own grouping track: Local tab groups by `local_group_id` (device-private),
-// Favorites tab groups by `synced_group_id` (git-synced) and shows the source
-// device per row. Clicking a row opens the detail Sheet with the transcript.
+// Sessions view —— 单屏四栏工作台容器（定稿 docs/plans/sessions-
+// workbench-redesign.md，原型 variant-d）：主导航（shell，1024 自动收窄）｜
+// 左树栏（三轨道两级树）｜中内容区（三态）｜右统计卡栏（4 卡，按项目/按会话）。
+// 顶部工具条：时间 pill（作用于全部统计）+ 筛选 + 搜索 + 批量操作入口。
+//
+// 中内容区三态：未选中 = 会话总列表；选中项目 = 统计头小卡片 + 项目会话列表；
+// 选中会话 = 标题行 + 对话流（session-detail，其余统计全在右栏）。窄容器
+// （< 48rem ≈ 768 档）左树收成工具条下拉、右栏折叠为浮动按钮开抽屉。
 //
 // Pure rendering only — all state, queries, mutations and the optimistic
 // favorite / pending-group handling live in useSessionsBrowser (./use-sessions-
@@ -10,15 +14,20 @@
 
 import dayjs from "dayjs"
 import relativeTime from "dayjs/plugin/relativeTime"
-import { MessagesSquare, Search, Star } from "lucide-react"
+import {
+  MessagesSquare,
+  Search,
+  Star,
+  Trash2,
+  X,
+} from "lucide-react"
 import { useTranslation } from "react-i18next"
 import { DateRangeChip } from "@/components/date-range-chip"
 import { FilterSelect } from "@/components/filter-select"
 import { PaginationBar } from "@/components/pagination-bar"
 import { QueryState } from "@/components/query-state"
-import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
+import { Card, CardContent } from "@/components/ui/card"
 import { Input } from "@/components/ui/input"
 import {
   Table,
@@ -28,221 +37,134 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table"
-import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs"
+import { Checkbox } from "@/components/ui/checkbox"
 import {
   Tooltip,
   TooltipContent,
   TooltipTrigger,
 } from "@/components/ui/tooltip"
 import type { FilterOption } from "@/lib/filter-options"
-import { formatCost, formatInt, formatTokens } from "@/lib/format"
+import {
+  formatCost,
+  formatInt,
+  formatPct,
+  formatTokens,
+} from "@/lib/format"
 import { SOURCE_TAGS } from "@/lib/source-tags"
 import { cn } from "@/lib/utils"
-import type { SessionRow } from "@/types/generated/bindings"
-import { favKey, type SessionTab } from "../derive"
+import type {
+  ProjectStatsRow,
+  SessionRow,
+} from "@/types/generated/bindings"
+import {
+  ALL_GROUPS,
+  favKey,
+  projectBasename,
+  UNGROUPED,
+} from "../derive"
 import { highlight } from "../highlight"
 import { sessionAgentKind, sessionSourceLabel } from "../source-labels"
 import { useSessionsBrowser } from "../use-sessions-browser"
 import { GroupCreateDialog } from "./group-create-dialog"
-import { GroupSidebar } from "./group-sidebar"
-import { SessionDetailSheet } from "./session-detail-sheet"
+import { SessionDetail } from "./session-detail"
+import { SessionTree } from "./session-tree"
+import { StatsRail } from "./stats-rail"
 
 dayjs.extend(relativeTime)
 
 export function SessionsView() {
   const b = useSessionsBrowser()
   const { t } = useTranslation()
-  // Narrow `preview` to a non-null local so the detail-sheet callbacks capture
+  // Narrow `preview` to a non-null local so the detail callbacks capture
   // a SessionRow, not SessionRow | null (TS will not narrow across callbacks
   // that read the field later).
   const preview = b.preview
 
-  return (
-    <div className="flex min-h-0 flex-1 flex-col gap-3">
-      {/* Control row — at most two lines, with a fixed visual order on every
-        width. The min window (840px → ~600px content) fits 主筛选(≈210px) +
-        search(224px) on line 1 and the three chips (≈480px) on line 2, so
-        the flex order flips instead of letting wrap scatter anything:
-        - narrow: order = 主筛选(1) → search(3, right-pinned) → chips(4,
-          full-width line 2) — two lines, search stays beside the tabs;
-        - wide (@60rem): order = 主筛选(1) → chips(3) → search(4) — one line,
-          chips sit before the right-pinned search.
-        The fold measures the toolbar's own width (@container), not the
-        window, so the sidebar's collapsed state can't shift it. */}
-      <div className="@container flex flex-wrap items-center gap-2">
-        <div className="order-1 flex shrink-0 items-center gap-2">
-          <Tabs value={b.tab} onValueChange={(v) => b.setTab(v as SessionTab)}>
-            <TabsList>
-              <TabsTrigger value="local">{t("sessions.tab.local")}</TabsTrigger>
-              <TabsTrigger value="favorites">
-                {t("sessions.tab.favorites")}
-              </TabsTrigger>
-            </TabsList>
-          </Tabs>
-          <DateRangeChip
-            preset={b.rangePreset}
-            fromDay={b.fromDay}
-            toDay={b.toDay}
-            onPreset={b.setRangePreset}
-            onFromDay={b.setFromDay}
-            onToDay={b.setToDay}
-          />
-        </div>
-        {/* Search rides line 1 beside the tabs on narrow containers (order 3)
-          and moves to the row end on wide ones (order 4). */}
-        <div className="order-3 ml-auto flex shrink-0 items-center gap-2 @[60rem]:order-4">
-          <div className="relative w-56">
-            <Search className="text-muted-foreground absolute top-1/2 left-2 size-3.5 -translate-y-1/2" />
-            <Input
-              value={b.search}
-              onChange={(e) => b.setSearch(e.target.value)}
-              placeholder={t("sessions.searchPlaceholder")}
-              className="h-8 pl-7"
-              aria-label={t("sessions.searchPlaceholder")}
-            />
-          </div>
-        </div>
-        {/* Secondary filters: full-width line 2 on narrow containers
-          (w-full), inline before the search on wide ones. */}
-        <div className="order-4 flex w-full min-w-0 flex-wrap items-center gap-2 @[60rem]:order-3 @[60rem]:w-auto">
-          {/* w-30: 「全部应用」4 字 + padding 约 102px；具体应用名 (Claude
-            Code 等) 更长时由 SelectValue 的 line-clamp-1 截断。 */}
-          <FilterSelect
-            ariaLabel={t("sessions.filter.source")}
-            allLabel={t("sessions.filter.allSources")}
-            options={SOURCE_OPTIONS}
-            value={b.source}
-            onChange={b.setSource}
-            className="h-8 w-30"
-          />
-          <FilterSelect
-            ariaLabel={t("sessions.filter.model")}
-            allLabel={t("sessions.filter.allModels")}
-            options={b.modelOptions.map((m) => ({ value: m, label: m }))}
-            value={b.model}
-            onChange={b.setModel}
-            className="h-8 w-40"
-          />
-          {/* Device dropdown for the Favorites tab — narrows "all devices" to
-            one. w-30: 「全部设备」4 字 + padding 约 102px；长设备名由
-            line-clamp-1 截断。与来源下拉同宽，行内对齐。 */}
-          {b.deviceOptions.length > 0 && b.tab === "favorites" ? (
-            <FilterSelect
-              ariaLabel={t("sessions.filter.device")}
-              allLabel={t("sessions.filter.allDevices")}
-              options={b.deviceOptions.map((o) => ({
-                value: o.id,
-                label: o.label,
-              }))}
-              value={b.deviceScope}
-              onChange={b.setDeviceScope}
-              className="h-8 w-30"
-            />
-          ) : null}
-        </div>
-      </div>
+  // 右栏口径对象名 + 会话粒度统计行（按会话卡的数据源）。
+  const scopeLabel = preview
+    ? preview.title || t("sessions.untitled")
+    : b.selectedProject
+      ? projectBasename(b.selectedProject) || t("sessions.tree.noProject")
+      : b.selectedGroupId === UNGROUPED
+        ? t("sessions.group.ungrouped")
+        : b.selectedGroupId === ALL_GROUPS
+          ? t("sessions.stats.allSessions")
+          : (b.trackGroups.find((g) => g.id === b.selectedGroupId)?.name ??
+            t("sessions.stats.allSessions"))
+  const sessionStats = preview ? (b.statsByKey.get(favKey(preview)) ?? null) : null
 
-      {/* Sidebar + list */}
+  return (
+    // @container 驱动工作台自身的折叠（48rem ≈ 768 档树/右栏让位；64rem ≈
+    // 1024 档右栏卡两列）——量的是内容区自身宽度，主导航折叠不牵动它。
+    <div className="@container flex min-h-0 flex-1 flex-col gap-3">
+      <WorkbenchToolbar b={b} />
+
       <div className="flex min-h-0 flex-1 gap-3">
-        <GroupSidebar
+        <SessionTree
+          track={b.track}
+          onTrackChange={b.setTreeTrack}
+          statsRows={b.statsRows}
+          projectBuckets={b.projectBuckets}
+          groupBuckets={b.groupBuckets}
           trackGroups={b.trackGroups}
-          groupCounts={b.groupCounts}
-          ungroupedCount={b.ungroupedCount}
-          totalCount={b.totalCount}
           selectedGroupId={b.selectedGroupId}
-          onSelect={b.setSelectedGroupId}
-          onCreate={b.openCreateGroup}
-          onRename={b.renameGroup}
-          onDelete={b.deleteGroup}
-          onReorder={b.reorderGroups}
+          selectedProject={b.selectedProject}
+          activeSessionKey={preview ? favKey(preview) : null}
+          onSelectAll={b.selectAll}
+          onSelectProject={b.selectProject}
+          onSelectGroup={b.selectGroup}
+          onOpenSession={b.openStatsRow}
+          onCreateGroup={b.openCreateGroup}
+          onRenameGroup={b.renameGroup}
+          onDeleteGroup={b.deleteGroup}
+          onReorderGroups={b.reorderGroups}
           pendingGroup={b.pendingGroup}
           busyGroupId={b.busyGroupId}
-          track={b.effectiveTrack}
         />
 
-        <Card className="flex min-h-0 min-w-0 flex-1 flex-col">
-          <CardHeader>
-            {/* truncate: on a narrow window the card is squeezed beside the
-              group sidebar; a long localized title must ellipsize instead of
-              wrapping into the sidebar area. */}
-            <CardTitle className="truncate">{t("sessions.title")}</CardTitle>
-          </CardHeader>
-          <CardContent className="flex min-h-0 flex-1 flex-col">
-            <QueryState
-              isLoading={b.isLoading}
-              error={b.error}
-              isEmpty={!b.isLoading && b.visibleSessions.length === 0}
-              emptyIcon={MessagesSquare}
-              // Empty means different things per tab: Local = nothing
-              // collected yet (go run a CLI), Favorites = nothing starred yet
-              // (go star in the Local tab). Same copy for both would mislead.
-              emptyLabel={
-                b.search
-                  ? t("sessions.noMatch")
-                  : b.tab === "local"
-                    ? t("sessions.empty.title")
-                    : t("sessions.empty.favoritesTitle")
+        {/* 中内容区（三态）。@container 在此列——详情里的轮次导航列
+            （TURN_NAV_VISIBILITY）以本列宽度显隐。 */}
+        <div className="@container flex min-h-0 min-w-0 flex-1 flex-col">
+          {preview ? (
+            <SessionDetail
+              session={preview}
+              favorited={b.effectiveFavorite(preview)}
+              onClose={() => b.setPreview(null)}
+              onToggleFavorite={() => b.toggleFavorite(preview)}
+              trackGroups={b.trackGroups}
+              currentGroupId={
+                b.effectiveTrack === "local"
+                  ? preview.local_group_id
+                  : preview.synced_group_id
               }
-              emptyDescription={
-                b.search
-                  ? undefined
-                  : b.tab === "local"
-                    ? t("sessions.empty.desc")
-                    : t("sessions.empty.favoritesDesc")
-              }
-            >
-              <SessionsTable
-                rows={b.visibleSessions}
-                effectiveFavorite={b.effectiveFavorite}
-                onToggleFavorite={b.toggleFavorite}
-                onOpen={b.setPreview}
-                showDeviceColumn={b.showDeviceColumn}
-                deviceLabel={b.deviceLabel}
-                openFavKey={b.preview ? favKey(b.preview) : null}
-                search={b.search}
-              />
-            </QueryState>
-
-            {/* Paged footer — the shared PaginationBar (page info left,
-              numbered pages with ellipsis jumps right; disabled states agree
-              with the page query's size — SESSIONS_PAGE_SIZE, single source).
-              Hidden on an empty result set (zero rows render nothing — the
-              judgment lives in PaginationBar, shared by every call site). */}
-            <PaginationBar
-              page={b.page}
-              totalPages={b.totalPages}
-              total={b.viewTotal}
-              loading={b.isFetching}
-              onPageChange={b.goToPage}
+              onSetGroup={(groupId) => b.setSessionGroup(preview, groupId)}
+              transcript={b.transcript}
+              transcriptLoading={b.transcriptLoading}
+              transcriptError={b.transcriptError}
+              onRefreshTranscript={b.refetchTranscript}
+              onPrev={() => b.openNeighbor(-1)}
+              onNext={() => b.openNeighbor(1)}
+              canPrev={b.canPrev}
+              canNext={b.canNext}
             />
-          </CardContent>
-        </Card>
-      </div>
+          ) : (
+            <ListPane b={b} />
+          )}
+        </div>
 
-      {preview ? (
-        <SessionDetailSheet
+        <StatsRail
+          scope={b.statsScope}
+          onScopeChange={b.setStatsScope}
+          scopeLabel={scopeLabel}
+          aggregate={b.selectionAggregate}
           session={preview}
-          favorited={b.effectiveFavorite(preview)}
-          onClose={() => b.setPreview(null)}
-          onToggleFavorite={() => b.toggleFavorite(preview)}
-          trackGroups={b.trackGroups}
-          currentGroupId={
-            b.effectiveTrack === "local"
-              ? preview.local_group_id
-              : preview.synced_group_id
-          }
-          onSetGroup={(groupId) => b.setSessionGroup(preview, groupId)}
+          sessionStats={sessionStats}
           transcript={b.transcript}
           transcriptLoading={b.transcriptLoading}
-          transcriptError={b.transcriptError}
-          onRefreshTranscript={b.refetchTranscript}
-          onPrev={() => b.openNeighbor(-1)}
-          onNext={() => b.openNeighbor(1)}
-          canPrev={b.canPrev}
-          canNext={b.canNext}
           deviceLabel={(id) => b.deviceLabel.get(id) ?? id.slice(0, 8)}
+          projectSelected={b.selectedProject != null}
         />
-      ) : null}
+      </div>
 
       <GroupCreateDialog
         open={b.createGroupOpen}
@@ -251,6 +173,326 @@ export function SessionsView() {
         creating={b.pendingGroup !== null}
         track={b.effectiveTrack}
       />
+    </div>
+  )
+}
+
+// ------------------------------------------------------------- 工具条 ----
+
+/** 顶部工具条：时间 pill + 筛选 + 搜索 + 批量操作；窄容器加树容器下拉。 */
+function WorkbenchToolbar({ b }: { b: ReturnType<typeof useSessionsBrowser> }) {
+  const { t } = useTranslation()
+  return (
+    <div className="@container flex flex-wrap items-center gap-2">
+      <div className="order-1 flex shrink-0 items-center gap-2">
+        <DateRangeChip
+          preset={b.rangePreset}
+          fromDay={b.fromDay}
+          toDay={b.toDay}
+          onPreset={b.setRangePreset}
+          onFromDay={b.setFromDay}
+          onToDay={b.setToDay}
+        />
+        {/* 窄容器的树下拉（左树 < 48rem 让位）：列出当前轨道的容器。 */}
+        <div className="@[48rem]:hidden">
+          <NarrowTreeSelect b={b} />
+        </div>
+      </div>
+
+      {/* Search rides line 1 (right-pinned); secondary filters wrap on line 2
+          on narrow containers and inline before the search on wide ones. */}
+      <div className="order-3 ml-auto flex shrink-0 items-center gap-2 @[60rem]:order-4">
+        <BatchBar b={b} />
+        <div className="relative w-56 @[48rem]:w-40 @[60rem]:w-56">
+          <Search className="text-muted-foreground absolute top-1/2 left-2 size-3.5 -translate-y-1/2" />
+          <Input
+            value={b.search}
+            onChange={(e) => b.setSearch(e.target.value)}
+            placeholder={t("sessions.searchPlaceholder")}
+            className="h-8 pl-7"
+            aria-label={t("sessions.searchPlaceholder")}
+          />
+        </div>
+      </div>
+      <div className="order-4 flex w-full min-w-0 flex-wrap items-center gap-2 @[60rem]:order-3 @[60rem]:w-auto">
+        <FilterSelect
+          ariaLabel={t("sessions.filter.source")}
+          allLabel={t("sessions.filter.allSources")}
+          options={SOURCE_OPTIONS}
+          value={b.source}
+          onChange={b.setSource}
+          className="h-8 w-30"
+        />
+        <FilterSelect
+          ariaLabel={t("sessions.filter.model")}
+          allLabel={t("sessions.filter.allModels")}
+          options={b.modelOptions.map((m) => ({ value: m, label: m }))}
+          value={b.model}
+          onChange={b.setModel}
+          className="h-8 w-40"
+        />
+        {/* Device dropdown — only in the favorites universe (收藏轨）and only
+            when more than one device exists. */}
+        {b.deviceOptions.length > 0 && b.track === "favorites" ? (
+          <FilterSelect
+            ariaLabel={t("sessions.filter.device")}
+            allLabel={t("sessions.filter.allDevices")}
+            options={b.deviceOptions.map((o) => ({
+              value: o.id,
+              label: o.label,
+            }))}
+            value={b.deviceScope}
+            onChange={b.setDeviceScope}
+            className="h-8 w-30"
+          />
+        ) : null}
+      </div>
+    </div>
+  )
+}
+
+/** 批量操作入口（定稿 §6）：勾选后出现——批量收藏 / 归组（下拉选组）/
+ *  删除（会话删除属后续切片，入口就位但禁用）+ 清除多选。 */
+function BatchBar({ b }: { b: ReturnType<typeof useSessionsBrowser> }) {
+  const { t } = useTranslation()
+  if (b.checkedCount === 0) return null
+  return (
+    <div className="flex items-center gap-1.5">
+      <span className="bg-accent-tint text-accent-brand-strong rounded-full px-2 py-0.5 text-xs tabular-nums">
+        {t("sessions.batch.selected", { n: b.checkedCount })}
+      </span>
+      <Button variant="outline" size="sm" onClick={() => void b.batchFavorite()}>
+        <Star className="size-3.5" />
+        {t("sessions.batch.favorite")}
+      </Button>
+      <FilterSelect
+        ariaLabel={t("sessions.batch.group")}
+        allLabel={t("sessions.batch.group")}
+        options={b.trackGroups.map((g) => ({ value: g.id, label: g.name }))}
+        value=""
+        onChange={(v) => void b.batchSetGroup(v || null)}
+        className="h-8 w-32"
+        triggerSize="sm"
+      />
+      <Tooltip>
+        <TooltipTrigger
+          render={
+            <Button variant="outline" size="sm" disabled>
+              <Trash2 className="size-3.5" />
+              {t("sessions.batch.delete")}
+            </Button>
+          }
+        />
+        <TooltipContent>{t("sessions.batch.deleteHint")}</TooltipContent>
+      </Tooltip>
+      <Tooltip>
+        <TooltipTrigger
+          render={
+            <Button
+              variant="ghost"
+              size="icon-sm"
+              aria-label={t("sessions.batch.clear")}
+              onClick={b.clearChecked}
+              className="text-muted-foreground"
+            />
+          }
+        >
+          <X className="size-3.5" />
+        </TooltipTrigger>
+        <TooltipContent>{t("sessions.batch.clear")}</TooltipContent>
+      </Tooltip>
+    </div>
+  )
+}
+
+/** 窄容器的容器下拉：全部 + 当前轨道的容器（项目 basename / 组名）。值编码
+ *  "p:<dir>" / "g:<id>"，onChange 解码回选中动作。 */
+function NarrowTreeSelect({
+  b,
+}: {
+  b: ReturnType<typeof useSessionsBrowser>
+}) {
+  const { t } = useTranslation()
+  const options: FilterOption[] =
+    b.track === "projects"
+      ? b.projectBuckets.map((n) => ({
+          value: `p:${n.project}`,
+          label: projectBasename(n.project) || t("sessions.tree.noProject"),
+        }))
+      : b.trackGroups.map((g) => ({ value: `g:${g.id}`, label: g.name }))
+  const value = b.selectedProject
+    ? `p:${b.selectedProject}`
+    : b.selectedGroupId === UNGROUPED
+      ? `g:${UNGROUPED}`
+      : b.selectedGroupId === ALL_GROUPS
+        ? ""
+        : `g:${b.selectedGroupId}`
+  return (
+    <FilterSelect
+      ariaLabel={t("sessions.tree.all")}
+      allLabel={t("sessions.tree.all")}
+      options={options}
+      value={value}
+      onChange={(v) => {
+        if (!v) b.selectAll()
+        else if (v.startsWith("p:")) b.selectProject(v.slice(2))
+        else b.selectGroup(v.slice(2))
+      }}
+      className="h-8 w-40"
+      fallbackLabel={t("sessions.tree.all")}
+    />
+  )
+}
+
+// ------------------------------------------------------------- 中栏 ----
+
+/** 列表态/项目态共用骨架：头部（标题 + 描述 / 项目统计头）+ 表格 + 分页。 */
+function ListPane({ b }: { b: ReturnType<typeof useSessionsBrowser> }) {
+  const { t } = useTranslation()
+  const headTitle = b.selectedProject
+    ? projectBasename(b.selectedProject) || t("sessions.tree.noProject")
+    : b.selectedGroupId === UNGROUPED
+      ? t("sessions.group.ungrouped")
+      : b.selectedGroupId === ALL_GROUPS
+        ? t("sessions.tree.all")
+        : (b.trackGroups.find((g) => g.id === b.selectedGroupId)?.name ??
+          t("sessions.tree.all"))
+  const headDesc = b.selectedProject ?? ""
+
+  return (
+    <Card className="flex min-h-0 min-w-0 flex-1 flex-col">
+      <CardContent className="flex min-h-0 flex-1 flex-col gap-2 p-4">
+        <div className="flex items-baseline gap-2.5 px-0.5">
+          <h3 className="text-sm font-semibold">{headTitle}</h3>
+          {headDesc ? (
+            <span className="text-muted-foreground min-w-0 flex-1 truncate text-xs">
+              {headDesc}
+            </span>
+          ) : null}
+        </div>
+
+        {b.selectedProject ? <ProjectTiles stats={b.selectedProjectStats} rows={b.selectionRows} /> : null}
+
+        <QueryState
+          isLoading={b.isLoading}
+          error={b.error}
+          isEmpty={!b.isLoading && b.visibleSessions.length === 0}
+          emptyIcon={MessagesSquare}
+          emptyLabel={
+            b.search ? t("sessions.noMatch") : t("sessions.empty.title")
+          }
+          emptyDescription={
+            b.search ? undefined : t("sessions.empty.desc")
+          }
+        >
+          <SessionsTable
+            rows={b.visibleSessions}
+            effectiveFavorite={b.effectiveFavorite}
+            onToggleFavorite={b.toggleFavorite}
+            onOpen={b.setPreview}
+            showDeviceColumn={b.showDeviceColumn}
+            deviceLabel={b.deviceLabel}
+            openFavKey={b.preview ? favKey(b.preview) : null}
+            search={b.search}
+            isChecked={b.isChecked}
+            onToggleCheck={b.toggleCheck}
+          />
+        </QueryState>
+
+        <PaginationBar
+          page={b.page}
+          totalPages={b.totalPages}
+          total={b.viewTotal}
+          loading={b.isFetching}
+          onPageChange={b.goToPage}
+        />
+      </CardContent>
+    </Card>
+  )
+}
+
+/** 项目统计头（定稿 §2）：6 张小卡——会话数（含 subagent）/ 请求数 / Token
+ *  总量 / 缓存命中率 / 成本 / 最近活跃。#85 的项目粒度行直读。 */
+function ProjectTiles({
+  stats,
+  rows,
+}: {
+  stats: ProjectStatsRow | null
+  rows: ReadonlyArray<{ agent_type: string }>
+}) {
+  const { t } = useTranslation()
+  if (!stats) {
+    return (
+      <div className="bg-muted/40 text-muted-foreground animate-pulse rounded-lg p-4 text-xs">
+        {t("common.loading")}
+      </div>
+    )
+  }
+  const subs = rows.filter((r) => r.agent_type !== "").length
+  const tiles = [
+    {
+      k: t("sessions.stats.sessions"),
+      v: formatInt(stats.session_count),
+      s: t("sessions.stats.subSessions", { n: subs }),
+    },
+    {
+      k: t("sessions.detail.requests"),
+      v: formatInt(stats.request_count),
+      s: "",
+    },
+    {
+      k: t("sessions.stats.tokensTotal"),
+      v: formatTokens(stats.total_tokens),
+      s: t("sessions.stats.tokensNote"),
+    },
+    {
+      k: t("sessions.stats.hitRate"),
+      v: formatPct(stats.cache_hit_rate),
+      s: t("sessions.stats.hitRateFormula"),
+      hit: true,
+    },
+    {
+      k: t("sessions.detail.cost"),
+      v: formatCost(stats.total_cost_usd),
+      s: "USD",
+      cost: true,
+    },
+    {
+      k: t("sessions.detail.lastActive"),
+      v: stats.last_active_at
+        ? dayjs(stats.last_active_at).fromNow()
+        : "—",
+      s: stats.last_active_at
+        ? dayjs(stats.last_active_at).format("YYYY-MM-DD HH:mm")
+        : "",
+    },
+  ]
+  return (
+    <div className="grid shrink-0 grid-cols-3 gap-2 @[64rem]:grid-cols-6">
+      {tiles.map((tile) => (
+        <div
+          key={tile.k}
+          className="border-border rounded-lg border px-2.5 py-2"
+        >
+          <div className="text-muted-foreground truncate text-[10px]">
+            {tile.k}
+          </div>
+          <div
+            className={cn(
+              "mt-0.5 truncate text-base font-semibold tabular-nums",
+              tile.hit && "text-[var(--chart-cache-read)]",
+              tile.cost && "text-accent-brand-strong",
+            )}
+          >
+            {tile.v}
+          </div>
+          {tile.s ? (
+            <div className="text-muted-foreground/60 mt-0.5 truncate text-[10px]">
+              {tile.s}
+            </div>
+          ) : null}
+        </div>
+      ))}
     </div>
   )
 }
@@ -264,6 +506,8 @@ function SessionsTable({
   deviceLabel,
   openFavKey,
   search,
+  isChecked,
+  onToggleCheck,
 }: {
   rows: SessionRow[]
   effectiveFavorite: (s: SessionRow) => boolean
@@ -271,40 +515,34 @@ function SessionsTable({
   onOpen: (s: SessionRow) => void
   showDeviceColumn: boolean
   deviceLabel: Map<string, string>
-  /** favKey of the row whose detail sheet is open — that row gets a tinted
-   *  selected state so closing the sheet leaves a visible anchor. */
+  /** favKey of the open detail row — that row gets a tinted selected state. */
   openFavKey: string | null
   /** Live search box value — matched title spans get highlighted. */
   search: string
+  isChecked: (s: SessionRow) => boolean
+  onToggleCheck: (s: SessionRow) => void
 }) {
   const { t } = useTranslation()
   return (
     <div className="min-h-0 flex-1 -mr-2.5 overflow-auto pr-2.5">
       {/* table-fixed: column widths come from the header row, so the narrow
-          numeric columns (w-20/w-24) are never stretched by extra horizontal
-          space — the title column (no explicit width) absorbs the remainder.
-          min-w: the fixed columns sum to 856px (incl. the header row's w-10
-          star column, the w-40 type column and the w-28 device column);
-          below that the auto title column would collapse to ~0 and its
-          header text overflows into the type column. The floor keeps the
-          title readable and lets the outer overflow-auto scroll horizontally
-          instead of squeezing columns into overlap. */}
+          numeric columns are never stretched by extra horizontal space. min-w
+          keeps the title readable below the fixed sum — the outer overflow-auto
+          scrolls horizontally instead of squeezing columns into overlap. */}
       <Table className="table-fixed min-w-[58rem]">
         <TableHeader>
           <TableRow>
-            <TableHead className="w-10" />
-            {/* The title column absorbs the remaining space (keeps the numeric
-              columns at their fixed narrow widths when maximized) but caps at
-              max-w so an ultra-wide window ellipsizes long titles instead of
-              stretching the column indefinitely. */}
+            {/* 批量勾选列（定稿 §6 批量操作入口）。 */}
+            <TableHead className="w-9" />
+            <TableHead className="w-9" />
             <TableHead className="max-w-[24rem]">
               {t("sessions.col.title")}
             </TableHead>
-            <TableHead className="w-40">{t("sessions.col.type")}</TableHead>
+            <TableHead className="w-36">{t("sessions.col.type")}</TableHead>
             {showDeviceColumn ? (
               <TableHead className="w-28">{t("sessions.col.device")}</TableHead>
             ) : null}
-            <TableHead className="w-48">{t("sessions.col.project")}</TableHead>
+            <TableHead className="w-44">{t("sessions.col.project")}</TableHead>
             <TableHead className="w-24">
               {t("sessions.col.lastActive")}
             </TableHead>
@@ -323,6 +561,7 @@ function SessionsTable({
           {rows.map((s) => {
             const fav = effectiveFavorite(s)
             const open = openFavKey === favKey(s)
+            const sub = s.agent_type !== ""
             return (
               <TableRow
                 key={favKey(s)}
@@ -330,6 +569,15 @@ function SessionsTable({
                 // hover:bg-hover would otherwise flash grey over it.
                 className={cn(open && "bg-accent-tint hover:bg-accent-tint")}
               >
+                <TableCell>
+                  <Checkbox
+                    checked={isChecked(s)}
+                    onCheckedChange={() => onToggleCheck(s)}
+                    aria-label={t("sessions.batch.check", {
+                      title: s.title || t("sessions.untitled"),
+                    })}
+                  />
+                </TableCell>
                 <TableCell>
                   <Tooltip>
                     <TooltipTrigger
@@ -367,8 +615,8 @@ function SessionsTable({
                 </TableCell>
                 <TableCell>
                   {/* trackCursorAxis: the trigger is the full column width, so
-                    a centered tooltip would float over the column's middle
-                    (wrong for short titles) — anchor it to the cursor. */}
+                      a centered tooltip would float over the column's middle
+                      (wrong for short titles) — anchor it to the cursor. */}
                   <Tooltip trackCursorAxis="both">
                     <TooltipTrigger
                       render={
@@ -380,6 +628,11 @@ function SessionsTable({
                       }
                     >
                       <span className="block w-full min-w-0 truncate font-medium">
+                        {sub ? (
+                          <span className="text-muted-foreground/50 mr-0.5">
+                            ↳
+                          </span>
+                        ) : null}
                         {highlight(s.title || t("sessions.untitled"), search)}
                       </span>
                       <span className="text-muted-foreground text-xs">
@@ -398,9 +651,7 @@ function SessionsTable({
                     // bare agent type (e.g. Explore) — no "subagent" prefix.
                     // Color mirrors the request-log stop-reason palette:
                     // main = 常规主会话绿 (success), subagent = 派生工具活动
-                    // 琥珀 (tool) — a glance tells the two apart in a mixed
-                    // list. Long types truncate within the w-40 column instead
-                    // of overflowing into the Project column.
+                    // 琥珀 (tool). Long types truncate within the column.
                     const label =
                       kind.kind === "main" ? t("sessions.type.main") : kind.type
                     return (
@@ -424,9 +675,9 @@ function SessionsTable({
                 </TableCell>
                 {showDeviceColumn ? (
                   <TableCell>
-                    <Badge variant="outline" className="font-normal">
+                    <span className="text-muted-foreground text-xs">
                       {deviceLabel.get(s.device_id) ?? s.device_id.slice(0, 8)}
-                    </Badge>
+                    </span>
                   </TableCell>
                 ) : null}
                 <TableCell className="text-muted-foreground text-xs">
@@ -434,7 +685,7 @@ function SessionsTable({
                     <TooltipTrigger
                       render={<span className="block min-w-0 truncate" />}
                     >
-                      {s.project_dir || "—"}
+                      {projectBasename(s.project_dir) || "—"}
                     </TooltipTrigger>
                     <TooltipContent className="max-w-sm break-all">
                       {s.project_dir || "—"}
@@ -461,9 +712,7 @@ function SessionsTable({
                   {formatInt(s.request_count)}
                 </TableCell>
                 {/* Tokens + cost are the two numbers a usage tool is scanned
-                  for — half-bold them so they read above the request count;
-                  cost additionally picks up the brand color (deep grey on the
-                  Neutral skin, chromatic on the colored skins). */}
+                    for — half-bold them so they read above the request count. */}
                 <TableCell className="text-right text-xs font-medium tabular-nums">
                   {formatTokens(s.total_tokens)}
                 </TableCell>

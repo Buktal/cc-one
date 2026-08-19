@@ -42,9 +42,9 @@ use crate::error::{AppError, AppResult};
 use crate::model::{
     project_identity, LocalGroup, LogCostBreakdown, LogsQuery, ModelStatsRow, PricingEntry,
     ProjectStatsRow, ServerToolUse, SessionFilter, SessionGroupCount, SessionGroupCounts,
-    SessionMessage, SessionMessageRole, SessionQuery, SessionRow, SessionSnapshotMeta,
-    SessionSystemData, TokenCounts, TrendBucket, TrendPoint, TurnDuration, UsageFilter,
-    UsageLogRow, UsageRecord, UsageStats, SESSION_SNAPSHOT_VERSION,
+    SessionMessage, SessionMessageRole, SessionModelTokens, SessionQuery, SessionRow,
+    SessionSnapshotMeta, SessionStatsRow, SessionSystemData, TokenCounts, TrendBucket, TrendPoint,
+    TurnDuration, UsageFilter, UsageLogRow, UsageRecord, UsageStats, SESSION_SNAPSHOT_VERSION,
 };
 use crate::pricing::{ModelPricing, PricingBook};
 use crate::source_parser::{FileCursor, ScanProgress, ScanProgressDelta};

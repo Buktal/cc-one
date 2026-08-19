@@ -251,6 +251,52 @@ export const commands = {
 	search: string | null,
 } | null) => typedError<ProjectStatsRow[], AppError>(__TAURI_INVOKE("query_project_stats_cmd", { filter })),
 	/**
+	 *  The stats dimension at session grain: every session under the filter with
+	 *  its usage four-buckets / hit rate / cost, message count, and per-model
+	 *  token split (see `Store::query_session_stats`). The sessions workbench's
+	 *  left tree and right stats rail consume this one read.
+	 */
+	querySessionStatsCmd: (filter: {
+	/**  Scope to one device (`None` = all devices). */
+	device_scope: string | null,
+	/**  Scope to one source, e.g. `claude_code`. */
+	source: string | null,
+	/**  `Some(true)` = only favorited; `Some(false)` = only non-favorited. */
+	favorited: boolean | null,
+	/**  Scope to a local group (empty string matches ungrouped). */
+	local_group_id: string | null,
+	/**  Scope to a synced group (empty string matches ungrouped). */
+	synced_group_id: string | null,
+	/**
+	 *  Scope to one project — matched by project IDENTITY, not the raw stored
+	 *  launch dir: the comparison runs through the `project_identity` SQL
+	 *  scalar, so a Claude Code worktree session (`<proj>\.claude\worktrees\…`)
+	 *  matches its parent project's bucket. Same rule the project aggregate
+	 *  groups by. `None`/empty = no constraint.
+	 */
+	project: string | null,
+	/**  Inclusive lower bound on `last_active_at` (ISO8601). */
+	from_ts: string | null,
+	/**  Inclusive upper bound on `last_active_at` (ISO8601). */
+	to_ts: string | null,
+	/**
+	 *  Scope to sessions that have at least one usage record with this model
+	 *  (EXISTS semantics — a session spanning several models matches any of
+	 *  them). The model lives on `usage_records`, not on the session row.
+	 */
+	model: string | null,
+	/**
+	 *  Substring search over the display title (custom title when set, else the
+	 *  original), the project path, and every message body
+	 *  (`session_messages.content`, probed across ALL devices of the session —
+	 *  the same union the merged transcript read shows) — case-insensitive,
+	 *  literal (LIKE metacharacters are escaped). `None`/empty = no constraint.
+	 *  Lives backend-side because paged results make client-side filtering
+	 *  inconsistent (it would only search the loaded page).
+	 */
+	search: string | null,
+} | null) => typedError<SessionStatsRow[], AppError>(__TAURI_INVOKE("query_session_stats_cmd", { filter })),
+	/**
 	 *  One session row by its exact composite key `(id, device_id)` — the
 	 *  "request log → session" jump channel. The frontend resolves a usage
 	 *  record's `session_id` into a title + a jump target through this read (one
@@ -1059,6 +1105,21 @@ export type SessionMessage_Serialize = {
 };
 
 /**
+ *  One (model, total-tokens) share within a [`SessionStatsRow`] — the per-model
+ *  slice the sessions workbench's model card renders. Tokens are the model's
+ *  four-bucket sum within that session; the share denominator is the session's
+ *  total (the frontend derives the percentage).
+ */
+export type SessionModelTokens = {
+	/**
+	 *  Model name as usage_records store it (empty when a session has usage
+	 *  rows with no model — kept as its own slice so the sums still add up).
+	 */
+	model: string,
+	tokens: number,
+};
+
+/**
  *  Paged session-list query — mirrors `LogsQuery` (filter + limit + offset) so
  *  the sessions table paginates like the request log instead of loading every
  *  row into the UI. `offset` is an absolute row offset into the filtered,
@@ -1103,6 +1164,50 @@ export type SessionRow = {
 	total_tokens: number,
 	/**  Live aggregate: sum of cost. */
 	total_cost_usd: number | null,
+};
+
+/**
+ *  One session of the stats dimension: the session-list row's identity fields
+ *  plus the usage aggregates the sessions workbench's right rail needs at
+ *  SESSION grain (the project grain lives in [`ProjectStatsRow`]). Four-bucket
+ *  totals / hit rate / cost are live aggregates over `usage_records` (the same
+ *  single token source the list reads); `message_count` counts
+ *  `session_messages` rows; `models` splits the session's tokens per model.
+ *  Sessions with NO usage still appear (LEFT JOIN + COALESCE) — the rail's
+ *  usage card shows zeros, and the tree counts the session.
+ */
+export type SessionStatsRow = {
+	id: string,
+	device_id: string,
+	source: string,
+	/**
+	 *  Project identity (worktree suffix collapsed — same decode rule as
+	 *  [`SessionRow::project_dir`]).
+	 */
+	project_dir: string,
+	/**  Display title: `custom_title` when set, else `title_orig`. */
+	title: string,
+	/**  `""` = main session; non-empty = subagent type tag. */
+	agent_type: string,
+	favorited: boolean,
+	local_group_id: string,
+	synced_group_id: string,
+	started_at: string,
+	last_active_at: string,
+	/**  Live aggregate over `usage_records`. */
+	request_count: number,
+	/**  Rows in `session_messages` for this (session, device). */
+	message_count: number,
+	input_tokens: number,
+	output_tokens: number,
+	cache_creation_tokens: number,
+	cache_read_tokens: number,
+	/**  Cache-hit ratio, [0,1] ([`TokenCounts::cache_hit_rate`]). */
+	cache_hit_rate: number | null,
+	/**  Live aggregate: sum of cost. */
+	total_cost_usd: number | null,
+	/**  Per-model token split, most-tokens-first. */
+	models: SessionModelTokens[],
 };
 
 /**

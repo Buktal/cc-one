@@ -22,11 +22,13 @@ import {
   useDistinctModelsQuery,
   useListGroupsQuery,
   useListSessionsQuery,
+  useProjectStatsQuery,
   useRenameLocalGroupMutation,
   useRenameSyncedGroupMutation,
   useReorderLocalGroupsMutation,
   useReorderSyncedGroupsMutation,
   useSessionCountsQuery,
+  useSessionStatsQuery,
   useSessionTranscriptQuery,
   useSetSessionCustomTitleMutation,
   useSetSessionFavoritedMutation,
@@ -43,34 +45,47 @@ import { usePagedBrowser } from "@/hooks/use-paged-browser"
 import { useMutateWithToast } from "@/hooks/use-toast-mutation"
 import { facetOptions } from "@/lib/filter-options"
 import { usePersistedState } from "@/lib/persistence"
-import type { SessionGroup, SessionRow } from "@/types/generated/bindings"
+import type {
+  ProjectStatsRow,
+  SessionGroup,
+  SessionRow,
+  SessionStatsRow,
+} from "@/types/generated/bindings"
 import {
   ALL_GROUPS,
-  applyGroupOrder,
+  aggregateStats,
   canCreateSyncedGroup,
   effectiveFavorite,
   favKey,
+  groupedRows,
   type GroupTrack,
   neighborNav,
   nextFavValue,
+  projectNodes,
+  applyGroupOrder,
   type SessionScopeSpec,
-  type SessionTab,
+  type TreeTrack,
+  trackUniverseTab,
+  toSessionRow,
+  UNGROUPED,
   ungroupedCount,
   withFavOverride,
   withoutFavOverride,
 } from "./derive"
 import { useSessionJumpConsumer } from "./session-jump"
 
-/** Persisted-tab key — the chosen tab (local / favorites) survives restarts. */
-const TAB_KEY = "cc-one:sessions-tab"
+/** Persisted-track key — the tree track (项目 / 分组 / 收藏) survives
+ *  restarts. Replaces the old Local/Favorites tab key: the track IS the
+ *  universe switch now (定稿 §1). */
+const TRACK_KEY = "cc-one:sessions-track"
 
 /** Rows per page — matches the request-log table so both data views page at
  *  the same density. Exported for the view's paginator (the disabled state
  *  must agree with the query's page size — one source of truth). */
 export const SESSIONS_PAGE_SIZE = 20
 
-/** Title-rename 状态的单一归属（架构扫描候选⑨c）：detail sheet 的头部就地
- *  管理「编辑中 / 草稿 / 提交」，不再经 useSessionsBrowser → SessionDetailSheet
+/** Title-rename 状态的单一归属（架构扫描候选⑨c）：详情头部的就地
+ *  管理「编辑中 / 草稿 / 提交」，不再经 useSessionsBrowser → SessionDetail
  *  → SessionHeader 逐层传递六个 props。rename mutation 与 toast 策略在此
  *  自己拿（RTK hooks 全局缓存 + useMutateWithToast 每次挂载独立，无共享态）。 */
 export function useSessionTitleRename(session: SessionRow | null) {
@@ -118,14 +133,21 @@ export function useSessionTitleRename(session: SessionRow | null) {
 export function useSessionsBrowser() {
   const { t } = useTranslation()
   const dispatch = useAppDispatch()
-  const [tab, setTab] = usePersistedState<SessionTab>(TAB_KEY, "local")
+  // 树轨道（项目/分组/收藏）是页面的宇宙开关：前两轨读本机会话，收藏轨读
+  // 跨设备收藏——tab（local/favorites）由轨道派生，仍是后端 scope 的语言。
+  const [track, setTreeTrack] = usePersistedState<TreeTrack>(
+    TRACK_KEY,
+    "projects",
+  )
+  const tab = trackUniverseTab(track)
   const [search, setSearch] = useState("")
   // Search is backend-side (the page query filters the whole set, not just
   // the loaded page), so keystrokes debounce before they hit the db.
   const debouncedSearch = useDebouncedValue(search, 300)
   // Common dimensions (time / model / source / device) live in the shared
   // filterSlice — sessions shares them with the dashboard / logs.
-  // Only the sessions-only dimensions (tab / search / group) stay local here.
+  // Only the sessions-only dimensions (track / search / group / project) stay
+  // local here.
   const filter = useAppSelector((s) => s.filter.filter)
   const source = filter.source
   const model = filter.model
@@ -141,11 +163,15 @@ export function useSessionsBrowser() {
   const setModel = (v: string) => dispatch(patchFilter({ model: v }))
   const setDeviceScope = (v: string) =>
     dispatch(patchFilter({ device_scope: v }))
+  // 左树的两级选中：容器（分组 id 或项目 identity）与 会话（previewKey）。
+  // 分组选中是轨道语义的（local/synced 组 id 不共空间），项目选中只在项目
+  // 轨道有意义——切轨道时两者都归位。
   const [selectedGroupId, setSelectedGroupId] = useState<string>(ALL_GROUPS)
+  const [selectedProject, setSelectedProject] = useState<string | null>(null)
   const [favOverrides, setFavOverrides] = useState<Record<string, boolean>>({})
   const [pendingGroup, setPendingGroup] = useState<string | null>(null)
   const [busyGroupId, setBusyGroupId] = useState<string | null>(null)
-  // Detail-sheet target stored as a composite key (device_id, id), not a row
+  // Detail target stored as a composite key (device_id, id), not a row
   // snapshot. A snapshot goes stale the moment a favorite toggle's refetch
   // clears the optimistic override map — effectiveFavorite would then fall
   // back to the snapshot's old `favorited`, making the sheet's star flicker
@@ -161,13 +187,25 @@ export function useSessionsBrowser() {
   // of snapping shut. Refreshed whenever the live lookup hits.
   const lastKnownRef = useRef<SessionRow | null>(null)
   const [createGroupOpen, setCreateGroupOpen] = useState(false)
+  // 批量操作：勾选键 = favKey（device/id 复合键），值保留行的定位信息——
+  // 勾选可跨页留存，批量动作不依赖「行恰好在当前页」。
+  const [checked, setChecked] = useState<Map<string, { id: string; device_id: string }>>(
+    () => new Map(),
+  )
+  // 右栏统计卡的口径 tab（按项目/按会话）——跟随选中对象的默认值在选择
+  // 动作里设置，用户可手动切换。
+  const [statsScope, setStatsScope] = useState<"project" | "session">(
+    "project",
+  )
 
-  // The sidebar selection is track-scoped (local vs synced group ids are
-  // disjoint spaces), so a tab switch must drop a stale selection.
-  // biome-ignore lint/correctness/useExhaustiveDependencies: intentional — reset the group selection on tab switch; the body needs no tab value
+  // The tree selection is track-scoped (local vs synced group ids are disjoint
+  // spaces), and a project selection only lives on the projects track — a
+  // track switch must drop both stale selections.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: intentional — reset the selections on track switch; the body needs no track value
   useEffect(() => {
     setSelectedGroupId(ALL_GROUPS)
-  }, [tab])
+    setSelectedProject(null)
+  }, [track])
 
   const { data: appInfo } = useAppInfoQuery()
   const selfDeviceId = appInfo?.device_id ?? ""
@@ -179,19 +217,29 @@ export function useSessionsBrowser() {
   // queryFn at query time. Midnight rollover rides the collect-
   // interval refresh chain, same as the usage views.
 
-  // One scope for both reads: the common dimensions (from the shared
-  // filterSlice) + the sessions-only dimensions (tab / search / group). The
-  // backend SessionFilter + timestamp bounds are derived from it in the
-  // endpoint queryFn (buildSessionFilter), so this object carries no
-  // timestamp and its cache key (sessionSpecId) stays stable across a day.
-  // selfDeviceId is part of the scope (not a filter dimension) because the
-  // Local tab narrows to it backend-side.
+  // One scope for the reads: the common dimensions (from the shared
+  // filterSlice) + the sessions-only dimensions (track universe / search /
+  // group / project selection). The backend SessionFilter + timestamp bounds
+  // are derived from it in the endpoint queryFn (buildSessionFilter), so this
+  // object carries no timestamp and its cache key (sessionSpecId) stays stable
+  // across a day. selfDeviceId is part of the scope (not a filter dimension)
+  // because the Local universe narrows to it backend-side.
   const scope: SessionScopeSpec = {
     filter,
     tab,
     selfDeviceId,
     selectedGroupId,
+    project: selectedProject,
     search: debouncedSearch || null,
+  }
+  // The stats reads are SELECTION-FREE (All groups, no project): the tree and
+  // the right rail need the whole universe at once — they bucket client-side.
+  // Same toolbar dimensions otherwise, so a search / time change refilters
+  // both the list and the stats consistently.
+  const universeScope: SessionScopeSpec = {
+    ...scope,
+    selectedGroupId: ALL_GROUPS,
+    project: null,
   }
   // Model-dropdown candidates mirror the usage view's facet semantics: the
   // sessions model list comes from usage_records (a session has no model column
@@ -212,7 +260,7 @@ export function useSessionsBrowser() {
   // - 视图计数（分页 total）：跟随当前分组——列表已被分组过滤，分页总数
   //   必须匹配列表范围，否则翻页错位。
   const sidebarCountsQuery = useSessionCountsQuery(
-    { spec: { ...scope, selectedGroupId: ALL_GROUPS }, track: effectiveTrack },
+    { spec: universeScope, track: effectiveTrack },
     { skip: !selfDeviceId },
   )
   const viewCountsQuery = useSessionCountsQuery(
@@ -221,6 +269,16 @@ export function useSessionsBrowser() {
   )
   const sidebarCounts = sidebarCountsQuery.data ?? { total: 0, groups: [] }
   const viewCounts = viewCountsQuery.data ?? { total: 0, groups: [] }
+  // 工作台统计读：会话粒度（树 + 右栏卡）与项目粒度（项目树节点 + 中栏项目
+  // 统计头）。同一 selection-free scope，同一失效标签。
+  const statsQuery = useSessionStatsQuery(universeScope, {
+    skip: !selfDeviceId,
+  })
+  const projectsQuery = useProjectStatsQuery(universeScope, {
+    skip: !selfDeviceId,
+  })
+  const statsRows = statsQuery.data ?? []
+  const projectStatRows: ProjectStatsRow[] = projectsQuery.data ?? []
 
   // 分页控制器（架构扫描候选⑧）：offset / 页统计 / 翻页单一归属。scope 身份
   // 变化 → 回第 1 页——结构性规则，scope 里新增维度自动参与，不再手列依赖
@@ -309,8 +367,53 @@ export function useSessionsBrowser() {
     [sidebarCounts, knownGroupIds],
   )
   // The visible list is the backend's current page — already narrowed by the
-  // tab/toolbar/search AND the sidebar group selection, time-desc ordered.
+  // track-universe/toolbar/search AND the tree's container selection (group or
+  // project), time-desc ordered.
   const visibleSessions = sessionsQuery.data ?? []
+
+  // ---- 左树两级数据（selection-free 统计行的客户端分桶）----
+  // 项目轨：projectNodes 已按桶最近活跃排序；分组/收藏轨：knownIds 之外的
+  // 组 id（含空串）按 ungroupedCount 同一规则落入未分组桶。
+  const projectBuckets = useMemo(() => projectNodes(statsRows), [statsRows])
+  const groupBuckets = useMemo(
+    () =>
+      groupedRows(
+        statsRows,
+        (r) =>
+          effectiveTrack === "local" ? r.local_group_id : r.synced_group_id,
+        knownGroupIds,
+      ),
+    [statsRows, effectiveTrack, knownGroupIds],
+  )
+  // stats row lookup by the same composite key the list uses — the right
+  // rail's「按会话」卡 resolves the selected session against it.
+  const statsByKey = useMemo(() => {
+    const m = new Map<string, SessionStatsRow>()
+    for (const r of statsRows) m.set(favKey(r), r)
+    return m
+  }, [statsRows])
+  // 右栏「按项目」聚合对象：项目选中 = 该项目桶；分组选中 = 该组行；未选中 =
+  // 全量。一次聚合，三种容器同一口径。
+  const selectionStatsRows = useMemo(() => {
+    if (selectedProject)
+      return statsRows.filter((r) => r.project_dir === selectedProject)
+    if (selectedGroupId === ALL_GROUPS) return statsRows
+    if (selectedGroupId === UNGROUPED) return groupBuckets.ungrouped
+    return groupBuckets.grouped.get(selectedGroupId) ?? []
+  }, [statsRows, groupBuckets, selectedProject, selectedGroupId])
+  const selectionAggregate = useMemo(
+    () => aggregateStats(selectionStatsRows),
+    [selectionStatsRows],
+  )
+  // 中栏项目统计头（选中项目时）：#85 的项目粒度行，避免客户端重算命中率。
+  const selectedProjectStats = useMemo(
+    () =>
+      selectedProject
+        ? (projectStatRows.find((p) => p.project_dir === selectedProject) ??
+          null)
+        : null,
+    [projectStatRows, selectedProject],
+  )
 
   // sessions lookup by composite key — O(1) resolve for the derived preview.
   // Reuses the favKey shape ("device_id/id") so favorite + preview agree on
@@ -348,10 +451,35 @@ export function useSessionsBrowser() {
     if (s) {
       lastKnownRef.current = s
       setPreviewKey({ id: s.id, device_id: s.device_id })
+      setStatsScope("session")
     } else {
       lastKnownRef.current = null
       setPreviewKey(null)
     }
+  }
+
+  // ---- 树选中动作：容器选中即让出会话态，并把右栏默认切回「按项目」----
+  function selectProject(project: string | null): void {
+    setSelectedProject(project)
+    if (project) setTreeTrack("projects")
+    setPreviewKey(null)
+    setStatsScope("project")
+  }
+  function selectGroup(groupId: string): void {
+    setSelectedGroupId(groupId)
+    setPreviewKey(null)
+    setStatsScope("project")
+  }
+  function selectAll(): void {
+    setSelectedGroupId(ALL_GROUPS)
+    setSelectedProject(null)
+    setPreviewKey(null)
+    setStatsScope("project")
+  }
+  // 树的会话子行 → 详情：子行是统计行，经 toSessionRow 投影成列表行形状
+  // 再走 setPreview 通道（与列表行点击、usage 跳转同一条路）。
+  function openStatsRow(r: SessionStatsRow): void {
+    setPreview(toSessionRow(r))
   }
 
   // 跨域跳转落地（usage 请求日志→会话，features/sessions/session-jump.ts）：
@@ -459,6 +587,53 @@ export function useSessionsBrowser() {
       // Rollback the optimistic flip.
       setFavOverrides((p) => withoutFavOverride(p, s))
     }
+  }
+
+  // ---- 批量操作（定稿 §6：勾选后批量收藏 / 归组；删除属后续切片）----
+  // 勾选键 = favKey，值保留 (id, device_id) 定位——批量动作不依赖行还在
+  // 当前页（勾选可跨页留存）。动作对全部勾选行并发执行，结束一条汇总
+  // toast（逐行 toast 会在大勾选下刷屏）； Sessions 标签失效驱动刷新。
+  function toggleCheck(s: SessionRow): void {
+    setChecked((prev) => {
+      const next = new Map(prev)
+      const key = favKey(s)
+      if (next.has(key)) next.delete(key)
+      else next.set(key, { id: s.id, device_id: s.device_id })
+      return next
+    })
+  }
+  function clearChecked(): void {
+    setChecked(new Map())
+  }
+  function isChecked(s: SessionRow): boolean {
+    return checked.has(favKey(s))
+  }
+  async function runBatch(
+    run: (target: { id: string; device_id: string }) => Promise<unknown>,
+    successKey: string,
+  ): Promise<void> {
+    const targets = [...checked.values()]
+    const results = await Promise.allSettled(targets.map((t) => run(t)))
+    const failed = results.filter((r) => r.status === "rejected").length
+    if (failed === 0) {
+      toast.success(t(successKey, { n: targets.length }))
+    } else {
+      toast.warning(t("sessions.toast.batchPartial", { n: failed }))
+    }
+    clearChecked()
+  }
+  async function batchFavorite(): Promise<void> {
+    await runBatch(
+      (t) => favoritedMut({ id: t.id, deviceId: t.device_id, favorited: true }),
+      "sessions.toast.batchFavorited",
+    )
+  }
+  async function batchSetGroup(groupId: string | null): Promise<void> {
+    const mut = groupMutations(effectiveTrack).setGroup
+    await runBatch(
+      (t) => mut({ id: t.id, deviceId: t.device_id, groupId }),
+      "sessions.toast.batchGrouped",
+    )
   }
 
   /** group 双轨 mutation 选择（架构扫描候选⑨b）：local（SQLite 直写）vs
@@ -599,9 +774,9 @@ export function useSessionsBrowser() {
   }
 
   return {
-    // tab / search / source / model / selection
-    tab,
-    setTab,
+    // track (tree rail) / search / source / model / selection
+    track,
+    setTreeTrack,
     search,
     setSearch,
     source,
@@ -610,7 +785,10 @@ export function useSessionsBrowser() {
     setModel,
     modelOptions,
     selectedGroupId,
-    setSelectedGroupId,
+    selectGroup,
+    selectedProject,
+    selectProject,
+    selectAll,
     effectiveTrack,
     // toolbar filters (time range · device)
     rangePreset: dateRange.preset,
@@ -628,6 +806,16 @@ export function useSessionsBrowser() {
     error: sessionsQuery.error,
     trackGroups,
     visibleSessions,
+    // 左树（两级）+ 右栏统计
+    statsRows,
+    projectBuckets,
+    groupBuckets,
+    statsByKey,
+    selectionRows: selectionStatsRows,
+    selectionAggregate,
+    selectedProjectStats,
+    statsScope,
+    setStatsScope,
     // paging + sidebar counts
     // totalCount = 侧栏「全部」行（全局聚合，切分组不变）；viewTotal = 分页
     // 总数（跟随当前分组过滤的列表范围）。
@@ -638,16 +826,24 @@ export function useSessionsBrowser() {
     goToPage: browser.goToPage,
     groupCounts,
     ungroupedCount: ungroupedN,
-    // device labels (favorites tab)
+    // device labels (favorites universe)
     deviceLabel,
     showDeviceColumn,
     // session row actions
     effectiveFavorite: (s: SessionRow) => effectiveFavorite(s, favOverrides),
     toggleFavorite,
     setSessionGroup,
-    // detail sheet
+    // batch operations
+    checkedCount: checked.size,
+    isChecked,
+    toggleCheck,
+    clearChecked,
+    batchFavorite,
+    batchSetGroup,
+    // detail (选中会话)
     preview,
     setPreview,
+    openStatsRow,
     openNeighbor,
     canPrev: neighbor.canPrev,
     canNext: neighbor.canNext,
