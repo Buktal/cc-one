@@ -15,8 +15,8 @@ import type {
   SessionStatsRow,
 } from "@/types/generated/bindings"
 import {
-  aggregateStats,
   ALL_GROUPS,
+  aggregateStats,
   applyGroupOrder,
   canCreateSyncedGroup,
   collapseAllMessages,
@@ -832,7 +832,12 @@ function statsRow(
 describe("tokensHitRate", () => {
   it("derives cache_read / (input + cache_creation + cache_read)", () => {
     expect(
-      tokensHitRate({ input: 30, output: 99, cache_creation: 10, cache_read: 60 }),
+      tokensHitRate({
+        input: 30,
+        output: 99,
+        cache_creation: 10,
+        cache_read: 60,
+      }),
     ).toBeCloseTo(60 / 100)
   })
 
@@ -917,8 +922,16 @@ describe("aggregateStats", () => {
 describe("projectNodes", () => {
   it("buckets by project identity and orders buckets by newest activity", () => {
     const nodes = projectNodes([
-      statsRow({ id: "a1", project_dir: "/p/alpha", last_active_at: "2026-08-10" }),
-      statsRow({ id: "b1", project_dir: "/p/beta", last_active_at: "2026-08-12" }),
+      statsRow({
+        id: "a1",
+        project_dir: "/p/alpha",
+        last_active_at: "2026-08-10",
+      }),
+      statsRow({
+        id: "b1",
+        project_dir: "/p/beta",
+        last_active_at: "2026-08-12",
+      }),
       statsRow({
         id: "a2",
         project_dir: "/p/alpha",

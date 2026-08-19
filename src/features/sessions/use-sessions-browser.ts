@@ -54,19 +54,19 @@ import type {
 import {
   ALL_GROUPS,
   aggregateStats,
+  applyGroupOrder,
   canCreateSyncedGroup,
   effectiveFavorite,
   favKey,
-  groupedRows,
   type GroupTrack,
+  groupedRows,
   neighborNav,
   nextFavValue,
   projectNodes,
-  applyGroupOrder,
   type SessionScopeSpec,
   type TreeTrack,
-  trackUniverseTab,
   toSessionRow,
+  trackUniverseTab,
   UNGROUPED,
   ungroupedCount,
   withFavOverride,
@@ -189,14 +189,12 @@ export function useSessionsBrowser() {
   const [createGroupOpen, setCreateGroupOpen] = useState(false)
   // 批量操作：勾选键 = favKey（device/id 复合键），值保留行的定位信息——
   // 勾选可跨页留存，批量动作不依赖「行恰好在当前页」。
-  const [checked, setChecked] = useState<Map<string, { id: string; device_id: string }>>(
-    () => new Map(),
-  )
+  const [checked, setChecked] = useState<
+    Map<string, { id: string; device_id: string }>
+  >(() => new Map())
   // 右栏统计卡的口径 tab（按项目/按会话）——跟随选中对象的默认值在选择
   // 动作里设置，用户可手动切换。
-  const [statsScope, setStatsScope] = useState<"project" | "session">(
-    "project",
-  )
+  const [statsScope, setStatsScope] = useState<"project" | "session">("project")
 
   // The tree selection is track-scoped (local vs synced group ids are disjoint
   // spaces), and a project selection only lives on the projects track — a

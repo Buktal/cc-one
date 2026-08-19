@@ -667,5 +667,7 @@
   "sessions.batch.check": "Select {{title}}",
   "sessions.toast.batchFavorited": "Favorited {{n}} sessions",
   "sessions.toast.batchGrouped": "Grouped {{n}} sessions",
-  "sessions.toast.batchPartial": "{{n}} operations failed — retry"
+  "sessions.toast.batchPartial": "{{n}} operations failed — retry",
+  "sessions.empty.favoritesTitle": "Nothing starred yet — star sessions and they sync across devices here.",
+  "sessions.empty.favoritesDesc": "Starring favorites a session; favorited transcripts sync across devices via git snapshots."
 }

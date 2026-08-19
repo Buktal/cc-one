@@ -19,8 +19,8 @@ import {
   PointerSensor,
 } from "@dnd-kit/react"
 import { useSortable } from "@dnd-kit/react/sortable"
-import { Box, ChevronRight, Loader2, Plus, Star, Tag } from "lucide-react"
 import dayjs from "dayjs"
+import { Box, ChevronRight, Loader2, Plus, Star, Tag } from "lucide-react"
 import { useEffect, useMemo, useState } from "react"
 import { useTranslation } from "react-i18next"
 import { Button } from "@/components/ui/button"
@@ -33,16 +33,13 @@ import {
 } from "@/components/ui/tooltip"
 import { formatTokens } from "@/lib/format"
 import { cn } from "@/lib/utils"
-import type {
-  SessionGroup,
-  SessionStatsRow,
-} from "@/types/generated/bindings"
+import type { SessionGroup, SessionStatsRow } from "@/types/generated/bindings"
 import {
-  aggregateStats,
   ALL_GROUPS,
+  aggregateStats,
   favKey,
-  projectBasename,
   type ProjectNodeData,
+  projectBasename,
   reorderGroupIds,
   type TreeTrack,
   UNGROUPED,
@@ -113,7 +110,8 @@ export function SessionTree({
     )
   }, [selectedKey, selectedGroupId, selectedProject])
 
-  const nothingSelected = selectedGroupId === ALL_GROUPS && selectedProject == null
+  const nothingSelected =
+    selectedGroupId === ALL_GROUPS && selectedProject == null
   const universe = useMemo(() => aggregateStats(statsRows), [statsRows])
 
   function toggleNode(key: string): void {
@@ -263,7 +261,9 @@ export function SessionTree({
 }
 
 /** 四桶求和 —— 树节点「Token」小统计的显示值。 */
-function bucketTotal(a: { tokens: ReturnType<typeof aggregateStats>["tokens"] }) {
+function bucketTotal(a: {
+  tokens: ReturnType<typeof aggregateStats>["tokens"]
+}) {
   return (
     a.tokens.input +
     a.tokens.output +

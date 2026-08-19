@@ -665,5 +665,7 @@
   "sessions.batch.check": "多选 {{title}}",
   "sessions.toast.batchFavorited": "已收藏 {{n}} 个会话",
   "sessions.toast.batchGrouped": "已归组 {{n}} 个会话",
-  "sessions.toast.batchPartial": "{{n}} 项操作失败，请重试"
+  "sessions.toast.batchPartial": "{{n}} 项操作失败，请重试",
+  "sessions.empty.favoritesTitle": "收藏夹还是空的——在本机会话里点星标后，这里会跨设备同步。",
+  "sessions.empty.favoritesDesc": "星标即收藏；收藏的会话原文随 git 快照跨设备同步。"
 }

@@ -67,6 +67,8 @@ export const STORE_DERIVED_READS: ReadonlySet<string> = new Set([
   // Sessions
   "listSessions",
   "sessionCounts",
+  "sessionStats",
+  "projectStats",
   "getSession",
   "sessionTranscript",
   "listGroups",

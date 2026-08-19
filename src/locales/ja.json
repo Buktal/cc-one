@@ -665,5 +665,7 @@
   "sessions.batch.check": "{{title}} を選択",
   "sessions.toast.batchFavorited": "{{n}} セッションをお気に入りに追加",
   "sessions.toast.batchGrouped": "{{n}} セッションをグループ化",
-  "sessions.toast.batchPartial": "{{n}} 件失敗 — 再試行してください"
+  "sessions.toast.batchPartial": "{{n}} 件失敗 — 再試行してください",
+  "sessions.empty.favoritesTitle": "お気に入りはまだありません — セッションに星を付けるとここに同期されます。",
+  "sessions.empty.favoritesDesc": "星付けでお気に入り登録。お気に入りのセッションは git スナップショットで同期されます。"
 }

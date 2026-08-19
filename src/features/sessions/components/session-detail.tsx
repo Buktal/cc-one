@@ -18,6 +18,8 @@
 // Virtuoso measures each row's height dynamically, so collapsing a bubble
 // re-lays the list without any manual bookkeeping.
 
+import dayjs from "dayjs"
+import relativeTime from "dayjs/plugin/relativeTime"
 import {
   ArrowLeft,
   ChevronDown,
@@ -30,7 +32,6 @@ import {
   X,
 } from "lucide-react"
 import {
-  type ReactNode,
   useCallback,
   useEffect,
   useLayoutEffect,
@@ -40,8 +41,6 @@ import {
 } from "react"
 import { useTranslation } from "react-i18next"
 import type { VirtuosoHandle } from "react-virtuoso"
-import dayjs from "dayjs"
-import relativeTime from "dayjs/plugin/relativeTime"
 import { FilterSelect } from "@/components/filter-select"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
@@ -109,8 +108,6 @@ export interface SessionDetailProps {
   onNext: () => void
   canPrev: boolean
   canNext: boolean
-  // device label (for the source line)
-  deviceLabel: (id: string) => string
 }
 
 export function SessionDetail(props: SessionDetailProps) {
@@ -130,7 +127,6 @@ export function SessionDetail(props: SessionDetailProps) {
     onNext,
     canPrev,
     canNext,
-    deviceLabel,
   } = props
   const turnNav = useTurnNav(transcript)
   // Esc = 返回列表。详情内更里层的 Esc 语义（重命名取消、轮次搜索退出）由
@@ -324,9 +320,7 @@ function SessionHeader({
                 </span>
                 <Pencil className="text-muted-foreground size-3.5 shrink-0 opacity-60 transition-opacity group-hover:opacity-100" />
               </TooltipTrigger>
-              <TooltipContent>
-                {t("sessions.detail.renameHint")}
-              </TooltipContent>
+              <TooltipContent>{t("sessions.detail.renameHint")}</TooltipContent>
             </Tooltip>
           </h2>
         )}

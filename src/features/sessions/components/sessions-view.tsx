@@ -14,13 +14,7 @@
 
 import dayjs from "dayjs"
 import relativeTime from "dayjs/plugin/relativeTime"
-import {
-  MessagesSquare,
-  Search,
-  Star,
-  Trash2,
-  X,
-} from "lucide-react"
+import { MessagesSquare, Search, Star, Trash2, X } from "lucide-react"
 import { useTranslation } from "react-i18next"
 import { DateRangeChip } from "@/components/date-range-chip"
 import { FilterSelect } from "@/components/filter-select"
@@ -28,6 +22,7 @@ import { PaginationBar } from "@/components/pagination-bar"
 import { QueryState } from "@/components/query-state"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent } from "@/components/ui/card"
+import { Checkbox } from "@/components/ui/checkbox"
 import { Input } from "@/components/ui/input"
 import {
   Table,
@@ -37,31 +32,17 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table"
-import { Checkbox } from "@/components/ui/checkbox"
 import {
   Tooltip,
   TooltipContent,
   TooltipTrigger,
 } from "@/components/ui/tooltip"
 import type { FilterOption } from "@/lib/filter-options"
-import {
-  formatCost,
-  formatInt,
-  formatPct,
-  formatTokens,
-} from "@/lib/format"
+import { formatCost, formatInt, formatPct, formatTokens } from "@/lib/format"
 import { SOURCE_TAGS } from "@/lib/source-tags"
 import { cn } from "@/lib/utils"
-import type {
-  ProjectStatsRow,
-  SessionRow,
-} from "@/types/generated/bindings"
-import {
-  ALL_GROUPS,
-  favKey,
-  projectBasename,
-  UNGROUPED,
-} from "../derive"
+import type { ProjectStatsRow, SessionRow } from "@/types/generated/bindings"
+import { ALL_GROUPS, favKey, projectBasename, UNGROUPED } from "../derive"
 import { highlight } from "../highlight"
 import { sessionAgentKind, sessionSourceLabel } from "../source-labels"
 import { useSessionsBrowser } from "../use-sessions-browser"
@@ -91,7 +72,9 @@ export function SessionsView() {
           ? t("sessions.stats.allSessions")
           : (b.trackGroups.find((g) => g.id === b.selectedGroupId)?.name ??
             t("sessions.stats.allSessions"))
-  const sessionStats = preview ? (b.statsByKey.get(favKey(preview)) ?? null) : null
+  const sessionStats = preview
+    ? (b.statsByKey.get(favKey(preview)) ?? null)
+    : null
 
   return (
     // @container 驱动工作台自身的折叠（48rem ≈ 768 档树/右栏让位；64rem ≈
@@ -261,7 +244,11 @@ function BatchBar({ b }: { b: ReturnType<typeof useSessionsBrowser> }) {
       <span className="bg-accent-tint text-accent-brand-strong rounded-full px-2 py-0.5 text-xs tabular-nums">
         {t("sessions.batch.selected", { n: b.checkedCount })}
       </span>
-      <Button variant="outline" size="sm" onClick={() => void b.batchFavorite()}>
+      <Button
+        variant="outline"
+        size="sm"
+        onClick={() => void b.batchFavorite()}
+      >
         <Star className="size-3.5" />
         {t("sessions.batch.favorite")}
       </Button>
@@ -307,11 +294,7 @@ function BatchBar({ b }: { b: ReturnType<typeof useSessionsBrowser> }) {
 
 /** 窄容器的容器下拉：全部 + 当前轨道的容器（项目 basename / 组名）。值编码
  *  "p:<dir>" / "g:<id>"，onChange 解码回选中动作。 */
-function NarrowTreeSelect({
-  b,
-}: {
-  b: ReturnType<typeof useSessionsBrowser>
-}) {
+function NarrowTreeSelect({ b }: { b: ReturnType<typeof useSessionsBrowser> }) {
   const { t } = useTranslation()
   const options: FilterOption[] =
     b.track === "projects"
@@ -371,18 +354,31 @@ function ListPane({ b }: { b: ReturnType<typeof useSessionsBrowser> }) {
           ) : null}
         </div>
 
-        {b.selectedProject ? <ProjectTiles stats={b.selectedProjectStats} rows={b.selectionRows} /> : null}
+        {b.selectedProject ? (
+          <ProjectTiles stats={b.selectedProjectStats} rows={b.selectionRows} />
+        ) : null}
 
         <QueryState
           isLoading={b.isLoading}
           error={b.error}
           isEmpty={!b.isLoading && b.visibleSessions.length === 0}
           emptyIcon={MessagesSquare}
+          // Empty means different things per universe: 项目/分组轨 = nothing
+          // collected yet (go run a CLI), 收藏轨 = nothing starred yet. Same
+          // copy for both would mislead.
           emptyLabel={
-            b.search ? t("sessions.noMatch") : t("sessions.empty.title")
+            b.search
+              ? t("sessions.noMatch")
+              : b.track === "favorites"
+                ? t("sessions.empty.favoritesTitle")
+                : t("sessions.empty.title")
           }
           emptyDescription={
-            b.search ? undefined : t("sessions.empty.desc")
+            b.search
+              ? undefined
+              : b.track === "favorites"
+                ? t("sessions.empty.favoritesDesc")
+                : t("sessions.empty.desc")
           }
         >
           <SessionsTable
@@ -459,9 +455,7 @@ function ProjectTiles({
     },
     {
       k: t("sessions.detail.lastActive"),
-      v: stats.last_active_at
-        ? dayjs(stats.last_active_at).fromNow()
-        : "—",
+      v: stats.last_active_at ? dayjs(stats.last_active_at).fromNow() : "—",
       s: stats.last_active_at
         ? dayjs(stats.last_active_at).format("YYYY-MM-DD HH:mm")
         : "",

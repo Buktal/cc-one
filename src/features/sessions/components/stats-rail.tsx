@@ -26,12 +26,7 @@ import {
   TooltipContent,
   TooltipTrigger,
 } from "@/components/ui/tooltip"
-import {
-  formatCost,
-  formatInt,
-  formatPct,
-  formatTokens,
-} from "@/lib/format"
+import { formatCost, formatInt, formatPct, formatTokens } from "@/lib/format"
 import { cn } from "@/lib/utils"
 import type {
   SessionMessage,
@@ -42,9 +37,9 @@ import { groupConversation } from "../conversation"
 import {
   type ModelShare,
   projectBasename,
+  type StatsAggregate,
   sessionSpan,
   spanLabelKey,
-  type StatsAggregate,
 } from "../derive"
 import { turnAnchors } from "../turn-nav"
 
@@ -103,7 +98,10 @@ export function StatsRail({
   )
   const header = (
     <div className="flex items-center gap-2">
-      <Tabs value={scope} onValueChange={(v) => onScopeChange(v as StatsRailScope)}>
+      <Tabs
+        value={scope}
+        onValueChange={(v) => onScopeChange(v as StatsRailScope)}
+      >
         <TabsList>
           <TabsTrigger value="project" className="px-2 text-xs">
             {t("sessions.stats.byProject")}
@@ -114,7 +112,11 @@ export function StatsRail({
         </TabsList>
       </Tabs>
       <Tooltip>
-        <TooltipTrigger render={<span className="min-w-0 flex-1 truncate text-right text-xs" />}>
+        <TooltipTrigger
+          render={
+            <span className="min-w-0 flex-1 truncate text-right text-xs" />
+          }
+        >
           <span className="text-muted-foreground">
             {t("sessions.stats.scope")}{" "}
             <span className="text-accent-brand-strong font-medium">
@@ -361,8 +363,16 @@ function UsageCard({
   const { t } = useTranslation()
   const total = sumTokens(tokens)
   const segments = [
-    { label: t("sessions.stats.bucket.input"), value: tokens.input, color: BUCKET_COLORS.input },
-    { label: t("sessions.stats.bucket.output"), value: tokens.output, color: BUCKET_COLORS.output },
+    {
+      label: t("sessions.stats.bucket.input"),
+      value: tokens.input,
+      color: BUCKET_COLORS.input,
+    },
+    {
+      label: t("sessions.stats.bucket.output"),
+      value: tokens.output,
+      color: BUCKET_COLORS.output,
+    },
     {
       label: t("sessions.stats.bucket.cacheCreation"),
       value: tokens.cache_creation,
@@ -375,10 +385,7 @@ function UsageCard({
     },
   ]
   return (
-    <Card
-      title={t("sessions.stats.usage")}
-      className={className}
-    >
+    <Card title={t("sessions.stats.usage")} className={className}>
       <p className="text-muted-foreground text-[10px] tabular-nums">
         {t("sessions.stats.usageTotal", { n: formatTokens(total) })}
       </p>
@@ -470,11 +477,7 @@ function ModelCard({
   showSessionCounts?: boolean
 }) {
   const { t } = useTranslation()
-  const shades = [
-    "bg-foreground/70",
-    "bg-foreground/40",
-    "bg-foreground/20",
-  ]
+  const shades = ["bg-foreground/70", "bg-foreground/40", "bg-foreground/20"]
   return (
     <Card title={t("sessions.stats.byModel")}>
       {models.length === 0 ? (
@@ -538,7 +541,10 @@ function DurationCard({ aggregate }: { aggregate: StatsAggregate }) {
     <Card title={t("sessions.stats.durationDist")}>
       <div className="flex flex-col gap-1.5">
         {aggregate.durationBuckets.map((n, i) => (
-          <div key={labels[i]} className="grid grid-cols-[64px_1fr_24px] items-center gap-2 text-[11px]">
+          <div
+            key={labels[i]}
+            className="grid grid-cols-[64px_1fr_24px] items-center gap-2 text-[11px]"
+          >
             <span className="text-muted-foreground truncate">{labels[i]}</span>
             <span className="bg-muted h-1.5 overflow-hidden rounded-sm">
               <span
@@ -574,10 +580,15 @@ function IdentityCard({
     <Card title={t("sessions.stats.identity")} className="mt-auto">
       <div className="mb-1.5 flex min-w-0 items-center gap-1.5">
         <span className="truncate text-xs font-semibold">
-          {s.project_dir ? projectBasename(s.project_dir) : t("sessions.tree.noProject")}
+          {s.project_dir
+            ? projectBasename(s.project_dir)
+            : t("sessions.tree.noProject")}
         </span>
         {model ? (
-          <Badge variant="secondary" className="h-4 px-1.5 font-mono text-[10px] leading-none">
+          <Badge
+            variant="secondary"
+            className="h-4 px-1.5 font-mono text-[10px] leading-none"
+          >
             {model}
           </Badge>
         ) : null}
@@ -604,7 +615,9 @@ function IdentityCard({
             <CopyButton value={s.id} label={copyLabel} className="size-3.5" />
           </span>
         </KvRow>
-        <KvRow label={t("sessions.detail.device")}>{deviceLabel(s.device_id)}</KvRow>
+        <KvRow label={t("sessions.detail.device")}>
+          {deviceLabel(s.device_id)}
+        </KvRow>
         <KvRow label={t("sessions.detail.lastActive")}>
           {s.last_active_at ? (
             <Tooltip>

@@ -586,7 +586,8 @@ export function projectNodes(
       r.output_tokens +
       r.cache_creation_tokens +
       r.cache_read_tokens
-    if (r.last_active_at > node.lastActiveAt) node.lastActiveAt = r.last_active_at
+    if (r.last_active_at > node.lastActiveAt)
+      node.lastActiveAt = r.last_active_at
     byProject.set(r.project_dir, node)
   }
   return [...byProject.values()].sort((a, b) =>

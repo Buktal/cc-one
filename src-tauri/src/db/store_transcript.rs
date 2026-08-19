@@ -608,8 +608,9 @@ impl super::Store {
             row.cache_hit_rate = tokens.cache_hit_rate();
             // Drop the usage-less phantom slice (empty model, zero tokens) so
             // a session without usage renders "no model data", not a blank row.
-            row.models.retain(|m| !(m.model.is_empty() && m.tokens == 0));
-            row.models.sort_by(|a, b| b.tokens.cmp(&a.tokens));
+            row.models
+                .retain(|m| !(m.model.is_empty() && m.tokens == 0));
+            row.models.sort_by_key(|m| std::cmp::Reverse(m.tokens));
         }
         Ok(out)
     }
@@ -1313,15 +1314,7 @@ mod tests {
             },
             1.0,
         );
-        let mut r = rec(
-            "u2",
-            "2026-08-15",
-            "glm-5.2-air",
-            "dev",
-            30,
-            0,
-            2.0,
-        );
+        let mut r = rec("u2", "2026-08-15", "glm-5.2-air", "dev", 30, 0, 2.0);
         r.session_id = "a1".into();
         r.tokens = TokenCounts {
             input: 30,
@@ -1336,7 +1329,12 @@ mod tests {
             "dev",
             &[
                 msg("m1", "a1", SessionMessageRole::User, "2026-07-13T10:00:00Z"),
-                msg("m2", "a1", SessionMessageRole::Assistant, "2026-07-13T10:00:01Z"),
+                msg(
+                    "m2",
+                    "a1",
+                    SessionMessageRole::Assistant,
+                    "2026-07-13T10:00:01Z",
+                ),
             ],
         )
         .unwrap();
