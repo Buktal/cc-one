@@ -121,8 +121,8 @@ describe("toFilter", () => {
 })
 
 describe("presetPatch / dayPatch (DateRangeChip write semantics, ADR-0008)", () => {
-  // Production path: the shared DateRangeChip surfaces (usage ControlCard /
-  // ControlBar and the sessions toolbar) dispatch exactly these patches via
+  // Production path: the shared DateRangeChip surfaces (usage ControlBar
+  // and the sessions toolbar) dispatch exactly these patches via
   // useDateRangeFilter — the "dynamic presets store no concrete date" rule is
   // a contract here, not a comment in two views.
 

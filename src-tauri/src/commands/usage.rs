@@ -5,8 +5,8 @@ use tauri::State;
 use super::AppState;
 use crate::error::AppResult;
 use crate::model::{
-    LogsQuery, ModelStatsRow, ProjectCandidates, TrendBucket, TrendPoint, UsageFilter, UsageLogRow,
-    UsageStats,
+    LogsQuery, ModelStatsRow, ProjectCandidates, ProjectUsageRow, SessionUsageRow, TrendBucket,
+    TrendPoint, UsageFilter, UsageLogRow, UsageStats,
 };
 
 #[tauri::command]
@@ -80,4 +80,27 @@ pub fn query_distinct_projects(
     filter: UsageFilter,
 ) -> AppResult<ProjectCandidates> {
     state.store.query_distinct_projects(&filter)
+}
+
+/// Project buckets at usage grain (#106 dashboard project section) — bucket
+/// sums equal `query_usage_stats`'s totals under the same filter exactly.
+#[tauri::command]
+#[specta::specta]
+pub fn query_project_usage(
+    state: State<'_, AppState>,
+    filter: UsageFilter,
+) -> AppResult<Vec<ProjectUsageRow>> {
+    state.store.query_project_usage(&filter)
+}
+
+/// Session buckets at usage grain (#106 dashboard session section) — every
+/// store-known session with its in-window usage; per-session turn counts ride
+/// along under the turn grain's applicable facets.
+#[tauri::command]
+#[specta::specta]
+pub fn query_session_usage(
+    state: State<'_, AppState>,
+    filter: UsageFilter,
+) -> AppResult<Vec<SessionUsageRow>> {
+    state.store.query_session_usage(&filter)
 }

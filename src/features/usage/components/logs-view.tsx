@@ -3,7 +3,7 @@
 
 import { useAppSelector } from "@/app/store/hooks"
 
-import { ControlBar } from "./control-card"
+import { ControlBar } from "./control-bar"
 import { RequestLogTable } from "./request-log-table"
 
 export function LogsView() {

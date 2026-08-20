@@ -70,6 +70,17 @@ export const commands = {
 	 *  the literal.
 	 */
 	queryDistinctProjects: (filter: UsageFilter) => typedError<ProjectCandidates, AppError>(__TAURI_INVOKE("query_distinct_projects", { filter })),
+	/**
+	 *  Project buckets at usage grain (#106 dashboard project section) — bucket
+	 *  sums equal `query_usage_stats`'s totals under the same filter exactly.
+	 */
+	queryProjectUsage: (filter: UsageFilter) => typedError<ProjectUsageRow[], AppError>(__TAURI_INVOKE("query_project_usage", { filter })),
+	/**
+	 *  Session buckets at usage grain (#106 dashboard session section) — every
+	 *  store-known session with its in-window usage; per-session turn counts ride
+	 *  along under the turn grain's applicable facets.
+	 */
+	querySessionUsage: (filter: UsageFilter) => typedError<SessionUsageRow[], AppError>(__TAURI_INVOKE("query_session_usage", { filter })),
 	listDevices: () => typedError<DeviceInfo[], AppError>(__TAURI_INVOKE("list_devices")),
 	listPricing: () => typedError<PricingEntry[], AppError>(__TAURI_INVOKE("list_pricing")),
 	/**  Add or update a pricing entry from the UI (user edits ⇒ `is_builtin=false`). */
@@ -941,6 +952,52 @@ export type ProjectStatsRow = {
 };
 
 /**
+ *  One project bucket at USAGE grain (the dashboard's project dimension,
+ *  #106): `usage_records` grouped by the owning session's `project_identity`,
+ *  so the bucket sums equal `UsageStats`'s totals under the same filter
+ *  exactly — time bounds run on usage timestamps, the hero's caliber. (The
+ *  sessions page's `ProjectStatsRow` instead selects sessions by
+ *  `last_active_at` — a sessions-grain caliber answering "where sessions
+ *  ran"; this one answers "where usage landed".) Every usage row lands in
+ *  exactly one bucket: rows with a session map by the identity rule, while
+ *  session-less rows AND rows whose session carries no launch dir both fall
+ *  to the synthetic [`UNKNOWN_PROJECT`](crate::model::UNKNOWN_PROJECT) bucket
+ *  — attribution missing either way. Note the project FILTER's sentinel stays
+ *  the stricter NOT-EXISTS form, so picking the unknown bucket narrows to its
+ *  session-less share only.
+ */
+export type ProjectUsageRow = {
+	/**  Bucket key: a project identity, or the unknown sentinel. */
+	project: string,
+	/**
+	 *  Whether this is the unknown bucket — rides as DATA (like
+	 *  `ProjectCandidates::unknown`) so the frontend never pattern-matches
+	 *  the sentinel literal.
+	 */
+	is_unknown: boolean,
+	/**
+	 *  Distinct `(session_id, device_id)` pairs among the bucket's rows that
+	 *  own a session row (0 for the sentinel's session-less share by
+	 *  definition).
+	 */
+	session_count: number,
+	request_count: number,
+	total_tokens: number,
+	input_tokens: number,
+	output_tokens: number,
+	cache_creation_tokens: number,
+	cache_read_tokens: number,
+	/**
+	 *  Cache-hit ratio over the bucket's cacheable pool, [0,1]
+	 *  (`TokenCounts::cache_hit_rate`).
+	 */
+	cache_hit_rate: number | null,
+	total_cost_usd: number | null,
+	/**  `MAX(usage timestamp)` in the bucket — recency for display. */
+	last_active_at: string,
+};
+
+/**
  *  A provider (供应商): `settingsConfig` is the owning app's live-file
  *  snapshot (raw JSON text) — Claude 是 `settings.json` 快照，Codex 是
  *  `{"auth", "config"}` 快照（auth = auth.json 内容、config = config.toml
@@ -1269,6 +1326,41 @@ export type SessionStatsRow = {
 };
 
 /**
+ *  One session bucket at usage grain (#106 dashboard session section):
+ *  `usage_records` grouped by `(session_id, device_id)`, INNER-joined to the
+ *  sessions table — only sessions that EXIST in the store (本机采集 ∪ 拉回的
+ *  远程收藏快照) appear; session-less usage surfaces only in the project
+ *  dimension's unknown bucket. Display fields (title / agent_type /
+ *  started_at) ride along from the session row. `turn_count` merges the
+ *  per-session turn rows — the turn grain ignores the model / source facets
+ *  (no such column; same caliber note as `UsageStats`'s turn aggregate).
+ */
+export type SessionUsageRow = {
+	session_id: string,
+	device_id: string,
+	/**  Display title: `custom_title` when set, else `title_orig`. */
+	title: string,
+	/**  `""` = main session; non-empty = subagent type tag. */
+	agent_type: string,
+	/**
+	 *  Session start (ISO8601); always present (the inner join guarantees a
+	 *  session row).
+	 */
+	started_at: string,
+	/**  `MAX(usage timestamp)` in the window — the bucket's recency. */
+	last_active_at: string,
+	/**  Turns recorded for this session under the filter's applicable facets. */
+	turn_count: number,
+	request_count: number,
+	total_tokens: number,
+	input_tokens: number,
+	output_tokens: number,
+	cache_creation_tokens: number,
+	cache_read_tokens: number,
+	total_cost_usd: number | null,
+};
+
+/**
  *  Color skin for multi-skin theming (token-first). Serialized
  *  snake_case; `neutral` is the default and maps to NO `data-skin` attribute on
  *  `<html>` (the :root/.dark values in src/index.css ARE the Neutral palette —
@@ -1382,6 +1474,11 @@ export type TrendPoint = {
 	cache_creation_tokens: number,
 	cache_read_tokens: number,
 	total_cost_usd: number | null,
+	/**
+	 *  Usage rows in this bucket — feeds the daily-request bar chart (the
+	 *  token sums alone can't answer "how many calls").
+	 */
+	request_count: number,
 };
 
 /**  One item the user is uploading (from the pending-upload dialog). */
@@ -1472,6 +1569,17 @@ export type UsageStats = {
 	/**  Aggregate over TurnDuration rows in range (per-turn grain). */
 	turn_count: number,
 	avg_turn_duration_ms: number | null,
+	/**
+	 *  95th-percentile turn duration (ms) over the same turn rows — smallest
+	 *  duration whose cumulative share reaches 95%. `None` when no turn rows
+	 *  are in range.
+	 */
+	p95_turn_duration_ms: number | null,
+	/**
+	 *  Turn-duration histogram over the same turn rows: counts into
+	 *  `[<10s, 10–30s, 30–60s, >60s]` (the dashboard's four duration bands).
+	 */
+	turn_duration_buckets: [number, number, number, number],
 };
 
 /**

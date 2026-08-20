@@ -2,17 +2,15 @@
 // (多日: vs 窗首; 单日: vs 昨日同时段) + 日均/近 N 小时均 + 四桶堆叠
 // composition bar + legend (label/value 行) + DSL footer (请求 · 命中率 · 成本).
 //
-// 右栏窄布局: 纵向，无 sparkline — 中栏已有大趋势图，此处只留当前
-// 窗口的数值快照。颜色全部走 CSS 变量，换主题不改本件。
+// 概览区宽布局(#106): 与 KPI 带等高并排占概览首行左 1/3。颜色全部走 CSS
+// 变量，换主题不改本件。delta/日均口径收敛在 use-token-snapshot（与 KPI 带
+// 共享同一次派生）。
 
 import dayjs from "dayjs"
-import { useMemo } from "react"
 import { useTranslation } from "react-i18next"
-import { useStatsQuery, useTrendQuery, ZERO_STATS } from "@/app/store/api"
 import type { FilterState } from "@/app/store/slices/filterSlice"
 import { Card, CardContent } from "@/components/ui/card"
-import { hourlySnapshot, tokenSnapshot } from "@/features/usage/derive"
-import { dayRangeToTs, effectiveDays } from "@/lib/date-range"
+import { useTokenSnapshot } from "@/features/usage/use-token-snapshot"
 import {
   formatCost,
   formatCount,
@@ -22,7 +20,6 @@ import {
   formatSegValue,
   formatTokens,
 } from "@/lib/format"
-import type { TrendBucket } from "@/types/generated/bindings"
 
 const SEGMENTS = [
   {
@@ -49,52 +46,25 @@ const SEGMENTS = [
 
 export function TokenHero({ filter }: { filter: FilterState }) {
   const { t } = useTranslation()
-  const { data: stats } = useStatsQuery(filter)
-  // 单日窗口 (today / 单日 custom) 判定与趋势图一致: 时间戳范围落在同一个
-  // 本地日 → 小时粒度。此时多日的 delta/日均语义失真 (日趋势只有 1 个点,
-  // delta 恒 null, 日均退化回总量), 改走 hourlySnapshot 的「vs 昨日同时段」。
-  const { from_day, to_day } = effectiveDays(filter)
-  const { from_ts: fromTs, to_ts: toTs } = dayRangeToTs(from_day, to_day)
-  const singleDay = !!fromTs && !!toTs && dayjs(fromTs).isSame(toTs, "day")
-  // 昨日 filter —— 与当前 filter 同维度 (model/source/device), 只把窗口换成
-  // 昨天的具体日期。queryKey 一天内稳定, 跨天滚动自动重查。
-  const yesterdayFilter = useMemo<FilterState>(
-    () =>
-      singleDay
-        ? {
-            ...filter,
-            range_preset: "custom",
-            from_day: dayjs(from_day).subtract(1, "day").format("YYYY-MM-DD"),
-            to_day: dayjs(from_day).subtract(1, "day").format("YYYY-MM-DD"),
-          }
-        : filter,
-    [filter, singleDay, from_day],
-  )
-  const bucket: TrendBucket = singleDay ? "Hour" : "Day"
-  const { data: trend = [] } = useTrendQuery({ filter, bucket })
-  const { data: yesterday = [] } = useTrendQuery(
-    { filter: yesterdayFilter, bucket: "Hour" },
-    { skip: !singleDay },
-  )
-  const s = stats ?? ZERO_STATS
+  const {
+    stats: s,
+    deltaPct,
+    singleDay,
+    dailyAvg,
+    hourlyAvg,
+  } = useTokenSnapshot(filter)
   const total = s.total_tokens || 1
-  // 多日: delta = 末日 vs 窗首 (trend 已按日升序), 日均 = 总量 / 窗口天数;
-  // 单日: delta = 今日 vs 昨日同时段, 均值 = 总量 / 已过小时数。
-  const now = dayjs()
-  const hourlySnap = singleDay ? hourlySnapshot(trend, yesterday, now) : null
-  const multiSnap = singleDay ? null : tokenSnapshot(s, trend)
-  const deltaPct = hourlySnap?.deltaPct ?? multiSnap?.deltaPct ?? null
-  const avgNode = hourlySnap
+  const avgNode = singleDay
     ? t("usage.hero.hourlyAvg", {
-        n: now.hour() + 1,
-        avg: formatTokens(hourlySnap.hourlyAvg),
+        n: dayjs().hour() + 1,
+        avg: formatTokens(hourlyAvg),
       })
-    : t("usage.hero.dailyAvg", { avg: formatTokens(multiSnap?.dailyAvg ?? 0) })
+    : t("usage.hero.dailyAvg", { avg: formatTokens(dailyAvg) })
 
   return (
-    <Card interactive>
-      <CardContent className="flex flex-col gap-4">
-        <div className="flex flex-col gap-1.5">
+    <Card interactive className="h-full">
+      <CardContent className="flex h-full flex-col gap-4">
+        <div className="flex flex-1 flex-col justify-center gap-1.5">
           <span className="text-muted-foreground text-xs">
             {t("usage.hero.total")}
           </span>
@@ -136,23 +106,25 @@ export function TokenHero({ filter }: { filter: FilterState }) {
           })}
         </div>
 
-        <div className="flex flex-col gap-2">
+        <div className="grid grid-cols-2 gap-x-4 gap-y-2">
           {SEGMENTS.map((seg) => {
             const v = Number(s[seg.key] ?? 0)
             return (
               <div
                 key={seg.key}
-                className="flex items-center justify-between text-xs"
+                className="flex items-center justify-between gap-1.5 text-xs"
               >
-                <span className="flex items-center gap-1.5">
+                <span className="flex min-w-0 items-center gap-1.5">
                   <span
-                    className="inline-block size-2 rounded-sm"
+                    className="inline-block size-2 shrink-0 rounded-sm"
                     style={{ backgroundColor: seg.color }}
                   />
-                  <span className="text-muted-foreground">{t(seg.label)}</span>
+                  <span className="text-muted-foreground truncate">
+                    {t(seg.label)}
+                  </span>
                 </span>
                 {/* DSL: 数量 · 占比（占比恒一位小数，标签在行左由布局渲染）。 */}
-                <span className="tabular-nums">
+                <span className="shrink-0 tabular-nums">
                   {formatSegValue(formatTokens(v), v / total)}
                 </span>
               </div>

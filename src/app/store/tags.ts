@@ -58,6 +58,8 @@ export const STORE_DERIVED_READS: ReadonlySet<string> = new Set([
   "distinctSources",
   "distinctModels",
   "distinctProjects",
+  "projectUsage",
+  "sessionUsage",
   // Logs
   "logs",
   "count",

@@ -63,6 +63,8 @@ export const ZERO_STATS: UsageStats = {
   total_cost_usd: 0,
   turn_count: 0,
   avg_turn_duration_ms: 0,
+  p95_turn_duration_ms: null,
+  turn_duration_buckets: [0, 0, 0, 0],
 }
 
 /**

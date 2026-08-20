@@ -11,6 +11,8 @@ import type {
   AlignReport,
   ModelStatsRow,
   ProjectCandidates,
+  ProjectUsageRow,
+  SessionUsageRow,
   TrendBucket,
   TrendPoint,
   UsageLogRow,
@@ -29,6 +31,8 @@ export const {
   useDistinctSourcesQuery,
   useDistinctModelsQuery,
   useDistinctProjectsQuery,
+  useProjectUsageQuery,
+  useSessionUsageQuery,
   useCollectMutation,
   useSyncMutation,
   useRebillMutation,
@@ -90,6 +94,22 @@ export const {
     distinctProjects: b.query<ProjectCandidates, FilterState>({
       queryFn: async (filter) =>
         run(commands.queryDistinctProjects(toFilter(filter))),
+      providesTags: (_r, _e, filter) =>
+        storeRead({ type: "Usage", id: filterId(filter) }),
+    }),
+    // Project buckets at usage grain (#106 dashboard project section) — sums
+    // equal the stats totals under the same filter exactly.
+    projectUsage: b.query<ProjectUsageRow[], FilterState>({
+      queryFn: async (filter) =>
+        run(commands.queryProjectUsage(toFilter(filter))),
+      providesTags: (_r, _e, filter) =>
+        storeRead({ type: "Usage", id: filterId(filter) }),
+    }),
+    // Session buckets at usage grain (#106 dashboard session section) — every
+    // store-known session with its in-window usage + per-session turn counts.
+    sessionUsage: b.query<SessionUsageRow[], FilterState>({
+      queryFn: async (filter) =>
+        run(commands.querySessionUsage(toFilter(filter))),
       providesTags: (_r, _e, filter) =>
         storeRead({ type: "Usage", id: filterId(filter) }),
     }),

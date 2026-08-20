@@ -1,7 +1,8 @@
 // Shared "collect now" action. Fires the align mutation (Standalone ⇒ local
 // collect only; Synced ⇒ collect + pull + push), toasts the outcome, and stamps
-// the data-freshness hint. Extracted here so the dashboard ControlCard, the
-// request-log ControlBar, and the sessions view all trigger the exact same
+// the data-freshness hint. Extracted here so the dashboard's ControlBar (the
+// sticky tab bar), the request-log ControlBar, and the sessions view all
+// trigger the exact same
 // collect path — one concept, one implementation (architecture.md: 单一事实来源).
 //
 // The run mode decides what "collect" means; the button is always "refresh my

@@ -8,8 +8,8 @@
 //     number's click): a press that moves >4px starts a window drag, a press
 //     that doesn't is a click → expand. →大 stops propagation so it stays a
 //     pure click.
-//   - expanded: a 1:1 reuse of the dashboard's right-column anchor (TokenHero)
-//     fed today's filter — the "中窗口" mirrors the 右中 card exactly,
+//   - expanded: a 1:1 reuse of the dashboard's TokenHero anchor, fed
+//     today's filter — the "中窗口" mirrors the dashboard anchor exactly,
 //     only adding a drag/title bar with expand + shrink controls.
 //
 // Three "windows", each reachable from the others: full ⇄ expanded ⇄ tucked,

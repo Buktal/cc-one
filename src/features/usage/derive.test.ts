@@ -14,16 +14,22 @@ import {
   hourlySnapshot,
   modelMetricValue,
   projectOptions,
+  projectRanking,
+  requestHeadline,
+  sessionSectionStats,
   stopReasonLabelKey,
   stopReasonTone,
   tokenSnapshot,
   topNModels,
+  windowDayCount,
   zeroFillTrend,
   zeroTrendPoint,
 } from "@/features/usage/derive"
 
 import type {
   ModelStatsRow,
+  ProjectUsageRow,
+  SessionUsageRow,
   TrendPoint,
   UsageStats,
 } from "@/types/generated/bindings"
@@ -37,6 +43,7 @@ function trend(day: string, total: number): TrendPoint {
     cache_creation_tokens: 0,
     cache_read_tokens: 0,
     total_cost_usd: 0,
+    request_count: 0,
   }
 }
 
@@ -52,6 +59,56 @@ function stats(totalTokens: number): UsageStats {
     total_cost_usd: 0,
     turn_count: 0,
     avg_turn_duration_ms: 0,
+    p95_turn_duration_ms: null,
+    turn_duration_buckets: [0, 0, 0, 0],
+  }
+}
+
+/** Usage-grain project bucket fixture (backend order: tokens desc). */
+function projectRow(
+  project: string,
+  tokens: number,
+  extra: Partial<ProjectUsageRow> = {},
+): ProjectUsageRow {
+  return {
+    project,
+    is_unknown: false,
+    session_count: 1,
+    request_count: 1,
+    total_tokens: tokens,
+    input_tokens: tokens,
+    output_tokens: 0,
+    cache_creation_tokens: 0,
+    cache_read_tokens: 0,
+    cache_hit_rate: 0,
+    total_cost_usd: 0,
+    last_active_at: "2026-08-15T10:00:00.000Z",
+    ...extra,
+  }
+}
+
+/** Usage-grain session bucket fixture. */
+function sessionRow(
+  sid: string,
+  tokens: number,
+  extra: Partial<SessionUsageRow> = {},
+): SessionUsageRow {
+  return {
+    session_id: sid,
+    device_id: "d",
+    title: `title-${sid}`,
+    agent_type: "",
+    started_at: "2026-08-15T08:00:00.000Z",
+    last_active_at: "2026-08-15T10:00:00.000Z",
+    turn_count: 1,
+    request_count: 1,
+    total_tokens: tokens,
+    input_tokens: tokens,
+    output_tokens: 0,
+    cache_creation_tokens: 0,
+    cache_read_tokens: 0,
+    total_cost_usd: 0,
+    ...extra,
   }
 }
 
@@ -418,5 +475,122 @@ describe("projectOptions (project dropdown derivation)", () => {
       value: SENTINEL,
       label: "未知项目",
     })
+  })
+})
+
+describe("projectRanking (#106 sections)", () => {
+  const SENTINEL = "__unknown__"
+  const rows: ProjectUsageRow[] = [
+    projectRow("/proj/alpha", 500),
+    projectRow("/proj/beta", 300),
+    projectRow("/proj/gamma", 150),
+    projectRow("/proj/delta", 40),
+    projectRow(SENTINEL, 10, { is_unknown: true }),
+  ]
+
+  it("splits top-N known / rest aggregate / unknown, shares over all buckets", () => {
+    const r = projectRanking(rows, 2)
+    expect(r.top.map((x) => x.project)).toEqual(["/proj/alpha", "/proj/beta"])
+    expect(r.rest).toEqual({
+      count: 2,
+      tokens: 190,
+      sessions: 2,
+      requests: 2,
+      cost: 0,
+    })
+    expect(r.unknown?.project).toBe(SENTINEL)
+    expect(r.knownCount).toBe(4)
+    expect(r.totalTokens).toBe(1000)
+    // Top-3 known = 500+300+150 over ALL buckets (incl. unknown).
+    expect(r.top3Share).toBeCloseTo(0.95)
+  })
+
+  it("keeps the unknown bucket out of top even when it outranks a known project", () => {
+    const withBigUnknown = [
+      ...rows.slice(0, 1),
+      projectRow(SENTINEL, 900, { is_unknown: true }),
+    ]
+    const r = projectRanking(withBigUnknown, 5)
+    expect(r.top.map((x) => x.project)).toEqual(["/proj/alpha"])
+    expect(r.unknown?.total_tokens).toBe(900)
+  })
+
+  it("nulls rest/top3Share when the buckets are too few", () => {
+    const r = projectRanking([projectRow("/only", 10)], 5)
+    expect(r.rest).toBeNull()
+    expect(r.top3Share).toBeNull()
+    expect(r.totalTokens).toBe(10)
+  })
+})
+
+describe("sessionSectionStats (#106 sections)", () => {
+  it("aggregates counts / shares / spans / turn buckets / top-N", () => {
+    const rows = [
+      sessionRow("s1", 600, {
+        turn_count: 2,
+        last_active_at: "2026-08-15T12:00:00.000Z",
+      }),
+      sessionRow("s2", 300, {
+        turn_count: 10,
+        device_id: "d2",
+        agent_type: "task",
+      }),
+      sessionRow("s3", 100, { turn_count: 20 }),
+    ]
+    const s = sessionSectionStats(rows, 2)
+    expect(s.sessions).toBe(3)
+    expect(s.subagents).toBe(1)
+    expect(s.subagentShare).toBeCloseTo(1 / 3)
+    expect(s.devices).toBe(2)
+    // Top device = d (600+100) over 1000.
+    expect(s.topDeviceShare).toBeCloseTo(0.7)
+    // Longest span = s1 (08:00 → 12:00 = 4h).
+    expect(s.longestSpanMs).toBe(4 * 3600_000)
+    expect(s.avgTurns).toBeCloseTo(32 / 3)
+    // Bands: 1–3 (s1) / 4–8 (none) / 9–16 (s2) / 17+ (s3).
+    expect(s.turnBuckets).toEqual([1, 0, 1, 1])
+    expect(s.top.map((x) => x.session_id)).toEqual(["s1", "s2"])
+    expect(s.top[0].share).toBeCloseTo(0.6)
+  })
+
+  it("empty input → zeroed aggregates and null ratios/spans", () => {
+    const s = sessionSectionStats([], 5)
+    expect(s.sessions).toBe(0)
+    expect(s.subagentShare).toBeNull()
+    expect(s.topDeviceShare).toBeNull()
+    expect(s.longestSpanMs).toBeNull()
+    expect(s.avgTurns).toBeNull()
+    expect(s.turnBuckets).toEqual([0, 0, 0, 0])
+    expect(s.top).toEqual([])
+  })
+})
+
+describe("requestHeadline + windowDayCount", () => {
+  it("daily average over the window days and the peak bucket", () => {
+    const buckets = [
+      { day: "2026-08-14", request_count: 100 },
+      { day: "2026-08-15", request_count: 400 },
+      { day: "2026-08-16", request_count: 200 },
+    ]
+    expect(requestHeadline(buckets, 4)).toEqual({
+      dailyAvg: 175,
+      peakCount: 400,
+      peakDay: "2026-08-15",
+    })
+  })
+
+  it("empty counts → nulls (caller renders dashes)", () => {
+    expect(requestHeadline([], 7)).toEqual({
+      dailyAvg: null,
+      peakCount: null,
+      peakDay: null,
+    })
+  })
+
+  it("windowDayCount is inclusive and null on unbounded windows", () => {
+    expect(windowDayCount("2026-08-01", "2026-08-30")).toBe(30)
+    expect(windowDayCount("2026-08-01", "2026-08-01")).toBe(1)
+    expect(windowDayCount("", "2026-08-01")).toBeNull()
+    expect(windowDayCount("2026-08-01", "")).toBeNull()
   })
 })

@@ -246,6 +246,13 @@ pub struct UsageStats {
     /// Aggregate over TurnDuration rows in range (per-turn grain).
     pub turn_count: u32,
     pub avg_turn_duration_ms: f64,
+    /// 95th-percentile turn duration (ms) over the same turn rows — smallest
+    /// duration whose cumulative share reaches 95%. `None` when no turn rows
+    /// are in range.
+    pub p95_turn_duration_ms: Option<f64>,
+    /// Turn-duration histogram over the same turn rows: counts into
+    /// `[<10s, 10–30s, 30–60s, >60s]` (the dashboard's four duration bands).
+    pub turn_duration_buckets: [u32; 4],
 }
 
 /// Per-model aggregate row (for breakdown tables / model filter).
@@ -260,6 +267,77 @@ pub struct ModelStatsRow {
     pub cache_hit_rate: f64,
 }
 
+/// One project bucket at USAGE grain (the dashboard's project dimension,
+/// #106): `usage_records` grouped by the owning session's `project_identity`,
+/// so the bucket sums equal `UsageStats`'s totals under the same filter
+/// exactly — time bounds run on usage timestamps, the hero's caliber. (The
+/// sessions page's `ProjectStatsRow` instead selects sessions by
+/// `last_active_at` — a sessions-grain caliber answering "where sessions
+/// ran"; this one answers "where usage landed".) Every usage row lands in
+/// exactly one bucket: rows with a session map by the identity rule, while
+/// session-less rows AND rows whose session carries no launch dir both fall
+/// to the synthetic [`UNKNOWN_PROJECT`](crate::model::UNKNOWN_PROJECT) bucket
+/// — attribution missing either way. Note the project FILTER's sentinel stays
+/// the stricter NOT-EXISTS form, so picking the unknown bucket narrows to its
+/// session-less share only.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, specta::Type)]
+pub struct ProjectUsageRow {
+    /// Bucket key: a project identity, or the unknown sentinel.
+    pub project: String,
+    /// Whether this is the unknown bucket — rides as DATA (like
+    /// `ProjectCandidates::unknown`) so the frontend never pattern-matches
+    /// the sentinel literal.
+    pub is_unknown: bool,
+    /// Distinct `(session_id, device_id)` pairs among the bucket's rows that
+    /// own a session row (0 for the sentinel's session-less share by
+    /// definition).
+    pub session_count: u32,
+    pub request_count: u32,
+    pub total_tokens: u32,
+    pub input_tokens: u32,
+    pub output_tokens: u32,
+    pub cache_creation_tokens: u32,
+    pub cache_read_tokens: u32,
+    /// Cache-hit ratio over the bucket's cacheable pool, [0,1]
+    /// (`TokenCounts::cache_hit_rate`).
+    pub cache_hit_rate: f64,
+    pub total_cost_usd: f64,
+    /// `MAX(usage timestamp)` in the bucket — recency for display.
+    pub last_active_at: String,
+}
+
+/// One session bucket at usage grain (#106 dashboard session section):
+/// `usage_records` grouped by `(session_id, device_id)`, INNER-joined to the
+/// sessions table — only sessions that EXIST in the store (本机采集 ∪ 拉回的
+/// 远程收藏快照) appear; session-less usage surfaces only in the project
+/// dimension's unknown bucket. Display fields (title / agent_type /
+/// started_at) ride along from the session row. `turn_count` merges the
+/// per-session turn rows — the turn grain ignores the model / source facets
+/// (no such column; same caliber note as `UsageStats`'s turn aggregate).
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, specta::Type)]
+pub struct SessionUsageRow {
+    pub session_id: String,
+    pub device_id: String,
+    /// Display title: `custom_title` when set, else `title_orig`.
+    pub title: String,
+    /// `""` = main session; non-empty = subagent type tag.
+    pub agent_type: String,
+    /// Session start (ISO8601); always present (the inner join guarantees a
+    /// session row).
+    pub started_at: String,
+    /// `MAX(usage timestamp)` in the window — the bucket's recency.
+    pub last_active_at: String,
+    /// Turns recorded for this session under the filter's applicable facets.
+    pub turn_count: u32,
+    pub request_count: u32,
+    pub total_tokens: u32,
+    pub input_tokens: u32,
+    pub output_tokens: u32,
+    pub cache_creation_tokens: u32,
+    pub cache_read_tokens: u32,
+    pub total_cost_usd: f64,
+}
+
 /// One point on the trend chart. `day` carries the bucket key: a `YYYY-MM-DD`
 /// UTC day (`TrendBucket::Day`) or a `YYYY-MM-DDTHH` local hour
 /// (`TrendBucket::Hour`). The field keeps the `day` name for wire stability.
@@ -272,6 +350,9 @@ pub struct TrendPoint {
     pub cache_creation_tokens: u32,
     pub cache_read_tokens: u32,
     pub total_cost_usd: f64,
+    /// Usage rows in this bucket — feeds the daily-request bar chart (the
+    /// token sums alone can't answer "how many calls").
+    pub request_count: u32,
 }
 
 /// Trend aggregation granularity. `Day` groups on the UTC `day` column

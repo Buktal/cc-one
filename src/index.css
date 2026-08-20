@@ -855,3 +855,13 @@
 .md-codeblock .hljs-strong {
   font-weight: 600;
 }
+
+/* 分布行的「其他 / 未知」聚合条填充：斜纹与实体条目区分（#106 看板分区，
+   原型 variant-c-v2 的 .bar-fill.other）。颜色走 border token，换肤跟随。 */
+.bar-hatch {
+  background: repeating-linear-gradient(
+    45deg,
+    var(--border) 0 3px,
+    transparent 3px 6px
+  );
+}

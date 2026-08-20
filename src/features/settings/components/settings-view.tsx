@@ -1,11 +1,14 @@
 // Settings view: device identity, run mode, repo binding
 // (Standalone ↔ Synced), manual sync / rebill.
 //
-// Sectioned cards (通用 / 本机 / 同步 / 设备), each fronted by an eyebrow
-// label. The sync card's state machine (probe / bind / unbind / sync-now +
-// draft inputs) lives in useSyncRepo; this file is presentation. The sync
-// card renders TWO distinct states — unbound (inputs + test/bind) vs bound
-// (current repo, copyable, + test/sync/unbind) — never a mix of both.
+// Sectioned cards (通用 / 本机 / 同步 / 设备 / 关于), each fronted by an eyebrow
+// label. #109: the page widens to max-w-6xl (决议 #99 variant-a — 加宽单列，
+// 「通用」卡内部两栏见 general-card.tsx) and gains the 关于 section that
+// inherited the changelog + version display from the old shell footer. The
+// sync card's state machine (probe / bind / unbind / sync-now + draft inputs)
+// lives in useSyncRepo; this file is presentation. The sync card renders TWO
+// distinct states — unbound (inputs + test/bind) vs bound (current repo,
+// copyable, + test/sync/unbind) — never a mix of both.
 
 import {
   Calculator,
@@ -26,6 +29,7 @@ import { Button } from "@/components/ui/button"
 import { Card, CardContent } from "@/components/ui/card"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
+import { AboutCard } from "@/features/settings/components/about-card"
 import { DeviceList } from "@/features/settings/components/device-list"
 import { GeneralCard } from "@/features/settings/components/general-card"
 import { useSyncRepo } from "@/features/settings/use-sync-repo"
@@ -58,7 +62,7 @@ export function SettingsView() {
   const [displayName, setDisplayName] = useState("")
 
   return (
-    <div className="mx-auto flex max-w-3xl flex-col gap-6">
+    <div className="mx-auto flex max-w-6xl flex-col gap-6">
       {/* 通用 — tray / language / update */}
       <Section
         eyebrow={t("settings.section.general")}
@@ -274,6 +278,14 @@ export function SettingsView() {
         description={t("settings.sectionDesc.devices")}
       >
         <DeviceList />
+      </Section>
+
+      {/* 关于 — 版本与更新 + 更新日志（#109 承接自 shell footer） */}
+      <Section
+        eyebrow={t("settings.section.about")}
+        description={t("settings.sectionDesc.about")}
+      >
+        <AboutCard />
       </Section>
     </div>
   )

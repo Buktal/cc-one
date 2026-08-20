@@ -1,5 +1,5 @@
 // 时间范围筛选的 Redux filterSlice 适配：DateRangeChip 的受控值 + 写回调。
-// usage 的 ControlCard / ControlBar 与 sessions 工具栏共用同一份「动态预设不
+// usage 的 ControlBar（看板 tab 栏 / 日志页）与 sessions 工具栏共用同一份「动态预设不
 // 存日期、日历选日期转 custom」的写语义（ADR-0008）——此前两处各写一份
 // dispatch 链，收敛到这一个 hook；补丁形状本身在 filterSlice 的 presetPatch /
 // dayPatch（可测），本 hook 只做 Redux 接线。

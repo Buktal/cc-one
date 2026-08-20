@@ -219,7 +219,7 @@ function WorkbenchToolbar({ b }: { b: ReturnType<typeof useSessionsBrowser> }) {
         {/* 项目维度：共享 filterSlice（与看板 / 日志一致），左树项目轨道的
             选中也写同一份状态。候选取自 distinct-projects 端点，含「未知
             项目」特殊选项。 */}
-        <ProjectSelect bar className="h-8 w-40" />
+        <ProjectSelect className="h-8 w-40" />
         {/* Device dropdown — only in the favorites universe (收藏轨）and only
             when more than one device exists. */}
         {b.deviceOptions.length > 0 && b.track === "favorites" ? (
