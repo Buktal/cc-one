@@ -5,15 +5,20 @@
 // (variant-c-v2). Cell = big number + label + sub line; every number flows
 // through the metric DSL. The token delta/daily-average caliber comes from
 // use-token-snapshot (shared with the hero); the 会话/项目/设备 cells read the
-// SAME projectUsage / sessionUsage queries the sections below consume (one
-// cache entry per filter).
+// SAME projectUsage / sessionUsage / deviceUsage queries the sections below
+// consume (one cache entry per filter).
 
 import { useTranslation } from "react-i18next"
-import { useProjectUsageQuery, useSessionUsageQuery } from "@/app/store/api"
+import {
+  useDeviceUsageQuery,
+  useProjectUsageQuery,
+  useSessionUsageQuery,
+} from "@/app/store/api"
 import type { FilterState } from "@/app/store/slices/filterSlice"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { sessionSpan, spanLabelKey } from "@/features/sessions/derive"
 import {
+  deviceSectionStats,
   projectRanking,
   sessionSectionStats,
   windowDayCount,
@@ -49,10 +54,13 @@ export function KpiBand({ filter }: { filter: FilterState }) {
   } = useTokenSnapshot(filter)
   const { data: projectRows = [] } = useProjectUsageQuery(filter)
   const { data: sessionRows = [] } = useSessionUsageQuery(filter)
+  const { data: deviceRows = [] } = useDeviceUsageQuery(filter)
   // topN=0: the ranking itself renders in the project section below — here
   // only the aggregates (known count / Top3 concentration) are read.
   const ranking = projectRanking(projectRows, 0)
   const sessions = sessionSectionStats(sessionRows, 0)
+  // 设备 KPI 的口径 = 设备分区本身（usage 粒度的活跃设备），不再从会话行派生。
+  const devices = deviceSectionStats(deviceRows)
   const { from_day, to_day } = effectiveDays(filter)
   const days = windowDayCount(from_day, to_day)
 
@@ -100,12 +108,12 @@ export function KpiBand({ filter }: { filter: FilterState }) {
     },
     {
       key: "devices",
-      value: formatCount(sessions.devices),
+      value: formatCount(devices.devices),
       label: t("usage.kpi.devices"),
       sub:
-        sessions.topDeviceShare != null
+        devices.topShare != null
           ? t("usage.kpi.topDevice", {
-              pct: formatPct(sessions.topDeviceShare),
+              pct: formatPct(devices.topShare),
             })
           : undefined,
     },

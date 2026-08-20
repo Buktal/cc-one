@@ -1,21 +1,22 @@
 // Dashboard view (#106, 定稿 variant-c-v2: 概览首屏 + 维度分区) —
-// 概览 (总消耗 + KPI 带 + 趋势 + 模型分布) → 项目 → 会话 → 请求 → 近期请求,
-// each a section with an indexed head carrying a summary line (secondary
-// aggregates only — never a repeat of the cards' big numbers). The sticky tab
-// bar holds the section tabs (scrollspy-highlighted), the shared filter bar
-// (time / source / model / project / device + reset) on its right end, and
-// the page scroll progress line on its bottom edge. Single frozen layer by
-// design: only the tab bar sticks — the filter row can wrap to a second line
-// at narrower widths, so a second frozen layer under it would need measured
-// geometry; section heads stay in flow and the tab highlight already says
-// where you are. 设备分区 (#107) lands as another section/tab when its
-// endpoint ships.
+// 概览 (总消耗 + KPI 带 + 趋势 + 模型分布) → 设备 → 项目 → 会话 → 请求 →
+// 近期请求, each a section with an indexed head carrying a summary line
+// (secondary aggregates only — never a repeat of the cards' big numbers). The
+// sticky tab bar holds the section tabs (scrollspy-highlighted), the shared
+// filter bar (time / source / model / project / device + reset) on its right
+// end, and the page scroll progress line on its bottom edge. Single frozen
+// layer by design: only the tab bar sticks — the filter row can wrap to a
+// second line at narrower widths, so a second frozen layer under it would
+// need measured geometry; section heads stay in flow and the tab highlight
+// already says where you are.
 
 import dayjs from "dayjs"
 import { RotateCcw } from "lucide-react"
 import { useRef } from "react"
 import { useTranslation } from "react-i18next"
 import {
+  useDevicesQuery,
+  useDeviceUsageQuery,
   useProjectUsageQuery,
   useSessionUsageQuery,
   useStatsQuery,
@@ -30,6 +31,7 @@ import {
 import { Button } from "@/components/ui/button"
 import { sessionSpan, spanLabelKey } from "@/features/sessions/derive"
 import {
+  deviceSectionStats,
   projectRanking,
   requestHeadline,
   sessionSectionStats,
@@ -47,6 +49,7 @@ import { cn } from "@/lib/utils"
 import type { TrendBucket } from "@/types/generated/bindings"
 import { useSectionScroll } from "../use-section-scroll"
 import { ControlBar } from "./control-bar"
+import { DeviceSection } from "./device-section"
 import { KpiBand } from "./kpi-band"
 import { ModelDistribution } from "./model-distribution"
 import { ProjectSection } from "./project-section"
@@ -56,9 +59,11 @@ import { SessionSection } from "./session-section"
 import { TokenHero } from "./token-hero"
 import { UsageTrendChart } from "./usage-trend-chart"
 
-/** Section registry — tab order IS scroll order; ids anchor the spy + jumps. */
+/** Section registry — tab order IS scroll order; ids anchor the spy + jumps.
+ *  设备 leads the dimension sections (the #96 prototype's order). */
 const SECTIONS = [
   { id: "dash-overview", key: "usage.sections.overview" },
+  { id: "dash-devices", key: "usage.sections.devices" },
   { id: "dash-projects", key: "usage.sections.projects" },
   { id: "dash-sessions", key: "usage.sections.sessions" },
   { id: "dash-requests", key: "usage.sections.requests" },
@@ -168,8 +173,17 @@ export function DashboardView() {
       </Section>
 
       <Section
-        id="dash-projects"
+        id="dash-devices"
         index={2}
+        title={summaries.label("usage.sections.devices")}
+        summary={summaries.devices}
+      >
+        <DeviceSection filter={filter} />
+      </Section>
+
+      <Section
+        id="dash-projects"
+        index={3}
         title={summaries.label("usage.sections.projects")}
         summary={summaries.projects}
       >
@@ -178,7 +192,7 @@ export function DashboardView() {
 
       <Section
         id="dash-sessions"
-        index={3}
+        index={4}
         title={summaries.label("usage.sections.sessions")}
         summary={summaries.sessions}
       >
@@ -187,7 +201,7 @@ export function DashboardView() {
 
       <Section
         id="dash-requests"
-        index={4}
+        index={5}
         title={summaries.label("usage.sections.requests")}
         summary={summaries.requests}
       >
@@ -196,7 +210,7 @@ export function DashboardView() {
 
       <Section
         id="dash-recent"
-        index={5}
+        index={6}
         title={summaries.label("usage.sections.recent")}
         summary={summaries.recent}
       >
@@ -252,8 +266,11 @@ function useSectionSummaries(filter: FilterState) {
   const { data: stats } = useStatsQuery(filter)
   const { data: projectRows = [] } = useProjectUsageQuery(filter)
   const { data: sessionRows = [] } = useSessionUsageQuery(filter)
+  const { data: deviceRows = [] } = useDeviceUsageQuery(filter)
+  const { data: registryDevices = [] } = useDevicesQuery()
   const ranking = projectRanking(projectRows, 0)
   const sessionStats = sessionSectionStats(sessionRows, 0)
+  const deviceStats = deviceSectionStats(deviceRows)
 
   // The requests summary needs the per-bucket counts — same trend query (and
   // bucket rule) the requests section's bars read.
@@ -283,6 +300,22 @@ function useSectionSummaries(filter: FilterState) {
           })
         : "",
   })
+  // Registry devices with no usage in the window stay invisible as rows —
+  // the summary says how many, so "where's my other machine" is answered.
+  const silentDevices = Math.max(
+    registryDevices.length - deviceStats.devices,
+    0,
+  )
+  const devices = t("usage.sections.devicesSum", {
+    n: formatCount(deviceStats.devices),
+    top: deviceStats.topShare != null ? formatPct(deviceStats.topShare) : "—",
+    silent:
+      silentDevices > 0
+        ? t("usage.sections.devicesSilent", {
+            n: formatCount(silentDevices),
+          })
+        : "",
+  })
   const longest =
     sessionStats.longestSpanMs != null
       ? spanLabelKey(sessionSpan(sessionStats.longestSpanMs))
@@ -303,6 +336,7 @@ function useSectionSummaries(filter: FilterState) {
     label: (key: string) => t(key),
     resetLabel: t("usage.control.reset"),
     overview,
+    devices,
     projects,
     sessions,
     requests,

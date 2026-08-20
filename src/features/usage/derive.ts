@@ -14,6 +14,7 @@ import {
 import { type FilterOption, facetOptions } from "@/lib/filter-options"
 import { projectBasename } from "@/lib/paths"
 import type {
+  DeviceUsageRow,
   ModelStatsRow,
   ProjectUsageRow,
   SessionUsageRow,
@@ -374,10 +375,6 @@ export interface SessionSectionStats {
   /** Subagent sessions (non-empty agent_type) and their share. */
   subagents: number
   subagentShare: number | null
-  /** Distinct devices among the rows. */
-  devices: number
-  /** Top device's token share, or null (no rows). */
-  topDeviceShare: number | null
   /** Longest span (last_active − started, ms), or null (none positive). */
   longestSpanMs: number | null
   /** Total turns / sessions, or null (no sessions). */
@@ -409,17 +406,10 @@ export function sessionSectionStats(
       0,
     ) || 1
   const turnBuckets: [number, number, number, number] = [0, 0, 0, 0]
-  const byDevice = new Map<string, number>()
   let subagents = 0
   let turns = 0
   let longest: number | null = null
   for (const r of rows) {
-    const tokens =
-      Number(r.input_tokens) +
-      Number(r.output_tokens) +
-      Number(r.cache_creation_tokens) +
-      Number(r.cache_read_tokens)
-    byDevice.set(r.device_id, (byDevice.get(r.device_id) ?? 0) + tokens)
     if (r.agent_type) subagents += 1
     turns += Number(r.turn_count)
     const span = Date.parse(r.last_active_at) - Date.parse(r.started_at)
@@ -430,13 +420,10 @@ export function sessionSectionStats(
       r.turn_count <= 3 ? 0 : r.turn_count <= 8 ? 1 : r.turn_count <= 16 ? 2 : 3
     ] += 1
   }
-  const topDeviceTokens = byDevice.size > 0 ? Math.max(...byDevice.values()) : 0
   return {
     sessions: rows.length,
     subagents,
     subagentShare: rows.length > 0 ? subagents / rows.length : null,
-    devices: byDevice.size,
-    topDeviceShare: byDevice.size > 0 ? topDeviceTokens / totalTokens : null,
     longestSpanMs: longest,
     avgTurns: rows.length > 0 ? turns / rows.length : null,
     turnBuckets,
@@ -456,6 +443,32 @@ export function sessionSectionStats(
           Number(r.cache_read_tokens)) /
         totalTokens,
     })),
+    totalTokens,
+  }
+}
+
+export interface DeviceSectionStats {
+  /** Devices with usage in the window (GROUP BY omits empty buckets — a
+   *  silent peer is invisible by design). */
+  devices: number
+  /** Top device's token share of the section total, or null (no rows). */
+  topShare: number | null
+  /** All-row token sum, floored at 1 so callers can divide safely. */
+  totalTokens: number
+}
+
+/** The device section's aggregates over usage-grain device rows (#107): the
+ *  active-device count and the leader's share — the section head's summary
+ *  and the KPI band's 设备 cell both derive from here, so the count / share
+ *  stay ONE caliber with the section's own rows. */
+export function deviceSectionStats(
+  rows: readonly DeviceUsageRow[],
+): DeviceSectionStats {
+  const totalTokens = rows.reduce((s, r) => s + Number(r.total_tokens), 0) || 1
+  return {
+    devices: rows.length,
+    topShare:
+      rows.length > 0 ? Number(rows[0].total_tokens) / totalTokens : null,
     totalTokens,
   }
 }

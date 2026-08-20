@@ -9,6 +9,7 @@ import { type FilterState, toFilter } from "@/app/store/slices/filterSlice"
 import { INVALIDATE_STORE, storeRead } from "@/app/store/tags"
 import type {
   AlignReport,
+  DeviceUsageRow,
   ModelStatsRow,
   ProjectCandidates,
   ProjectUsageRow,
@@ -33,6 +34,7 @@ export const {
   useDistinctProjectsQuery,
   useProjectUsageQuery,
   useSessionUsageQuery,
+  useDeviceUsageQuery,
   useCollectMutation,
   useSyncMutation,
   useRebillMutation,
@@ -110,6 +112,15 @@ export const {
     sessionUsage: b.query<SessionUsageRow[], FilterState>({
       queryFn: async (filter) =>
         run(commands.querySessionUsage(toFilter(filter))),
+      providesTags: (_r, _e, filter) =>
+        storeRead({ type: "Usage", id: filterId(filter) }),
+    }),
+    // Device buckets at usage grain (#107 dashboard device section) — pure
+    // usage aggregates keyed by device id; naming / "this machine" identity
+    // join frontend-side from listDevices.
+    deviceUsage: b.query<DeviceUsageRow[], FilterState>({
+      queryFn: async (filter) =>
+        run(commands.queryDeviceUsage(toFilter(filter))),
       providesTags: (_r, _e, filter) =>
         storeRead({ type: "Usage", id: filterId(filter) }),
     }),

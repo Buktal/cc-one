@@ -5,8 +5,8 @@ use tauri::State;
 use super::AppState;
 use crate::error::AppResult;
 use crate::model::{
-    LogsQuery, ModelStatsRow, ProjectCandidates, ProjectUsageRow, SessionUsageRow, TrendBucket,
-    TrendPoint, UsageFilter, UsageLogRow, UsageStats,
+    DeviceUsageRow, LogsQuery, ModelStatsRow, ProjectCandidates, ProjectUsageRow, SessionUsageRow,
+    TrendBucket, TrendPoint, UsageFilter, UsageLogRow, UsageStats,
 };
 
 #[tauri::command]
@@ -103,4 +103,18 @@ pub fn query_session_usage(
     filter: UsageFilter,
 ) -> AppResult<Vec<SessionUsageRow>> {
     state.store.query_session_usage(&filter)
+}
+
+/// Device buckets at usage grain (#107 dashboard device section) — GROUP BY
+/// device_id over the same WHERE builder, so bucket sums equal
+/// `query_usage_stats`'s totals under the same filter exactly. Pure usage
+/// aggregates: naming / "this machine" identity are the frontend's join with
+/// `list_devices`.
+#[tauri::command]
+#[specta::specta]
+pub fn query_device_usage(
+    state: State<'_, AppState>,
+    filter: UsageFilter,
+) -> AppResult<Vec<DeviceUsageRow>> {
+    state.store.query_device_usage(&filter)
 }

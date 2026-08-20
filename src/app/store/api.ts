@@ -94,6 +94,7 @@ export {
 export {
   useCollectMutation,
   useCountQuery,
+  useDeviceUsageQuery,
   useDistinctModelsQuery,
   useDistinctProjectsQuery,
   useDistinctSourcesQuery,

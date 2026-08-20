@@ -338,6 +338,35 @@ pub struct SessionUsageRow {
     pub total_cost_usd: f64,
 }
 
+/// One device bucket at usage grain (the dashboard's device dimension,
+/// #107): `usage_records` grouped by `device_id`, in the exact shape of
+/// `query_models` — pure usage aggregates, every `UsageFilter` facet applies
+/// (project included, through the one WHERE builder), and the bucket sums
+/// equal `UsageStats`'s totals under the same filter exactly. Registry facts
+/// (display name, which device is "this machine") are NOT joined here — the
+/// frontend merges `list_devices` for them, the same division as the device
+/// dropdown. `last_active_at` is the device's newest usage timestamp in the
+/// window: for this machine its latest activity, for a peer the latest usage
+/// that reached this store (arriving with the last pull — the recency the
+/// card shows as 最近同步).
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, specta::Type)]
+pub struct DeviceUsageRow {
+    /// Owning device's 12-hex id (the grouping key).
+    pub device_id: String,
+    pub request_count: u32,
+    pub total_tokens: u32,
+    pub input_tokens: u32,
+    pub output_tokens: u32,
+    pub cache_creation_tokens: u32,
+    pub cache_read_tokens: u32,
+    /// Cache-hit ratio over the bucket's cacheable pool, [0,1]
+    /// (`TokenCounts::cache_hit_rate`).
+    pub cache_hit_rate: f64,
+    pub total_cost_usd: f64,
+    /// `MAX(usage timestamp)` in the bucket — recency for display.
+    pub last_active_at: String,
+}
+
 /// One point on the trend chart. `day` carries the bucket key: a `YYYY-MM-DD`
 /// UTC day (`TrendBucket::Day`) or a `YYYY-MM-DDTHH` local hour
 /// (`TrendBucket::Hour`). The field keeps the `day` name for wire stability.

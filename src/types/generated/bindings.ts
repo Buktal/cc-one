@@ -81,6 +81,14 @@ export const commands = {
 	 *  along under the turn grain's applicable facets.
 	 */
 	querySessionUsage: (filter: UsageFilter) => typedError<SessionUsageRow[], AppError>(__TAURI_INVOKE("query_session_usage", { filter })),
+	/**
+	 *  Device buckets at usage grain (#107 dashboard device section) — GROUP BY
+	 *  device_id over the same WHERE builder, so bucket sums equal
+	 *  `query_usage_stats`'s totals under the same filter exactly. Pure usage
+	 *  aggregates: naming / "this machine" identity are the frontend's join with
+	 *  `list_devices`.
+	 */
+	queryDeviceUsage: (filter: UsageFilter) => typedError<DeviceUsageRow[], AppError>(__TAURI_INVOKE("query_device_usage", { filter })),
 	listDevices: () => typedError<DeviceInfo[], AppError>(__TAURI_INVOKE("list_devices")),
 	listPricing: () => typedError<PricingEntry[], AppError>(__TAURI_INVOKE("list_pricing")),
 	/**  Add or update a pricing entry from the UI (user edits ⇒ `is_builtin=false`). */
@@ -680,6 +688,38 @@ export type DeviceInfo = {
 export type DeviceLibrarySummary = {
 	files: number | null,
 	dirs: number | null,
+};
+
+/**
+ *  One device bucket at usage grain (the dashboard's device dimension,
+ *  #107): `usage_records` grouped by `device_id`, in the exact shape of
+ *  `query_models` — pure usage aggregates, every `UsageFilter` facet applies
+ *  (project included, through the one WHERE builder), and the bucket sums
+ *  equal `UsageStats`'s totals under the same filter exactly. Registry facts
+ *  (display name, which device is "this machine") are NOT joined here — the
+ *  frontend merges `list_devices` for them, the same division as the device
+ *  dropdown. `last_active_at` is the device's newest usage timestamp in the
+ *  window: for this machine its latest activity, for a peer the latest usage
+ *  that reached this store (arriving with the last pull — the recency the
+ *  card shows as 最近同步).
+ */
+export type DeviceUsageRow = {
+	/**  Owning device's 12-hex id (the grouping key). */
+	device_id: string,
+	request_count: number,
+	total_tokens: number,
+	input_tokens: number,
+	output_tokens: number,
+	cache_creation_tokens: number,
+	cache_read_tokens: number,
+	/**
+	 *  Cache-hit ratio over the bucket's cacheable pool, [0,1]
+	 *  (`TokenCounts::cache_hit_rate`).
+	 */
+	cache_hit_rate: number | null,
+	total_cost_usd: number | null,
+	/**  `MAX(usage timestamp)` in the bucket — recency for display. */
+	last_active_at: string,
 };
 
 /**  Summary of one ingest run. */

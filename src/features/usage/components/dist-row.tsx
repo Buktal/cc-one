@@ -1,15 +1,19 @@
 // DistRow — the dashboard sections' shared distribution row (#106): entity
 // name + DSL value (`数量 · 占比`) on the first line, a share bar under it,
 // and an optional sub line of secondary metrics. One row shape for the
-// project ranking and the session/activity lists, so the sections read as one
-// system. `hatch` marks aggregate rows (其他 / 未知项目) — the striped fill
-// separates them from real entities (the #94/#96 decision).
+// project ranking, the session/activity lists and the device list, so the
+// sections read as one system. `hatch` marks aggregate rows (其他 / 未知项目)
+// — the striped fill separates them from real entities (the #94/#96
+// decision). `badge` renders a tiny chip beside the name (the device
+// section's「本机」mark).
 
+import { Badge } from "@/components/ui/badge"
 import { cn } from "@/lib/utils"
 
 export function DistRow({
   name,
   mono = false,
+  badge,
   value,
   share,
   sub,
@@ -21,6 +25,8 @@ export function DistRow({
   name: string
   /** Model/session ids render mono; localized names (未知项目) don't. */
   mono?: boolean
+  /** Tiny chip after the name — e.g. the「本机」mark on this machine's row. */
+  badge?: string
   /** Pre-formatted DSL value half (`数量 · 占比`) — the caller builds it with
    *  formatSegValue so the caliber stays in the DSL layer. */
   value: string
@@ -47,14 +53,24 @@ export function DistRow({
       )}
     >
       <div className="flex items-baseline justify-between gap-2 text-xs">
-        <span
-          className={cn(
-            "min-w-0 truncate font-medium",
-            mono && "font-mono",
-            selected && "text-accent-brand-strong",
-          )}
-        >
-          {name}
+        <span className="flex min-w-0 items-baseline gap-1">
+          <span
+            className={cn(
+              "min-w-0 truncate font-medium",
+              mono && "font-mono",
+              selected && "text-accent-brand-strong",
+            )}
+          >
+            {name}
+          </span>
+          {badge ? (
+            <Badge
+              variant="outline"
+              className="text-muted-foreground h-4 shrink-0 px-1 text-[9.5px] font-medium"
+            >
+              {badge}
+            </Badge>
+          ) : null}
         </span>
         <span className="text-muted-foreground shrink-0 tabular-nums">
           {value}

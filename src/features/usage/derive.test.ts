@@ -9,6 +9,7 @@ import {
 import {
   classifyStopReason,
   costIsNotable,
+  deviceSectionStats,
   filterId,
   groupRowsByDay,
   hourlySnapshot,
@@ -27,6 +28,7 @@ import {
 } from "@/features/usage/derive"
 
 import type {
+  DeviceUsageRow,
   ModelStatsRow,
   ProjectUsageRow,
   SessionUsageRow,
@@ -541,9 +543,6 @@ describe("sessionSectionStats (#106 sections)", () => {
     expect(s.sessions).toBe(3)
     expect(s.subagents).toBe(1)
     expect(s.subagentShare).toBeCloseTo(1 / 3)
-    expect(s.devices).toBe(2)
-    // Top device = d (600+100) over 1000.
-    expect(s.topDeviceShare).toBeCloseTo(0.7)
     // Longest span = s1 (08:00 → 12:00 = 4h).
     expect(s.longestSpanMs).toBe(4 * 3600_000)
     expect(s.avgTurns).toBeCloseTo(32 / 3)
@@ -557,11 +556,47 @@ describe("sessionSectionStats (#106 sections)", () => {
     const s = sessionSectionStats([], 5)
     expect(s.sessions).toBe(0)
     expect(s.subagentShare).toBeNull()
-    expect(s.topDeviceShare).toBeNull()
     expect(s.longestSpanMs).toBeNull()
     expect(s.avgTurns).toBeNull()
     expect(s.turnBuckets).toEqual([0, 0, 0, 0])
     expect(s.top).toEqual([])
+  })
+})
+
+describe("deviceSectionStats (#107 section)", () => {
+  /** Usage-grain device bucket fixture (backend order: tokens desc). */
+  function deviceRow(
+    device_id: string,
+    tokens: number,
+    extra: Partial<DeviceUsageRow> = {},
+  ): DeviceUsageRow {
+    return {
+      device_id,
+      request_count: 1,
+      total_tokens: tokens,
+      input_tokens: tokens,
+      output_tokens: 0,
+      cache_creation_tokens: 0,
+      cache_read_tokens: 0,
+      cache_hit_rate: 0,
+      total_cost_usd: 0,
+      last_active_at: "2026-08-15T10:00:00.000Z",
+      ...extra,
+    }
+  }
+
+  it("counts active devices; top share over the section total", () => {
+    const s = deviceSectionStats([deviceRow("d1", 700), deviceRow("d2", 300)])
+    expect(s.devices).toBe(2)
+    expect(s.topShare).toBeCloseTo(0.7)
+    expect(s.totalTokens).toBe(1000)
+  })
+
+  it("empty input → 0 devices, null share, total floored at 1", () => {
+    const s = deviceSectionStats([])
+    expect(s.devices).toBe(0)
+    expect(s.topShare).toBeNull()
+    expect(s.totalTokens).toBe(1)
   })
 })
 

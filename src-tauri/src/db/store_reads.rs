@@ -441,6 +441,57 @@ impl super::Store {
         Ok(out)
     }
 
+    /// The device dimension at USAGE grain (#107 dashboard): `usage_records`
+    /// grouped by `device_id`, following `query_models`' pattern — every
+    /// `UsageFilter` facet applies through the one WHERE builder (project
+    /// included), so the bucket sums equal `query_stats`'s totals under the
+    /// same filter EXACTLY. Only devices with usage in the window appear
+    /// (GROUP BY omits empty buckets — a silent peer is invisible by design,
+    /// the prototype's「未计入」). Device naming / "this machine" identity
+    /// live in the registry; the frontend joins `list_devices` for them.
+    pub fn query_device_usage(&self, filter: &UsageFilter) -> AppResult<Vec<DeviceUsageRow>> {
+        let conn = self.conn.lock().expect("db mutex poisoned");
+        let (clause, params_vec) = build_where(filter, true, true, true, "usage_records");
+        let sql = format!(
+            "SELECT device_id,
+                    COUNT(*),
+                    COALESCE(SUM(input_tokens),0),
+                    COALESCE(SUM(output_tokens),0),
+                    COALESCE(SUM(cache_creation_tokens),0),
+                    COALESCE(SUM(cache_read_tokens),0),
+                    COALESCE(SUM(CAST(total_cost_usd AS REAL)),0),
+                    COALESCE(SUM(input_tokens + output_tokens
+                        + cache_creation_tokens + cache_read_tokens),0) AS total_tokens,
+                    MAX(timestamp)
+             FROM usage_records {clause}
+             GROUP BY device_id
+             ORDER BY total_tokens DESC, device_id"
+        );
+        let mut stmt = conn.prepare(&sql)?;
+        let rows = stmt.query_map(params_from_iter(params_vec.iter()), |r| {
+            let tokens = TokenCounts {
+                input: r.get::<_, i64>(2)? as u32,
+                output: r.get::<_, i64>(3)? as u32,
+                cache_creation: r.get::<_, i64>(4)? as u32,
+                cache_read: r.get::<_, i64>(5)? as u32,
+            };
+            Ok(DeviceUsageRow {
+                device_id: r.get(0)?,
+                request_count: r.get::<_, i64>(1)? as u32,
+                input_tokens: tokens.input,
+                output_tokens: tokens.output,
+                cache_creation_tokens: tokens.cache_creation,
+                cache_read_tokens: tokens.cache_read,
+                cache_hit_rate: tokens.cache_hit_rate(),
+                total_cost_usd: r.get(6)?,
+                total_tokens: r.get::<_, i64>(7)? as u32,
+                last_active_at: r.get(8)?,
+            })
+        })?;
+        rows.collect::<rusqlite::Result<Vec<_>>>()
+            .map_err(AppError::from)
+    }
+
     /// Request-log rows (BLUEPRINT 请求日志; columns). Selects the full
     /// per-call field set — the row-detail panel reads from these rows, so
     /// expanding a row costs no extra round-trip. `server_tool_use` is a JSON
@@ -1244,5 +1295,76 @@ mod tests {
         let narrowed = s.query_session_usage(&alpha).unwrap();
         assert_eq!(narrowed.len(), 1);
         assert_eq!(narrowed[0].session_id, "s1");
+    }
+
+    /// Device buckets at usage grain (#107): GROUP BY device_id over the one
+    /// WHERE builder — tokens-desc order, bucket sums equal the stats totals
+    /// (the hero's caliber), cache hit rate from the one TokenCounts rule, and
+    /// every facet narrows them (project through the session join, device
+    /// scope, time). Devices with no usage in the window never appear.
+    #[test]
+    fn device_usage_buckets_match_stats_and_follow_filters() {
+        let s = mem();
+        seed_session_project(&s, "s1", "d1", "/proj/alpha", "2026-08-02T10:00:00.000Z");
+        seed_session_project(&s, "s2", "d2", "/proj/beta", "2026-08-02T10:00:00.000Z");
+        let bound = |uuid: &str, sid: &str, dev: &str, day: &str, input: u32, cache_read: u32| {
+            let mut r = rec(uuid, day, "glm-5.2", dev, input, 0, 1.0);
+            r.session_id = sid.into();
+            r.tokens.cache_read = cache_read;
+            r
+        };
+        // d1: 100 fresh + 50 cached reads on 08-15; d2: 300 on 08-14 — d2
+        // outranks d1 by tokens; the cache hit rate exercises the shared
+        // TokenCounts rule (50 / 150 for d1).
+        s.ingest(&[
+            bound("a", "s1", "d1", "2026-08-15", 100, 50),
+            bound("b", "s2", "d2", "2026-08-14", 300, 0),
+        ])
+        .unwrap();
+
+        let rows = s.query_device_usage(&UsageFilter::default()).unwrap();
+        assert_eq!(rows.len(), 2);
+        assert_eq!(rows[0].device_id, "d2", "tokens-desc order");
+        assert_eq!(rows[0].total_tokens, 300);
+        assert_eq!(rows[0].request_count, 1);
+        assert_eq!(rows[0].last_active_at, "2026-08-14T10:00:00.000Z");
+        assert_eq!(rows[1].device_id, "d1");
+        assert_eq!(rows[1].total_tokens, 150);
+        assert!((rows[1].cache_hit_rate - (50.0 / 150.0)).abs() < 1e-9);
+        assert_eq!(rows[1].last_active_at, "2026-08-15T10:00:00.000Z");
+        // Bucket sums equal the stats totals exactly (the hero's caliber).
+        let stats = s.query_stats(&UsageFilter::default()).unwrap();
+        let sum: u32 = rows.iter().map(|r| r.total_tokens).sum();
+        assert_eq!(sum, stats.total_tokens);
+
+        // Project facet narrows through the session join (alpha = d1's rows).
+        let alpha = UsageFilter {
+            project: Some("/proj/alpha".into()),
+            ..Default::default()
+        };
+        let narrowed = s.query_device_usage(&alpha).unwrap();
+        assert_eq!(narrowed.len(), 1);
+        assert_eq!(narrowed[0].device_id, "d1");
+
+        // Device scope + time facets narrow the same way.
+        let by_device = UsageFilter {
+            device_scope: Some("d2".into()),
+            ..Default::default()
+        };
+        assert_eq!(
+            s.query_device_usage(&by_device)
+                .unwrap()
+                .iter()
+                .map(|r| r.device_id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["d2"]
+        );
+        let later = UsageFilter {
+            from_ts: Some("2026-08-15T00:00:00.000Z".into()),
+            ..Default::default()
+        };
+        let rows = s.query_device_usage(&later).unwrap();
+        assert_eq!(rows.len(), 1, "d2 has no usage on/after 08-15");
+        assert_eq!(rows[0].device_id, "d1");
     }
 }
