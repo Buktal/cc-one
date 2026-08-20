@@ -6,6 +6,14 @@
 // numeric `MM/DD HH:mm`. Only the relative-time words (`fromNow`) follow the
 // language — driven by the dayjs locale set in `@/i18n/languages`. So nothing
 // here hard-codes a dayjs locale.
+//
+// Metric DSL (统一指标展示): a metric segment is `标签 数量` plus an optional
+// ` · 占比` share (`formatMetricSeg`); segments join with ` · `
+// (`formatMetricLine`). Values: tokens/counts compact to K/M/B, shares and
+// rates are ALWAYS one decimal (no trailing-zero trimming — `96.0%`, not
+// `96%`), metric costs are ALWAYS `$` with two decimals. Ledger/pricing
+// surfaces that need sub-cent precision use `formatCostPrecise` /
+// `formatCostAmount` instead of the metric shapers.
 
 import dayjs from "dayjs"
 
@@ -19,7 +27,20 @@ export function formatTokens(n: number | null | undefined): string {
   return v.toLocaleString("en-US")
 }
 
-/** USD amount with 4 decimals, no currency symbol — `1.7564`. Null/0 →
+/** Count metric (requests / sessions / messages — the DSL's 计数类): K/M/B
+ *  like tokens but only from 10K up (`24,670` → `24.7K`, `10,000` → `10K`);
+ *  below the threshold the plain grouped integer reads better (`9,999`). UI
+ *  chrome counts (paging "共 N 条") are not metrics — those keep formatInt. */
+export function formatCount(n: number | null | undefined): string {
+  const v = Math.trunc(Number(n ?? 0))
+  if (!Number.isFinite(v)) return "0"
+  if (v >= 1e9) return `${oneDecimal(v / 1e9)}B`
+  if (v >= 1e6) return `${oneDecimal(v / 1e6)}M`
+  if (v >= 1e4) return `${oneDecimal(v / 1e3)}K`
+  return v.toLocaleString("en-US")
+}
+
+/** USD cost with 4 decimals, no currency symbol — `1.7564`. Null/0 →
  *  `0.0000`. Tables that carry the `$` unit in the column header use this so
  *  the symbol doesn't repeat per cell. */
 export function formatCostAmount(usd: number | null | undefined): string {
@@ -28,8 +49,19 @@ export function formatCostAmount(usd: number | null | undefined): string {
   return v.toFixed(4)
 }
 
-/** USD cost with 4 decimals, e.g. `$1.7564`. Null/0 → `$0.0000`. */
+/** Metric USD cost — the DSL rule: always `$` with exactly two decimals
+ *  (`$12.34`, `$0.00`). KPI values, footer lines and row-level cost segments
+ *  all use this; sub-cent precision surfaces (cost breakdowns, pricing
+ *  tables) use formatCostPrecise / formatCostAmount instead. */
 export function formatCost(usd: number | null | undefined): string {
+  const v = Number(usd ?? 0)
+  if (!Number.isFinite(v)) return "$0.00"
+  return `$${v.toFixed(2)}`
+}
+
+/** Precise USD (`$0.0003`) — the `$`-prefixed form of formatCostAmount for
+ *  ledger surfaces where per-bucket cents matter (log detail cost lines). */
+export function formatCostPrecise(usd: number | null | undefined): string {
   return `$${formatCostAmount(usd)}`
 }
 
@@ -39,11 +71,21 @@ export function formatInt(n: number | null | undefined): string {
   return v.toLocaleString("en-US")
 }
 
-/** Ratio in [0,1] → percent string `90.2%`. */
+/** Ratio in [0,1] → percent string. DSL: shares and rates are ALWAYS one
+ *  decimal with the trailing zero kept (`90.2%`, `96.0%`, `0.0%`) — column
+ *  widths stay stable across values. */
 export function formatPct(rate: number | null | undefined): string {
   const v = Number(rate ?? 0)
-  if (!Number.isFinite(v)) return "0%"
+  if (!Number.isFinite(v)) return "0.0%"
   return `${(v * 100).toFixed(1)}%`
+}
+
+/** Plain ratio (e.g. requests per turn) — the DSL's one-decimal rule for the
+ *  ratio class, without the percent scaling. Non-finite → `0.0`. */
+export function formatRatio(n: number | null | undefined): string {
+  const v = Number(n ?? 0)
+  if (!Number.isFinite(v)) return "0.0"
+  return v.toFixed(1)
 }
 
 /** Milliseconds → `12.3s` / `1m05s`. Em-dash when absent / non-positive. */
@@ -85,10 +127,42 @@ export function dateInputToDay(v: string): string | null {
   return v && v.trim() !== "" ? v.trim() : null
 }
 
+// ------------------------------------------------------------- metric DSL ----
+
+/** The DSL segment: `标签 数量`, plus ` · 占比` when a share is given — e.g.
+ *  `输入 96.37M · 96.0%` or the footer `请求 24.7K`. `value` arrives
+ *  pre-formatted (formatTokens / formatCount / formatCost / formatPct …);
+ *  `share` is a [0,1] ratio the caller derives from its data. */
+export function formatMetricSeg(
+  label: string,
+  value: string,
+  share?: number | null,
+): string {
+  const base = `${label} ${value}`
+  return share == null ? base : `${base} · ${formatPct(share)}`
+}
+
+/** `数量 · 占比` — the value half of a segment for layouts that render the
+ *  label elsewhere (the hero legend's label+dot sit on the row's left; the
+ *  distribution row's entity name is the label). */
+export function formatSegValue(value: string, share?: number | null): string {
+  return share == null ? value : `${value} · ${formatPct(share)}`
+}
+
+/** Join metric segments into one line with the DSL separator ` · `. */
+export function formatMetricLine(segs: readonly string[]): string {
+  return segs.join(" · ")
+}
+
 function trim(n: number): string {
   // 2 decimals, drop trailing zeros for compactness.
   return n
     .toFixed(2)
     .replace(/\.?0+$/, "")
     .trim()
+}
+
+function oneDecimal(n: number): string {
+  // 1 decimal, drop a trailing zero ("24.7K", "10K").
+  return n.toFixed(1).replace(/\.0$/, "")
 }

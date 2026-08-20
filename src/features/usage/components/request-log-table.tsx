@@ -42,6 +42,7 @@ import { collectLabelKey, useCollectAction } from "@/hooks/use-collect-action"
 import { usePagedBrowser } from "@/hooks/use-paged-browser"
 import {
   formatCost,
+  formatCostPrecise,
   formatDay,
   formatInt,
   formatTime,
@@ -328,7 +329,8 @@ function DetailRow({ r }: { r: UsageLogRow }) {
       <TableCell colSpan={7} className="bg-muted/20 border-t-0 px-3 py-2.5">
         <div className="grid grid-cols-[minmax(0,auto)_minmax(0,1fr)] gap-x-8 gap-y-1.5">
           {/* 成本明细 — the "why is this call expensive" half. 每行 token →
-              金额，读一眼就知道这笔钱花在哪。 */}
+              金额，读一眼就知道这笔钱花在哪。逐桶金额常在分厘级，走
+              formatCostPrecise（4 位精度），不吃 DSL 指标层恒两位的舍入。 */}
           <div className="flex flex-col gap-1">
             <div className="text-foreground mb-0.5 text-[11px] font-semibold">
               {t("usage.logs.detail.costTitle")}
@@ -336,27 +338,27 @@ function DetailRow({ r }: { r: UsageLogRow }) {
             <CostLine
               label={t("usage.logs.detail.output")}
               tokens={formatTokens(r.tokens.output)}
-              value={formatCost(r.cost.output_usd)}
+              value={formatCostPrecise(r.cost.output_usd)}
             />
             <CostLine
               label={t("usage.logs.detail.input")}
               tokens={formatTokens(r.tokens.input)}
-              value={formatCost(r.cost.input_usd)}
+              value={formatCostPrecise(r.cost.input_usd)}
             />
             <CostLine
               label={t("usage.logs.detail.cacheRead")}
               tokens={formatTokens(r.tokens.cache_read)}
-              value={formatCost(r.cost.cache_read_usd)}
+              value={formatCostPrecise(r.cost.cache_read_usd)}
             />
             <CostLine
               label={t("usage.logs.detail.cacheCreate")}
               tokens={formatTokens(r.tokens.cache_creation)}
-              value={formatCost(r.cost.cache_creation_usd)}
+              value={formatCostPrecise(r.cost.cache_creation_usd)}
             />
             <CostLine
               label={t("usage.logs.col.cost")}
               tokens={formatTokens(tokenTotal(r))}
-              value={formatCost(r.total_cost_usd)}
+              value={formatCostPrecise(r.total_cost_usd)}
             />
           </div>
           {/* 其余字段 — identity + context. 两列 grid：标签列等宽，所有行的

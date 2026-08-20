@@ -1,7 +1,7 @@
 // Shared usage-filter state — the single source of truth for the COMMON query
-// dimensions (time range / model / source / device scope) shared across the
-// dashboard, request-log and sessions views. Empty string = "no constraint";
-// toFilter() converts to the nullable UsageFilter the API expects.
+// dimensions (time range / model / source / device scope / project) shared
+// across the dashboard, request-log and sessions views. Empty string = "no
+// constraint"; toFilter() converts to the nullable UsageFilter the API expects.
 //
 // Dynamic time presets (today/7d/30d) store NO concrete dates — from_day /
 // to_day stay empty and effectiveDays re-derives them from the current date
@@ -26,6 +26,10 @@ export interface FilterState extends DayRange {
   model: string
   source: string
   device_scope: string
+  /** Project identity ("" = no constraint). The unknown-project sentinel may
+   *  land here as a value — it arrives as DATA from the distinct-projects
+   *  endpoint (`ProjectCandidates.unknown`), never as a frontend literal. */
+  project: string
 }
 
 /** Every FilterState dimension, in cache-key concatenation order. Cache keys
@@ -41,6 +45,7 @@ export const FILTER_DIMENSIONS = [
   "model",
   "source",
   "device_scope",
+  "project",
 ] as const satisfies readonly (keyof FilterState)[]
 
 /** Default filter — "today", unconstrained otherwise. Not persisted: each app
@@ -52,6 +57,7 @@ export const DEFAULT_FILTER: FilterState = {
   model: "",
   source: "",
   device_scope: "",
+  project: "",
 }
 
 /** "All time" probe — unconstrained on every dimension, used to decide whether
@@ -83,10 +89,10 @@ export function dayPatch(
  *  Date bounds are derived via effectiveDays: a dynamic preset (today/7d/30d)
  *  re-rolls to the current day on every call, so the caller (an endpoint
  *  queryFn) always gets fresh bounds with nothing time-shaped frozen into the
- *  state or cache key. `project` is constant null here — the shared filter has
- *  no project dimension yet (the usage-side project picker is a later ticket);
- *  null = "no constraint", so it stays out of FILTER_DIMENSIONS and the cache
- *  key for free. */
+ *  state or cache key. The project value passes through as-is — a known
+ *  identity narrows via the EXISTS rule, the unknown sentinel (arriving as
+ *  endpoint data) via its NOT-EXISTS / empty-identity semantics; both live
+ *  backend-side behind the one `project` field. */
 export function toFilter(s: FilterState): UsageFilter {
   const { from_day, to_day } = effectiveDays(s)
   const { from_ts, to_ts } = dayRangeToTs(from_day, to_day)
@@ -96,7 +102,7 @@ export function toFilter(s: FilterState): UsageFilter {
     model: s.model || null,
     source: s.source || null,
     device_scope: s.device_scope || null,
-    project: null,
+    project: s.project || null,
   }
 }
 

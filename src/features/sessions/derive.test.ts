@@ -25,12 +25,13 @@ import {
   favKey,
   firstLine,
   groupedRows,
+  identityOfProjectFilter,
   isAllCollapsed,
   isRowOpen,
   modelsUsed,
   neighborNav,
   nextFavValue,
-  projectBasename,
+  projectFilterOfIdentity,
   projectNodes,
   reorderGroupIds,
   roleDefaultsCollapsed,
@@ -761,7 +762,6 @@ describe("sessionSpecId — cache-key dimension completeness", () => {
     tab: "local",
     selfDeviceId: "dev-self",
     selectedGroupId: "",
-    project: null,
     search: null,
   })
 
@@ -784,7 +784,6 @@ describe("sessionSpecId — cache-key dimension completeness", () => {
       { label: "tab", patch: { tab: "favorites" } },
       { label: "selfDeviceId", patch: { selfDeviceId: "dev-other" } },
       { label: "selectedGroupId", patch: { selectedGroupId: "g1" } },
-      { label: "project", patch: { project: "/proj/alpha" } },
       { label: "search", patch: { search: "query" } },
     ]
     for (const { label, patch } of cases) {
@@ -795,6 +794,44 @@ describe("sessionSpecId — cache-key dimension completeness", () => {
         `${label} must be part of sessionSpecId or two scopes share one cache entry`,
       ).not.toBe(sessionSpecId(base))
     }
+  })
+})
+
+// --------------------------------------------- project dimension mapping ----
+
+describe("projectFilterOfIdentity / identityOfProjectFilter (tree ↔ filter)", () => {
+  // The tree buckets by session-side identity ("" = the no-launch-dir bucket);
+  // the filter value space uses "" for "no constraint" and the unknown
+  // sentinel (endpoint data, never a frontend literal) for that bucket.
+  const SENTINEL = "__unknown_project__"
+
+  it("a known identity passes through unchanged in both directions", () => {
+    expect(projectFilterOfIdentity("/p/alpha", SENTINEL)).toBe("/p/alpha")
+    expect(identityOfProjectFilter("/p/alpha", SENTINEL)).toBe("/p/alpha")
+  })
+
+  it('the empty tree bucket maps to the sentinel and back to ""', () => {
+    expect(projectFilterOfIdentity("", SENTINEL)).toBe(SENTINEL)
+    expect(identityOfProjectFilter(SENTINEL, SENTINEL)).toBe("")
+  })
+
+  it("an empty filter value maps to null (no selection)", () => {
+    expect(identityOfProjectFilter("", SENTINEL)).toBeNull()
+  })
+
+  it("the empty bucket is not expressible without the sentinel value", () => {
+    // No unknown usage ever seen → the endpoint never delivered the sentinel;
+    // clicking the bucket degrades to "no constraint" instead of guessing.
+    expect(projectFilterOfIdentity("", null)).toBe("")
+  })
+
+  it("a stale sentinel selection still maps back via the remembered value", () => {
+    // unknownValue outlives the live option presence (useProjectCandidates
+    // remembers it), so a window change cannot strand the mapping.
+    expect(identityOfProjectFilter(SENTINEL, SENTINEL)).toBe("")
+    // And with no remembered value the sentinel is indistinguishable from a
+    // (pathological) plain identity — it names itself rather than mis-bucketing.
+    expect(identityOfProjectFilter(SENTINEL, null)).toBe(SENTINEL)
   })
 })
 
@@ -962,14 +999,5 @@ describe("groupedRows", () => {
     expect(grouped.get("g1")).toEqual([{ id: "s1", g: "g1" }])
     expect(grouped.get("g2")).toEqual([{ id: "s4", g: "g2" }])
     expect(ungrouped.map((r) => r.id)).toEqual(["s2", "s3"])
-  })
-})
-
-describe("projectBasename", () => {
-  it("takes the final path component on both separators", () => {
-    expect(projectBasename("D:\\Project\\O_CC_One")).toBe("O_CC_One")
-    expect(projectBasename("/home/user/vault-one")).toBe("vault-one")
-    expect(projectBasename("solo")).toBe("solo")
-    expect(projectBasename("D:\\proj\\")).toBe("proj")
   })
 })

@@ -37,6 +37,7 @@ import {
   TooltipContent,
   TooltipTrigger,
 } from "@/components/ui/tooltip"
+import { ProjectSelect } from "@/features/usage/components/project-select"
 import type { FilterOption } from "@/lib/filter-options"
 import { formatCost, formatInt, formatPct, formatTokens } from "@/lib/format"
 import { SOURCE_TAGS } from "@/lib/source-tags"
@@ -61,10 +62,11 @@ export function SessionsView() {
   // that read the field later).
   const preview = b.preview
 
-  // 右栏口径对象名 + 会话粒度统计行（按会话卡的数据源）。
+  // 右栏口径对象名 + 会话粒度统计行（按会话卡的数据源）。selectedProject 用
+  // != null 判空："" 是未知项目桶（哨兵映射后的 identity），真值语义。
   const scopeLabel = preview
     ? preview.title || t("sessions.untitled")
-    : b.selectedProject
+    : b.selectedProject != null
       ? projectBasename(b.selectedProject) || t("sessions.tree.noProject")
       : b.selectedGroupId === UNGROUPED
         ? t("sessions.group.ungrouped")
@@ -214,6 +216,10 @@ function WorkbenchToolbar({ b }: { b: ReturnType<typeof useSessionsBrowser> }) {
           onChange={b.setModel}
           className="h-8 w-40"
         />
+        {/* 项目维度：共享 filterSlice（与看板 / 日志一致），左树项目轨道的
+            选中也写同一份状态。候选取自 distinct-projects 端点，含「未知
+            项目」特殊选项。 */}
+        <ProjectSelect bar className="h-8 w-40" />
         {/* Device dropdown — only in the favorites universe (收藏轨）and only
             when more than one device exists. */}
         {b.deviceOptions.length > 0 && b.track === "favorites" ? (
@@ -293,7 +299,8 @@ function BatchBar({ b }: { b: ReturnType<typeof useSessionsBrowser> }) {
 }
 
 /** 窄容器的容器下拉：全部 + 当前轨道的容器（项目 basename / 组名）。值编码
- *  "p:<dir>" / "g:<id>"，onChange 解码回选中动作。 */
+ *  "p:<dir>" / "g:<id>"，onChange 解码回选中动作。项目 identity 为 ""（未知
+ *  项目桶）时编码为 "p:"——用 != null 区分「未选」与「空桶」。 */
 function NarrowTreeSelect({ b }: { b: ReturnType<typeof useSessionsBrowser> }) {
   const { t } = useTranslation()
   const options: FilterOption[] =
@@ -303,13 +310,14 @@ function NarrowTreeSelect({ b }: { b: ReturnType<typeof useSessionsBrowser> }) {
           label: projectBasename(n.project) || t("sessions.tree.noProject"),
         }))
       : b.trackGroups.map((g) => ({ value: `g:${g.id}`, label: g.name }))
-  const value = b.selectedProject
-    ? `p:${b.selectedProject}`
-    : b.selectedGroupId === UNGROUPED
-      ? `g:${UNGROUPED}`
-      : b.selectedGroupId === ALL_GROUPS
-        ? ""
-        : `g:${b.selectedGroupId}`
+  const value =
+    b.selectedProject != null
+      ? `p:${b.selectedProject}`
+      : b.selectedGroupId === UNGROUPED
+        ? `g:${UNGROUPED}`
+        : b.selectedGroupId === ALL_GROUPS
+          ? ""
+          : `g:${b.selectedGroupId}`
   return (
     <FilterSelect
       ariaLabel={t("sessions.tree.all")}
@@ -329,17 +337,19 @@ function NarrowTreeSelect({ b }: { b: ReturnType<typeof useSessionsBrowser> }) {
 
 // ------------------------------------------------------------- 中栏 ----
 
-/** 列表态/项目态共用骨架：头部（标题 + 描述 / 项目统计头）+ 表格 + 分页。 */
+/** 列表态/项目态共用骨架：头部（标题 + 描述 / 项目统计头）+ 表格 + 分页。
+ *  selectedProject 以 != null 判选中："" = 未知项目桶。 */
 function ListPane({ b }: { b: ReturnType<typeof useSessionsBrowser> }) {
   const { t } = useTranslation()
-  const headTitle = b.selectedProject
-    ? projectBasename(b.selectedProject) || t("sessions.tree.noProject")
-    : b.selectedGroupId === UNGROUPED
-      ? t("sessions.group.ungrouped")
-      : b.selectedGroupId === ALL_GROUPS
-        ? t("sessions.tree.all")
-        : (b.trackGroups.find((g) => g.id === b.selectedGroupId)?.name ??
-          t("sessions.tree.all"))
+  const headTitle =
+    b.selectedProject != null
+      ? projectBasename(b.selectedProject) || t("sessions.tree.noProject")
+      : b.selectedGroupId === UNGROUPED
+        ? t("sessions.group.ungrouped")
+        : b.selectedGroupId === ALL_GROUPS
+          ? t("sessions.tree.all")
+          : (b.trackGroups.find((g) => g.id === b.selectedGroupId)?.name ??
+            t("sessions.tree.all"))
   const headDesc = b.selectedProject ?? ""
 
   return (
@@ -354,7 +364,7 @@ function ListPane({ b }: { b: ReturnType<typeof useSessionsBrowser> }) {
           ) : null}
         </div>
 
-        {b.selectedProject ? (
+        {b.selectedProject != null ? (
           <ProjectTiles stats={b.selectedProjectStats} rows={b.selectionRows} />
         ) : null}
 

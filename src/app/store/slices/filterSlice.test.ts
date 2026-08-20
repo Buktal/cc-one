@@ -28,6 +28,7 @@ describe("DEFAULT_FILTER (app-start default)", () => {
     expect(DEFAULT_FILTER.model).toBe("")
     expect(DEFAULT_FILTER.source).toBe("")
     expect(DEFAULT_FILTER.device_scope).toBe("")
+    expect(DEFAULT_FILTER.project).toBe("")
   })
 })
 
@@ -47,17 +48,27 @@ describe("toFilter", () => {
     })
   })
 
-  it("passes non-empty model / source / device_scope through", () => {
+  it("passes non-empty model / source / device_scope / project through", () => {
     const f = toFilter(
       base({
         model: "claude-3-5-sonnet",
         source: "claude_code",
         device_scope: "abc123def456",
+        project: "D:\\Project\\O_CC_One",
       }),
     )
     expect(f.model).toBe("claude-3-5-sonnet")
     expect(f.source).toBe("claude_code")
     expect(f.device_scope).toBe("abc123def456")
+    expect(f.project).toBe("D:\\Project\\O_CC_One")
+  })
+
+  it("treats an empty project as null (no constraint), like every dimension", () => {
+    // The clear/reset path: clearing the project dropdown dispatches
+    // patchFilter({project: ""}) — same ""-means-unconstrained contract as
+    // model / source / device_scope, so resetFilter / clearFilterKey need no
+    // project-specific handling.
+    expect(toFilter(base({ project: "" })).project).toBeNull()
   })
 
   it("converts a custom day range to ISO timestamp bounds ordered from <= to", () => {

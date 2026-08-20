@@ -16,7 +16,14 @@ import {
   CardTitle,
 } from "@/components/ui/card"
 import { topNModels } from "@/features/usage/derive"
-import { formatCost, formatPct, formatTokens } from "@/lib/format"
+import {
+  formatCost,
+  formatMetricLine,
+  formatMetricSeg,
+  formatPct,
+  formatSegValue,
+  formatTokens,
+} from "@/lib/format"
 import { cn } from "@/lib/utils"
 
 const TOP_N = 5
@@ -117,6 +124,19 @@ export function ModelDistribution({
             // 当前 filter 选中的模型行高亮 —— 点击行收窄全看板后, 这里
             // 既是反馈 (知道筛选生效) 也是入口 (header chip 一键清除)。
             const selected = it.model === filter.model
+            // DSL: 分布行主值不带标签（模型名在行左即标签）—— `数量 · 占比`；
+            // 缓存命中是有标签的段，与主值同行拼接。
+            const line = formatMetricLine([
+              formatSegValue(fmt(it.value), it.value / total),
+              ...(it.cache_hit_rate
+                ? [
+                    formatMetricSeg(
+                      t("usage.models.cacheHit"),
+                      formatPct(it.cache_hit_rate),
+                    ),
+                  ]
+                : []),
+            ])
             return (
               <button
                 key={it.label}
@@ -141,16 +161,7 @@ export function ModelDistribution({
                     {it.label}
                   </span>
                   <span className="text-muted-foreground shrink-0 tabular-nums">
-                    {fmt(it.value)} · {formatPct(it.value / total)}
-                    {/* 缓存命中率只在有命中 (rate > 0) 时显示; "其他" 聚合行
-                        没有后端算好的 rate, 同样不显示。 */}
-                    {it.cache_hit_rate ? (
-                      <>
-                        {" · "}
-                        {t("usage.models.cacheHit")}{" "}
-                        {formatPct(it.cache_hit_rate)}
-                      </>
-                    ) : null}
+                    {line}
                   </span>
                 </div>
                 <div className="bg-muted h-1.5 w-full overflow-hidden rounded-full">

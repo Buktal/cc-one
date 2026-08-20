@@ -39,6 +39,7 @@ import { useAppDispatch, useAppSelector } from "@/app/store/hooks"
 import { patchFilter } from "@/app/store/slices/filterSlice"
 import { setView } from "@/app/store/slices/viewSlice"
 import { deviceOptionLabel } from "@/features/usage/use-device-options"
+import { useProjectCandidates } from "@/features/usage/use-project-candidates"
 import { useDateRangeFilter } from "@/hooks/use-date-range-filter"
 import { useDebouncedValue } from "@/hooks/use-debounced-value"
 import { usePagedBrowser } from "@/hooks/use-paged-browser"
@@ -60,8 +61,10 @@ import {
   favKey,
   type GroupTrack,
   groupedRows,
+  identityOfProjectFilter,
   neighborNav,
   nextFavValue,
+  projectFilterOfIdentity,
   projectNodes,
   type SessionScopeSpec,
   type TreeTrack,
@@ -144,10 +147,10 @@ export function useSessionsBrowser() {
   // Search is backend-side (the page query filters the whole set, not just
   // the loaded page), so keystrokes debounce before they hit the db.
   const debouncedSearch = useDebouncedValue(search, 300)
-  // Common dimensions (time / model / source / device) live in the shared
-  // filterSlice — sessions shares them with the dashboard / logs.
-  // Only the sessions-only dimensions (track / search / group / project) stay
-  // local here.
+  // Common dimensions (time / model / source / device / project) live in the
+  // shared filterSlice — sessions shares them with the dashboard / logs. Only
+  // the sessions-only dimensions (track / search / group selection) stay local
+  // here.
   const filter = useAppSelector((s) => s.filter.filter)
   const source = filter.source
   const model = filter.model
@@ -163,11 +166,15 @@ export function useSessionsBrowser() {
   const setModel = (v: string) => dispatch(patchFilter({ model: v }))
   const setDeviceScope = (v: string) =>
     dispatch(patchFilter({ device_scope: v }))
-  // 左树的两级选中：容器（分组 id 或项目 identity）与 会话（previewKey）。
-  // 分组选中是轨道语义的（local/synced 组 id 不共空间），项目选中只在项目
-  // 轨道有意义——切轨道时两者都归位。
+  // 项目维度与左树项目轨道统一（#102）：树的项目桶选中和工具栏的项目下拉
+  // 是同一份状态——共享 filterSlice.project。selectedProject（视图契约不变）
+  // 由筛选值映射回树的 identity 空间（哨兵 → "" 无启动目录桶）；哨兵值从候选
+  // 端点以数据过线，见 useProjectCandidates。
+  const { unknownValue } = useProjectCandidates()
+  const selectedProject = identityOfProjectFilter(filter.project, unknownValue)
+  // 左树的两级选中：分组选中是轨道语义的（local/synced 组 id 不共空间），项目
+  // 选中（= 筛选维度）跨轨存续——切轨只复位分组选中。
   const [selectedGroupId, setSelectedGroupId] = useState<string>(ALL_GROUPS)
-  const [selectedProject, setSelectedProject] = useState<string | null>(null)
   const [favOverrides, setFavOverrides] = useState<Record<string, boolean>>({})
   const [pendingGroup, setPendingGroup] = useState<string | null>(null)
   const [busyGroupId, setBusyGroupId] = useState<string | null>(null)
@@ -197,12 +204,12 @@ export function useSessionsBrowser() {
   const [statsScope, setStatsScope] = useState<"project" | "session">("project")
 
   // The tree selection is track-scoped (local vs synced group ids are disjoint
-  // spaces), and a project selection only lives on the projects track — a
-  // track switch must drop both stale selections.
-  // biome-ignore lint/correctness/useExhaustiveDependencies: intentional — reset the selections on track switch; the body needs no track value
+  // spaces), so a track switch must drop a stale group selection. The project
+  // dimension needs no reset — it lives in the shared filter and persists
+  // across tracks like source / model / device do.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: intentional — reset the selection on track switch; the body needs no track value
   useEffect(() => {
     setSelectedGroupId(ALL_GROUPS)
-    setSelectedProject(null)
   }, [track])
 
   const { data: appInfo } = useAppInfoQuery()
@@ -216,28 +223,31 @@ export function useSessionsBrowser() {
   // interval refresh chain, same as the usage views.
 
   // One scope for the reads: the common dimensions (from the shared
-  // filterSlice) + the sessions-only dimensions (track universe / search /
-  // group / project selection). The backend SessionFilter + timestamp bounds
-  // are derived from it in the endpoint queryFn (buildSessionFilter), so this
-  // object carries no timestamp and its cache key (sessionSpecId) stays stable
-  // across a day. selfDeviceId is part of the scope (not a filter dimension)
-  // because the Local universe narrows to it backend-side.
+  // filterSlice, project included) + the sessions-only dimensions (track
+  // universe / search / group selection). The backend SessionFilter +
+  // timestamp bounds are derived from it in the endpoint queryFn
+  // (buildSessionFilter), so this object carries no timestamp and its cache
+  // key (sessionSpecId) stays stable across a day. selfDeviceId is part of the
+  // scope (not a filter dimension) because the Local universe narrows to it
+  // backend-side.
   const scope: SessionScopeSpec = {
     filter,
     tab,
     selfDeviceId,
     selectedGroupId,
-    project: selectedProject,
     search: debouncedSearch || null,
   }
-  // The stats reads are SELECTION-FREE (All groups, no project): the tree and
-  // the right rail need the whole universe at once — they bucket client-side.
-  // Same toolbar dimensions otherwise, so a search / time change refilters
-  // both the list and the stats consistently.
+  // The stats reads are CONTAINER-SELECTION-FREE (All groups, project
+  // dropped): the tree and the right rail need the whole universe at once —
+  // they bucket client-side, and the project dimension is the projects tree's
+  // own container dimension (selecting a bucket must not collapse the tree,
+  // the same facet rule the candidate endpoint applies). Same toolbar
+  // dimensions otherwise, so a search / time change refilters both the list
+  // and the stats consistently.
   const universeScope: SessionScopeSpec = {
     ...scope,
     selectedGroupId: ALL_GROUPS,
-    project: null,
+    filter: { ...scope.filter, project: "" },
   }
   // Model-dropdown candidates mirror the usage view's facet semantics: the
   // sessions model list comes from usage_records (a session has no model column
@@ -390,10 +400,11 @@ export function useSessionsBrowser() {
     for (const r of statsRows) m.set(favKey(r), r)
     return m
   }, [statsRows])
-  // 右栏「按项目」聚合对象：项目选中 = 该项目桶；分组选中 = 该组行；未选中 =
-  // 全量。一次聚合，三种容器同一口径。
+  // 右栏「按项目」聚合对象：项目选中 = 该项目桶（identity "" = 无启动目录
+  // 桶，哨兵映射后）；分组选中 = 该组行；未选中 = 全量。一次聚合，三种容器
+  // 同一口径。
   const selectionStatsRows = useMemo(() => {
-    if (selectedProject)
+    if (selectedProject != null)
       return statsRows.filter((r) => r.project_dir === selectedProject)
     if (selectedGroupId === ALL_GROUPS) return statsRows
     if (selectedGroupId === UNGROUPED) return groupBuckets.ungrouped
@@ -404,9 +415,11 @@ export function useSessionsBrowser() {
     [selectionStatsRows],
   )
   // 中栏项目统计头（选中项目时）：#85 的项目粒度行，避免客户端重算命中率。
+  // identity ""（未知项目桶）命中的是空身份桶行——会话工作台是会话粒度视角，
+  // 该桶与列表同一批会话；usage 侧合成哨兵行（无会话行用量）不在此展示。
   const selectedProjectStats = useMemo(
     () =>
-      selectedProject
+      selectedProject != null
         ? (projectStatRows.find((p) => p.project_dir === selectedProject) ??
           null)
         : null,
@@ -457,8 +470,16 @@ export function useSessionsBrowser() {
   }
 
   // ---- 树选中动作：容器选中即让出会话态，并把右栏默认切回「按项目」----
+  // 项目选中写共享筛选维度（与工具栏下拉同态）：identity 非空 → 原样；
+  // ""（无启动目录桶）→ 哨兵值（端点数据；未知时退化为不约束，见
+  // projectFilterOfIdentity）；null → 清除。
   function selectProject(project: string | null): void {
-    setSelectedProject(project)
+    dispatch(
+      patchFilter({
+        project:
+          project == null ? "" : projectFilterOfIdentity(project, unknownValue),
+      }),
+    )
     if (project) setTreeTrack("projects")
     setPreviewKey(null)
     setStatsScope("project")
@@ -470,7 +491,9 @@ export function useSessionsBrowser() {
   }
   function selectAll(): void {
     setSelectedGroupId(ALL_GROUPS)
-    setSelectedProject(null)
+    // 「全部」清的是容器选中：分组 + 项目维度（项目即筛选，与其它维度同态
+    // ——其它维度的「全部」也是清除）。
+    dispatch(patchFilter({ project: "" }))
     setPreviewKey(null)
     setStatsScope("project")
   }

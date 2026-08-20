@@ -15,8 +15,14 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card"
-import { formatCost, formatInt, formatTime } from "@/lib/format"
-import { tokenTotal } from "@/lib/usage"
+import {
+  formatCost,
+  formatInt,
+  formatMetricLine,
+  formatMetricSeg,
+  formatTime,
+  formatTokens,
+} from "@/lib/format"
 import { cn } from "@/lib/utils"
 
 import { useDeviceLabelMap } from "../use-device-options"
@@ -72,35 +78,40 @@ export function RecentRequests() {
               <span className="truncate font-mono text-xs font-medium">
                 {r.model}
               </span>
-              <div className="ml-auto flex shrink-0 items-center gap-3">
-                <span className="text-foreground text-sm font-semibold tabular-nums">
-                  {formatInt(tokenTotal(r))}
-                  <span className="text-muted-foreground ml-1 text-[10px] font-normal">
-                    tok
-                  </span>
+              {/* DSL 行指标：输入 · 输出 · 缓存命中 · 成本（全称标签段，废除
+                  「入 309」缩写文案）。逐请求时长无数据面（UsageLogRow 无
+                  duration 字段），不造段；时间 / 设备是上下文列，不是指标。 */}
+              <div className="text-muted-foreground ml-auto flex shrink-0 items-center gap-2 text-[11px] tabular-nums">
+                <span>
+                  {formatMetricLine([
+                    formatMetricSeg(
+                      t("usage.tokens.input"),
+                      formatTokens(r.tokens.input),
+                    ),
+                    formatMetricSeg(
+                      t("usage.tokens.output"),
+                      formatTokens(r.tokens.output),
+                    ),
+                    formatMetricSeg(
+                      t("usage.tokens.cacheRead"),
+                      formatTokens(r.tokens.cache_read),
+                    ),
+                    formatMetricSeg(
+                      t("usage.metric.cost"),
+                      formatCost(r.total_cost_usd),
+                    ),
+                  ])}
                 </span>
-                <span className="text-muted-foreground flex items-center gap-2 text-[11px] tabular-nums">
-                  <span>
-                    {t("usage.recent.in", { n: formatInt(r.tokens.input) })}
-                  </span>
-                  <span aria-hidden="true">·</span>
-                  <span>
-                    {t("usage.recent.out", { n: formatInt(r.tokens.output) })}
-                  </span>
-                  <span aria-hidden="true">·</span>
-                  <span>{formatCost(r.total_cost_usd)}</span>
-                  <span aria-hidden="true">·</span>
-                  <span>{formatTime(r.timestamp)}</span>
-                  {deviceLabel.size > 0 ? (
-                    <>
-                      <span aria-hidden="true">·</span>
-                      <span className="max-w-24 truncate">
-                        {deviceLabel.get(r.device_id) ??
-                          r.device_id.slice(0, 8)}
-                      </span>
-                    </>
-                  ) : null}
-                </span>
+                <span aria-hidden="true">·</span>
+                <span>{formatTime(r.timestamp)}</span>
+                {deviceLabel.size > 0 ? (
+                  <>
+                    <span aria-hidden="true">·</span>
+                    <span className="max-w-24 truncate">
+                      {deviceLabel.get(r.device_id) ?? r.device_id.slice(0, 8)}
+                    </span>
+                  </>
+                ) : null}
               </div>
             </div>
           ))

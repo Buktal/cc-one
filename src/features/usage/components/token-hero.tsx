@@ -1,6 +1,6 @@
 // Token hero — token-first Tier 1 anchor. 总消耗 headline + delta
 // (多日: vs 窗首; 单日: vs 昨日同时段) + 日均/近 N 小时均 + 四桶堆叠
-// composition bar + legend (label/value 行) + 缓存命中率 footer.
+// composition bar + legend (label/value 行) + DSL footer (请求 · 命中率 · 成本).
 //
 // 右栏窄布局: 纵向，无 sparkline — 中栏已有大趋势图，此处只留当前
 // 窗口的数值快照。颜色全部走 CSS 变量，换主题不改本件。
@@ -13,7 +13,15 @@ import type { FilterState } from "@/app/store/slices/filterSlice"
 import { Card, CardContent } from "@/components/ui/card"
 import { hourlySnapshot, tokenSnapshot } from "@/features/usage/derive"
 import { dayRangeToTs, effectiveDays } from "@/lib/date-range"
-import { formatInt, formatPct, formatTokens } from "@/lib/format"
+import {
+  formatCost,
+  formatCount,
+  formatMetricLine,
+  formatMetricSeg,
+  formatPct,
+  formatSegValue,
+  formatTokens,
+} from "@/lib/format"
 import type { TrendBucket } from "@/types/generated/bindings"
 
 const SEGMENTS = [
@@ -131,7 +139,6 @@ export function TokenHero({ filter }: { filter: FilterState }) {
         <div className="flex flex-col gap-2">
           {SEGMENTS.map((seg) => {
             const v = Number(s[seg.key] ?? 0)
-            const pct = (v / total) * 100
             return (
               <div
                 key={seg.key}
@@ -144,22 +151,32 @@ export function TokenHero({ filter }: { filter: FilterState }) {
                   />
                   <span className="text-muted-foreground">{t(seg.label)}</span>
                 </span>
+                {/* DSL: 数量 · 占比（占比恒一位小数，标签在行左由布局渲染）。 */}
                 <span className="tabular-nums">
-                  {formatTokens(v)} · {pct.toFixed(0)}%
+                  {formatSegValue(formatTokens(v), v / total)}
                 </span>
               </div>
             )
           })}
         </div>
 
-        <div className="text-muted-foreground flex items-center justify-between border-border/60 border-t pt-2.5 text-xs">
+        {/* DSL footer 行：请求 · 命中率 · 成本（标签 数量 段拼装）。 */}
+        <div className="text-muted-foreground border-border/60 flex items-center border-t pt-2.5 text-xs">
           <span className="tabular-nums">
-            {t("usage.hero.requests", { n: formatInt(s.request_count) })}
-          </span>
-          <span className="tabular-nums">
-            {t("usage.hero.cacheHitRate", {
-              rate: formatPct(s.cache_hit_rate),
-            })}
+            {formatMetricLine([
+              formatMetricSeg(
+                t("usage.hero.requests"),
+                formatCount(s.request_count),
+              ),
+              formatMetricSeg(
+                t("usage.hero.cacheHitRate"),
+                formatPct(s.cache_hit_rate),
+              ),
+              formatMetricSeg(
+                t("usage.metric.cost"),
+                formatCost(s.total_cost_usd),
+              ),
+            ])}
           </span>
         </div>
       </CardContent>

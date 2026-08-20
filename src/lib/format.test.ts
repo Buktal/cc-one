@@ -4,10 +4,16 @@ import {
   dateInputToDay,
   formatCost,
   formatCostAmount,
+  formatCostPrecise,
+  formatCount,
   formatDay,
   formatDuration,
   formatInt,
+  formatMetricLine,
+  formatMetricSeg,
   formatPct,
+  formatRatio,
+  formatSegValue,
   formatSize,
   formatTokens,
 } from "@/lib/format"
@@ -36,6 +42,25 @@ describe("formatTokens", () => {
   })
 })
 
+describe("formatCount (DSL 计数类)", () => {
+  it("nullish / non-finite → 0", () => {
+    expect(formatCount(null)).toBe("0")
+    expect(formatCount(Number.NaN)).toBe("0")
+  })
+
+  it("below 10K stays the grouped integer", () => {
+    expect(formatCount(0)).toBe("0")
+    expect(formatCount(9_999)).toBe("9,999")
+  })
+
+  it("compacts only from 10K up, one decimal, trailing zero dropped", () => {
+    expect(formatCount(10_000)).toBe("10K")
+    expect(formatCount(24_670)).toBe("24.7K")
+    expect(formatCount(1_500_000)).toBe("1.5M")
+    expect(formatCount(2_000_000_000)).toBe("2B")
+  })
+})
+
 describe("formatCostAmount", () => {
   it("nullish / non-finite → 0.0000", () => {
     expect(formatCostAmount(null)).toBe("0.0000")
@@ -50,21 +75,25 @@ describe("formatCostAmount", () => {
   })
 })
 
-describe("formatCost", () => {
-  it("nullish / non-finite → $0.0000", () => {
-    expect(formatCost(null)).toBe("$0.0000")
-    expect(formatCost(undefined)).toBe("$0.0000")
-    expect(formatCost(Number.NaN)).toBe("$0.0000")
+describe("formatCost (DSL 成本恒两位)", () => {
+  it("nullish / non-finite → $0.00", () => {
+    expect(formatCost(null)).toBe("$0.00")
+    expect(formatCost(undefined)).toBe("$0.00")
+    expect(formatCost(Number.NaN)).toBe("$0.00")
   })
 
-  it("formats USD with 4 decimals", () => {
-    expect(formatCost(1.7564)).toBe("$1.7564")
-    expect(formatCost(0)).toBe("$0.0000")
+  it("formats USD with exactly two decimals (trailing zero kept)", () => {
+    expect(formatCost(1.7564)).toBe("$1.76")
+    expect(formatCost(0)).toBe("$0.00")
+    expect(formatCost(12)).toBe("$12.00")
+    expect(formatCost(-1.5)).toBe("$-1.50")
   })
+})
 
+describe("formatCostPrecise (ledger surfaces)", () => {
   it("is the currency symbol prefixed to formatCostAmount (single source)", () => {
-    expect(formatCost(1.7564)).toBe(`$${formatCostAmount(1.7564)}`)
-    expect(formatCost(Number.NaN)).toBe(`$${formatCostAmount(Number.NaN)}`)
+    expect(formatCostPrecise(0.0003)).toBe(`$${formatCostAmount(0.0003)}`)
+    expect(formatCostPrecise(null)).toBe("$0.0000")
   })
 })
 
@@ -81,7 +110,49 @@ describe("formatPct", () => {
     expect(formatPct(0.902)).toBe("90.2%")
     expect(formatPct(0)).toBe("0.0%")
     expect(formatPct(null)).toBe("0.0%")
-    expect(formatPct(Number.NaN)).toBe("0%")
+    expect(formatPct(Number.NaN)).toBe("0.0%")
+  })
+
+  it("keeps the trailing zero — one decimal always (DSL 占比/比率)", () => {
+    expect(formatPct(0.96)).toBe("96.0%")
+    expect(formatPct(0.032)).toBe("3.2%")
+  })
+})
+
+describe("formatRatio (DSL 比率一位小数)", () => {
+  it("formats a plain ratio with one decimal, trailing zero kept", () => {
+    expect(formatRatio(2)).toBe("2.0")
+    expect(formatRatio(12.34)).toBe("12.3")
+  })
+
+  it("nullish / non-finite → 0.0", () => {
+    expect(formatRatio(null)).toBe("0.0")
+    expect(formatRatio(Number.NaN)).toBe("0.0")
+  })
+})
+
+describe("formatMetricSeg / formatSegValue / formatMetricLine (DSL 段)", () => {
+  it("builds `标签 数量` and appends ` · 占比` only when a share is given", () => {
+    expect(formatMetricSeg("输入", "96.37M", 0.96)).toBe("输入 96.37M · 96.0%")
+    expect(formatMetricSeg("请求", "24.7K")).toBe("请求 24.7K")
+    expect(formatMetricSeg("请求", "9,999", null)).toBe("请求 9,999")
+  })
+
+  it("formatSegValue is the label-less half (label rendered by the layout)", () => {
+    expect(formatSegValue("1.83B", 0.617)).toBe("1.83B · 61.7%")
+    expect(formatSegValue("406K")).toBe("406K")
+    // 0% shows (0 share is a real share, not "no share").
+    expect(formatSegValue("0", 0)).toBe("0 · 0.0%")
+  })
+
+  it("joins segments with the DSL separator", () => {
+    expect(
+      formatMetricLine([
+        formatMetricSeg("请求", "24.7K"),
+        formatMetricSeg("命中率", "96.0%"),
+        formatMetricSeg("成本", "$12.34"),
+      ]),
+    ).toBe("请求 24.7K · 命中率 96.0% · 成本 $12.34")
   })
 })
 

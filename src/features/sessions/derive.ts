@@ -45,11 +45,11 @@ export const UNGROUPED = "__ungrouped__"
 /**
  * Extra filter dimensions the sessions toolbar exposes on top of the tab. All
  * optional — omitted/empty values mean "no constraint". Mirrors the logs view's
- * toolbar (time range · source · model · device) so the two data views filter
- * the same way. Model is EXISTS semantics (a session that used the model at
- * least once matches) — the model lives per-request on usage_records, never on
- * the session row. Search is backend-side too (paged results would otherwise
- * only search the loaded page) — see sessionTabFilter.
+ * toolbar (time range · source · model · device · project) so the two data
+ * views filter the same way. Model is EXISTS semantics (a session that used the
+ * model at least once matches) — the model lives per-request on usage_records,
+ * never on the session row. Search is backend-side too (paged results would
+ * otherwise only search the loaded page) — see sessionTabFilter.
  */
 export interface SessionListFilter {
   /** Source tag, e.g. "claude_code". */
@@ -68,8 +68,11 @@ export interface SessionListFilter {
   /**
    * Project identity to narrow to (matched backend-side through the
    * `project_identity` rule, so a worktree session counts under its parent
-   * project). No UI feeds this yet — the project tree track is a later ticket;
-   * null = "no constraint".
+   * project). Fed from the SHARED filterSlice project dimension (the same
+   * constraint the dashboard / request-log project dropdowns write) — the
+   * sessions tree's project track and the toolbar dropdown are two surfaces of
+   * that one state. The unknown sentinel (arriving as endpoint data) is a
+   * value like any other; null = "no constraint".
    */
   project?: string | null
   /**
@@ -159,22 +162,21 @@ export function trackUniverseTab(track: TreeTrack): SessionTab {
 }
 
 /**
- * A sessions query scope: the common dimensions (from filterSlice) + the
- * sessions-only dimensions (tab / group / search) + the self device id a
- * SessionFilter needs. Carries NO timestamp — bounds are derived in
- * buildSessionFilter at query time, so the cache key (sessionSpecId) stays
+ * A sessions query scope: the common dimensions (from filterSlice — including
+ * `project`, shared with the dashboard / logs dropdowns and the tree's project
+ * track) + the sessions-only dimensions (tab / group / search) + the self
+ * device id a SessionFilter needs. Carries NO timestamp — bounds are derived
+ * in buildSessionFilter at query time, so the cache key (sessionSpecId) stays
  * stable across a day.
  */
 export interface SessionScopeSpec {
-  /** Common dimensions shared with the dashboard / logs (time / model / source / device). */
+  /** Common dimensions shared with the dashboard / logs (time / model / source
+   *  / device / project). */
   filter: FilterState
   /** Sessions-only: which tab, which sidebar group, and the search box. */
   tab: SessionTab
   selfDeviceId: string
   selectedGroupId: string
-  /** Selected project identity (the tree's project track / the narrow-window
-   *  project dropdown); null = no project constraint. */
-  project: string | null
   search: string | null
 }
 
@@ -183,7 +185,9 @@ export interface SessionScopeSpec {
  * from the current date. Shared by the listSessions + sessionCounts
  * queryFns so both reads see identical bounds. Bounds are a query-time concern
  * here — never stored or displayed, so the scope (and its cache key) carries
- * no timestamp.
+ * no timestamp. The project constraint rides `spec.filter.project` (the shared
+ * dimension; the sentinel value, when present, keeps its backend semantics —
+ * sessions with an empty project identity).
  */
 export function buildSessionFilter(spec: SessionScopeSpec): SessionFilter {
   const { from_day, to_day } = effectiveDays(spec.filter)
@@ -197,7 +201,7 @@ export function buildSessionFilter(spec: SessionScopeSpec): SessionFilter {
       toTs,
       deviceScope: spec.filter.device_scope || null,
       model: spec.filter.model || null,
-      project: spec.project,
+      project: spec.filter.project || null,
       search: spec.search,
     },
     spec.selectedGroupId,
@@ -208,19 +212,52 @@ export function buildSessionFilter(spec: SessionScopeSpec): SessionFilter {
  * Stable cache id for a sessions scope (mirrors filterId on the usage side):
  * built from the logical dimensions only, so a dynamic preset stays stable
  * across a day and the bounds roll via the refresh chain. Concatenates the
- * scope's own dimensions plus every FilterState dimension (FILTER_DIMENSIONS)
- * — derive.test.ts fails if one is missed, so differing dimension values can
- * never silently share a cache entry.
+ * scope's own dimensions plus every FilterState dimension (FILTER_DIMENSIONS,
+ * project included) — derive.test.ts fails if one is missed, so differing
+ * dimension values can never silently share a cache entry.
  */
 export function sessionSpecId(spec: SessionScopeSpec): string {
   return [
     spec.tab,
     spec.selfDeviceId,
     spec.selectedGroupId,
-    spec.project ?? "",
     spec.search ?? "",
     ...FILTER_DIMENSIONS.map((k) => spec.filter[k]),
   ].join("|")
+}
+
+// --------------------------------------------- project dimension mapping ----
+
+/**
+ * Tree project-bucket identity → filter value. The tree keys buckets by the
+ * session-side identity space, where "" is the no-launch-dir bucket (「未知项
+ * 目」的会话面); the filter value space uses "" for "no constraint", so the
+ * empty bucket can only be expressed through the unknown sentinel — a value
+ * the frontend holds as ENDPOINT DATA, never as a literal. When the sentinel
+ * is not currently known (`unknownValue` null — no unknown usage has been seen
+ * in any window this mount), the empty bucket is not expressible and the
+ * click degrades to "no constraint" instead of silently narrowing to nothing.
+ */
+export function projectFilterOfIdentity(
+  identity: string,
+  unknownValue: string | null,
+): string {
+  return identity || unknownValue || ""
+}
+
+/**
+ * Filter value → tree project-bucket identity (the inverse of
+ * projectFilterOfIdentity): "" → null (no selection), the sentinel → "" (the
+ * no-launch-dir bucket), any other value → itself (a stale known project that
+ * left the window still names itself).
+ */
+export function identityOfProjectFilter(
+  value: string,
+  unknownValue: string | null,
+): string | null {
+  if (!value) return null
+  if (unknownValue != null && value === unknownValue) return ""
+  return value
 }
 
 // ---------------------------------------------------------------- counts ----
@@ -620,15 +657,10 @@ export function groupedRows<T>(
   return { grouped, ungrouped }
 }
 
-/** Display basename of a project dir — the tree / cards / tables show the
- *  short name with the full path on hover (定稿 §痛点1). Handles both path
- *  separators; a path that is all separators (or empty) has no basename and
- *  renders as-is (the caller decides the「无项目」placeholder). */
-export function projectBasename(dir: string): string {
-  const trimmed = dir.replace(/[\\/]+$/, "")
-  const slash = Math.max(trimmed.lastIndexOf("/"), trimmed.lastIndexOf("\\"))
-  return slash === -1 ? trimmed : trimmed.slice(slash + 1)
-}
+// projectBasename moved to lib/paths (the project filter dropdown — a usage-
+// feature surface — shares it); re-exported so the sessions call sites keep
+// their import seam (same pattern as reorderIds below).
+export { projectBasename } from "@/lib/paths"
 
 /** Project a stats row onto the list-row shape — the tree's session children
  *  are stats rows, but the detail view consumes SessionRow. The numbers come

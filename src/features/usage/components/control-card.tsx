@@ -1,13 +1,14 @@
 // ControlCard / ControlBar — shared meta-controls for the
-// data views. Time range · model · source · device filters only. The collect /
-// sync action and the data-freshness hint moved to the sidebar (single entry
-// point — see shell.tsx); these are pure filter surfaces now. Solid flat
-// (no glass / no glow) — Pixso dark.
+// data views. Time range · model · source · project · device filters. The
+// collect / sync action and the data-freshness hint moved to the sidebar
+// (single entry point — see shell.tsx); these are pure filter surfaces now.
+// Solid flat (no glass / no glow) — Pixso dark.
 //
 // 横排 ControlBar 的 chip 走 bar (纯值 + 选中「全部」时显全称「全部模型 /
-// 全部来源 / 全部设备」自带身份, 与库一致), 纵卡 ControlCard 靠左 Row label,
-// chip 只显「全部」. 来源 (source) 维度在多来源 (sources.length > 0) 时才出现
-// —— 采到任意来源就显示, 与设备维度同理.
+// 全部来源 / 全部项目 / 全部设备」自带身份, 与库一致), 纵卡 ControlCard 靠左
+// Row label, chip 只显「全部」. 来源 (source) 维度在多来源
+// (sources.length > 0) 时才出现 —— 采到任意来源就显示, 与设备维度同理;
+// 项目 (ProjectSelect) 与模型一样常驻.
 
 import { ChevronDown } from "lucide-react"
 import { type ReactNode, useMemo } from "react"
@@ -35,6 +36,7 @@ import { cn } from "@/lib/utils"
 import { sourceLabel } from "../source-labels"
 import { useDeviceOptions } from "../use-device-options"
 import { DeviceScopeControl } from "./device-scope-control"
+import { ProjectSelect } from "./project-select"
 
 const CONTROL_COLLAPSE_KEY = "cc-one:control-collapsed"
 
@@ -204,6 +206,9 @@ export function ControlCard() {
           <Row label={t("usage.control.model")}>
             <ModelChip align="end" />
           </Row>
+          <Row label={t("usage.control.project")}>
+            <ProjectSelect align="end" />
+          </Row>
           {multiDevice ? (
             <Row label={t("usage.deviceScope.label")}>
               <DeviceScopeControl align="end" />
@@ -232,6 +237,7 @@ export function ControlBar() {
       <div className="flex w-full min-w-0 flex-wrap items-center gap-2 @[60rem]:w-auto">
         {hasSources ? <SourceChip bar /> : null}
         <ModelChip bar />
+        <ProjectSelect bar />
         <DeviceScopeControl bar />
       </div>
     </div>
