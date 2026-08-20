@@ -13,13 +13,16 @@
     "windows": [
       {
         "label": "main",
+        "create": false,
         "title": "CC One",
         "width": 920,
         "height": 680,
         "minWidth": 840,
         "minHeight": 600,
-        "decorations": false,
-        "shadow": true
+        "shadow": true,
+        "titleBarStyle": "Overlay",
+        "hiddenTitle": true,
+        "trafficLightPosition": { "x": 13, "y": 14 }
       }
     ],
     "security": {

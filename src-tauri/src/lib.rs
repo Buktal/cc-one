@@ -334,6 +334,29 @@ pub fn run() {
         .setup(|app| {
             let state: tauri::State<AppState> = app.state::<AppState>();
 
+            // Main window creation (#105, O_DeepSeek_Desktop ADR 0003): the
+            // conf entry carries `create:false` so the builder here owns the
+            // platform branch. macOS keeps the conf's titleBarStyle Overlay
+            // (system traffic lights; the topbar reserves 84px inline);
+            // Windows/Linux drop system decorations for the fully custom
+            // titlebar with self-drawn controls flush to the right edge.
+            // Deliberately NOT per-platform conf files: their merge is
+            // json-patch (RFC 7396), which replaces the whole `windows` array
+            // and would drop the base window geometry.
+            {
+                let conf = app
+                    .config()
+                    .app
+                    .windows
+                    .iter()
+                    .find(|w| w.label == "main")
+                    .expect("tauri.conf.json must define the main window");
+                let builder = tauri::webview::WebviewWindowBuilder::from_config(app, conf)?;
+                #[cfg(any(target_os = "windows", target_os = "linux"))]
+                let builder = builder.decorations(false);
+                builder.build()?;
+            }
+
             // Startup pull (Synced only): covers the device-switch case.
             let store = state.store.clone();
             let config = state.config.clone();

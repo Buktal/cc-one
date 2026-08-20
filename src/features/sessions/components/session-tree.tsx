@@ -31,7 +31,7 @@ import {
   TooltipContent,
   TooltipTrigger,
 } from "@/components/ui/tooltip"
-import { formatTokens } from "@/lib/format"
+import { formatCount, formatTokens } from "@/lib/format"
 import { cn } from "@/lib/utils"
 import type { SessionGroup, SessionStatsRow } from "@/types/generated/bindings"
 import {
@@ -215,8 +215,10 @@ export function SessionTree({
             )}
           >
             <span className="flex-1 truncate">{t("sessions.tree.all")}</span>
+            {/* DSL：节点统计 会话数 · Token（计数类 ≥10K 才缩写）。 */}
             <span className="text-muted-foreground/70 text-[11px] tabular-nums">
-              {statsRows.length} · {formatTokens(bucketTotal(universe))}
+              {formatCount(statsRows.length)} ·{" "}
+              {formatTokens(bucketTotal(universe))}
             </span>
           </button>
 
@@ -319,7 +321,7 @@ function ProjectNodeRow({
           {name || t("sessions.tree.noProject")}
         </span>
         <span className="text-muted-foreground/70 shrink-0 text-[11px] tabular-nums">
-          {node.sessions.length} · {formatTokens(node.tokens)}
+          {formatCount(node.sessions.length)} · {formatTokens(node.tokens)}
         </span>
       </TooltipTrigger>
       <TooltipContent side="right" className="max-w-sm break-all">
@@ -471,7 +473,7 @@ function PlainGroupRow({
       <Tag className="size-3.5 shrink-0" />
       <span className="min-w-0 flex-1 truncate">{label}</span>
       <span className="text-muted-foreground/70 shrink-0 text-[11px] tabular-nums">
-        {count}
+        {formatCount(count)}
       </span>
     </button>
   )
@@ -538,7 +540,7 @@ function GroupNodeRow({
         <span className="min-w-0 flex-1 truncate">{g.name}</span>
       </button>
       <span className="text-muted-foreground/70 text-[11px] tabular-nums">
-        {count}
+        {formatCount(count)}
       </span>
       {/* ⋮ 悬停展开：零宽起步，hover/focus 展开（与旧侧栏同一手法）。 */}
       <div className="w-0 overflow-hidden transition-[width] duration-150 ease-out group-hover/grow:w-6 group-focus-within/grow:w-6">

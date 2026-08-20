@@ -26,7 +26,14 @@ import {
   TooltipContent,
   TooltipTrigger,
 } from "@/components/ui/tooltip"
-import { formatCost, formatInt, formatPct, formatTokens } from "@/lib/format"
+import {
+  formatCost,
+  formatCount,
+  formatMetricSeg,
+  formatPct,
+  formatSegValue,
+  formatTokens,
+} from "@/lib/format"
 import { cn } from "@/lib/utils"
 import type {
   SessionMessage,
@@ -254,15 +261,15 @@ function SessionCards({
         <ActGrid
           cells={[
             [
-              transcriptLoading ? "—" : formatInt(turns),
+              transcriptLoading ? "—" : formatCount(turns),
               t("sessions.stats.turns", {
-                n: transcriptLoading ? 0 : toolTurns,
+                n: formatCount(transcriptLoading ? 0 : toolTurns),
               }),
             ],
             [spanLabel, t("sessions.detail.duration")],
-            [formatInt(s.request_count), t("sessions.detail.requests")],
+            [formatCount(s.request_count), t("sessions.detail.requests")],
             [
-              transcriptLoading ? "—" : formatInt(transcript.length),
+              transcriptLoading ? "—" : formatCount(transcript.length),
               t("sessions.detail.messages"),
             ],
           ]}
@@ -304,10 +311,13 @@ function AggregateCards({
           <Card title={t("sessions.stats.activity")}>
             <ActGrid
               cells={[
-                [formatInt(aggregate.sessions), t("sessions.stats.sessions")],
+                [formatCount(aggregate.sessions), t("sessions.stats.sessions")],
                 [totalSpanLabel, t("sessions.stats.totalDuration")],
-                [formatInt(aggregate.requests), t("sessions.detail.requests")],
-                [formatInt(aggregate.messages), t("sessions.stats.messages")],
+                [
+                  formatCount(aggregate.requests),
+                  t("sessions.detail.requests"),
+                ],
+                [formatCount(aggregate.messages), t("sessions.stats.messages")],
               ]}
             />
           </Card>
@@ -394,7 +404,12 @@ function UsageCard({
           ? segments.map((seg) => (
               <span
                 key={seg.label}
-                title={`${seg.label} ${formatTokens(seg.value)}`}
+                // DSL 段 tooltip：标签 数量 · 占比。
+                title={formatMetricSeg(
+                  seg.label,
+                  formatTokens(seg.value),
+                  seg.value / total,
+                )}
                 style={{
                   width: `${(seg.value / total) * 100}%`,
                   background: seg.color,
@@ -416,7 +431,8 @@ function UsageCard({
             </span>
             <span className="tabular-nums">{formatTokens(seg.value)}</span>
             <span className="text-muted-foreground/70 w-11 text-right tabular-nums">
-              {total > 0 ? `${((seg.value / total) * 100).toFixed(1)}%` : "—"}
+              {/* DSL：占比恒一位小数（与正文精度一致）。 */}
+              {total > 0 ? formatPct(seg.value / total) : "—"}
             </span>
           </div>
         ))}
@@ -492,11 +508,12 @@ function ModelCard({
                 <span className="min-w-0 flex-1 truncate font-mono">
                   {m.model}
                 </span>
+                {/* DSL：模型名即标签，主值 数量 · 占比（usage 模型分布行同款）。 */}
                 <span className="text-muted-foreground shrink-0 tabular-nums">
-                  {formatTokens(m.tokens)}
-                  {total > 0
-                    ? ` · ${((m.tokens / total) * 100).toFixed(1)}%`
-                    : ""}
+                  {formatSegValue(
+                    formatTokens(m.tokens),
+                    total > 0 ? m.tokens / total : null,
+                  )}
                 </span>
               </div>
               <div className="bg-muted mt-1 h-1.5 overflow-hidden rounded-sm">
@@ -512,7 +529,9 @@ function ModelCard({
               </div>
               {showSessionCounts ? (
                 <div className="text-muted-foreground/60 mt-0.5 text-[10px] tabular-nums">
-                  {t("sessions.stats.modelSessions", { n: m.sessions })}
+                  {t("sessions.stats.modelSessions", {
+                    n: formatCount(m.sessions),
+                  })}
                 </div>
               ) : null}
             </div>

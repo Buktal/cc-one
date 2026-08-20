@@ -39,7 +39,7 @@ import {
 } from "@/components/ui/tooltip"
 import { ProjectSelect } from "@/features/usage/components/project-select"
 import type { FilterOption } from "@/lib/filter-options"
-import { formatCost, formatInt, formatPct, formatTokens } from "@/lib/format"
+import { formatCost, formatCount, formatPct, formatTokens } from "@/lib/format"
 import { SOURCE_TAGS } from "@/lib/source-tags"
 import { cn } from "@/lib/utils"
 import type { ProjectStatsRow, SessionRow } from "@/types/generated/bindings"
@@ -438,12 +438,12 @@ function ProjectTiles({
   const tiles = [
     {
       k: t("sessions.stats.sessions"),
-      v: formatInt(stats.session_count),
-      s: t("sessions.stats.subSessions", { n: subs }),
+      v: formatCount(stats.session_count),
+      s: t("sessions.stats.subSessions", { n: formatCount(subs) }),
     },
     {
       k: t("sessions.detail.requests"),
-      v: formatInt(stats.request_count),
+      v: formatCount(stats.request_count),
       s: "",
     },
     {
@@ -713,7 +713,7 @@ function SessionsTable({
                   )}
                 </TableCell>
                 <TableCell className="text-right text-xs tabular-nums">
-                  {formatInt(s.request_count)}
+                  {formatCount(s.request_count)}
                 </TableCell>
                 {/* Tokens + cost are the two numbers a usage tool is scanned
                     for — half-bold them so they read above the request count. */}
