@@ -13,10 +13,11 @@ impl super::Store {
     /// Refresh a session's SYSTEM-data columns only. On conflict (same id +
     /// device_id), the [`SessionUpsertPolicy::RefreshSystemOnly`] clause
     /// updates exactly the refreshable columns (source / project_dir /
-    /// title_orig / started_at / last_active_at) — it MUST NOT touch
-    /// `custom_title` / `favorited` / `synced_group_id` / `local_group_id`.
-    /// This is the SQLite-side encoding of the "re-extract never overwrites
-    /// user data" invariant; a regression test in this module pins it.
+    /// title_orig / started_at / last_active_at / agent_type /
+    /// parent_session_id) — it MUST NOT touch `custom_title` / `favorited` /
+    /// `synced_group_id` / `local_group_id` / `excluded`. This is the
+    /// SQLite-side encoding of the "re-extract never overwrites user data"
+    /// invariant; a regression test in this module pins it.
     pub fn upsert_session(&self, device_id: &str, system: &SessionSystemData) -> AppResult<()> {
         let mut conn = self.conn.lock().expect("db mutex poisoned");
         let tx = conn.transaction()?;
@@ -189,6 +190,47 @@ impl super::Store {
         tx.commit()?;
         Ok(ghosts)
     }
+
+    /// Batch soft-delete: set the `excluded` marker on the given sessions so
+    /// every sessions-side read (`build_session_where` filters `excluded = 0`)
+    /// stops surfacing them. Soft by design — the app re-collects from the
+    /// source session files, so a physical row delete would re-import on the
+    /// next pass, and the user's source files must never be touched. The
+    /// marker is device-private user data: no upsert conflict clause refreshes
+    /// it, so neither a re-collect (`RefreshSystemOnly`) nor a peer-snapshot
+    /// pull (`RefreshSystemAndFavorites`) can resurrect a deleted session.
+    ///
+    /// Deleting also clears `favorited` and flags the sessions dirty in the
+    /// SAME transaction, so the next push drops their git snapshots — a
+    /// deleted session stops riding the favorites sync, and the
+    /// "snapshot exists ⇔ favorited" invariant keeps holding. Transcript
+    /// messages are kept (the exclusion is reversible in principle; messages
+    /// are re-collectable derived data anyway). Returns how many rows matched
+    /// (keys addressing no row simply don't count — a peer's row already
+    /// reconciled away is not an error). Empty input is a no-op.
+    pub fn delete_sessions(&self, keys: &[SessionKey]) -> AppResult<usize> {
+        if keys.is_empty() {
+            return Ok(0);
+        }
+        let mut conn = self.conn.lock().expect("db mutex poisoned");
+        let tx = conn.transaction()?;
+        // The key set rides as a JSON array through json_each (the same
+        // large-set pattern as reconcile), matched on the composite
+        // (id, device_id) — a session is never addressable by bare id.
+        let json = serde_json::to_string(keys)
+            .map_err(|e| AppError::Internal(format!("delete sessions keys: {e}")))?;
+        let n = tx.execute(
+            "UPDATE sessions SET excluded = 1, favorited = 0 \
+             WHERE (id, device_id) IN ( \
+                SELECT json_extract(value, '$.id'), json_extract(value, '$.device_id') \
+                FROM json_each(?1))",
+            params![json],
+        )?;
+        let dirty: std::collections::BTreeSet<String> = keys.iter().map(|k| k.id.clone()).collect();
+        mark_sessions_dirty(&tx, &dirty)?;
+        tx.commit()?;
+        Ok(n)
+    }
 }
 
 // ---- sessions-table UPSERT core (shared by collect + pull) ----
@@ -204,29 +246,32 @@ impl super::Store {
 /// sessions-table UPSERT callers differ ONLY here, so this enum is the single
 /// typed home of that difference.
 pub(super) enum SessionUpsertPolicy {
-    /// Collect / re-extract: refresh the 6 system-data columns only. Never
+    /// Collect / re-extract: refresh the 7 system-data columns only. Never
     /// touches user-data columns — the "re-extract must not overwrite user
-    /// edits" invariant.
+    /// edits" invariant (which is also what keeps a soft-deleted session
+    /// excluded across every re-collect).
     RefreshSystemOnly,
-    /// Pull / import: refresh the 6 system columns AND `favorited` /
+    /// Pull / import: refresh the 7 system columns AND `favorited` /
     /// `synced_group_id` — a peer's snapshot is authoritative for its own
-    /// row's favorites-track fields. `custom_title` / `local_group_id` stay
-    /// device-local either way (never carried by a snapshot).
+    /// row's favorites-track fields. `custom_title` / `local_group_id` /
+    /// `excluded` stay device-local either way (never carried by a snapshot).
     RefreshSystemAndFavorites,
 }
 
 impl SessionUpsertPolicy {
     /// The `ON CONFLICT(id, device_id) DO UPDATE SET` clause this policy
-    /// drives. Every policy refreshes the 6 shared system-data columns; pull
+    /// drives. Every policy refreshes the 7 shared system-data columns; pull
     /// additionally takes the two favorites-track columns. The device-local
-    /// columns (`custom_title`, `local_group_id`) never appear here.
+    /// columns (`custom_title`, `local_group_id`, `excluded`) never appear
+    /// here.
     fn conflict_set(&self) -> String {
         // The refreshable system-data columns — shared by both policies, so
         // declared once (single source of truth).
         const SYSTEM: &str = "source=excluded.source, project_dir=excluded.project_dir, \
                               title_orig=excluded.title_orig, started_at=excluded.started_at, \
                               last_active_at=excluded.last_active_at, \
-                              agent_type=excluded.agent_type";
+                              agent_type=excluded.agent_type, \
+                              parent_session_id=excluded.parent_session_id";
         match self {
             SessionUpsertPolicy::RefreshSystemOnly => SYSTEM.to_string(),
             SessionUpsertPolicy::RefreshSystemAndFavorites => format!(
@@ -238,13 +283,14 @@ impl SessionUpsertPolicy {
 
 /// UPSERT one `sessions` row keyed by `(sys.id, device_id)` — the shared core
 /// of [`Store::upsert_session`] (collect) and [`Store::import_session_snapshot`]
-/// (pull). The INSERT lists all 12 columns (single source); on conflict,
-/// `policy` picks which columns refresh. `custom_title` and `local_group_id`
-/// seed as empty on INSERT for every caller (neither is carried: `custom_title`
-/// is a local edit, `local_group_id` never enters git). `favorited` /
-/// `synced_group_id` seed with the caller's values — defaults for collect, the
-/// snapshot's for pull — and only `RefreshSystemAndFavorites` overwrites them
-/// on conflict.
+/// (pull). The INSERT lists all 14 columns (single source); on conflict,
+/// `policy` picks which columns refresh. `custom_title`, `local_group_id` and
+/// `excluded` seed as empty/off on INSERT for every caller (none is carried:
+/// `custom_title` is a local edit, `local_group_id` never enters git, and
+/// `excluded` — the soft-delete marker — is device-private user data no
+/// collector may set). `favorited` / `synced_group_id` seed with the caller's
+/// values — defaults for collect, the snapshot's for pull — and only
+/// `RefreshSystemAndFavorites` overwrites them on conflict.
 pub(super) fn upsert_session_row(
     tx: &rusqlite::Transaction,
     device_id: &str,
@@ -257,8 +303,9 @@ pub(super) fn upsert_session_row(
         &format!(
             "INSERT INTO sessions
              (id, device_id, source, project_dir, title_orig, started_at, last_active_at,
-              agent_type, custom_title, favorited, synced_group_id, local_group_id)
-             VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12)
+              agent_type, parent_session_id, custom_title, favorited, synced_group_id,
+              local_group_id, excluded)
+             VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14)
              ON CONFLICT(id, device_id) DO UPDATE SET {}",
             policy.conflict_set()
         ),
@@ -271,10 +318,12 @@ pub(super) fn upsert_session_row(
             sys.started_at,
             sys.last_active_at,
             sys.agent_type,
+            sys.parent_session_id,
             "", // custom_title — device-local; neither caller carries it
             favorited as i64,
             synced_group_id,
             "", // local_group_id — device-private, never in git
+            0,  // excluded — device-private soft-delete marker; collect never sets it
         ],
     )?;
     Ok(())
@@ -812,6 +861,199 @@ mod tests {
             ["plain"],
             "plain query unaffected by escaping"
         );
+    }
+
+    // ---- delete_sessions (soft delete / exclusion marker, #91) ----
+
+    /// Soft delete hides the sessions from EVERY sessions-side read (the list,
+    /// the counts, the stats dimension, and the jump-channel row read) while
+    /// leaving other rows and the physical rows themselves untouched.
+    #[test]
+    fn delete_sessions_hides_rows_from_sessions_reads() {
+        let s = mem();
+        seed_session(&s, "keep", "dev", "2026-08-01T10:00:00.000Z");
+        seed_session(&s, "gone", "dev", "2026-08-02T10:00:00.000Z");
+        s.set_session_favorited("dev", "gone", true).unwrap();
+
+        let n = s
+            .delete_sessions(&[SessionKey {
+                id: "gone".into(),
+                device_id: "dev".into(),
+            }])
+            .unwrap();
+        assert_eq!(n, 1, "one row matched");
+
+        let ids: Vec<String> = s
+            .query_sessions(None)
+            .unwrap()
+            .into_iter()
+            .map(|r| r.id)
+            .collect();
+        assert_eq!(ids, ["keep"], "list drops the deleted session");
+        assert_eq!(
+            s.count_sessions(None, "local").unwrap().total,
+            1,
+            "counts drop it too"
+        );
+        assert_eq!(
+            s.query_session_stats(None).unwrap().len(),
+            1,
+            "the stats dimension drops it too"
+        );
+        assert!(
+            s.get_session("gone", "dev").unwrap().is_none(),
+            "the jump channel treats deleted as nonexistent"
+        );
+        assert!(
+            s.get_session("keep", "dev").unwrap().is_some(),
+            "survivors still resolve"
+        );
+        // Composite-key addressing: a same-id row on another device is not
+        // touched, and a key matching no row simply doesn't count.
+        seed_session(&s, "gone", "peer", "2026-08-03T10:00:00.000Z");
+        assert_eq!(
+            s.delete_sessions(&[SessionKey {
+                id: "no-such".into(),
+                device_id: "dev".into()
+            }])
+            .unwrap(),
+            0,
+            "no row matched"
+        );
+        assert!(
+            s.get_session("gone", "peer").unwrap().is_some(),
+            "the peer's row survives a dev-scoped delete"
+        );
+        // Empty input is a no-op.
+        assert_eq!(s.delete_sessions(&[]).unwrap(), 0);
+    }
+
+    /// The acceptance invariant (#91): after a delete, neither a re-collect
+    /// (RefreshSystemOnly upsert) nor a peer-snapshot pull
+    /// (RefreshSystemAndFavorites upsert) resurrects the session — the
+    /// `excluded` marker rides no conflict clause. The same-tx dirty marking
+    /// also lands, so the next push drops the deleted favorite's snapshot.
+    #[test]
+    fn delete_sessions_marker_survives_recollect_and_pull() {
+        let s = mem();
+        seed_session(&s, "sx", "dev", "2026-08-01T10:00:00.000Z");
+        s.set_session_favorited("dev", "sx", true).unwrap();
+        s.delete_sessions(&[SessionKey {
+            id: "sx".into(),
+            device_id: "dev".into(),
+        }])
+        .unwrap();
+        assert!(
+            s.dirty_sessions().unwrap().contains(&"sx".to_string()),
+            "delete flags the session dirty so the push drops its snapshot"
+        );
+
+        // Re-collect re-offers the same system data (RefreshSystemOnly).
+        s.upsert_session("dev", &sys_session("sx", "2026-08-09T00:00:00.000Z"))
+            .unwrap();
+        // Pull re-offers the peer's snapshot (RefreshSystemAndFavorites — even
+        // with favorited=true, the peer's own view).
+        s.import_session_snapshot(
+            "dev",
+            &SessionSnapshotMeta {
+                v: SESSION_SNAPSHOT_VERSION,
+                id: "sx".into(),
+                source: "claude_code".into(),
+                project_dir: "/proj".into(),
+                title_orig: "Title".into(),
+                started_at: "2026-08-01T00:00:00.000Z".into(),
+                last_active_at: "2026-08-09T00:00:00.000Z".into(),
+                agent_type: String::new(),
+                parent_session_id: String::new(),
+                favorited: true,
+                synced_group_id: String::new(),
+            },
+            &[],
+        )
+        .unwrap();
+
+        // The row physically exists (system data refreshed, favorited re-set by
+        // the peer's authoritative snapshot) but stays hidden: `excluded` was
+        // never in any conflict set.
+        let conn = s.conn.lock().expect("db mutex poisoned");
+        let (excluded, favorited, last): (i64, i64, String) = conn
+            .query_row(
+                "SELECT excluded, favorited, last_active_at FROM sessions \
+                 WHERE id = 'sx' AND device_id = 'dev'",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+            )
+            .unwrap();
+        drop(conn);
+        assert_eq!(excluded, 1, "the marker survived both upsert paths");
+        assert_eq!(
+            favorited, 1,
+            "the peer's snapshot stays authoritative for favorites"
+        );
+        assert_eq!(last, "2026-08-09T00:00:00.000Z", "system data refreshed");
+        assert!(
+            s.query_sessions(None).unwrap().is_empty(),
+            "still invisible to the sessions list"
+        );
+    }
+
+    /// Deleting clears `favorited` in the same transaction — a deleted session
+    /// stops riding the favorites sync (the push path then removes its git
+    /// snapshot per the snapshot-exists ⇔ favorited rule).
+    #[test]
+    fn delete_sessions_clears_favorited_in_same_transaction() {
+        let s = mem();
+        seed_session(&s, "fav", "dev", "2026-08-01T10:00:00.000Z");
+        s.set_session_favorited("dev", "fav", true).unwrap();
+        seed_session(&s, "plain", "dev", "2026-08-02T10:00:00.000Z");
+        s.delete_sessions(&[
+            SessionKey {
+                id: "fav".into(),
+                device_id: "dev".into(),
+            },
+            SessionKey {
+                id: "plain".into(),
+                device_id: "dev".into(),
+            },
+        ])
+        .unwrap();
+        assert_eq!(
+            s.favorited_session_ids("dev").unwrap(),
+            Vec::<String>::new(),
+            "deleted favorites leave the favorites list"
+        );
+    }
+
+    /// Parent link roundtrip (#90): a subagent row's `parent_session_id`
+    /// persists and crosses to the list DTO, keyed to the same device.
+    #[test]
+    fn session_list_carries_parent_link() {
+        let s = mem();
+        s.upsert_session(
+            "dev",
+            &SessionSystemData {
+                id: "main-1".into(),
+                agent_type: String::new(),
+                parent_session_id: String::new(),
+                ..sys_session("main-1", "2026-08-02T10:00:00.000Z")
+            },
+        )
+        .unwrap();
+        s.upsert_session(
+            "dev",
+            &SessionSystemData {
+                id: "agent-x".into(),
+                agent_type: "Explore".into(),
+                parent_session_id: "main-1".into(),
+                ..sys_session("agent-x", "2026-08-01T10:00:00.000Z")
+            },
+        )
+        .unwrap();
+        let rows = s.query_sessions(None).unwrap();
+        let by_id = |id: &str| rows.iter().find(|r| r.id == id).unwrap();
+        assert_eq!(by_id("agent-x").agent_type, "Explore");
+        assert_eq!(by_id("agent-x").parent_session_id, "main-1");
+        assert_eq!(by_id("main-1").parent_session_id, "");
     }
 
     /// Sidebar counts: total under the filter + one bucket per distinct group

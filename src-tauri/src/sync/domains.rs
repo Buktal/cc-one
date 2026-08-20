@@ -356,6 +356,7 @@ mod tests {
                 started_at: "2026-08-01T00:00:00.000Z".into(),
                 last_active_at: "2026-08-02T00:00:00.000Z".into(),
                 agent_type: "Explore".into(),
+                parent_session_id: String::new(),
             }],
             &[msg(
                 "u1",
@@ -487,6 +488,7 @@ mod tests {
                     started_at: "2026-08-01T00:00:00.000Z".into(),
                     last_active_at: "2026-08-02T00:00:00.000Z".into(),
                     agent_type: String::new(),
+                    parent_session_id: String::new(),
                 }],
                 &[msg(
                     &format!("u-{sid}"),
@@ -524,6 +526,7 @@ mod tests {
                     started_at: "2026-08-01T00:00:00.000Z".into(),
                     last_active_at: "2026-08-02T00:00:00.000Z".into(),
                     agent_type: String::new(),
+                    parent_session_id: String::new(),
                 },
             )
             .unwrap();

@@ -360,6 +360,14 @@ export const commands = {
 	title: string,
 	/**  `""` = main session; non-empty = subagent type tag (e.g. `Explore`). */
 	agent_type: string,
+	/**
+	 *  Parent link (subagent → its main session's id on the SAME device;
+	 *  `""` = no parent / top-level). Drives the indented "child" placement
+	 *  under the parent row in the workbench's session list — display
+	 *  structure only, the rows stay separate (see
+	 *  `SessionSystemData::parent_session_id`).
+	 */
+	parent_session_id: string,
 	favorited: boolean,
 	local_group_id: string,
 	synced_group_id: string,
@@ -377,6 +385,14 @@ export const commands = {
 	setSessionCustomTitleCmd: (id: string, deviceId: string, title: string | null) => typedError<null, AppError>(__TAURI_INVOKE("set_session_custom_title_cmd", { id, deviceId, title })),
 	setSessionLocalGroupCmd: (id: string, deviceId: string, groupId: string | null) => typedError<null, AppError>(__TAURI_INVOKE("set_session_local_group_cmd", { id, deviceId, groupId })),
 	setSessionSyncedGroupCmd: (id: string, deviceId: string, groupId: string | null) => typedError<null, AppError>(__TAURI_INVOKE("set_session_synced_group_cmd", { id, deviceId, groupId })),
+	/**
+	 *  Batch soft-delete the given sessions (`Store::delete_sessions`): sets the
+	 *  device-private `excluded` marker so the sessions workbench stops surfacing
+	 *  them — source files are never touched, and neither a re-collect nor a
+	 *  peer-snapshot pull can resurrect the marker (it rides no upsert conflict
+	 *  clause). Returns how many rows matched; the confirm step lives frontend-side.
+	 */
+	deleteSessionsCmd: (keys: SessionKey[]) => typedError<number, AppError>(__TAURI_INVOKE("delete_sessions_cmd", { keys })),
 	listLocalGroupsCmd: () => typedError<LocalGroup[], AppError>(__TAURI_INVOKE("list_local_groups_cmd")),
 	createLocalGroupCmd: (name: string) => typedError<LocalGroup, AppError>(__TAURI_INVOKE("create_local_group_cmd", { name })),
 	renameLocalGroupCmd: (id: string, name: string) => typedError<null, AppError>(__TAURI_INVOKE("rename_local_group_cmd", { id, name })),
@@ -1191,6 +1207,19 @@ export type SessionGroupCounts = {
 };
 
 /**
+ *  A session's composite key `(id, device_id)` — the addressing form every
+ *  session write already takes as two args, lifted into a DTO for the ONE
+ *  place that addresses many sessions at once: the batch soft-delete
+ *  ([`Store::delete_sessions`]). A session is uniquely `(device_id, id)` —
+ *  the same id can exist on two devices — so batch operations key on the pair,
+ *  never the bare id.
+ */
+export type SessionKey = {
+	id: string,
+	device_id: string,
+};
+
+/**
  *  One transcript line. Single source of truth across three roles: parser
  *  output, the per-session JSONL Artifact (`sessions/<id>.jsonl`), and the DTO
  *  crossing to the frontend. The shape is identical for all three, so one
@@ -1308,6 +1337,14 @@ export type SessionRow = {
 	title: string,
 	/**  `""` = main session; non-empty = subagent type tag (e.g. `Explore`). */
 	agent_type: string,
+	/**
+	 *  Parent link (subagent → its main session's id on the SAME device;
+	 *  `""` = no parent / top-level). Drives the indented "child" placement
+	 *  under the parent row in the workbench's session list — display
+	 *  structure only, the rows stay separate (see
+	 *  `SessionSystemData::parent_session_id`).
+	 */
+	parent_session_id: string,
 	favorited: boolean,
 	local_group_id: string,
 	synced_group_id: string,

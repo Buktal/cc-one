@@ -736,6 +736,13 @@ mod tests {
                 started_at: "2026-08-01T00:00:00.000Z".into(),
                 last_active_at: "2026-08-02T00:00:00.000Z".into(),
                 agent_type: agent_type.into(),
+                // A subagent row carries its parent link — the test asserts the
+                // link rides the snapshot meta line like agent_type does.
+                parent_session_id: if agent_type.is_empty() {
+                    String::new()
+                } else {
+                    "main-1".to_string()
+                },
             }
         }
         fn msg(uuid: &str, sid: &str) -> SessionMessage {
@@ -799,6 +806,10 @@ mod tests {
             "agent_type rode the snapshot meta line (pull must not zero it)"
         );
         assert_eq!(
+            b_sx.parent_session_id, "main-1",
+            "the subagent parent link rode the snapshot meta line too"
+        );
+        assert_eq!(
             store_b.query_session_messages(dev_a, "sx").unwrap().len(),
             1,
             "message imported"
@@ -853,6 +864,7 @@ mod tests {
                 started_at: "2026-08-01T00:00:00.000Z".into(),
                 last_active_at: "2026-08-02T00:00:00.000Z".into(),
                 agent_type: String::new(),
+                parent_session_id: String::new(),
             }
         }
         fn msg(uuid: &str, sid: &str) -> SessionMessage {
@@ -1138,6 +1150,7 @@ mod tests {
             started_at: "2026-08-01T00:00:00.000Z".into(),
             last_active_at: "2026-08-02T00:00:00.000Z".into(),
             agent_type: String::new(),
+            parent_session_id: String::new(),
         };
         let msg = crate::model::SessionMessage {
             uuid: "m1".into(),
@@ -1206,6 +1219,7 @@ mod tests {
             started_at: "2026-08-01T00:00:00.000Z".into(),
             last_active_at: "2026-08-02T00:00:00.000Z".into(),
             agent_type: String::new(),
+            parent_session_id: String::new(),
         };
         let msg = SessionMessage {
             uuid: "m1".into(),

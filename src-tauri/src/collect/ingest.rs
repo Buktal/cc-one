@@ -388,6 +388,7 @@ mod tests {
             started_at: "2026-08-01T00:00:00.000Z".into(),
             last_active_at: last_active_at.into(),
             agent_type: String::new(),
+            parent_session_id: String::new(),
         }
     }
 

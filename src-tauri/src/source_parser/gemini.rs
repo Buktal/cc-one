@@ -276,6 +276,7 @@ fn fold_file(file: &Path, text: &str) -> FileParseOutcome {
             started_at,
             last_active_at,
             agent_type: String::new(),
+            parent_session_id: String::new(),
         }],
         messages,
         skipped: 0,

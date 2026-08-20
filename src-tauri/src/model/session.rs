@@ -41,6 +41,18 @@ pub struct SessionSystemData {
     /// Unknown types fall back to `"agent"`. Drives the type column in the
     /// session list ("main" vs "subagent(Explore)").
     pub agent_type: String,
+    /// Parent link for a subagent session: the id of the main session it was
+    /// spawned under, `""` when none. Claude Code's own placement is the
+    /// explicit source — it writes subagent files at
+    /// `<project>/<parent-session-id>/subagents/agent-*.jsonl`, so the parent
+    /// is read off the directory chain (no heuristic: the placement is written
+    /// by Claude Code, and every nested agent file pairs with a real parent
+    /// session file). Older Claude Code versions wrote agent files flat in the
+    /// project dir — no link exists there, so those rows keep `""` (top-level
+    /// display, `agent_type` still set). Display-only structural ownership:
+    /// the sessions stay separate rows (details are never merged), and tokens
+    /// never move between them.
+    pub parent_session_id: String,
 }
 
 /// Parser-output alias for a parsed session (pre-device). Identical to
@@ -143,6 +155,13 @@ pub struct SessionSnapshotMeta {
     /// field existed still parse (they project as main sessions).
     #[serde(default)]
     pub agent_type: String,
+    /// Parent link (subagent → its main session's id; `""` = none), same
+    /// semantics as the sessions row's `parent_session_id`. `serde(default)`
+    /// keeps pre-field snapshots parsing — and an older peer's binary simply
+    /// ignores the extra key, so the version stays compatible both ways (no
+    /// `SESSION_SNAPSHOT_VERSION` bump).
+    #[serde(default)]
+    pub parent_session_id: String,
     pub favorited: bool,
     pub synced_group_id: String,
 }
@@ -179,6 +198,12 @@ pub struct SessionRow {
     pub title: String,
     /// `""` = main session; non-empty = subagent type tag (e.g. `Explore`).
     pub agent_type: String,
+    /// Parent link (subagent → its main session's id on the SAME device;
+    /// `""` = no parent / top-level). Drives the indented "child" placement
+    /// under the parent row in the workbench's session list — display
+    /// structure only, the rows stay separate (see
+    /// `SessionSystemData::parent_session_id`).
+    pub parent_session_id: String,
     pub favorited: bool,
     pub local_group_id: String,
     pub synced_group_id: String,
@@ -190,6 +215,18 @@ pub struct SessionRow {
     pub total_tokens: u32,
     /// Live aggregate: sum of cost.
     pub total_cost_usd: f64,
+}
+
+/// A session's composite key `(id, device_id)` — the addressing form every
+/// session write already takes as two args, lifted into a DTO for the ONE
+/// place that addresses many sessions at once: the batch soft-delete
+/// ([`Store::delete_sessions`]). A session is uniquely `(device_id, id)` —
+/// the same id can exist on two devices — so batch operations key on the pair,
+/// never the bare id.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize, specta::Type)]
+pub struct SessionKey {
+    pub id: String,
+    pub device_id: String,
 }
 
 /// Sentinel for the project dimension's「未知项目」(unknown project) bucket:

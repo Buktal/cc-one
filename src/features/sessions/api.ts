@@ -11,6 +11,7 @@ import type {
   ProjectStatsRow,
   SessionGroup,
   SessionGroupCounts,
+  SessionKey,
   SessionMessage_Serialize,
   SessionRow,
   SessionStatsRow,
@@ -35,6 +36,7 @@ export const {
   useSetSessionCustomTitleMutation,
   useSetSessionLocalGroupMutation,
   useSetSessionSyncedGroupMutation,
+  useDeleteSessionsMutation,
   useListGroupsQuery,
   useListLocalGroupsQuery,
   useListSyncedGroupsQuery,
@@ -164,6 +166,15 @@ export const {
     >({
       queryFn: async ({ id, deviceId, groupId }) =>
         run(commands.setSessionSyncedGroupCmd(id, deviceId, groupId)),
+      invalidatesTags: ["Sessions"],
+    }),
+    /** Batch soft-delete (#91): one command for the whole checked set — the
+     *  backend marks the rows `excluded` (device-private, survives re-collect
+     *  and pull), clears their favorites, and flags them dirty so the next
+     *  push drops their git snapshots. Source files are never touched. The
+     *  confirm step lives in the toolbar (ConfirmDialog), not here. */
+    deleteSessions: b.mutation<number, SessionKey[]>({
+      queryFn: async (keys) => run(commands.deleteSessionsCmd(keys)),
       invalidatesTags: ["Sessions"],
     }),
 

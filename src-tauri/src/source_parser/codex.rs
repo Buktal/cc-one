@@ -518,6 +518,7 @@ fn fold_codex_file(file: &Path, text: &str, start_line: i64) -> FileParseOutcome
             started_at,
             last_active_at,
             agent_type: String::new(),
+            parent_session_id: String::new(),
         }]
     } else {
         Vec::new()

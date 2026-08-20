@@ -100,7 +100,7 @@ impl super::Store {
         let row = conn
             .query_row(
                 "SELECT id, source, project_dir, title_orig, started_at, last_active_at,
-                        agent_type, favorited, synced_group_id
+                        agent_type, parent_session_id, favorited, synced_group_id
                  FROM sessions WHERE id = ?1 AND device_id = ?2",
                 params![session_id, device_id],
                 |r| {
@@ -113,8 +113,9 @@ impl super::Store {
                         started_at: r.get(4)?,
                         last_active_at: r.get(5)?,
                         agent_type: r.get(6)?,
-                        favorited: r.get::<_, i64>(7)? != 0,
-                        synced_group_id: r.get(8)?,
+                        parent_session_id: r.get(7)?,
+                        favorited: r.get::<_, i64>(8)? != 0,
+                        synced_group_id: r.get(9)?,
                     })
                 },
             )
@@ -152,6 +153,7 @@ impl super::Store {
                 started_at: meta.started_at.clone(),
                 last_active_at: meta.last_active_at.clone(),
                 agent_type: meta.agent_type.clone(),
+                parent_session_id: meta.parent_session_id.clone(),
             },
             meta.favorited,
             &meta.synced_group_id,
@@ -312,7 +314,8 @@ impl super::Store {
     /// List sessions for the UI, joined live with `usage_records` to compute
     /// per-session request_count / total_tokens / total_cost_usd (the usage
     /// table is the single source of token truth). Title = `custom_title` when
-    /// set, else `title_orig`. `filter` is optional; `None` lists every session.
+    /// set, else `title_orig`. `filter` is optional; `None` lists every
+    /// non-excluded session (soft-deleted rows never surface).
     /// Unpaged — retained for test-only callers (the collector/sync tests);
     /// production reads go through [`Store::query_sessions_page`] so the UI
     /// only materializes one page.
@@ -350,10 +353,12 @@ impl super::Store {
     /// this read instead of a backend join on the usage query. Same SELECT as
     /// the list (usage aggregates + project_identity truncation included), so
     /// the resolved row is identical to what the session list would show.
-    /// `None` = no such session (usage record without a collected session).
+    /// `None` = no such session (usage record without a collected session, or
+    /// one soft-deleted — deleted means nonexistent to the jump channel too,
+    /// so the link degrades to the raw id like any unresolved one).
     pub fn get_session(&self, id: &str, device_id: &str) -> AppResult<Option<SessionRow>> {
         let conn = self.conn.lock().expect("db mutex poisoned");
-        let sql = sessions_select_sql("WHERE s.id = ?1 AND s.device_id = ?2");
+        let sql = sessions_select_sql("WHERE s.id = ?1 AND s.device_id = ?2 AND s.excluded = 0");
         conn.query_row(&sql, params![id, device_id], session_row)
             .optional()
             .map_err(AppError::from)
@@ -786,13 +791,18 @@ pub(super) fn mark_sessions_dirty(
 /// Build a WHERE clause over the `sessions` table for a [`SessionFilter`]. The
 /// clause prefixes every column with `s.` so it composes with the
 /// `usage_records` subquery JOIN in [`Store::query_sessions`]. Empty filter ⇒
-/// `("", [])`. `pub(super)` so the distinct-projects read (store_reads) reuses
-/// the same sessions-side narrowing — one builder, no drifting copy.
+/// the bare exclusion condition (`s.excluded = 0`): a soft-deleted session is
+/// invisible to EVERY sessions-side read (list / counts / stats / project
+/// buckets / project candidates) through this one builder — usage-side reads
+/// deliberately keep counting its records (usage is collected history, and the
+/// dashboard's bucket-sums-equal-hero calibers must not shift under a sessions
+/// view action). `pub(super)` so the distinct-projects read (store_reads)
+/// reuses the same sessions-side narrowing — one builder, no drifting copy.
 pub(super) fn build_session_where(filter: Option<&SessionFilter>) -> (String, Vec<SqlValue>) {
-    let mut conds: Vec<String> = Vec::new();
+    let mut conds: Vec<String> = vec!["s.excluded = 0".into()];
     let mut params: Vec<SqlValue> = Vec::new();
     let Some(f) = filter else {
-        return (String::new(), params);
+        return (format!("WHERE {}", conds.join(" AND ")), params);
     };
     if let Some(d) = &f.device_scope {
         if !d.is_empty() {
@@ -892,11 +902,8 @@ pub(super) fn build_session_where(filter: Option<&SessionFilter>) -> (String, Ve
             params.push(SqlValue::Text(pattern));
         }
     }
-    let clause = if conds.is_empty() {
-        String::new()
-    } else {
-        format!("WHERE {}", conds.join(" AND "))
-    };
+    // conds is never empty — the exclusion condition seeds it above.
+    let clause = format!("WHERE {}", conds.join(" AND "));
     (clause, params)
 }
 
@@ -928,7 +935,7 @@ fn sessions_select_sql(clause: &str) -> String {
         "SELECT s.id, s.device_id, s.source, s.project_dir,
                 COALESCE(NULLIF(s.custom_title,''), s.title_orig) AS title,
                 s.favorited, s.local_group_id, s.synced_group_id,
-                s.started_at, s.last_active_at, s.agent_type,
+                s.started_at, s.last_active_at, s.agent_type, s.parent_session_id,
                 COALESCE(agg.request_count, 0),
                 COALESCE(agg.total_tokens, 0),
                 COALESCE(agg.total_cost_usd, 0.0)
@@ -945,7 +952,7 @@ fn sessions_select_sql(clause: &str) -> String {
     )
 }
 
-/// Decode a `sessions` row in the shared SELECT's column order (13 columns —
+/// Decode a `sessions` row in the shared SELECT's column order (14 columns —
 /// the positional mapping lives in one place for both the paged and unpaged
 /// reads). `project_dir` crosses as the PROJECT IDENTITY
 /// ([`crate::model::project_identity`]): a Claude Code worktree suffix
@@ -968,9 +975,10 @@ fn session_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<SessionRow> {
         started_at: r.get(8)?,
         last_active_at: r.get(9)?,
         agent_type: r.get(10)?,
-        request_count: r.get::<_, i64>(11)? as u32,
-        total_tokens: r.get::<_, i64>(12)? as u32,
-        total_cost_usd: r.get(13)?,
+        parent_session_id: r.get(11)?,
+        request_count: r.get::<_, i64>(12)? as u32,
+        total_tokens: r.get::<_, i64>(13)? as u32,
+        total_cost_usd: r.get(14)?,
     })
 }
 
@@ -1135,6 +1143,7 @@ mod tests {
                 started_at: "2026-08-01T00:00:00.000Z".into(),
                 last_active_at: "2026-08-02T00:00:00.000Z".into(),
                 agent_type: "Explore".into(),
+                parent_session_id: String::new(),
             },
         )
         .unwrap();
@@ -1178,6 +1187,7 @@ mod tests {
                     started_at: "2026-08-01T00:00:00.000Z".into(),
                     last_active_at: "2026-08-02T00:00:00.000Z".into(),
                     agent_type: String::new(),
+                    parent_session_id: String::new(),
                 },
             )
             .unwrap();
@@ -1530,6 +1540,7 @@ mod tests {
                 started_at: "2026-08-01T00:00:00.000Z".into(),
                 last_active_at: "2026-08-12T10:00:00.000Z".into(),
                 agent_type: String::new(),
+                parent_session_id: String::new(),
                 favorited: true,
                 synced_group_id: String::new(),
             },
@@ -1848,6 +1859,7 @@ mod tests {
                 started_at: "2026-08-01T00:00:00.000Z".into(),
                 last_active_at: "2026-08-01T12:00:00.000Z".into(),
                 agent_type: String::new(),
+                parent_session_id: String::new(),
                 favorited: true,
                 synced_group_id: String::new(),
             },
@@ -1915,6 +1927,7 @@ mod tests {
             started_at: "2026-08-01T00:00:00.000Z".into(),
             last_active_at: "2026-08-02T09:00:00.000Z".into(),
             agent_type: "Explore".into(),
+            parent_session_id: String::new(),
             favorited: true,
             synced_group_id: "sg-peer".into(),
         };

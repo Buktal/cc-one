@@ -148,14 +148,16 @@ const DEAD_TABLES_DROP: &str = "\
     DROP TABLE IF EXISTS ledger;";
 
 /// `sessions` — one row per (session id, device id). The system-data columns
-/// (source / project_dir / title_orig / started_at / last_active_at) are
-/// refreshable: every collect re-extracts them from the source log. The user-
-/// data columns (custom_title / favorited / synced_group_id / local_group_id)
-/// are NEVER overwritten by re-extract — `upsert_session`'s ON CONFLICT clause
-/// refreshes only the system-data columns, preserving user edits. This split is
-/// the "user data not overwritten by re-extract" invariant, encoded in SQL.
-/// `local_group_id` is device-private (never enters git); the session sync
-/// shape lands later.
+/// (source / project_dir / title_orig / started_at / last_active_at /
+/// agent_type / parent_session_id) are refreshable: every collect re-extracts
+/// them from the source log. The user-data columns (custom_title / favorited /
+/// synced_group_id / local_group_id / excluded) are NEVER overwritten by
+/// re-extract — `upsert_session`'s ON CONFLICT clause refreshes only the
+/// system-data columns, preserving user edits. This split is the "user data
+/// not overwritten by re-extract" invariant, encoded in SQL — and it is what
+/// makes soft delete stable: a user-excluded session stays excluded across
+/// every re-collect and pull import. `local_group_id` / `excluded` are
+/// device-private (never enter git); the session sync shape lands later.
 pub(super) const SESSIONS_COLS_DDL: &str = "\
     id TEXT NOT NULL, \
     device_id TEXT NOT NULL, \
@@ -165,10 +167,12 @@ pub(super) const SESSIONS_COLS_DDL: &str = "\
     started_at TEXT NOT NULL DEFAULT '', \
     last_active_at TEXT NOT NULL DEFAULT '', \
     agent_type TEXT NOT NULL DEFAULT '', \
+    parent_session_id TEXT NOT NULL DEFAULT '', \
     custom_title TEXT NOT NULL DEFAULT '', \
     favorited INTEGER NOT NULL DEFAULT 0, \
     synced_group_id TEXT NOT NULL DEFAULT '', \
     local_group_id TEXT NOT NULL DEFAULT '', \
+    excluded INTEGER NOT NULL DEFAULT 0, \
     PRIMARY KEY (id, device_id)";
 
 pub(super) const SESSIONS_INDEXES: &str = "\

@@ -5,8 +5,8 @@ use tauri::{Emitter, State};
 use super::AppState;
 use crate::error::{AppError, AppResult};
 use crate::model::{
-    LocalGroup, ProjectStatsRow, SessionFilter, SessionGroup, SessionGroupCounts, SessionMessage,
-    SessionQuery, SessionRow, SessionStatsRow, SyncedGroup,
+    LocalGroup, ProjectStatsRow, SessionFilter, SessionGroup, SessionGroupCounts, SessionKey,
+    SessionMessage, SessionQuery, SessionRow, SessionStatsRow, SyncedGroup,
 };
 use crate::sessions;
 
@@ -158,6 +158,23 @@ pub fn set_session_synced_group_cmd(
         .set_session_synced_group(&device_id, &id, group_id.as_deref())?;
     emit_sessions_changed(&app_handle);
     Ok(())
+}
+
+/// Batch soft-delete the given sessions (`Store::delete_sessions`): sets the
+/// device-private `excluded` marker so the sessions workbench stops surfacing
+/// them — source files are never touched, and neither a re-collect nor a
+/// peer-snapshot pull can resurrect the marker (it rides no upsert conflict
+/// clause). Returns how many rows matched; the confirm step lives frontend-side.
+#[tauri::command]
+#[specta::specta]
+pub fn delete_sessions_cmd(
+    state: State<'_, AppState>,
+    app_handle: tauri::AppHandle,
+    keys: Vec<SessionKey>,
+) -> AppResult<u32> {
+    let n = state.store.delete_sessions(&keys)?;
+    emit_sessions_changed(&app_handle);
+    Ok(n as u32)
 }
 
 // ---- local groups ----

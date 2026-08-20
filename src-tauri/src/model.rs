@@ -215,10 +215,38 @@ mod tests {
             started_at: "2026-08-01T10:00:00Z".into(),
             last_active_at: "2026-08-01T11:00:00Z".into(),
             agent_type: String::new(),
+            parent_session_id: String::new(),
         };
         let s: SessionSystemData =
             serde_json::from_str(&serde_json::to_string(&sys).unwrap()).unwrap();
         assert_eq!(s, sys);
+    }
+
+    #[test]
+    fn snapshot_meta_parent_link_roundtrips_and_defaults() {
+        // The parent link rides today's meta line unchanged...
+        let meta = SessionSnapshotMeta {
+            v: 1,
+            id: "agent-x".into(),
+            source: "claude_code".into(),
+            project_dir: "/proj".into(),
+            title_orig: "Task".into(),
+            started_at: "2026-08-01T10:00:00Z".into(),
+            last_active_at: "2026-08-01T11:00:00Z".into(),
+            agent_type: "Explore".into(),
+            parent_session_id: "main-1".into(),
+            favorited: true,
+            synced_group_id: String::new(),
+        };
+        let back: SessionSnapshotMeta =
+            serde_json::from_str(&serde_json::to_string(&meta).unwrap()).unwrap();
+        assert_eq!(back.parent_session_id, "main-1");
+        // ...and a pre-field snapshot (written before #90) still parses,
+        // defaulting to no parent — no SESSION_SNAPSHOT_VERSION bump needed.
+        let legacy = r#"{"v":1,"id":"agent-x","source":"claude_code","project_dir":"/proj","title_orig":"Task","started_at":"2026-08-01T10:00:00Z","last_active_at":"2026-08-01T11:00:00Z","agent_type":"Explore","favorited":true,"synced_group_id":""}"#;
+        let old: SessionSnapshotMeta = serde_json::from_str(legacy).unwrap();
+        assert_eq!(old.parent_session_id, "", "absent parent => empty default");
+        assert_eq!(old.agent_type, "Explore");
     }
 
     #[test]

@@ -30,6 +30,7 @@ import {
   isRowOpen,
   modelsUsed,
   neighborNav,
+  nestSubagents,
   nextFavValue,
   projectFilterOfIdentity,
   projectNodes,
@@ -60,6 +61,7 @@ function row(
     project_dir: "",
     title: "",
     agent_type: "",
+    parent_session_id: "",
     favorited: false,
     local_group_id: "",
     synced_group_id: "",
@@ -933,5 +935,56 @@ describe("groupedRows", () => {
     expect(grouped.get("g1")).toEqual([{ id: "s1", g: "g1" }])
     expect(grouped.get("g2")).toEqual([{ id: "s4", g: "g2" }])
     expect(ungrouped.map((r) => r.id)).toEqual(["s2", "s3"])
+  })
+})
+
+describe("nestSubagents", () => {
+  it("moves children directly under their in-slice parent, fetch order kept otherwise", () => {
+    const parent1 = row({ id: "main-1", title: "P1" })
+    const parent2 = row({ id: "main-2", title: "P2" })
+    // Children arrive interleaved in the time-desc fetch order.
+    const c2b = row({ id: "agent-c", parent_session_id: "main-2" })
+    const c1 = row({ id: "agent-a", parent_session_id: "main-1" })
+    const c2a = row({ id: "agent-b", parent_session_id: "main-2" })
+    const { rows, nestedKeys } = nestSubagents([parent1, c2b, c1, parent2, c2a])
+    expect(rows.map((r) => r.id)).toEqual([
+      "main-1",
+      "agent-a",
+      "main-2",
+      "agent-c",
+      "agent-b",
+    ])
+    expect([...nestedKeys]).toEqual(
+      expect.arrayContaining([
+        "dev-self/agent-a",
+        "dev-self/agent-b",
+        "dev-self/agent-c",
+      ]),
+    )
+    expect(nestedKeys.size).toBe(3)
+  })
+
+  it("keeps a child top-level when its parent is not in the slice", () => {
+    const orphan = row({ id: "agent-x", parent_session_id: "main-elsewhere" })
+    const other = row({ id: "main-1" })
+    const { rows, nestedKeys } = nestSubagents([orphan, other])
+    expect(rows.map((r) => r.id)).toEqual(["agent-x", "main-1"])
+    expect(nestedKeys.size).toBe(0)
+  })
+
+  it("matches the parent on the composite key — a same-id row on another device is no parent", () => {
+    const parent = row({ id: "main-1", device_id: "dev-peer" })
+    const child = row({ id: "agent-a", parent_session_id: "main-1" }) // dev-self
+    const { rows, nestedKeys } = nestSubagents([parent, child])
+    expect(rows.map((r) => r.id)).toEqual(["main-1", "agent-a"])
+    expect(nestedKeys.size).toBe(0)
+  })
+
+  it("returns rows untouched when no row carries a link", () => {
+    const a = row({ id: "a" })
+    const b = row({ id: "b" })
+    const { rows, nestedKeys } = nestSubagents([a, b])
+    expect(rows).toEqual([a, b])
+    expect(nestedKeys.size).toBe(0)
   })
 })

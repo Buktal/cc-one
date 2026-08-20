@@ -95,6 +95,7 @@ fn specta_builder() -> Builder<tauri::Wry> {
         commands::set_session_custom_title_cmd,
         commands::set_session_local_group_cmd,
         commands::set_session_synced_group_cmd,
+        commands::delete_sessions_cmd,
         commands::list_local_groups_cmd,
         commands::create_local_group_cmd,
         commands::rename_local_group_cmd,

@@ -343,6 +343,7 @@ fn opencode_raw_session(row: &OpenCodeSessionRow) -> RawSession {
         started_at: epoch_millis_to_iso(row.time_created_ms),
         last_active_at: epoch_millis_to_iso(row.time_updated_ms),
         agent_type: String::new(),
+        parent_session_id: String::new(),
     }
 }
 

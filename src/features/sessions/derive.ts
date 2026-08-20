@@ -636,6 +636,64 @@ export function groupedRows<T>(
   return { grouped, ungrouped }
 }
 
+// ------------------------------------------------- subagent nesting (#90) --
+
+/**
+ * Subagent nesting for the workbench's session list: rows carrying an explicit
+ * `parent_session_id` whose parent row (same device, that id) is IN THE SAME
+ * LIST move directly under it, so the list reads as structure rather than a
+ * flat time-desc pile. Purely presentational — every row stays its own row
+ * (details are never merged, tokens never move), the page count and the
+ * backend ordering are untouched.
+ *
+ * Degradation is explicit and graceful: a child whose parent is absent from
+ * the current page (filtered out, or an older page) keeps its top-level
+ * position — it still shows the ↳ subagent marker, it just doesn't indent.
+ * Nesting applies within the loaded slice only (the paged list's contract);
+ * matching keys on the composite (device_id, id), never the bare id.
+ */
+export interface NestedSessions {
+  /** Display order — children moved directly after their parent row. */
+  rows: SessionRow[]
+  /** favKeys of the rows rendered as indented children. */
+  nestedKeys: Set<string>
+}
+
+export function nestSubagents(rows: readonly SessionRow[]): NestedSessions {
+  // Index the in-slice children by their parent's composite key, then rebuild:
+  // unclaimed rows keep their fetch order (time-desc), each immediately
+  // followed by its children (recursively — real data is single-level, but a
+  // deeper chain still renders rather than dropping rows).
+  const present = new Set(rows.map(favKey))
+  const childOf = new Map<string, SessionRow[]>()
+  for (const r of rows) {
+    if (!r.parent_session_id) continue
+    const key = `${r.device_id}/${r.parent_session_id}`
+    if (!present.has(key)) continue
+    const bucket = childOf.get(key)
+    if (bucket) bucket.push(r)
+    else childOf.set(key, [r])
+  }
+  if (childOf.size === 0) {
+    return { rows: [...rows], nestedKeys: new Set() }
+  }
+  const out: SessionRow[] = []
+  const nestedKeys = new Set<string>()
+  const claimed = new Set([...childOf.values()].flat().map((r) => favKey(r)))
+  const emit = (r: SessionRow): void => {
+    out.push(r)
+    for (const child of childOf.get(favKey(r)) ?? []) {
+      nestedKeys.add(favKey(child))
+      emit(child)
+    }
+  }
+  for (const r of rows) {
+    if (claimed.has(favKey(r))) continue
+    emit(r)
+  }
+  return { rows: out, nestedKeys }
+}
+
 // projectBasename moved to lib/paths (the project filter dropdown — a usage-
 // feature surface — shares it); re-exported so the sessions call sites keep
 // their import seam (same pattern as reorderIds below).

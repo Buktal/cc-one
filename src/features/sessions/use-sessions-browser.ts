@@ -18,6 +18,7 @@ import {
   useCreateLocalGroupMutation,
   useCreateSyncedGroupMutation,
   useDeleteLocalGroupMutation,
+  useDeleteSessionsMutation,
   useDeleteSyncedGroupMutation,
   useDevicesQuery,
   useDistinctModelsQuery,
@@ -62,6 +63,7 @@ import {
   groupedRows,
   identityOfProjectFilter,
   neighborNav,
+  nestSubagents,
   nextFavValue,
   projectFilterOfIdentity,
   projectNodes,
@@ -326,6 +328,7 @@ export function useSessionsBrowser() {
   }, [groupsQuery.data])
 
   const [favoritedMut] = useSetSessionFavoritedMutation()
+  const [deleteSessionsMut] = useDeleteSessionsMutation()
   const [setLocalGroupMut] = useSetSessionLocalGroupMutation()
   const [setSyncedGroupMut] = useSetSessionSyncedGroupMutation()
   const [createLocalMut] = useCreateLocalGroupMutation()
@@ -356,8 +359,16 @@ export function useSessionsBrowser() {
   )
   // The visible list is the backend's current page — already narrowed by the
   // track-universe/toolbar/search AND the tree's container selection (group or
-  // project), time-desc ordered.
-  const visibleSessions = sessionsQuery.data ?? []
+  // project), time-desc ordered — then NESTED (#90): subagent rows carrying an
+  // explicit parent link move directly under their in-page parent. Purely
+  // presentational (rows stay separate; the page count is untouched), and the
+  // display order IS the navigation order — the table, the detail's prev/next
+  // walk, and the preview lookup all read this one list.
+  const nested = useMemo(
+    () => nestSubagents(sessionsQuery.data ?? []),
+    [sessionsQuery.data],
+  )
+  const visibleSessions = nested.rows
 
   // ---- 左树计数清单数据（selection-free 统计行的客户端分桶）----
   // 项目轨：projectNodes 已按桶最近活跃排序；分组/收藏轨：knownIds 之外的
@@ -570,10 +581,10 @@ export function useSessionsBrowser() {
     }
   }
 
-  // ---- 批量操作（定稿 §6：勾选后批量收藏 / 归组；删除属后续切片）----
+  // ---- 批量操作（定稿 §6：勾选后批量收藏 / 归组 / 删除）----
   // 勾选键 = favKey，值保留 (id, device_id) 定位——批量动作不依赖行还在
-  // 当前页（勾选可跨页留存）。动作对全部勾选行并发执行，结束一条汇总
-  // toast（逐行 toast 会在大勾选下刷屏）； Sessions 标签失效驱动刷新。
+  // 当前页（勾选可跨页留存）。收藏/归组对全部勾选行并发执行，结束一条
+  // 汇总 toast（逐行 toast 会在大勾选下刷屏）；删除走单条批量命令。
   function toggleCheck(s: SessionRow): void {
     setChecked((prev) => {
       const next = new Map(prev)
@@ -615,6 +626,20 @@ export function useSessionsBrowser() {
       (t) => mut({ id: t.id, deviceId: t.device_id, groupId }),
       "sessions.toast.batchGrouped",
     )
+  }
+  // 批量删除（#91）：一次命令带全部勾选键（后端批量软删除——排除标记随
+  // 采集/拉取稳定，源文件不动）；确认对话在工具条（BatchBar）里，动作
+  // 只在被确认后到达这里。返回值（实际命中行数）驱动成功 toast。
+  async function batchDelete(): Promise<void> {
+    const targets = [...checked.values()]
+    if (targets.length === 0) return
+    await runWithToast(deleteSessionsMut, targets, {
+      success: {
+        message: (n) => t("sessions.toast.batchDeleted", { n }),
+      },
+      failed: { key: "sessions.toast.failed" },
+    })
+    clearChecked()
   }
 
   /** group 双轨 mutation 选择（架构扫描候选⑨b）：local（SQLite 直写）vs
@@ -787,6 +812,8 @@ export function useSessionsBrowser() {
     error: sessionsQuery.error,
     trackGroups,
     visibleSessions,
+    // #90 缩进展示：被挂到父行下的子行 favKey 集合（表行渲染缩进的依据）。
+    nestedSessionKeys: nested.nestedKeys,
     // 左树（两级）+ 右栏统计
     statsRows,
     projectBuckets,
@@ -817,6 +844,7 @@ export function useSessionsBrowser() {
     clearChecked,
     batchFavorite,
     batchSetGroup,
+    batchDelete,
     // detail (选中会话)
     preview,
     setPreview,

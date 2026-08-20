@@ -17,7 +17,9 @@
 import dayjs from "dayjs"
 import relativeTime from "dayjs/plugin/relativeTime"
 import { MessagesSquare, Search, Star, Trash2, X } from "lucide-react"
+import { useState } from "react"
 import { useTranslation } from "react-i18next"
+import { ConfirmDialog } from "@/components/confirm-dialog"
 import { DateRangeChip } from "@/components/date-range-chip"
 import { FilterSelect } from "@/components/filter-select"
 import { PaginationBar } from "@/components/pagination-bar"
@@ -261,9 +263,10 @@ function WorkbenchToolbar({ b }: { b: ReturnType<typeof useSessionsBrowser> }) {
 }
 
 /** 批量操作入口（定稿 §6）：勾选后出现——批量收藏 / 归组（下拉选组）/
- *  删除（会话删除属后续切片，入口就位但禁用）+ 清除多选。 */
+ *  删除（#91 软删除，ConfirmDialog 二次确认后执行）+ 清除多选。 */
 function BatchBar({ b }: { b: ReturnType<typeof useSessionsBrowser> }) {
   const { t } = useTranslation()
+  const [deleteOpen, setDeleteOpen] = useState(false)
   if (b.checkedCount === 0) return null
   return (
     <div className="flex items-center gap-1.5">
@@ -290,7 +293,11 @@ function BatchBar({ b }: { b: ReturnType<typeof useSessionsBrowser> }) {
       <Tooltip>
         <TooltipTrigger
           render={
-            <Button variant="outline" size="sm" disabled>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => setDeleteOpen(true)}
+            >
               <Trash2 className="size-3.5" />
               {t("sessions.batch.delete")}
             </Button>
@@ -314,6 +321,18 @@ function BatchBar({ b }: { b: ReturnType<typeof useSessionsBrowser> }) {
         </TooltipTrigger>
         <TooltipContent>{t("sessions.batch.clear")}</TooltipContent>
       </Tooltip>
+      <ConfirmDialog
+        open={deleteOpen}
+        onOpenChange={setDeleteOpen}
+        title={t("sessions.delete.title")}
+        description={t("sessions.delete.desc", { n: b.checkedCount })}
+        confirmLabel={t("sessions.delete.confirm")}
+        onConfirm={() => {
+          // Close-then-delete：确认即关对话再执行，结果由汇总 toast 反馈。
+          setDeleteOpen(false)
+          void b.batchDelete()
+        }}
+      />
     </div>
   )
 }
@@ -427,6 +446,7 @@ function ListPane({ b }: { b: ReturnType<typeof useSessionsBrowser> }) {
             isChecked={b.isChecked}
             onToggleCheck={b.toggleCheck}
             showProjectColumn={b.selectedProject == null}
+            nestedKeys={b.nestedSessionKeys}
           />
         </QueryState>
 
@@ -459,6 +479,7 @@ function SessionsTable({
   isChecked,
   onToggleCheck,
   showProjectColumn,
+  nestedKeys,
 }: {
   rows: SessionRow[]
   effectiveFavorite: (s: SessionRow) => boolean
@@ -474,6 +495,8 @@ function SessionsTable({
   onToggleCheck: (s: SessionRow) => void
   /** 项目态下项目列冗余（表头已示项目与路径），隐藏让位给标题列。 */
   showProjectColumn: boolean
+  /** #90 缩进展示：挂到父行下的子行 favKey 集合（nestSubagents 的输出）。 */
+  nestedKeys: Set<string>
 }) {
   const { t } = useTranslation()
   return (
@@ -519,6 +542,11 @@ function SessionsTable({
             const fav = effectiveFavorite(s)
             const open = openFavKey === favKey(s)
             const sub = s.agent_type !== ""
+            // #90 缩进：显式父子链接且父行在同页的子行缩进挂到父行下
+            //（nestSubagents 已把它移到父行正后方），缩进量落在 ↳ 标记上；
+            // 父行不在同页的子行保持顶格，仅以 ↳ 标记类型。表格本身 min-w
+            // + 横向滚动，三档容器宽度下缩进都不破版。
+            const nested = nestedKeys.has(favKey(s))
             return (
               <TableRow
                 key={favKey(s)}
@@ -586,7 +614,12 @@ function SessionsTable({
                     >
                       <span className="block w-full min-w-0 truncate font-medium">
                         {sub ? (
-                          <span className="text-muted-foreground/50 mr-0.5">
+                          <span
+                            className={cn(
+                              "text-muted-foreground/50 mr-0.5 select-none",
+                              nested && "ml-3.5",
+                            )}
+                          >
                             ↳
                           </span>
                         ) : null}

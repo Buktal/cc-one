@@ -84,6 +84,24 @@ impl ClaudeCodeSourceParser {
         } else {
             None
         };
+        // Parent link: Claude Code writes subagent sidechain files at
+        // `<project>/<parent-session-id>/subagents/agent-*.jsonl` — the
+        // directory chain IS the explicit parent field (written by Claude Code
+        // itself; on the machine this was derived from, 261/261 agent files
+        // live in that shape and 53/53 parent dirs pair with a real parent
+        // session file — no heuristic inference). Old Claude Code versions
+        // wrote agent files flat in the project dir: no link exists there, so
+        // those rows keep `""` and display top-level (`agent_type` still set).
+        let parent_session_id = if is_agent {
+            file.parent()
+                .filter(|dir| dir.file_name().and_then(|n| n.to_str()) == Some("subagents"))
+                .and_then(|dir| dir.parent())
+                .and_then(|grand| grand.file_name().and_then(|n| n.to_str()))
+                .map(str::to_string)
+                .unwrap_or_default()
+        } else {
+            String::new()
+        };
         let mut events_by_mid: std::collections::HashMap<String, RawUsage> =
             std::collections::HashMap::new();
         let mut turn_durations = Vec::new();
@@ -265,6 +283,7 @@ impl ClaudeCodeSourceParser {
                 started_at,
                 last_active_at,
                 agent_type,
+                parent_session_id,
             }]
         } else {
             Vec::new()
@@ -1339,5 +1358,60 @@ mod tests {
         assert_eq!(main.title_orig, "hello world");
         // Subagent usage is parsed like any other session's.
         assert!(outcome.events.iter().any(|u| u.session_id == "agent-aaa"));
+    }
+
+    /// Parent link (#90): Claude Code writes subagent files at
+    /// `<project>/<parent-session-id>/subagents/agent-*.jsonl` — the directory
+    /// chain is the EXPLICIT parent field, so a nested agent file carries its
+    /// parent's id, while the legacy flat layout (agent files directly in the
+    /// project dir) and main sessions carry `""` (no heuristic inference).
+    #[test]
+    fn fold_derives_parent_from_subagents_directory_placement() {
+        let dir = tempfile::tempdir().unwrap();
+        let proj = dir.path().join("proj");
+        let nested = proj
+            .join("196aa2c3-ee4f-4408-929d-b356c7dbb25c")
+            .join("subagents");
+        fs::create_dir_all(&nested).unwrap();
+        // Nested subagent (the current Claude Code layout) + its parent main
+        // session file at the project root.
+        write_lines(
+            &nested.join("agent-a01d98.jsonl"),
+            &[assistant_line("u1", "msg_A", 10)],
+        );
+        write_lines(
+            &proj.join("196aa2c3-ee4f-4408-929d-b356c7dbb25c.jsonl"),
+            &[assistant_line("u2", "msg_B", 20)],
+        );
+        // Legacy flat subagent: same project dir, no subagents/ wrapper.
+        write_lines(
+            &proj.join("agent-flat.jsonl"),
+            &[assistant_line("u3", "msg_C", 30)],
+        );
+        let p = ClaudeCodeSourceParser::with_dir(dir.path().to_path_buf());
+        let outcome = p.parse(&p.discover().unwrap()).unwrap();
+
+        let by_id = |id: &str| {
+            outcome
+                .sessions
+                .iter()
+                .find(|s| s.id == id)
+                .unwrap_or_else(|| panic!("session {id} missing"))
+        };
+        assert_eq!(
+            by_id("agent-a01d98").parent_session_id,
+            "196aa2c3-ee4f-4408-929d-b356c7dbb25c",
+            "nested placement names the parent session"
+        );
+        assert_eq!(
+            by_id("agent-flat").parent_session_id,
+            "",
+            "flat layout carries no link — never guessed"
+        );
+        assert_eq!(
+            by_id("196aa2c3-ee4f-4408-929d-b356c7dbb25c").parent_session_id,
+            "",
+            "a main session has no parent"
+        );
     }
 }

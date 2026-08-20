@@ -83,9 +83,13 @@ pub(super) fn migrate_schema(conn: &Connection) -> AppResult<()> {
         }
     }
 
-    // `sessions.agent_type` (added after the initial schema) — the subagent
-    // type tag ("" = main session). Same probe-ALTER pattern; the table may not
-    // exist on stores older than the sessions feature, so gate on sqlite_master.
+    // `sessions` columns added after the initial schema: `agent_type` (the
+    // subagent type tag, "" = main session) and `parent_session_id` (subagent →
+    // its main session's id, "" = none) — both system data, defaulting to the
+    // top-level/main shape on legacy rows until the next collect refreshes
+    // them; `excluded` (the soft-delete marker, user data — legacy rows default
+    // to 0 = present). Same probe-ALTER pattern; the table may not exist on
+    // stores older than the sessions feature, so gate on sqlite_master.
     {
         let has_table: i64 = conn.query_row(
             "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='sessions'",
@@ -100,11 +104,14 @@ pub(super) fn migrate_schema(conn: &Connection) -> AppResult<()> {
             for n in names {
                 have_session.insert(n?);
             }
-            if !have_session.contains("agent_type") {
-                conn.execute(
-                    "ALTER TABLE sessions ADD COLUMN agent_type TEXT NOT NULL DEFAULT ''",
-                    [],
-                )?;
+            for (col, ddl) in [
+                ("agent_type", "TEXT NOT NULL DEFAULT ''"),
+                ("parent_session_id", "TEXT NOT NULL DEFAULT ''"),
+                ("excluded", "INTEGER NOT NULL DEFAULT 0"),
+            ] {
+                if !have_session.contains(col) {
+                    conn.execute(&format!("ALTER TABLE sessions ADD COLUMN {col} {ddl}"), [])?;
+                }
             }
         }
     }
@@ -526,6 +533,59 @@ mod tests {
             )
             .unwrap();
         assert_eq!(sid, "", "legacy rows default to '' (unknown project)");
+    }
+
+    /// Regression: a legacy `sessions` table predating `parent_session_id`
+    /// (subagent parent link) and `excluded` (soft-delete marker) is upgraded
+    /// in place by probe-ALTER — legacy rows default to `""` (top-level) and
+    /// `0` (present) respectively.
+    #[test]
+    fn migrate_adds_sessions_parent_link_and_excluded() {
+        let conn = Connection::open_in_memory().unwrap();
+        // usage_records must exist (migrate_schema probes it first) — built
+        // with the full current column set so only sessions is legacy.
+        conn.execute_batch(
+            "CREATE TABLE usage_records (
+                uuid TEXT NOT NULL, timestamp TEXT NOT NULL, day TEXT NOT NULL,
+                model TEXT NOT NULL, pricing_model TEXT NOT NULL, source TEXT NOT NULL,
+                session_id TEXT NOT NULL DEFAULT '', device_id TEXT NOT NULL,
+                input_tokens INTEGER NOT NULL, output_tokens INTEGER NOT NULL,
+                cache_creation_tokens INTEGER NOT NULL, cache_read_tokens INTEGER NOT NULL,
+                server_tool_use TEXT NOT NULL DEFAULT '{}', stop_reason TEXT NOT NULL DEFAULT '',
+                service_tier TEXT NOT NULL DEFAULT '', iterations INTEGER NOT NULL DEFAULT 0,
+                input_cost_usd TEXT NOT NULL, output_cost_usd TEXT NOT NULL,
+                cache_read_cost_usd TEXT NOT NULL, cache_creation_cost_usd TEXT NOT NULL,
+                total_cost_usd TEXT NOT NULL,
+                PRIMARY KEY (uuid, device_id)
+            );
+            CREATE TABLE sessions (
+                id TEXT NOT NULL, device_id TEXT NOT NULL,
+                source TEXT NOT NULL DEFAULT '', project_dir TEXT NOT NULL DEFAULT '',
+                title_orig TEXT NOT NULL DEFAULT '', started_at TEXT NOT NULL DEFAULT '',
+                last_active_at TEXT NOT NULL DEFAULT '', agent_type TEXT NOT NULL DEFAULT '',
+                custom_title TEXT NOT NULL DEFAULT '', favorited INTEGER NOT NULL DEFAULT 0,
+                synced_group_id TEXT NOT NULL DEFAULT '', local_group_id TEXT NOT NULL DEFAULT '',
+                PRIMARY KEY (id, device_id)
+            );
+            INSERT INTO sessions (id, device_id) VALUES ('s1', 'dev1');",
+        )
+        .unwrap();
+        assert!(conn
+            .prepare("SELECT parent_session_id FROM sessions")
+            .is_err());
+        assert!(conn.prepare("SELECT excluded FROM sessions").is_err());
+
+        migrate_schema(&conn).unwrap();
+
+        let (parent, excluded): (String, i64) = conn
+            .query_row(
+                "SELECT parent_session_id, excluded FROM sessions WHERE id='s1'",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(parent, "", "legacy rows default to top-level");
+        assert_eq!(excluded, 0, "legacy rows default to present");
     }
 
     /// Regression companion: a legacy DB ALREADY on the composite (uuid,
