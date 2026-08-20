@@ -1,11 +1,13 @@
-// Sessions view —— 单屏四栏工作台容器（定稿 docs/plans/sessions-
-// workbench-redesign.md，原型 variant-d）：主导航（shell，1024 自动收窄）｜
-// 左树栏（三轨道两级树）｜中内容区（三态）｜右统计卡栏（4 卡，按项目/按会话）。
-// 顶部工具条：时间 pill（作用于全部统计）+ 筛选 + 搜索 + 批量操作入口。
+// Sessions view —— 三栏工作台容器（#108 定稿 variant-a「图标轨道 + 计数
+// 清单」，原型 docs/prototype/sessions-v2/variant-a-icon-rail-counts.html）：
+// 左栏（图标轨道条 + 纯计数清单）｜中内容区（分页会话列表 / 会话详情）｜
+// 右统计卡栏（口径随选中对象派生：会话态四卡 / 项目态项目卡 / 分组态轻量
+// 汇总）。顶部工具条：时间 pill（作用于全部统计）+ 筛选 + 搜索 + 批量操作
+// 入口。
 //
-// 中内容区三态：未选中 = 会话总列表；选中项目 = 统计头小卡片 + 项目会话列表；
-// 选中会话 = 标题行 + 对话流（session-detail，其余统计全在右栏）。窄容器
-// （< 48rem ≈ 768 档）左树收成工具条下拉、右栏折叠为浮动按钮开抽屉。
+// 中内容区两态：列表态（未选会话）= 分页会话列表（每页 20/50/100）；会话态
+// = 标题行 + 对话流（session-detail，其余统计全在右栏）。窄容器（< 48rem ≈
+// 768 档）左树收成工具条下拉、右栏折叠为浮动按钮开抽屉。
 //
 // Pure rendering only — all state, queries, mutations and the optimistic
 // favorite / pending-group handling live in useSessionsBrowser (./use-sessions-
@@ -39,18 +41,23 @@ import {
 } from "@/components/ui/tooltip"
 import { ProjectSelect } from "@/features/usage/components/project-select"
 import type { FilterOption } from "@/lib/filter-options"
-import { formatCost, formatCount, formatPct, formatTokens } from "@/lib/format"
+import {
+  formatCost,
+  formatCount,
+  formatMetricSeg,
+  formatTokens,
+} from "@/lib/format"
 import { SOURCE_TAGS } from "@/lib/source-tags"
 import { cn } from "@/lib/utils"
-import type { ProjectStatsRow, SessionRow } from "@/types/generated/bindings"
+import type { SessionRow } from "@/types/generated/bindings"
 import { ALL_GROUPS, favKey, projectBasename, UNGROUPED } from "../derive"
 import { highlight } from "../highlight"
 import { sessionAgentKind, sessionSourceLabel } from "../source-labels"
-import { useSessionsBrowser } from "../use-sessions-browser"
+import { PAGE_SIZES, useSessionsBrowser } from "../use-sessions-browser"
 import { GroupCreateDialog } from "./group-create-dialog"
 import { SessionDetail } from "./session-detail"
 import { SessionTree } from "./session-tree"
-import { StatsRail } from "./stats-rail"
+import { StatsRail, type StatsScopeTag } from "./stats-rail"
 
 dayjs.extend(relativeTime)
 
@@ -77,6 +84,22 @@ export function SessionsView() {
   const sessionStats = preview
     ? (b.statsByKey.get(favKey(preview)) ?? null)
     : null
+  // 右栏口径 tag 与项目态身份卡数据：口径由选中对象派生（会话 > 项目 > 分组），
+  // 与 selectionAggregate 的容器判定同一优先级——tab 删除后不再有第二份手设。
+  const groupSelected =
+    b.selectedProject == null && b.selectedGroupId !== ALL_GROUPS
+  const scopeTag: StatsScopeTag = preview
+    ? "session"
+    : groupSelected
+      ? "group"
+      : "project"
+  const projectIdentity =
+    !preview && b.selectedProject != null
+      ? {
+          dir: b.selectedProject,
+          subagents: b.selectionRows.filter((r) => r.agent_type !== "").length,
+        }
+      : null
 
   return (
     // @container 驱动工作台自身的折叠（48rem ≈ 768 档树/右栏让位；64rem ≈
@@ -94,11 +117,9 @@ export function SessionsView() {
           trackGroups={b.trackGroups}
           selectedGroupId={b.selectedGroupId}
           selectedProject={b.selectedProject}
-          activeSessionKey={preview ? favKey(preview) : null}
           onSelectAll={b.selectAll}
           onSelectProject={b.selectProject}
           onSelectGroup={b.selectGroup}
-          onOpenSession={b.openStatsRow}
           onCreateGroup={b.openCreateGroup}
           onRenameGroup={b.renameGroup}
           onDeleteGroup={b.deleteGroup}
@@ -107,8 +128,8 @@ export function SessionsView() {
           busyGroupId={b.busyGroupId}
         />
 
-        {/* 中内容区（三态）。@container 在此列——详情里的轮次导航列
-            （TURN_NAV_VISIBILITY）以本列宽度显隐。 */}
+        {/* 中内容区（两态：列表 / 会话详情）。@container 在此列——详情里的
+            轮次导航列（TURN_NAV_VISIBILITY）以本列宽度显隐。 */}
         <div className="@container flex min-h-0 min-w-0 flex-1 flex-col">
           {preview ? (
             <SessionDetail
@@ -138,8 +159,7 @@ export function SessionsView() {
         </div>
 
         <StatsRail
-          scope={b.statsScope}
-          onScopeChange={b.setStatsScope}
+          scopeTag={scopeTag}
           scopeLabel={scopeLabel}
           aggregate={b.selectionAggregate}
           session={preview}
@@ -147,7 +167,7 @@ export function SessionsView() {
           transcript={b.transcript}
           transcriptLoading={b.transcriptLoading}
           deviceLabel={(id) => b.deviceLabel.get(id) ?? id.slice(0, 8)}
-          projectSelected={b.selectedProject != null}
+          projectIdentity={projectIdentity}
         />
       </div>
 
@@ -337,8 +357,9 @@ function NarrowTreeSelect({ b }: { b: ReturnType<typeof useSessionsBrowser> }) {
 
 // ------------------------------------------------------------- 中栏 ----
 
-/** 列表态/项目态共用骨架：头部（标题 + 描述 / 项目统计头）+ 表格 + 分页。
- *  selectedProject 以 != null 判选中："" = 未知项目桶。 */
+/** 列表态骨架：头部（标题 + 项目路径 + 会话数）+ 表格 + 分页（每页 20/50/
+ *  100）。selectedProject 以 != null 判选中："" = 未知项目桶。项目统计头
+ *  已上移右栏（项目态项目卡），中栏只管列表。 */
 function ListPane({ b }: { b: ReturnType<typeof useSessionsBrowser> }) {
   const { t } = useTranslation()
   const headTitle =
@@ -362,11 +383,14 @@ function ListPane({ b }: { b: ReturnType<typeof useSessionsBrowser> }) {
               {headDesc}
             </span>
           ) : null}
+          {/* DSL 段：会话数 N（与分页条同源的 viewTotal）。 */}
+          <span className="text-muted-foreground ml-auto shrink-0 text-xs tabular-nums">
+            {formatMetricSeg(
+              t("sessions.stats.sessions"),
+              formatCount(b.viewTotal),
+            )}
+          </span>
         </div>
-
-        {b.selectedProject != null ? (
-          <ProjectTiles stats={b.selectedProjectStats} rows={b.selectionRows} />
-        ) : null}
 
         <QueryState
           isLoading={b.isLoading}
@@ -402,6 +426,7 @@ function ListPane({ b }: { b: ReturnType<typeof useSessionsBrowser> }) {
             search={b.search}
             isChecked={b.isChecked}
             onToggleCheck={b.toggleCheck}
+            showProjectColumn={b.selectedProject == null}
           />
         </QueryState>
 
@@ -411,93 +436,14 @@ function ListPane({ b }: { b: ReturnType<typeof useSessionsBrowser> }) {
           total={b.viewTotal}
           loading={b.isFetching}
           onPageChange={b.goToPage}
+          pageSize={{
+            value: b.pageSize,
+            options: PAGE_SIZES,
+            onChange: b.setPageSize,
+          }}
         />
       </CardContent>
     </Card>
-  )
-}
-
-/** 项目统计头（定稿 §2）：6 张小卡——会话数（含 subagent）/ 请求数 / Token
- *  总量 / 缓存命中率 / 成本 / 最近活跃。#85 的项目粒度行直读。 */
-function ProjectTiles({
-  stats,
-  rows,
-}: {
-  stats: ProjectStatsRow | null
-  rows: ReadonlyArray<{ agent_type: string }>
-}) {
-  const { t } = useTranslation()
-  if (!stats) {
-    return (
-      <div className="bg-muted/40 text-muted-foreground animate-pulse rounded-lg p-4 text-xs">
-        {t("common.loading")}
-      </div>
-    )
-  }
-  const subs = rows.filter((r) => r.agent_type !== "").length
-  const tiles = [
-    {
-      k: t("sessions.stats.sessions"),
-      v: formatCount(stats.session_count),
-      s: t("sessions.stats.subSessions", { n: formatCount(subs) }),
-    },
-    {
-      k: t("sessions.detail.requests"),
-      v: formatCount(stats.request_count),
-      s: "",
-    },
-    {
-      k: t("sessions.stats.tokensTotal"),
-      v: formatTokens(stats.total_tokens),
-      s: t("sessions.stats.tokensNote"),
-    },
-    {
-      k: t("sessions.stats.hitRate"),
-      v: formatPct(stats.cache_hit_rate),
-      s: t("sessions.stats.hitRateFormula"),
-      hit: true,
-    },
-    {
-      k: t("sessions.detail.cost"),
-      v: formatCost(stats.total_cost_usd),
-      s: "USD",
-      cost: true,
-    },
-    {
-      k: t("sessions.detail.lastActive"),
-      v: stats.last_active_at ? dayjs(stats.last_active_at).fromNow() : "—",
-      s: stats.last_active_at
-        ? dayjs(stats.last_active_at).format("YYYY-MM-DD HH:mm")
-        : "",
-    },
-  ]
-  return (
-    <div className="grid shrink-0 grid-cols-3 gap-2 @[64rem]:grid-cols-6">
-      {tiles.map((tile) => (
-        <div
-          key={tile.k}
-          className="border-border rounded-lg border px-2.5 py-2"
-        >
-          <div className="text-muted-foreground truncate text-[10px]">
-            {tile.k}
-          </div>
-          <div
-            className={cn(
-              "mt-0.5 truncate text-base font-semibold tabular-nums",
-              tile.hit && "text-[var(--chart-cache-read)]",
-              tile.cost && "text-accent-brand-strong",
-            )}
-          >
-            {tile.v}
-          </div>
-          {tile.s ? (
-            <div className="text-muted-foreground/60 mt-0.5 truncate text-[10px]">
-              {tile.s}
-            </div>
-          ) : null}
-        </div>
-      ))}
-    </div>
   )
 }
 
@@ -512,6 +458,7 @@ function SessionsTable({
   search,
   isChecked,
   onToggleCheck,
+  showProjectColumn,
 }: {
   rows: SessionRow[]
   effectiveFavorite: (s: SessionRow) => boolean
@@ -525,6 +472,8 @@ function SessionsTable({
   search: string
   isChecked: (s: SessionRow) => boolean
   onToggleCheck: (s: SessionRow) => void
+  /** 项目态下项目列冗余（表头已示项目与路径），隐藏让位给标题列。 */
+  showProjectColumn: boolean
 }) {
   const { t } = useTranslation()
   return (
@@ -546,7 +495,11 @@ function SessionsTable({
             {showDeviceColumn ? (
               <TableHead className="w-28">{t("sessions.col.device")}</TableHead>
             ) : null}
-            <TableHead className="w-44">{t("sessions.col.project")}</TableHead>
+            {showProjectColumn ? (
+              <TableHead className="w-44">
+                {t("sessions.col.project")}
+              </TableHead>
+            ) : null}
             <TableHead className="w-24">
               {t("sessions.col.lastActive")}
             </TableHead>
@@ -684,18 +637,20 @@ function SessionsTable({
                     </span>
                   </TableCell>
                 ) : null}
-                <TableCell className="text-muted-foreground text-xs">
-                  <Tooltip trackCursorAxis="both">
-                    <TooltipTrigger
-                      render={<span className="block min-w-0 truncate" />}
-                    >
-                      {projectBasename(s.project_dir) || "—"}
-                    </TooltipTrigger>
-                    <TooltipContent className="max-w-sm break-all">
-                      {s.project_dir || "—"}
-                    </TooltipContent>
-                  </Tooltip>
-                </TableCell>
+                {showProjectColumn ? (
+                  <TableCell className="text-muted-foreground text-xs">
+                    <Tooltip trackCursorAxis="both">
+                      <TooltipTrigger
+                        render={<span className="block min-w-0 truncate" />}
+                      >
+                        {projectBasename(s.project_dir) || "—"}
+                      </TooltipTrigger>
+                      <TooltipContent className="max-w-sm break-all">
+                        {s.project_dir || "—"}
+                      </TooltipContent>
+                    </Tooltip>
+                  </TableCell>
+                ) : null}
                 <TableCell className="text-muted-foreground text-xs">
                   {s.last_active_at ? (
                     <Tooltip>

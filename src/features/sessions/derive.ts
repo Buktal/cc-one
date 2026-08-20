@@ -13,7 +13,6 @@ import { ALL_FILTER } from "@/lib/source-tags"
 import type {
   SessionFilter,
   SessionGroup,
-  SessionGroupCounts,
   SessionMessage,
   SessionRow,
   SessionStatsRow,
@@ -258,26 +257,6 @@ export function identityOfProjectFilter(
   if (!value) return null
   if (unknownValue != null && value === unknownValue) return ""
   return value
-}
-
-// ---------------------------------------------------------------- counts ----
-
-/**
- * The sidebar's ungrouped count from the backend's per-bucket counts: total
- * minus the buckets belonging to known groups. Every other bucket — the empty
- * id (ungrouped) and stale ids whose group was deleted — counts as ungrouped,
- * the same rule the old client-side grouping applied (a stale id is treated as
- * ungrouped, never silently dropped). Pure so the invariant is testable.
- */
-export function ungroupedCount(
-  counts: Pick<SessionGroupCounts, "total" | "groups">,
-  knownGroupIds: ReadonlySet<string>,
-): number {
-  let known = 0
-  for (const g of counts.groups) {
-    if (knownGroupIds.has(g.group_id)) known += g.count
-  }
-  return counts.total - known
 }
 
 // -------------------------------------------------------------- detail -----
@@ -634,9 +613,9 @@ export function projectNodes(
 
 /**
  * The group tracks' row bucketing: rows keyed by their group id, with every
- * row whose id is empty OR not in `knownIds` falling into `ungrouped` — the
- * same "stale id counts as ungrouped" rule `ungroupedCount` applies to the
- * backend counts, kept in one place for the tree's session children.
+ * row whose id is empty OR not in `knownIds` falling into `ungrouped` — a
+ * stale id (group since deleted) is treated as ungrouped, never silently
+ * dropped. The one rule, in the one place the count list reads.
  */
 export function groupedRows<T>(
   rows: readonly T[],
@@ -661,34 +640,6 @@ export function groupedRows<T>(
 // feature surface — shares it); re-exported so the sessions call sites keep
 // their import seam (same pattern as reorderIds below).
 export { projectBasename } from "@/lib/paths"
-
-/** Project a stats row onto the list-row shape — the tree's session children
- *  are stats rows, but the detail view consumes SessionRow. The numbers come
- *  from the same SQL aggregates the list reads (buckets summed = the list's
- *  total_tokens; cost identical), so the projection is lossless for every
- *  field the detail uses. */
-export function toSessionRow(r: SessionStatsRow): SessionRow {
-  return {
-    id: r.id,
-    device_id: r.device_id,
-    source: r.source,
-    project_dir: r.project_dir,
-    title: r.title,
-    agent_type: r.agent_type,
-    favorited: r.favorited,
-    local_group_id: r.local_group_id,
-    synced_group_id: r.synced_group_id,
-    started_at: r.started_at,
-    last_active_at: r.last_active_at,
-    request_count: r.request_count,
-    total_tokens:
-      r.input_tokens +
-      r.output_tokens +
-      r.cache_creation_tokens +
-      r.cache_read_tokens,
-    total_cost_usd: r.total_cost_usd,
-  }
-}
 
 // ------------------------------------------------------------- transcript --
 

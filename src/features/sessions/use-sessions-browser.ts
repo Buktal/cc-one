@@ -1,9 +1,10 @@
 // Sessions browser state + actions, extracted from SessionsView so the
-// component shrinks to pure rendering. Owns: the tab / search / sidebar-group
-// selection, the session list + groups + devices queries, the transcript query
-// for the open detail sheet, optimistic favorite toggling, the two-track group
-// CRUD (local = immediate, synced = async git push → optimistic + loading), and
-// the derived sidebar buckets / visible-session list.
+// component shrinks to pure rendering. Owns: the track / search / sidebar-group
+// selection, the per-page size, the session list + groups + devices queries,
+// the transcript query for the open detail sheet, optimistic favorite
+// toggling, the two-track group CRUD (local = immediate, synced = async git
+// push → optimistic + loading), and the derived sidebar buckets /
+// visible-session list.
 //
 // vitest runs in a node-only environment (no DOM — see vitest.config.ts), so
 // renderHook is out of scope; the companion test guards that this module
@@ -22,7 +23,6 @@ import {
   useDistinctModelsQuery,
   useListGroupsQuery,
   useListSessionsQuery,
-  useProjectStatsQuery,
   useRenameLocalGroupMutation,
   useRenameSyncedGroupMutation,
   useReorderLocalGroupsMutation,
@@ -47,7 +47,6 @@ import { useMutateWithToast } from "@/hooks/use-toast-mutation"
 import { facetOptions } from "@/lib/filter-options"
 import { usePersistedState } from "@/lib/persistence"
 import type {
-  ProjectStatsRow,
   SessionGroup,
   SessionRow,
   SessionStatsRow,
@@ -68,10 +67,8 @@ import {
   projectNodes,
   type SessionScopeSpec,
   type TreeTrack,
-  toSessionRow,
   trackUniverseTab,
   UNGROUPED,
-  ungroupedCount,
   withFavOverride,
   withoutFavOverride,
 } from "./derive"
@@ -82,10 +79,15 @@ import { useSessionJumpConsumer } from "./session-jump"
  *  universe switch now (定稿 §1). */
 const TRACK_KEY = "cc-one:sessions-track"
 
-/** Rows per page — matches the request-log table so both data views page at
- *  the same density. Exported for the view's paginator (the disabled state
- *  must agree with the query's page size — one source of truth). */
+/** Persisted page-size key — the center list's per-page density (三栏定稿：
+ *  每页 20/50/100) survives restarts. */
+const PAGE_SIZE_KEY = "cc-one:sessions-page-size"
+
+/** Default rows per page — the first option of PAGE_SIZES. */
 export const SESSIONS_PAGE_SIZE = 20
+
+/** The pager's per-page options (variant-a 定稿：20/50/100)。 */
+export const PAGE_SIZES: readonly number[] = [20, 50, 100]
 
 /** Title-rename 状态的单一归属（架构扫描候选⑨c）：详情头部的就地
  *  管理「编辑中 / 草稿 / 提交」，不再经 useSessionsBrowser → SessionDetail
@@ -143,6 +145,10 @@ export function useSessionsBrowser() {
     "projects",
   )
   const tab = trackUniverseTab(track)
+  const [pageSize, setPageSize] = usePersistedState<number>(
+    PAGE_SIZE_KEY,
+    SESSIONS_PAGE_SIZE,
+  )
   const [search, setSearch] = useState("")
   // Search is backend-side (the page query filters the whole set, not just
   // the loaded page), so keystrokes debounce before they hit the db.
@@ -199,9 +205,6 @@ export function useSessionsBrowser() {
   const [checked, setChecked] = useState<
     Map<string, { id: string; device_id: string }>
   >(() => new Map())
-  // 右栏统计卡的口径 tab（按项目/按会话）——跟随选中对象的默认值在选择
-  // 动作里设置，用户可手动切换。
-  const [statsScope, setStatsScope] = useState<"project" | "session">("project")
 
   // The tree selection is track-scoped (local vs synced group ids are disjoint
   // spaces), so a track switch must drop a stale group selection. The project
@@ -261,47 +264,36 @@ export function useSessionsBrowser() {
     () => facetOptions(distinctModels, model),
     [distinctModels, model],
   )
-  // 两套计数，语义不同：
-  // - 侧栏计数（分组分布 + 「全部」行）：**全局聚合，不含选中分组**——选中
-  //   分组只是过滤右侧列表，侧栏分布不该跟着变（否则切到 A 组时 B/C/D 的
-  //   数字全部归零，明显错乱）。
-  // - 视图计数（分页 total）：跟随当前分组——列表已被分组过滤，分页总数
-  //   必须匹配列表范围，否则翻页错位。
-  const sidebarCountsQuery = useSessionCountsQuery(
-    { spec: universeScope, track: effectiveTrack },
-    { skip: !selfDeviceId },
-  )
+  // 视图计数（分页 total）：跟随当前分组——列表已被分组过滤，分页总数必须
+  // 匹配列表范围，否则翻页错位。（左栏计数清单是 selection-free 的 statsRows
+  // 分桶，不走这份带选中的计数——两套口径见上。）
   const viewCountsQuery = useSessionCountsQuery(
     { spec: scope, track: effectiveTrack },
     { skip: !selfDeviceId },
   )
-  const sidebarCounts = sidebarCountsQuery.data ?? { total: 0, groups: [] }
   const viewCounts = viewCountsQuery.data ?? { total: 0, groups: [] }
-  // 工作台统计读：会话粒度（树 + 右栏卡）与项目粒度（项目树节点 + 中栏项目
-  // 统计头）。同一 selection-free scope，同一失效标签。
+  // 工作台统计读（会话粒度）：左树计数、右栏全部卡组同一次 selection-free
+  // 读——一条统计路径，无第二份口径。
   const statsQuery = useSessionStatsQuery(universeScope, {
     skip: !selfDeviceId,
   })
-  const projectsQuery = useProjectStatsQuery(universeScope, {
-    skip: !selfDeviceId,
-  })
   const statsRows = statsQuery.data ?? []
-  const projectStatRows: ProjectStatsRow[] = projectsQuery.data ?? []
 
   // 分页控制器（架构扫描候选⑧）：offset / 页统计 / 翻页单一归属。scope 身份
   // 变化 → 回第 1 页——结构性规则，scope 里新增维度自动参与，不再手列依赖
-  // 清单（此前 4 组互不相同的手列数组各自编码同一不变量）。统计用视图计数
-  // （viewCounts，跟随分组过滤）；侧栏「全部」行用全局计数。
+  // 清单（此前 4 组互不相同的手列数组各自编码同一不变量）。pageSize 挂在
+  // browser 的 scope 里：每页条数切换即「维度变化」，同一规则负责回第 1 页
+  // （offset 在不同页大小下不同义，不能沿用）。
   const browser = usePagedBrowser({
-    scope,
-    pageSize: SESSIONS_PAGE_SIZE,
+    scope: { ...scope, pageSize },
+    pageSize,
     total: viewCounts.total,
   })
   // Paged session list (mirrors the request-log table). Skipped until
   // selfDeviceId resolves so the local tab never queries with an empty
   // device_scope.
   const sessionsQuery = useListSessionsQuery(
-    { ...scope, limit: SESSIONS_PAGE_SIZE, offset: browser.offset },
+    { ...scope, limit: pageSize, offset: browser.offset },
     { skip: !selfDeviceId },
   )
 
@@ -357,31 +349,19 @@ export function useSessionsBrowser() {
       ),
     [groups, effectiveTrack, groupOrderOverride],
   )
-  // Sidebar counts from the backend aggregation: the per-bucket map (group
-  // rows) and the derived ungrouped count (total minus known buckets — stale
-  // ids count as ungrouped, the rule the old client-side grouping applied).
-  // 用全局聚合（sidebarCounts）——切分组不改变侧栏分布。
-  const groupCounts = useMemo(() => {
-    const m = new Map<string, number>()
-    for (const g of sidebarCounts.groups) m.set(g.group_id, g.count)
-    return m
-  }, [sidebarCounts])
+  // knownGroupIds：分组桶的已知组集合——空串与陈旧 id（组已删）都归未分组。
   const knownGroupIds = useMemo(
     () => new Set(trackGroups.map((g) => g.id)),
     [trackGroups],
-  )
-  const ungroupedN = useMemo(
-    () => ungroupedCount(sidebarCounts, knownGroupIds),
-    [sidebarCounts, knownGroupIds],
   )
   // The visible list is the backend's current page — already narrowed by the
   // track-universe/toolbar/search AND the tree's container selection (group or
   // project), time-desc ordered.
   const visibleSessions = sessionsQuery.data ?? []
 
-  // ---- 左树两级数据（selection-free 统计行的客户端分桶）----
+  // ---- 左树计数清单数据（selection-free 统计行的客户端分桶）----
   // 项目轨：projectNodes 已按桶最近活跃排序；分组/收藏轨：knownIds 之外的
-  // 组 id（含空串）按 ungroupedCount 同一规则落入未分组桶。
+  // 组 id（含空串）落入未分组桶。
   const projectBuckets = useMemo(() => projectNodes(statsRows), [statsRows])
   const groupBuckets = useMemo(
     () =>
@@ -413,17 +393,6 @@ export function useSessionsBrowser() {
   const selectionAggregate = useMemo(
     () => aggregateStats(selectionStatsRows),
     [selectionStatsRows],
-  )
-  // 中栏项目统计头（选中项目时）：#85 的项目粒度行，避免客户端重算命中率。
-  // identity ""（未知项目桶）命中的是空身份桶行——会话工作台是会话粒度视角，
-  // 该桶与列表同一批会话；usage 侧合成哨兵行（无会话行用量）不在此展示。
-  const selectedProjectStats = useMemo(
-    () =>
-      selectedProject != null
-        ? (projectStatRows.find((p) => p.project_dir === selectedProject) ??
-          null)
-        : null,
-    [projectStatRows, selectedProject],
   )
 
   // sessions lookup by composite key — O(1) resolve for the derived preview.
@@ -462,17 +431,16 @@ export function useSessionsBrowser() {
     if (s) {
       lastKnownRef.current = s
       setPreviewKey({ id: s.id, device_id: s.device_id })
-      setStatsScope("session")
     } else {
       lastKnownRef.current = null
       setPreviewKey(null)
     }
   }
 
-  // ---- 树选中动作：容器选中即让出会话态，并把右栏默认切回「按项目」----
-  // 项目选中写共享筛选维度（与工具栏下拉同态）：identity 非空 → 原样；
-  // ""（无启动目录桶）→ 哨兵值（端点数据；未知时退化为不约束，见
-  // projectFilterOfIdentity）；null → 清除。
+  // ---- 树选中动作：容器选中即让出会话态（右栏口径随之回到容器态——口径
+  // 由「是否打开会话」派生，不再手设）。项目选中写共享筛选维度（与工具栏
+  // 下拉同态）：identity 非空 → 原样；""（无启动目录桶）→ 哨兵值（端点数
+  // 据；未知时退化为不约束，见 projectFilterOfIdentity）；null → 清除。
   function selectProject(project: string | null): void {
     dispatch(
       patchFilter({
@@ -482,12 +450,10 @@ export function useSessionsBrowser() {
     )
     if (project) setTreeTrack("projects")
     setPreviewKey(null)
-    setStatsScope("project")
   }
   function selectGroup(groupId: string): void {
     setSelectedGroupId(groupId)
     setPreviewKey(null)
-    setStatsScope("project")
   }
   function selectAll(): void {
     setSelectedGroupId(ALL_GROUPS)
@@ -495,12 +461,6 @@ export function useSessionsBrowser() {
     // ——其它维度的「全部」也是清除）。
     dispatch(patchFilter({ project: "" }))
     setPreviewKey(null)
-    setStatsScope("project")
-  }
-  // 树的会话子行 → 详情：子行是统计行，经 toSessionRow 投影成列表行形状
-  // 再走 setPreview 通道（与列表行点击、usage 跳转同一条路）。
-  function openStatsRow(r: SessionStatsRow): void {
-    setPreview(toSessionRow(r))
   }
 
   // 跨域跳转落地（usage 请求日志→会话，features/sessions/session-jump.ts）：
@@ -521,10 +481,10 @@ export function useSessionsBrowser() {
         visibleSessions,
         previewKey ? favKey(previewKey) : null,
         browser.offset,
-        SESSIONS_PAGE_SIZE,
+        pageSize,
         viewCounts.total,
       ),
-    [visibleSessions, previewKey, browser.offset, viewCounts.total],
+    [visibleSessions, previewKey, browser.offset, pageSize, viewCounts.total],
   )
 
   function openNeighbor(delta: 1 | -1): void {
@@ -834,19 +794,15 @@ export function useSessionsBrowser() {
     statsByKey,
     selectionRows: selectionStatsRows,
     selectionAggregate,
-    selectedProjectStats,
-    statsScope,
-    setStatsScope,
-    // paging + sidebar counts
-    // totalCount = 侧栏「全部」行（全局聚合，切分组不变）；viewTotal = 分页
-    // 总数（跟随当前分组过滤的列表范围）。
-    totalCount: sidebarCounts.total,
+    // paging
+    // viewTotal = 分页总数（跟随当前分组过滤的列表范围）；左栏计数清单的
+    // 「全部」行读 statsRows.length（selection-free，同一份统计源）。
     viewTotal: viewCounts.total,
     page: browser.page,
     totalPages: browser.totalPages,
     goToPage: browser.goToPage,
-    groupCounts,
-    ungroupedCount: ungroupedN,
+    pageSize,
+    setPageSize,
     // device labels (favorites universe)
     deviceLabel,
     showDeviceColumn,
@@ -864,7 +820,6 @@ export function useSessionsBrowser() {
     // detail (选中会话)
     preview,
     setPreview,
-    openStatsRow,
     openNeighbor,
     canPrev: neighbor.canPrev,
     canNext: neighbor.canNext,

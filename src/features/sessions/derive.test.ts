@@ -44,7 +44,6 @@ import {
   transcriptMatches,
   tryFormatJson,
   UNGROUPED,
-  ungroupedCount,
   withFavOverride,
   withoutFavOverride,
 } from "./derive"
@@ -236,71 +235,6 @@ describe("sessionTabFilter", () => {
       sessionTabFilter("local", "dev-self", {}, ALL_GROUPS).local_group_id,
     ).toBeNull()
     expect(sessionTabFilter("local", "dev-self").local_group_id).toBeNull()
-  })
-})
-
-// --------------------------------------------------------------- counts ----
-
-describe("ungroupedCount", () => {
-  it("total minus known-group buckets", () => {
-    expect(
-      ungroupedCount(
-        {
-          total: 10,
-          groups: [
-            { group_id: "lg1", count: 4 },
-            { group_id: "lg2", count: 3 },
-            { group_id: "", count: 3 },
-          ],
-        },
-        new Set(["lg1", "lg2"]),
-      ),
-    ).toBe(3)
-  })
-
-  it("a stale group id (group since deleted) counts as ungrouped", () => {
-    expect(
-      ungroupedCount(
-        {
-          total: 7,
-          groups: [
-            { group_id: "lg1", count: 4 },
-            { group_id: "ghost", count: 2 },
-            { group_id: "", count: 1 },
-          ],
-        },
-        new Set(["lg1"]),
-      ),
-    ).toBe(3)
-  })
-
-  it("a bucket id outside this track's groups counts as ungrouped", () => {
-    // The synced-track bucket list contains only synced ids; a local-track
-    // id would never appear, but the count stays correct if it did.
-    expect(
-      ungroupedCount(
-        { total: 5, groups: [{ group_id: "sg1", count: 5 }] },
-        new Set(["lg1"]),
-      ),
-    ).toBe(5)
-  })
-
-  it("no groups known → everything is ungrouped", () => {
-    expect(
-      ungroupedCount(
-        { total: 3, groups: [{ group_id: "", count: 3 }] },
-        new Set(),
-      ),
-    ).toBe(3)
-  })
-
-  it("all grouped → zero ungrouped", () => {
-    expect(
-      ungroupedCount(
-        { total: 5, groups: [{ group_id: "lg1", count: 5 }] },
-        new Set(["lg1"]),
-      ),
-    ).toBe(0)
   })
 })
 
