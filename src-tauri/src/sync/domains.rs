@@ -210,7 +210,7 @@ pub fn devices_import(store: &Store, paths: &Paths, cfg: &ConfigData) -> AppResu
 mod tests {
     use super::*;
     use crate::db::testutil::{mem, msg, rec};
-    use crate::model::{App, Provider, ProviderCategory, SessionMessageRole, TurnDuration};
+    use crate::model::{App, Provider, ProviderCategory, SessionMessageRole};
 
     fn tmp_paths() -> (tempfile::TempDir, Paths) {
         let tmp = tempfile::tempdir().unwrap();
@@ -218,10 +218,15 @@ mod tests {
         (tmp, paths)
     }
 
-    /// The usage domain round-trips without git: collect marks days dirty and
-    /// writes only the store; `usage_materialize` recomputes both Artifact
-    /// grains; a fresh store's `usage_import` recovers the same rows (usage +
-    /// turns), NOT re-marked dirty.
+    /// The usage domain round-trips without git, through the PRODUCTION
+    /// collect→materialize→import chain: `ingest_collected` (the collect-side
+    /// seam parsers feed) writes only the store and marks days dirty;
+    /// `usage_materialize` recomputes both Artifact grains; a fresh store's
+    /// `usage_import` recovers the same rows (usage + turns), NOT re-marked
+    /// dirty. The turn's `session_id` — the project-dimension grouping key —
+    /// must survive the whole chain: it is stamped by the parser, carried by
+    /// ingest, serialized into `turns-<day>.jsonl`, and pulled back on the
+    /// peer, so a peer's turn aggregates can resolve the project too.
     #[test]
     fn usage_materialize_then_import_roundtrips_without_git() {
         let (_tmp, paths) = tmp_paths();
@@ -233,15 +238,31 @@ mod tests {
                 rec("u2", "2026-07-14", "gpt-4o", dev, 10, 0, 0.0),
             ])
             .unwrap();
-        store_a
-            .ingest_turn_durations_marking_dirty(&[TurnDuration {
-                uuid: "t1".into(),
-                timestamp: "2026-07-13T10:00:00Z".into(),
-                day: "2026-07-13".into(),
-                device_id: dev.into(),
-                duration_ms: 100_000,
-            }])
-            .unwrap();
+        // The collect-side seam: a parser result carrying a session-stamped
+        // turn (the shape the Claude parser emits since #101).
+        crate::collect::ingest::ingest_collected(
+            &store_a,
+            &paths,
+            dev,
+            &crate::pricing::seed_book(),
+            crate::source_parser::CollectResult {
+                source: "claude_code".into(),
+                events: vec![],
+                corrections: vec![],
+                turn_durations: vec![crate::source_parser::RawTurnDuration {
+                    uuid: "t1".into(),
+                    timestamp: "2026-07-13T10:00:00Z".into(),
+                    session_id: "sess-1".into(),
+                    duration_ms: 100_000,
+                }],
+                files_scanned: 1,
+                lines_skipped: 0,
+                sessions: vec![],
+                messages: vec![],
+                session_ids: vec![],
+            },
+        )
+        .unwrap();
 
         // Materialize: both dirty days recomputed into per-day files.
         let snapshots = usage_materialize(&store_a, &paths, dev).unwrap();
@@ -250,10 +271,15 @@ mod tests {
             .device_data_dir(dev)
             .join("usage-2026-07-13.jsonl")
             .exists());
-        assert!(paths
-            .device_data_dir(dev)
-            .join("turns-2026-07-13.jsonl")
-            .exists());
+        let turns_path = paths.device_data_dir(dev).join("turns-2026-07-13.jsonl");
+        assert!(turns_path.exists());
+        // The artifact line carries the session id — a peer pulling this file
+        // can attribute the turn to a project.
+        let turns_text = std::fs::read_to_string(&turns_path).unwrap();
+        assert!(
+            turns_text.contains(r#""session_id":"sess-1""#),
+            "turns artifact carries the session id: {turns_text}"
+        );
 
         // Import into a fresh store: same rows back, days NOT re-dirtied.
         let store_b = mem();
@@ -267,9 +293,44 @@ mod tests {
         let turns_b = store_b.turns_for_day_device("2026-07-13", dev).unwrap();
         assert_eq!(turns_b.len(), 1);
         assert_eq!(turns_b[0].uuid, "t1");
+        assert_eq!(
+            turns_b[0].session_id, "sess-1",
+            "session id survives the artifact round-trip (project dimension)"
+        );
         assert!(
             store_b.dirty_days().unwrap().is_empty(),
             "imported rows are already on git — never marked dirty"
+        );
+    }
+
+    /// An OLD peer artifact — turn lines predating the `session_id` field —
+    /// still imports (the reader tolerates the absent field), and the row
+    /// lands with an empty session id: the unknown-project bucket, since no
+    /// session row resolves it. Devices on mixed versions stay interoperable.
+    #[test]
+    fn usage_import_tolerates_turn_lines_without_session_id() {
+        let (_tmp, paths) = tmp_paths();
+        let dev = "aabbccddeeff";
+        // Hand-write a legacy turns artifact (the pre-#101 line shape).
+        let dir = paths.device_data_dir(dev);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            dir.join("turns-2026-07-13.jsonl"),
+            concat!(
+                r#"{"uuid":"t1","timestamp":"2026-07-13T10:00:00Z","day":"2026-07-13","#,
+                r#""device_id":"aabbccddeeff","duration_ms":209499}"#,
+                "\n"
+            ),
+        )
+        .unwrap();
+
+        let store = mem();
+        usage_import(&store, &paths).unwrap();
+        let turns = store.turns_for_day_device("2026-07-13", dev).unwrap();
+        assert_eq!(turns.len(), 1, "legacy line imports, not skipped");
+        assert_eq!(
+            turns[0].session_id, "",
+            "absent field ⇒ empty ⇒ unknown bucket"
         );
     }
 

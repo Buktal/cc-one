@@ -136,6 +136,32 @@ pub(super) fn migrate_schema(conn: &Connection) -> AppResult<()> {
         }
     }
 
+    // `turn_durations.session_id`（项目维度补齐时加入）— 旧库没有该列，存量行靠
+    // DEFAULT '' 归入未知项目（无会话行可归属）。与 sessions.agent_type 同样的
+    // probe-ALTER：表可能不存在于更老的库上（turns 是后来加的表），先查
+    // sqlite_master 再 PRAGMA table_info。
+    {
+        let has_table: i64 = conn.query_row(
+            "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='turn_durations'",
+            [],
+            |r| r.get(0),
+        )?;
+        if has_table > 0 {
+            let mut have_turn: std::collections::HashSet<String> = std::collections::HashSet::new();
+            let mut stmt = conn.prepare("PRAGMA table_info(turn_durations)")?;
+            let names = stmt.query_map([], |r| r.get::<_, String>(1))?;
+            for n in names {
+                have_turn.insert(n?);
+            }
+            if !have_turn.contains("session_id") {
+                conn.execute(
+                    "ALTER TABLE turn_durations ADD COLUMN session_id TEXT NOT NULL DEFAULT ''",
+                    [],
+                )?;
+            }
+        }
+    }
+
     // uuid 单列 PRIMARY KEY → (uuid, device_id) 复合主键。旧库的 usage_records /
     // turn_durations 以 uuid 为单列主键,把"同 uuid、不同设备"的记录折叠成一条
     // (后导入者被丢)——同一份 ~/.claude/projects 被两个 device_id 扫描,或
@@ -452,6 +478,54 @@ mod tests {
             .query_row("SELECT app FROM provider WHERE id='p1'", [], |r| r.get(0))
             .unwrap();
         assert_eq!(app, "claude", "legacy rows fall back to the claude pool");
+    }
+
+    /// Regression: a legacy `turn_durations` table predating the `session_id`
+    /// column (the project-dimension backfill) is upgraded in place by
+    /// probe-ALTER, and pre-existing rows fall back to '' — the unknown-project
+    /// bucket, since no session row resolves an empty id.
+    #[test]
+    fn migrate_adds_turn_durations_session_id() {
+        let conn = Connection::open_in_memory().unwrap();
+        // Legacy turn_durations: composite PK already, but no session_id.
+        conn.execute_batch(
+            "CREATE TABLE usage_records (
+                uuid TEXT NOT NULL, timestamp TEXT NOT NULL, day TEXT NOT NULL,
+                model TEXT NOT NULL, pricing_model TEXT NOT NULL, source TEXT NOT NULL,
+                session_id TEXT NOT NULL DEFAULT '',
+                device_id TEXT NOT NULL,
+                input_tokens INTEGER NOT NULL, output_tokens INTEGER NOT NULL,
+                cache_creation_tokens INTEGER NOT NULL, cache_read_tokens INTEGER NOT NULL,
+                server_tool_use TEXT NOT NULL DEFAULT '{}', stop_reason TEXT NOT NULL DEFAULT '',
+                service_tier TEXT NOT NULL DEFAULT '', iterations INTEGER NOT NULL DEFAULT 0,
+                input_cost_usd TEXT NOT NULL, output_cost_usd TEXT NOT NULL,
+                cache_read_cost_usd TEXT NOT NULL, cache_creation_cost_usd TEXT NOT NULL,
+                total_cost_usd TEXT NOT NULL,
+                PRIMARY KEY (uuid, device_id)
+            );
+            CREATE TABLE turn_durations (
+                uuid TEXT NOT NULL, timestamp TEXT NOT NULL, day TEXT NOT NULL,
+                device_id TEXT NOT NULL, duration_ms INTEGER NOT NULL,
+                PRIMARY KEY (uuid, device_id)
+            );
+            INSERT INTO turn_durations (uuid, timestamp, day, device_id, duration_ms)
+                VALUES ('t1','2026-08-01T00:00:00Z','2026-08-01','dev1',1000);",
+        )
+        .unwrap();
+        assert!(conn
+            .prepare("SELECT session_id FROM turn_durations")
+            .is_err());
+
+        migrate_schema(&conn).unwrap();
+
+        let sid: String = conn
+            .query_row(
+                "SELECT session_id FROM turn_durations WHERE uuid='t1'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(sid, "", "legacy rows default to '' (unknown project)");
     }
 
     /// Regression companion: a legacy DB ALREADY on the composite (uuid,

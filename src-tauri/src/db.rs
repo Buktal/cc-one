@@ -41,10 +41,11 @@ use rusqlite::{params, params_from_iter, types::Value as SqlValue, Connection, O
 use crate::error::{AppError, AppResult};
 use crate::model::{
     project_identity, LocalGroup, LogCostBreakdown, LogsQuery, ModelStatsRow, PricingEntry,
-    ProjectStatsRow, ServerToolUse, SessionFilter, SessionGroupCount, SessionGroupCounts,
-    SessionMessage, SessionMessageRole, SessionModelTokens, SessionQuery, SessionRow,
-    SessionSnapshotMeta, SessionStatsRow, SessionSystemData, TokenCounts, TrendBucket, TrendPoint,
-    TurnDuration, UsageFilter, UsageLogRow, UsageRecord, UsageStats, SESSION_SNAPSHOT_VERSION,
+    ProjectCandidates, ProjectStatsRow, ServerToolUse, SessionFilter, SessionGroupCount,
+    SessionGroupCounts, SessionMessage, SessionMessageRole, SessionModelTokens, SessionQuery,
+    SessionRow, SessionSnapshotMeta, SessionStatsRow, SessionSystemData, TokenCounts, TrendBucket,
+    TrendPoint, TurnDuration, UsageFilter, UsageLogRow, UsageRecord, UsageStats,
+    SESSION_SNAPSHOT_VERSION, UNKNOWN_PROJECT,
 };
 use crate::pricing::{ModelPricing, PricingBook};
 use crate::source_parser::{FileCursor, ScanProgress, ScanProgressDelta};

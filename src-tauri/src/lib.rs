@@ -56,6 +56,7 @@ fn specta_builder() -> Builder<tauri::Wry> {
         commands::query_models,
         commands::query_distinct_sources,
         commands::query_distinct_models,
+        commands::query_distinct_projects,
         commands::list_devices,
         commands::list_pricing,
         commands::save_pricing_entry,

@@ -10,6 +10,7 @@ import { INVALIDATE_STORE, storeRead } from "@/app/store/tags"
 import type {
   AlignReport,
   ModelStatsRow,
+  ProjectCandidates,
   TrendBucket,
   TrendPoint,
   UsageLogRow,
@@ -27,6 +28,7 @@ export const {
   useModelsQuery,
   useDistinctSourcesQuery,
   useDistinctModelsQuery,
+  useDistinctProjectsQuery,
   useCollectMutation,
   useSyncMutation,
   useRebillMutation,
@@ -79,6 +81,15 @@ export const {
     distinctModels: b.query<string[], FilterState>({
       queryFn: async (filter) =>
         run(commands.queryDistinctModels(toFilter(filter))),
+      providesTags: (_r, _e, filter) =>
+        storeRead({ type: "Usage", id: filterId(filter) }),
+    }),
+    // Project dropdown candidates (facet semantics). The unknown-project
+    // sentinel rides as data (`unknown`), so the consumer labels the special
+    // option without a second copy of the literal.
+    distinctProjects: b.query<ProjectCandidates, FilterState>({
+      queryFn: async (filter) =>
+        run(commands.queryDistinctProjects(toFilter(filter))),
       providesTags: (_r, _e, filter) =>
         storeRead({ type: "Usage", id: filterId(filter) }),
     }),

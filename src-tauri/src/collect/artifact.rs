@@ -200,6 +200,7 @@ mod tests {
         RawTurnDuration {
             uuid: uuid.into(),
             timestamp: "2026-07-13T16:55:00Z".into(),
+            session_id: String::new(),
             duration_ms: 123_456,
         }
     }

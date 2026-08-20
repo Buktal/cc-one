@@ -5,7 +5,8 @@ use tauri::State;
 use super::AppState;
 use crate::error::AppResult;
 use crate::model::{
-    LogsQuery, ModelStatsRow, TrendBucket, TrendPoint, UsageFilter, UsageLogRow, UsageStats,
+    LogsQuery, ModelStatsRow, ProjectCandidates, TrendBucket, TrendPoint, UsageFilter, UsageLogRow,
+    UsageStats,
 };
 
 #[tauri::command]
@@ -64,4 +65,19 @@ pub fn query_distinct_models(
     filter: UsageFilter,
 ) -> AppResult<Vec<String>> {
     state.store.query_distinct("model", &filter)
+}
+
+/// Distinct project candidates for the project dropdown (facet semantics —
+/// the filter's own project value is ignored). Known projects come from the
+/// sessions-side registry (本机全部会话 ∪ 远程收藏快照); the unknown-project
+/// sentinel rides as data in `unknown` when session-less usage exists in the
+/// window, so the frontend labels the special option without a second copy of
+/// the literal.
+#[tauri::command]
+#[specta::specta]
+pub fn query_distinct_projects(
+    state: State<'_, AppState>,
+    filter: UsageFilter,
+) -> AppResult<ProjectCandidates> {
+    state.store.query_distinct_projects(&filter)
 }

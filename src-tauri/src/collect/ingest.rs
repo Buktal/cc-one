@@ -60,6 +60,7 @@ fn turn_durationify(raw: &RawTurnDuration, device_id: &str) -> TurnDuration {
         uuid: raw.uuid.clone(),
         day: UsageRecord::day_from_timestamp(&raw.timestamp),
         timestamp: raw.timestamp.clone(),
+        session_id: raw.session_id.clone(),
         device_id: device_id.to_string(),
         duration_ms: raw.duration_ms,
     }
@@ -270,6 +271,7 @@ mod tests {
         RawTurnDuration {
             uuid: uuid.into(),
             timestamp: "2026-07-13T16:55:00Z".into(),
+            session_id: String::new(),
             duration_ms: 123_456,
         }
     }

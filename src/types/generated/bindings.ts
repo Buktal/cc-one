@@ -61,6 +61,15 @@ export const commands = {
 	queryModels: (filter: UsageFilter) => typedError<ModelStatsRow[], AppError>(__TAURI_INVOKE("query_models", { filter })),
 	queryDistinctSources: (filter: UsageFilter) => typedError<string[], AppError>(__TAURI_INVOKE("query_distinct_sources", { filter })),
 	queryDistinctModels: (filter: UsageFilter) => typedError<string[], AppError>(__TAURI_INVOKE("query_distinct_models", { filter })),
+	/**
+	 *  Distinct project candidates for the project dropdown (facet semantics —
+	 *  the filter's own project value is ignored). Known projects come from the
+	 *  sessions-side registry (本机全部会话 ∪ 远程收藏快照); the unknown-project
+	 *  sentinel rides as data in `unknown` when session-less usage exists in the
+	 *  window, so the frontend labels the special option without a second copy of
+	 *  the literal.
+	 */
+	queryDistinctProjects: (filter: UsageFilter) => typedError<ProjectCandidates, AppError>(__TAURI_INVOKE("query_distinct_projects", { filter })),
 	listDevices: () => typedError<DeviceInfo[], AppError>(__TAURI_INVOKE("list_devices")),
 	listPricing: () => typedError<PricingEntry[], AppError>(__TAURI_INVOKE("list_pricing")),
 	/**  Add or update a pricing entry from the UI (user edits ⇒ `is_builtin=false`). */
@@ -179,7 +188,11 @@ export const commands = {
 	 *  launch dir: the comparison runs through the `project_identity` SQL
 	 *  scalar, so a Claude Code worktree session (`<proj>\.claude\worktrees\…`)
 	 *  matches its parent project's bucket. Same rule the project aggregate
-	 *  groups by. `None`/empty = no constraint.
+	 *  groups by. The [`UNKNOWN_PROJECT`] sentinel matches sessions whose
+	 *  identity is EMPTY (a session row exists but carries no launch dir) —
+	 *  the sessions-side face of the unknown bucket; the usage-side face
+	 *  (session-less usage, NOT EXISTS) lives on `UsageFilter.project`.
+	 *  `None`/empty = no constraint.
 	 */
 	project: string | null,
 	/**  Inclusive lower bound on `last_active_at` (ISO8601). */
@@ -226,7 +239,11 @@ export const commands = {
 	 *  launch dir: the comparison runs through the `project_identity` SQL
 	 *  scalar, so a Claude Code worktree session (`<proj>\.claude\worktrees\…`)
 	 *  matches its parent project's bucket. Same rule the project aggregate
-	 *  groups by. `None`/empty = no constraint.
+	 *  groups by. The [`UNKNOWN_PROJECT`] sentinel matches sessions whose
+	 *  identity is EMPTY (a session row exists but carries no launch dir) —
+	 *  the sessions-side face of the unknown bucket; the usage-side face
+	 *  (session-less usage, NOT EXISTS) lives on `UsageFilter.project`.
+	 *  `None`/empty = no constraint.
 	 */
 	project: string | null,
 	/**  Inclusive lower bound on `last_active_at` (ISO8601). */
@@ -272,7 +289,11 @@ export const commands = {
 	 *  launch dir: the comparison runs through the `project_identity` SQL
 	 *  scalar, so a Claude Code worktree session (`<proj>\.claude\worktrees\…`)
 	 *  matches its parent project's bucket. Same rule the project aggregate
-	 *  groups by. `None`/empty = no constraint.
+	 *  groups by. The [`UNKNOWN_PROJECT`] sentinel matches sessions whose
+	 *  identity is EMPTY (a session row exists but carries no launch dir) —
+	 *  the sessions-side face of the unknown bucket; the usage-side face
+	 *  (session-less usage, NOT EXISTS) lives on `UsageFilter.project`.
+	 *  `None`/empty = no constraint.
 	 */
 	project: string | null,
 	/**  Inclusive lower bound on `last_active_at` (ISO8601). */
@@ -842,6 +863,28 @@ export type PricingEntry = {
 };
 
 /**
+ *  Project-dropdown candidates: the known project identities plus the unknown
+ *  bucket's presence. Returned by the distinct-projects read; the sentinel
+ *  rides as data (`unknown`) instead of being embedded in `projects`, so the
+ *  dropdown can render one labeled special option without recognizing the
+ *  literal string.
+ */
+export type ProjectCandidates = {
+	/**
+	 *  Known project identities under the filter's other dimensions, sorted.
+	 *  Never contains the unknown sentinel or the empty identity (a session
+	 *  with no launch dir is not a pickable project).
+	 */
+	projects: string[],
+	/**
+	 *  `Some(sentinel)` when session-less usage exists in the same window —
+	 *  the「未知项目」option is offered exactly then. `None` = no unknown
+	 *  usage, so the option stays hidden.
+	 */
+	unknown: string | null,
+};
+
+/**
  *  One project bucket of the project dimension: every session whose project
  *  IDENTITY equals `project_dir`, rolled up with its usage. Session count and
  *  last-active come from `sessions`; requests / token buckets / cost are live
@@ -850,9 +893,20 @@ export type PricingEntry = {
  *  the project identity (the `project_identity` SQL scalar = the #84 rule), so
  *  a Claude Code worktree session and its usage land under the PARENT project,
  *  never as a one-session bucket of their own.
+ * 
+ *  One SYNTHETIC row may carry the [`UNKNOWN_PROJECT`] sentinel as its key
+ *  instead: the aggregate over usage with no session row (remote usage whose
+ *  favorite snapshot was never pulled, session-less legacy rows). Its
+ *  `session_count` is 0 by definition (no session rows exist) and its
+ *  `last_active_at` is the MAX usage timestamp, so the bucket sorts by real
+ *  recency.
  */
 export type ProjectStatsRow = {
-	/**  Project identity — the bucket key the filter's `project` matches. */
+	/**
+	 *  Project identity — the bucket key the filter's `project` matches. One
+	 *  synthetic row can carry the [`UNKNOWN_PROJECT`] sentinel instead: the
+	 *  aggregate over session-less usage (see `Store::query_project_stats`).
+	 */
 	project_dir: string,
 	/**
 	 *  Sessions in the bucket. Same grain as the session list: one row per
@@ -974,7 +1028,11 @@ export type SessionFilter = {
 	 *  launch dir: the comparison runs through the `project_identity` SQL
 	 *  scalar, so a Claude Code worktree session (`<proj>\.claude\worktrees\…`)
 	 *  matches its parent project's bucket. Same rule the project aggregate
-	 *  groups by. `None`/empty = no constraint.
+	 *  groups by. The [`UNKNOWN_PROJECT`] sentinel matches sessions whose
+	 *  identity is EMPTY (a session row exists but carries no launch dir) —
+	 *  the sessions-side face of the unknown bucket; the usage-side face
+	 *  (session-less usage, NOT EXISTS) lives on `UsageFilter.project`.
+	 *  `None`/empty = no constraint.
 	 */
 	project: string | null,
 	/**  Inclusive lower bound on `last_active_at` (ISO8601). */
@@ -1360,9 +1418,13 @@ export type UsageFilter = {
 	 *  filter): a row matches when its session's `project_dir` maps to this
 	 *  project identity via the `project_identity` SQL scalar — so usage from
 	 *  a Claude Code worktree session counts under the PARENT project. Rows
-	 *  without a session id belong to no project and never match. `None`/empty
-	 *  = no constraint. Not applied to the per-turn aggregates in `UsageStats`
-	 *  (`turn_durations` has no session dimension to filter on).
+	 *  without a session id belong to no project and never match. The
+	 *  [`UNKNOWN_PROJECT`](crate::model::UNKNOWN_PROJECT) sentinel inverts the
+	 *  match to NOT EXISTS a session row — the unknown bucket (remote usage
+	 *  without a pulled favorite snapshot, session-less legacy rows).
+	 *  `None`/empty =
+	 *  no constraint. Also applied to the per-turn aggregates in `UsageStats`
+	 *  (`turn_durations` carries `session_id`).
 	 */
 	project: string | null,
 };

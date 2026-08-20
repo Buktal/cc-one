@@ -1,5 +1,6 @@
 //! Dashboard read paths (stats / trend / logs / models / distinct).
 
+use super::store_transcript::build_session_where;
 use super::*;
 
 impl super::Store {
@@ -8,7 +9,7 @@ impl super::Store {
     /// Aggregate stats over a filter (BLUEPRINT 使用统计).
     pub fn query_stats(&self, filter: &UsageFilter) -> AppResult<UsageStats> {
         let conn = self.conn.lock().expect("db mutex poisoned");
-        let (clause, params_vec) = build_where(filter, true, true, true);
+        let (clause, params_vec) = build_where(filter, true, true, true, "usage_records");
         let sql = format!(
             "SELECT
                 COUNT(*),
@@ -43,10 +44,14 @@ impl super::Store {
             cache_read: s.cache_read_tokens,
         };
         s.cache_hit_rate = tokens.cache_hit_rate();
-        // Per-turn aggregates (separate grain, from turn_durations). The
-        // project facet does not apply here: turn_durations has no session
-        // dimension to resolve a project through.
-        let (tclause, tparams) = build_where(filter, false, false, false);
+        // Per-turn aggregates (separate grain, from turn_durations). Time /
+        // device / project facets apply — `turn_durations` carries `session_id`
+        // so the project facet resolves through the sessions table exactly
+        // like the usage rows above (the unknown sentinel's NOT EXISTS
+        // included). Model / source do NOT apply: the turn grain has no such
+        // column, and gating per-row through the session's usage would be a
+        // different (unclaimed) semantic.
+        let (tclause, tparams) = build_where(filter, false, false, true, "turn_durations");
         let tsql =
             format!("SELECT COUNT(*), COALESCE(AVG(duration_ms),0) FROM turn_durations {tclause}");
         let (turn_count, avg_dur): (i64, f64) =
@@ -61,7 +66,7 @@ impl super::Store {
     /// Per-model breakdown over a filter.
     pub fn query_models(&self, filter: &UsageFilter) -> AppResult<Vec<ModelStatsRow>> {
         let conn = self.conn.lock().expect("db mutex poisoned");
-        let (clause, params_vec) = build_where(filter, true, true, true);
+        let (clause, params_vec) = build_where(filter, true, true, true, "usage_records");
         let sql = format!(
             "SELECT model,
                 COUNT(*),
@@ -105,7 +110,7 @@ impl super::Store {
         bucket: TrendBucket,
     ) -> AppResult<Vec<TrendPoint>> {
         let conn = self.conn.lock().expect("db mutex poisoned");
-        let (clause, params_vec) = build_where(filter, true, true, true);
+        let (clause, params_vec) = build_where(filter, true, true, true, "usage_records");
         // Hour buckets read the clock in the device's local zone so a UTC+8
         // "today" trends in hours the user recognizes; the day bucket stays on
         // the stored UTC `day` for cross-device determinism.
@@ -162,7 +167,8 @@ impl super::Store {
             "model" => (false, true),
             _ => (true, false),
         };
-        let (mut clause, params_vec) = build_where(filter, include_model, include_source, true);
+        let (mut clause, params_vec) =
+            build_where(filter, include_model, include_source, true, "usage_records");
         // Always exclude empty values; splice onto the WHERE clause (or start one).
         if clause.is_empty() {
             clause = format!("WHERE {col} != ''");
@@ -178,13 +184,72 @@ impl super::Store {
             .map_err(AppError::from)
     }
 
+    /// Distinct project candidates for the project dropdown (facet semantics:
+    /// the filter's OWN project value is ignored — a picked project never
+    /// shrinks its own candidate list). The known set is the sessions-side
+    /// project registry — 本机全部会话 ∪ 远程收藏快照 (both live in the one
+    /// `sessions` table; the only cross-device session rows are pulled
+    /// favorite snapshots) — narrowed by the filter's OTHER dimensions through
+    /// the sessions-side WHERE builder, whose fields map 1:1 onto
+    /// `UsageFilter`'s (time reads `last_active_at`, the sessions grain). The
+    /// empty identity never becomes a candidate (a session with no launch dir
+    /// is not a pickable project). The unknown bucket's PRESENCE is probed on
+    /// the usage side (session-less rows under the same other-dimensions
+    /// window) — "unknown" is a property of usage, not of sessions.
+    pub fn query_distinct_projects(&self, filter: &UsageFilter) -> AppResult<ProjectCandidates> {
+        let conn = self.conn.lock().expect("db mutex poisoned");
+        // Known projects: sessions-side distinct identities, other dimensions
+        // applied, own facet dropped.
+        let session_filter = SessionFilter {
+            from_ts: filter.from_ts.clone(),
+            to_ts: filter.to_ts.clone(),
+            model: filter.model.clone(),
+            source: filter.source.clone(),
+            device_scope: filter.device_scope.clone(),
+            ..Default::default()
+        };
+        let (clause, params_vec) = build_session_where(Some(&session_filter));
+        let sql = format!(
+            "SELECT pid FROM (\
+                SELECT DISTINCT project_identity(s.project_dir) AS pid FROM sessions s {clause}\
+             ) WHERE pid != '' ORDER BY pid"
+        );
+        let mut stmt = conn.prepare(&sql)?;
+        let rows = stmt.query_map(params_from_iter(params_vec.iter()), |r| {
+            r.get::<_, String>(0)
+        })?;
+        let projects = rows
+            .collect::<rusqlite::Result<Vec<_>>>()
+            .map_err(AppError::from)?;
+
+        // Unknown presence: does any session-less usage row exist under the
+        // same OTHER dimensions (time on usage timestamps — the unknown bucket
+        // is a usage-side concept)?
+        let (mut uclause, uparams) = build_where(filter, true, true, false, "usage_records");
+        let unknown_cond = project_condition("usage_records", UNKNOWN_PROJECT).0;
+        if uclause.is_empty() {
+            uclause = format!("WHERE {unknown_cond}");
+        } else {
+            uclause = format!("{uclause} AND {unknown_cond}");
+        }
+        let has_unknown: i64 = conn.query_row(
+            &format!("SELECT EXISTS (SELECT 1 FROM usage_records {uclause})"),
+            params_from_iter(uparams.iter()),
+            |r| r.get(0),
+        )?;
+        Ok(ProjectCandidates {
+            projects,
+            unknown: (has_unknown != 0).then(|| UNKNOWN_PROJECT.to_string()),
+        })
+    }
+
     /// Request-log rows (BLUEPRINT 请求日志; columns). Selects the full
     /// per-call field set — the row-detail panel reads from these rows, so
     /// expanding a row costs no extra round-trip. `server_tool_use` is a JSON
     /// text column; unknown/corrupt payloads fall back to zeros.
     pub fn query_logs(&self, q: &LogsQuery) -> AppResult<Vec<UsageLogRow>> {
         let conn = self.conn.lock().expect("db mutex poisoned");
-        let (clause, params_vec) = build_where(&q.filter, true, true, true);
+        let (clause, params_vec) = build_where(&q.filter, true, true, true, "usage_records");
         let limit = super::page_limit(q.limit);
         let offset = q.offset as i64;
         let sql = format!(
@@ -236,28 +301,61 @@ impl super::Store {
     /// Total row count (for paging display).
     pub fn count_logs(&self, filter: &UsageFilter) -> AppResult<u32> {
         let conn = self.conn.lock().expect("db mutex poisoned");
-        let (clause, params_vec) = build_where(filter, true, true, true);
+        let (clause, params_vec) = build_where(filter, true, true, true, "usage_records");
         let sql = format!("SELECT COUNT(*) FROM usage_records {clause}");
         let n: i64 = conn.query_row(&sql, params_from_iter(params_vec.iter()), |r| r.get(0))?;
         Ok(n as u32)
     }
 }
 
+/// The project facet's SQL condition over `driving`, a table carrying the
+/// `(session_id, device_id)` grouping pair (`usage_records`, `turn_durations`).
+/// A known project identity matches via the `project_identity` SQL scalar —
+/// the one Rust rule — so usage from a Claude Code worktree session matches
+/// its PARENT project. The [`UNKNOWN_PROJECT`] sentinel inverts to NOT EXISTS:
+/// the unknown bucket (remote usage without a pulled favorite snapshot,
+/// session-less rows). `driving` is a fixed literal from the call sites, never
+/// user input. Returns `(condition, param)`: the sentinel form binds no param.
+fn project_condition(driving: &str, project: &str) -> (String, Option<SqlValue>) {
+    if project == UNKNOWN_PROJECT {
+        (
+            format!(
+                "NOT EXISTS (SELECT 1 FROM sessions s \
+                 WHERE s.id = {driving}.session_id \
+                   AND s.device_id = {driving}.device_id)"
+            ),
+            None,
+        )
+    } else {
+        (
+            format!(
+                "EXISTS (SELECT 1 FROM sessions s \
+                 WHERE s.id = {driving}.session_id \
+                   AND s.device_id = {driving}.device_id \
+                   AND project_identity(s.project_dir) = ?)"
+            ),
+            Some(SqlValue::Text(project.to_string())),
+        )
+    }
+}
+
 /// Build a `WHERE` clause + bound params for a `UsageFilter` (timestamp range,
-/// model, source, device scope, project). The range filters on `timestamp`
-/// (UTC), not `day` — see `UsageFilter` for why. `include_model` /
-/// `include_source` gate those two facets independently: the distinct-dropdown
-/// path queries one facet while ignoring its OWN filter (a picked value must
-/// never shrink its own candidate list) yet still narrows by the other facet +
-/// time + device. `include_project` gates the project facet for the one query
-/// it cannot apply to: the per-turn aggregates read `turn_durations`, which has
-/// no session dimension to resolve a project through (see `UsageFilter`).
+/// model, source, device scope, project) over `driving` — the table the query
+/// reads, which must carry the filter's columns (`timestamp`, `device_id`, and
+/// the `(session_id, device_id)` pair for the project facet). The range filters
+/// on `timestamp` (UTC), not `day` — see `UsageFilter` for why. `include_model`
+/// / `include_source` gate those two facets independently: the distinct-
+/// dropdown path queries one facet while ignoring its OWN filter (a picked
+/// value must never shrink its own candidate list) yet still narrows by the
+/// other facets + time + device. `include_project` gates the project facet
+/// (the facet-ignoring caller is the project dropdown itself).
 /// Returns `("WHERE ...", vec![...])` or `("", [])`.
 fn build_where(
     filter: &UsageFilter,
     include_model: bool,
     include_source: bool,
     include_project: bool,
+    driving: &str,
 ) -> (String, Vec<SqlValue>) {
     let mut conds: Vec<String> = Vec::new();
     let mut params: Vec<SqlValue> = Vec::new();
@@ -298,20 +396,11 @@ fn build_where(
     if include_project {
         if let Some(p) = &filter.project {
             if !p.is_empty() {
-                // Project identity 口径 (aligned with the sessions-side
-                // filter): resolve the row's session and compare through the
-                // `project_identity` SQL scalar — the one Rust rule — so usage
-                // from a Claude Code worktree session matches its PARENT
-                // project. Both keys are required: session ids can collide
-                // across devices. Rows without a session id match no project.
-                conds.push(
-                    "EXISTS (SELECT 1 FROM sessions s \
-                     WHERE s.id = usage_records.session_id \
-                       AND s.device_id = usage_records.device_id \
-                       AND project_identity(s.project_dir) = ?)"
-                        .into(),
-                );
-                params.push(SqlValue::Text(p.clone()));
+                let (cond, param) = project_condition(driving, p);
+                conds.push(cond);
+                if let Some(v) = param {
+                    params.push(v);
+                }
             }
         }
     }
@@ -581,5 +670,209 @@ mod tests {
                 .request_count,
             3
         );
+    }
+
+    /// The unknown-project sentinel on the usage side (#100): NOT EXISTS a
+    /// session row — session-less legacy rows AND rows whose session id never
+    /// arrived (remote, non-favorited) both match, while sessioned rows never
+    /// do. Stats, the log list, and its count agree (same WHERE builder), and
+    /// a known project and the sentinel partition the store.
+    #[test]
+    fn usage_project_filter_unknown_sentinel_matches_session_less_rows() {
+        let s = mem();
+        seed_session_project(&s, "s-main", "d", "/proj/alpha", "2026-08-02T10:00:00.000Z");
+        let mut main = rec("u1", "2026-08-15", "glm-5.2", "d", 10, 0, 1.0);
+        main.session_id = "s-main".into();
+        // Session-less flavors: legacy (empty id) + remote (unresolvable id).
+        let legacy = rec("u2", "2026-08-15", "glm-5.2", "d", 20, 0, 2.0);
+        let mut remote = rec("u3", "2026-08-15", "glm-5.2", "peer", 40, 0, 4.0);
+        remote.session_id = "never-pulled".into();
+        s.ingest(&[main, legacy, remote]).unwrap();
+
+        let unknown = UsageFilter {
+            project: Some(UNKNOWN_PROJECT.into()),
+            ..Default::default()
+        };
+        let stats = s.query_stats(&unknown).unwrap();
+        assert_eq!(stats.request_count, 2, "both session-less rows match");
+        assert_eq!(stats.input_tokens, 60);
+        assert!((stats.total_cost_usd - 6.0).abs() < 1e-9);
+        assert_eq!(s.count_logs(&unknown).unwrap(), 2);
+        assert_eq!(
+            s.query_logs(&LogsQuery {
+                filter: unknown.clone(),
+                limit: 10,
+                offset: 0,
+            })
+            .unwrap()
+            .len(),
+            2
+        );
+
+        // A known project and the sentinel partition the store: alpha (1 row)
+        // + unknown (2 rows) = the unconstrained total (3).
+        let alpha = UsageFilter {
+            project: Some("/proj/alpha".into()),
+            ..Default::default()
+        };
+        assert_eq!(s.query_stats(&alpha).unwrap().request_count, 1);
+        assert_eq!(
+            s.query_stats(&UsageFilter::default())
+                .unwrap()
+                .request_count,
+            3
+        );
+    }
+
+    /// Distinct project candidates (#100): known projects = the sessions-side
+    /// registry (local sessions ∪ peers' pulled favorite snapshots — one
+    /// table), the own facet is ignored, the empty identity is never offered,
+    /// and the unknown sentinel rides as data exactly when session-less usage
+    /// exists in the window.
+    #[test]
+    fn distinct_projects_union_local_and_remote_with_window_gated_unknown() {
+        let s = mem();
+        seed_session_project(
+            &s,
+            "s-own",
+            "dev",
+            "/proj/alpha",
+            "2026-08-10T10:00:00.000Z",
+        );
+        // A session with NO launch dir never becomes a candidate.
+        seed_session_project(&s, "s-bare", "dev", "", "2026-08-11T10:00:00.000Z");
+        // Peer's pulled favorite snapshot — the remote half of the union.
+        s.import_session_snapshot(
+            "peer1",
+            &SessionSnapshotMeta {
+                v: SESSION_SNAPSHOT_VERSION,
+                id: "fav-1".into(),
+                source: "claude_code".into(),
+                project_dir: "/remote/beta".into(),
+                title_orig: "Peer".into(),
+                started_at: "2026-08-01T00:00:00.000Z".into(),
+                last_active_at: "2026-08-12T00:00:00.000Z".into(),
+                agent_type: String::new(),
+                favorited: true,
+                synced_group_id: String::new(),
+            },
+            &[],
+        )
+        .unwrap();
+        // Session-less usage: recent (08-20) + old (07-01).
+        let mut loose_new = rec("u-new", "2026-08-20", "glm-5.2", "d", 1, 0, 0.0);
+        loose_new.session_id = String::new();
+        let mut loose_old = rec("u-old", "2026-07-01", "glm-5.2", "d", 1, 0, 0.0);
+        loose_old.session_id = String::new();
+        s.ingest(&[loose_new, loose_old]).unwrap();
+
+        // Unfiltered: both devices' identities, no empty string, unknown
+        // present (session-less usage exists somewhere in the store).
+        let c = s.query_distinct_projects(&UsageFilter::default()).unwrap();
+        assert_eq!(
+            c.projects,
+            vec!["/proj/alpha".to_string(), "/remote/beta".to_string()]
+        );
+        assert_eq!(c.unknown.as_deref(), Some(UNKNOWN_PROJECT));
+
+        // Facet semantics: the project dropdown ignores its OWN picked value —
+        // picking alpha does not shrink the candidate list.
+        let picked = UsageFilter {
+            project: Some("/proj/alpha".into()),
+            ..Default::default()
+        };
+        let c = s.query_distinct_projects(&picked).unwrap();
+        assert_eq!(c.projects.len(), 2, "own facet ignored");
+
+        // The window narrows: a range covering only the OLD session-less row
+        // keeps unknown present; a range covering neither drops it.
+        let old_window = UsageFilter {
+            to_ts: Some("2026-07-02T00:00:00.000Z".into()),
+            ..Default::default()
+        };
+        assert_eq!(
+            s.query_distinct_projects(&old_window)
+                .unwrap()
+                .unknown
+                .as_deref(),
+            Some(UNKNOWN_PROJECT)
+        );
+        let mid_window = UsageFilter {
+            from_ts: Some("2026-07-02T00:00:00.000Z".into()),
+            to_ts: Some("2026-07-03T00:00:00.000Z".into()),
+            ..Default::default()
+        };
+        assert_eq!(
+            s.query_distinct_projects(&mid_window).unwrap().unknown,
+            None,
+            "no session-less usage in the window ⇒ option hidden"
+        );
+
+        // Device scope narrows to that device's registry: the peer's project
+        // stays (its snapshot row lives here post-pull), a bare device with no
+        // rows offers nothing.
+        let peer_only = UsageFilter {
+            device_scope: Some("peer1".into()),
+            ..Default::default()
+        };
+        assert_eq!(
+            s.query_distinct_projects(&peer_only).unwrap().projects,
+            vec!["/remote/beta".to_string()]
+        );
+        let none = UsageFilter {
+            device_scope: Some("ghost".into()),
+            ..Default::default()
+        };
+        let c = s.query_distinct_projects(&none).unwrap();
+        assert!(c.projects.is_empty());
+        assert_eq!(c.unknown, None);
+    }
+
+    /// Per-turn aggregates follow the project filter (#101): turns carry
+    /// `session_id`, so the turn count / average duration narrow with the
+    /// project facet — known project via the session's identity, unknown
+    /// sentinel via NOT EXISTS (legacy turns with an empty session id land
+    /// there). Time and device facets keep applying as before.
+    #[test]
+    fn stats_turn_aggregates_follow_the_project_filter() {
+        let s = mem();
+        seed_session_project(&s, "s1", "d", "/proj/alpha", "2026-08-02T10:00:00.000Z");
+        let td = |uuid: &str, sid: &str, ms: u32| TurnDuration {
+            uuid: uuid.into(),
+            timestamp: "2026-08-15T10:00:00Z".into(),
+            day: "2026-08-15".into(),
+            session_id: sid.into(),
+            device_id: "d".into(),
+            duration_ms: ms,
+        };
+        s.ingest_turn_durations(&[td("t1", "s1", 100_000), td("t2", "s1", 200_000)])
+            .unwrap();
+        // Legacy turns collected before the field existed ("" ⇒ unknown).
+        s.ingest_turn_durations(&[td("t3", "", 50_000)]).unwrap();
+
+        // Whole store: 3 turns, avg (100+200+50)/3 k = 116,666.67 ms.
+        let all = s.query_stats(&UsageFilter::default()).unwrap();
+        assert_eq!(all.turn_count, 3);
+
+        // alpha narrows the turn set to s1's two turns.
+        let alpha = UsageFilter {
+            project: Some("/proj/alpha".into()),
+            ..Default::default()
+        };
+        let stats = s.query_stats(&alpha).unwrap();
+        assert_eq!(stats.turn_count, 2);
+        assert!((stats.avg_turn_duration_ms - 150_000.0).abs() < 1e-9);
+
+        // The sentinel picks up exactly the session-less legacy turn.
+        let unknown = UsageFilter {
+            project: Some(UNKNOWN_PROJECT.into()),
+            ..Default::default()
+        };
+        let stats = s.query_stats(&unknown).unwrap();
+        assert_eq!(stats.turn_count, 1);
+        assert!((stats.avg_turn_duration_ms - 50_000.0).abs() < 1e-9);
+        // alpha + unknown partition the turn set, matching the usage-side
+        // semantics (same WHERE builder, driving table swapped).
+        assert_eq!(stats.request_count, 0, "no usage rows seeded here");
     }
 }

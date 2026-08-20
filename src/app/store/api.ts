@@ -95,6 +95,7 @@ export {
   useCollectMutation,
   useCountQuery,
   useDistinctModelsQuery,
+  useDistinctProjectsQuery,
   useDistinctSourcesQuery,
   useLogsQuery,
   useModelsQuery,

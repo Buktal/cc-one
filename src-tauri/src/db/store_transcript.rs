@@ -417,6 +417,17 @@ impl super::Store {
     /// where sessions ran, not only where usage landed. The filter applies
     /// BEFORE grouping, so a time range narrows which sessions feed the
     /// buckets at all.
+    ///
+    /// One SYNTHETIC row carries the [`UNKNOWN_PROJECT`] sentinel: the
+    /// aggregate over session-less usage — remote usage whose favorite
+    /// snapshot was never pulled (the only cross-device session rows are
+    /// favorites), plus session-less legacy rows. Without it, that usage
+    /// silently vanished from every project view. `session_count` is 0 by
+    /// definition (no session rows exist); `last_active_at` is the MAX usage
+    /// timestamp so the bucket sorts by real recency. Session-attribute
+    /// constraints the bucket can never satisfy (favorited-only, a group, a
+    /// search) suppress the row entirely; `favorited = Some(false)` keeps it
+    /// (session-less is definitionally not favorited).
     pub fn query_project_stats(
         &self,
         filter: Option<&SessionFilter>,
@@ -474,8 +485,124 @@ impl super::Store {
                 last_active_at: r.get(8)?,
             })
         })?;
-        rows.collect::<rusqlite::Result<Vec<_>>>()
-            .map_err(AppError::from)
+        let mut out = rows
+            .collect::<rusqlite::Result<Vec<_>>>()
+            .map_err(AppError::from)?;
+
+        // ---- the synthetic unknown row (see method doc) ----
+        // Session-attribute constraints session-less usage can never satisfy
+        // suppress the bucket. A group filter matches via the session's group
+        // column and search via the session's title/project/message bodies —
+        // all absent for session-less rows.
+        let suppress_unknown = filter.is_some_and(|f| {
+            f.favorited == Some(true)
+                || f.local_group_id.is_some()
+                || f.synced_group_id.is_some()
+                || f.search.as_deref().is_some_and(|s| !s.trim().is_empty())
+        });
+        if !suppress_unknown {
+            // Apply the filter's OTHER dimensions at usage grain: time runs on
+            // `u.timestamp` (no session row exists to read `last_active_at`
+            // from); device / source / model map to their usage columns. Note
+            // the model asymmetry: known buckets gate "session USED the model"
+            // then sum its FULL usage, while the unknown bucket can only match
+            // per-row (`u.model = ?`) — it has no session to gate on.
+            let mut conds: Vec<String> = vec!["NOT EXISTS (SELECT 1 FROM sessions s \
+                  WHERE s.id = u.session_id AND s.device_id = u.device_id)"
+                .into()];
+            let mut uparams: Vec<SqlValue> = Vec::new();
+            if let Some(f) = filter {
+                if let Some(d) = &f.device_scope {
+                    if !d.is_empty() {
+                        conds.push("u.device_id = ?".into());
+                        uparams.push(SqlValue::Text(d.clone()));
+                    }
+                }
+                if let Some(s) = &f.source {
+                    if !s.is_empty() {
+                        conds.push("u.source = ?".into());
+                        uparams.push(SqlValue::Text(s.clone()));
+                    }
+                }
+                if let Some(m) = &f.model {
+                    if !m.is_empty() {
+                        conds.push("u.model = ?".into());
+                        uparams.push(SqlValue::Text(m.clone()));
+                    }
+                }
+                if let Some(ts) = &f.from_ts {
+                    if !ts.is_empty() {
+                        conds.push("u.timestamp >= ?".into());
+                        uparams.push(SqlValue::Text(ts.clone()));
+                    }
+                }
+                if let Some(ts) = &f.to_ts {
+                    if !ts.is_empty() {
+                        conds.push("u.timestamp <= ?".into());
+                        uparams.push(SqlValue::Text(ts.clone()));
+                    }
+                }
+            }
+            let usql = format!(
+                "SELECT COUNT(*),
+                        COALESCE(SUM(input_tokens),0),
+                        COALESCE(SUM(output_tokens),0),
+                        COALESCE(SUM(cache_creation_tokens),0),
+                        COALESCE(SUM(cache_read_tokens),0),
+                        COALESCE(SUM(CAST(total_cost_usd AS REAL)),0),
+                        COALESCE(MAX(timestamp),'')
+                 FROM usage_records u WHERE {}",
+                conds.join(" AND ")
+            );
+            let (request_count, input, output, cc, cr, cost, last): (
+                i64,
+                i64,
+                i64,
+                i64,
+                i64,
+                f64,
+                String,
+            ) = conn.query_row(&usql, params_from_iter(uparams.iter()), |r| {
+                Ok((
+                    r.get(0)?,
+                    r.get(1)?,
+                    r.get(2)?,
+                    r.get(3)?,
+                    r.get(4)?,
+                    r.get(5)?,
+                    r.get(6)?,
+                ))
+            })?;
+            if request_count > 0 {
+                let tokens = TokenCounts {
+                    input: input as u32,
+                    output: output as u32,
+                    cache_creation: cc as u32,
+                    cache_read: cr as u32,
+                };
+                out.push(ProjectStatsRow {
+                    project_dir: UNKNOWN_PROJECT.to_string(),
+                    session_count: 0,
+                    request_count: request_count as u32,
+                    total_tokens: tokens.total(),
+                    input_tokens: tokens.input,
+                    output_tokens: tokens.output,
+                    cache_creation_tokens: tokens.cache_creation,
+                    cache_read_tokens: tokens.cache_read,
+                    cache_hit_rate: tokens.cache_hit_rate(),
+                    total_cost_usd: cost,
+                    last_active_at: last,
+                });
+                // Keep the bucket ordering contract (recency desc, key asc)
+                // over the appended row too.
+                out.sort_by(|a, b| {
+                    b.last_active_at
+                        .cmp(&a.last_active_at)
+                        .then_with(|| a.project_dir.cmp(&b.project_dir))
+                });
+            }
+        }
+        Ok(out)
     }
 
     /// The stats dimension at SESSION grain: every session (unpaged, list
@@ -659,8 +786,9 @@ pub(super) fn mark_sessions_dirty(
 /// Build a WHERE clause over the `sessions` table for a [`SessionFilter`]. The
 /// clause prefixes every column with `s.` so it composes with the
 /// `usage_records` subquery JOIN in [`Store::query_sessions`]. Empty filter ⇒
-/// `("", [])`.
-fn build_session_where(filter: Option<&SessionFilter>) -> (String, Vec<SqlValue>) {
+/// `("", [])`. `pub(super)` so the distinct-projects read (store_reads) reuses
+/// the same sessions-side narrowing — one builder, no drifting copy.
+pub(super) fn build_session_where(filter: Option<&SessionFilter>) -> (String, Vec<SqlValue>) {
     let mut conds: Vec<String> = Vec::new();
     let mut params: Vec<SqlValue> = Vec::new();
     let Some(f) = filter else {
@@ -695,9 +823,16 @@ fn build_session_where(filter: Option<&SessionFilter>) -> (String, Vec<SqlValue>
             // (the one Rust rule, registered as a UDF) — a worktree session's
             // raw launch dir collapses to its parent, so it matches the parent
             // project's filter. Same function the project aggregate groups by,
-            // so filtering and bucketing can never disagree.
-            conds.push("project_identity(s.project_dir) = ?".into());
-            params.push(SqlValue::Text(p.clone()));
+            // so filtering and bucketing can never disagree. The unknown
+            // sentinel matches the EMPTY identity — the sessions-side face of
+            // the unknown bucket (a session row exists but carries no launch
+            // dir; the usage-side NOT EXISTS face lives in store_reads).
+            if p == UNKNOWN_PROJECT {
+                conds.push("project_identity(s.project_dir) = ''".into());
+            } else {
+                conds.push("project_identity(s.project_dir) = ?".into());
+                params.push(SqlValue::Text(p.clone()));
+            }
         }
     }
     if let Some(ts) = &f.from_ts {
@@ -1288,6 +1423,171 @@ mod tests {
             .is_empty());
         assert_eq!(s.count_sessions(Some(&none), "local").unwrap().total, 0);
         assert!(s.query_project_stats(Some(&none)).unwrap().is_empty());
+    }
+
+    /// The unknown-project bucket (#100): usage with NO session row forms one
+    /// synthetic [`UNKNOWN_PROJECT`] row instead of vanishing. Local legacy
+    /// rows (empty session_id) and unresolvable session ids land there alike;
+    /// a known project's bucket is untouched; `session_count` is 0 by
+    /// definition and `last_active_at` is the MAX usage timestamp, so the
+    /// bucket sorts by real recency.
+    #[test]
+    fn project_stats_appends_unknown_bucket_for_session_less_usage() {
+        let s = mem();
+        seed_session_project(&s, "a1", "dev", "/proj/alpha", "2026-08-10T10:00:00.000Z");
+        bound_rec(
+            &s,
+            "u1",
+            "a1",
+            TokenCounts {
+                input: 100,
+                output: 0,
+                cache_read: 0,
+                cache_creation: 0,
+            },
+            1.0,
+        );
+        // Two flavors of session-less usage: a legacy row (empty session_id)
+        // and a row whose session id resolves to no sessions row (the remote
+        // shape — a peer's session that was never favorited, so no snapshot
+        // was pulled).
+        let mut legacy = rec("u2", "2026-08-15", "glm-5.2", "dev", 10, 0, 0.5);
+        legacy.session_id = String::new();
+        let mut remote = rec("u3", "2026-08-16", "glm-5.2", "peer", 20, 10, 1.5);
+        remote.session_id = "never-pulled".into();
+        s.ingest(&[legacy, remote]).unwrap();
+
+        let rows = s.query_project_stats(None).unwrap();
+        assert_eq!(rows.len(), 2, "alpha bucket + the synthetic unknown row");
+        let unknown = rows
+            .iter()
+            .find(|r| r.project_dir == UNKNOWN_PROJECT)
+            .expect("synthetic unknown row present");
+        assert_eq!(
+            unknown.session_count, 0,
+            "no session rows exist by definition"
+        );
+        assert_eq!(unknown.request_count, 2);
+        assert_eq!(unknown.input_tokens, 30);
+        assert_eq!(unknown.output_tokens, 10);
+        assert_eq!(unknown.total_tokens, 40);
+        assert_eq!(unknown.total_cost_usd, 2.0);
+        // cache_read / (input + cache_creation + cache_read) = 0 / 30 = 0.
+        assert_eq!(unknown.cache_hit_rate, 0.0);
+        assert_eq!(unknown.last_active_at, "2026-08-16T10:00:00.000Z");
+        // Recency ordering: the unknown bucket (08-16) sorts before alpha
+        // (last_active 08-10).
+        assert_eq!(rows[0].project_dir, UNKNOWN_PROJECT);
+
+        let alpha = rows
+            .iter()
+            .find(|r| r.project_dir == "/proj/alpha")
+            .unwrap();
+        assert_eq!(alpha.request_count, 1, "alpha's bucket untouched");
+
+        // A favorited-only filter can never be satisfied by session-less
+        // usage — the unknown row is suppressed, known buckets remain.
+        let fav = SessionFilter {
+            favorited: Some(true),
+            ..Default::default()
+        };
+        let rows = s.query_project_stats(Some(&fav)).unwrap();
+        assert!(
+            rows.iter().all(|r| r.project_dir != UNKNOWN_PROJECT),
+            "favorited-only suppresses the unknown bucket"
+        );
+
+        // A time window that excludes the session-less rows drops the bucket
+        // entirely (filter applies before aggregation).
+        let early = SessionFilter {
+            to_ts: Some("2026-08-15T00:00:00.000Z".into()),
+            ..Default::default()
+        };
+        let rows = s.query_project_stats(Some(&early)).unwrap();
+        assert!(
+            rows.iter().all(|r| r.project_dir != UNKNOWN_PROJECT),
+            "window without session-less usage yields no unknown row"
+        );
+    }
+
+    /// The cross-device shape the bucket exists for (#94): a peer's FAVORITED
+    /// session arrives as a pulled snapshot → its usage lands under the
+    /// snapshot's project; the same peer's NON-favorited session has no
+    /// snapshot → its usage lands in the unknown bucket, not nowhere.
+    #[test]
+    fn project_stats_unknown_bucket_covers_remote_nonfavorited_usage() {
+        let s = mem();
+        let peer = "peerdev01";
+        // Pulled favorite snapshot: session row for the peer, project /remote.
+        s.import_session_snapshot(
+            peer,
+            &SessionSnapshotMeta {
+                v: SESSION_SNAPSHOT_VERSION,
+                id: "fav-1".into(),
+                source: "claude_code".into(),
+                project_dir: "/remote".into(),
+                title_orig: "Favorited".into(),
+                started_at: "2026-08-01T00:00:00.000Z".into(),
+                last_active_at: "2026-08-12T10:00:00.000Z".into(),
+                agent_type: String::new(),
+                favorited: true,
+                synced_group_id: String::new(),
+            },
+            &[],
+        )
+        .unwrap();
+        let mut fav_usage = rec("ru1", "2026-08-15", "glm-5.2", peer, 100, 0, 1.0);
+        fav_usage.session_id = "fav-1".into();
+        let mut plain_usage = rec("ru2", "2026-08-15", "glm-5.2", peer, 40, 0, 4.0);
+        plain_usage.session_id = "plain-1".into();
+        s.ingest(&[fav_usage, plain_usage]).unwrap();
+
+        let rows = s.query_project_stats(None).unwrap();
+        let remote = rows.iter().find(|r| r.project_dir == "/remote").unwrap();
+        assert_eq!(
+            remote.request_count, 1,
+            "favorited snapshot's usage bucketed"
+        );
+        let unknown = rows
+            .iter()
+            .find(|r| r.project_dir == UNKNOWN_PROJECT)
+            .expect("non-favorited remote usage did not vanish");
+        assert_eq!(unknown.request_count, 1);
+        assert_eq!(unknown.input_tokens, 40);
+    }
+
+    /// The sessions-side unknown sentinel: it matches sessions whose project
+    /// identity is EMPTY (a session row exists but carries no launch dir) —
+    /// the sessions face of the unknown bucket, mirroring the usage-side NOT
+    /// EXISTS face. Worktree/sessioned projects never match it.
+    #[test]
+    fn session_filter_unknown_sentinel_matches_project_less_sessions() {
+        let s = mem();
+        seed_session_project(&s, "s1", "dev", "/proj/alpha", "2026-08-10T10:00:00.000Z");
+        seed_session_project(&s, "s2", "dev", "", "2026-08-11T10:00:00.000Z");
+
+        let f = SessionFilter {
+            project: Some(UNKNOWN_PROJECT.into()),
+            ..Default::default()
+        };
+        let ids: Vec<String> = s
+            .query_sessions_page(&SessionQuery {
+                filter: Some(f.clone()),
+                limit: 50,
+                offset: 0,
+            })
+            .unwrap()
+            .into_iter()
+            .map(|r| r.id)
+            .collect();
+        assert_eq!(ids, ["s2"], "only the project-less session matches");
+
+        // The paged list, the sidebar counts, and the project aggregate all
+        // share the same clause — the aggregate narrows to the "" bucket.
+        assert_eq!(s.count_sessions(Some(&f), "local").unwrap().total, 1);
+        let buckets = s.query_project_stats(Some(&f)).unwrap();
+        assert_eq!(buckets.len(), 1);
+        assert_eq!(buckets[0].project_dir, "");
     }
 
     /// The stats dimension at session grain: one row per session (folded from

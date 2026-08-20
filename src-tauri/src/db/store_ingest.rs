@@ -198,12 +198,13 @@ impl super::Store {
         for td in tds {
             let n = tx.execute(
                 "INSERT OR IGNORE INTO turn_durations
-                 (uuid, timestamp, day, device_id, duration_ms)
-                 VALUES (?1,?2,?3,?4,?5)",
+                 (uuid, timestamp, day, session_id, device_id, duration_ms)
+                 VALUES (?1,?2,?3,?4,?5,?6)",
                 params![
                     td.uuid,
                     td.timestamp,
                     td.day,
+                    td.session_id,
                     td.device_id,
                     td.duration_ms as i64
                 ],
@@ -593,6 +594,7 @@ mod tests {
                 uuid: "t1".into(),
                 timestamp: "2026-07-13T10:00:00Z".into(),
                 day: "2026-07-13".into(),
+                session_id: "s1".into(),
                 device_id: "d".into(),
                 duration_ms: 100_000,
             },
@@ -600,6 +602,7 @@ mod tests {
                 uuid: "t2".into(),
                 timestamp: "2026-07-13T11:00:00Z".into(),
                 day: "2026-07-13".into(),
+                session_id: "s1".into(),
                 device_id: "d".into(),
                 duration_ms: 200_000,
             },
@@ -610,6 +613,7 @@ mod tests {
             uuid: "t1".into(),
             timestamp: "2026-07-13T10:00:00Z".into(),
             day: "2026-07-13".into(),
+            session_id: "s1".into(),
             device_id: "d".into(),
             duration_ms: 999_999,
         }])

@@ -134,7 +134,7 @@ impl super::Store {
     pub fn turns_for_day_device(&self, day: &str, device_id: &str) -> AppResult<Vec<TurnDuration>> {
         let conn = self.conn.lock().expect("db mutex poisoned");
         let mut stmt = conn.prepare(
-            "SELECT uuid, timestamp, day, device_id, duration_ms
+            "SELECT uuid, timestamp, day, session_id, device_id, duration_ms
              FROM turn_durations WHERE day = ? AND device_id = ? ORDER BY uuid",
         )?;
         let rows = stmt.query_map(params![day, device_id], |r| {
@@ -142,8 +142,9 @@ impl super::Store {
                 uuid: r.get(0)?,
                 timestamp: r.get(1)?,
                 day: r.get(2)?,
-                device_id: r.get(3)?,
-                duration_ms: r.get::<_, i64>(4)? as u32,
+                session_id: r.get(3)?,
+                device_id: r.get(4)?,
+                duration_ms: r.get::<_, i64>(5)? as u32,
             })
         })?;
         rows.collect::<rusqlite::Result<Vec<_>>>()
@@ -331,6 +332,7 @@ mod tests {
                 uuid: "t1".into(),
                 timestamp: "2026-07-13T10:00:00Z".into(),
                 day: "2026-07-13".into(),
+                session_id: "s1".into(),
                 device_id: "d".into(),
                 duration_ms: 100_000,
             },
@@ -338,6 +340,7 @@ mod tests {
                 uuid: "t2".into(),
                 timestamp: "2026-07-14T11:00:00Z".into(),
                 day: "2026-07-14".into(),
+                session_id: "s1".into(),
                 device_id: "d".into(),
                 duration_ms: 200_000,
             },
@@ -371,6 +374,7 @@ mod tests {
             uuid: "t3".into(),
             timestamp: "2026-07-15T10:00:00Z".into(),
             day: "2026-07-15".into(),
+            session_id: "s2".into(),
             device_id: "d".into(),
             duration_ms: 1,
         }])

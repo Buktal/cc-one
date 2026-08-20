@@ -430,7 +430,7 @@ enum Parsed {
 impl SessionEvent {
     /// Classify this event into a usage record, a turn duration, or skip.
     /// `session_id` (the source-log file stem) is stamped onto any emitted
-    /// `RawUsage` so usage rows carry their session grouping key.
+    /// `RawUsage` / `RawTurnDuration` so rows carry their session grouping key.
     fn classify(self, session_id: &str) -> Parsed {
         // Per-turn duration: system event tagged turn_duration.
         if self.typ.as_deref() == Some("system") && self.subtype.as_deref() == Some("turn_duration")
@@ -439,6 +439,7 @@ impl SessionEvent {
                 (Some(uuid), Some(duration_ms)) => Parsed::TurnDuration(RawTurnDuration {
                     uuid,
                     timestamp: super::fallback_timestamp(self.timestamp.clone()),
+                    session_id: session_id.to_string(),
                     duration_ms,
                 }),
                 _ => Parsed::Skip,
@@ -702,7 +703,7 @@ mod tests {
     #[test]
     fn parses_turn_duration_events() {
         let dir = tempfile::tempdir().unwrap();
-        let file = dir.path().join("s.jsonl");
+        let file = dir.path().join("sess-td.jsonl");
         let td = r#"{"type":"system","subtype":"turn_duration","timestamp":"2026-07-13T16:55:00Z","uuid":"td-1","durationMs":209499}"#;
         let not_td = r#"{"type":"system","subtype":"other","uuid":"x","durationMs":10}"#;
         write_lines(&file, &[td, not_td]);
@@ -715,6 +716,9 @@ mod tests {
         assert_eq!(td.uuid, "td-1");
         assert_eq!(td.duration_ms, 209_499);
         assert_eq!(td.timestamp, "2026-07-13T16:55:00Z");
+        // The session grouping key rides on the turn too (file stem), so turn
+        // aggregates can resolve a project through the sessions table.
+        assert_eq!(td.session_id, "sess-td");
     }
 
     #[test]

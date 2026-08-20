@@ -70,17 +70,20 @@ pub(super) const USAGE_RECORDS_INDEXES: &str = "\
 
 /// `turn_durations` — per-turn durations (per-turn grain, separate from per-call
 /// `usage_records`). Sourced from system/turn_duration events.
-/// `(uuid, device_id)` = dedup key.
+/// `(uuid, device_id)` = dedup key. `session_id` is the grouping key that lets
+/// the per-turn aggregates resolve a project through `sessions` (same role as
+/// on `usage_records`); legacy rows keep the DEFAULT '' (unknown project).
 pub(super) const TURN_DURATIONS_COLS_DDL: &str = "\
     uuid TEXT NOT NULL, \
     timestamp TEXT NOT NULL, \
     day TEXT NOT NULL, \
+    session_id TEXT NOT NULL DEFAULT '', \
     device_id TEXT NOT NULL, \
     duration_ms INTEGER NOT NULL, \
     PRIMARY KEY (uuid, device_id)";
 
 pub(super) const TURN_DURATIONS_COLNAMES: &str = "\
-    uuid, timestamp, day, device_id, duration_ms";
+    uuid, timestamp, day, session_id, device_id, duration_ms";
 
 pub(super) const TURN_DURATIONS_INDEXES: &str = "\
     CREATE INDEX IF NOT EXISTS idx_turndur_day ON turn_durations(day); \

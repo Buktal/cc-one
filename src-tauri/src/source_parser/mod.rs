@@ -62,6 +62,10 @@ pub struct RawTurnDuration {
     /// Dedup key (the source event's uuid).
     pub uuid: String,
     pub timestamp: String,
+    /// Session this turn belongs to (the source log's session identifier) —
+    /// the grouping key that lets turn aggregates resolve a project, exactly
+    /// like `RawUsage::session_id`.
+    pub session_id: String,
     /// Turn wall-clock in milliseconds.
     pub duration_ms: u32,
 }

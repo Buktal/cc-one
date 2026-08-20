@@ -245,12 +245,25 @@ mod tests {
             uuid: "t1".into(),
             timestamp: "2026-07-21T10:00:00Z".into(),
             day: "2026-07-21".into(),
+            session_id: "sess-abc".into(),
             device_id: "abc123def456".into(),
             duration_ms: 209_499,
         };
         let json = serde_json::to_string(&td).unwrap();
         let back: TurnDuration = serde_json::from_str(&json).unwrap();
         assert_eq!(back, td);
+    }
+
+    /// An old `turns-*.jsonl` artifact line predating the `session_id` field
+    /// must parse (defaulting to "") rather than fail — peers may carry old
+    /// lines, and a "" session id simply buckets the turn into the unknown
+    /// project (no session row resolves).
+    #[test]
+    fn turn_duration_without_session_id_parses_to_unknown() {
+        let json = r#"{"uuid":"t1","timestamp":"2026-07-21T10:00:00Z","day":"2026-07-21","device_id":"abc123def456","duration_ms":209499}"#;
+        let td: TurnDuration = serde_json::from_str(json).unwrap();
+        assert_eq!(td.uuid, "t1");
+        assert_eq!(td.session_id, "", "absent session_id ⇒ empty default");
     }
 
     // ---- Model-key normalization sub-steps ----

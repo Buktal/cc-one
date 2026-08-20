@@ -192,6 +192,44 @@ pub struct SessionRow {
     pub total_cost_usd: f64,
 }
 
+/// Sentinel for the project dimension's「未知项目」(unknown project) bucket:
+/// usage whose session row never arrived. On a multi-device store the only
+/// cross-device session rows are pulled FAVORITE snapshots ("收藏才进 git"),
+/// so a peer's non-favorited usage resolves to no session — without this
+/// bucket that usage would silently vanish from every project view. Session-less
+/// legacy usage rows (empty `session_id`) land here too.
+///
+/// Filter semantics per grain — both are "we cannot name a project for this":
+/// - usage side (`UsageFilter.project` = sentinel): NOT EXISTS a `sessions`
+///   row for the record's `(session_id, device_id)` — remote usage without a
+///   pulled favorite snapshot, or session-less rows;
+/// - sessions side (`SessionFilter.project` = sentinel): sessions whose
+///   project IDENTITY is empty (`project_identity(s.project_dir) = ''`) — a
+///   session row exists, but it carries no launch dir.
+///
+/// The value crosses the wire as DATA (see [`ProjectCandidates`]), so the
+/// frontend labels the special option without a second copy of the literal.
+/// A real directory named exactly this string would be mis-bucketed — the
+/// double-underscore form is chosen to make that collision pathological.
+pub const UNKNOWN_PROJECT: &str = "__unknown_project__";
+
+/// Project-dropdown candidates: the known project identities plus the unknown
+/// bucket's presence. Returned by the distinct-projects read; the sentinel
+/// rides as data (`unknown`) instead of being embedded in `projects`, so the
+/// dropdown can render one labeled special option without recognizing the
+/// literal string.
+#[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize, specta::Type)]
+pub struct ProjectCandidates {
+    /// Known project identities under the filter's other dimensions, sorted.
+    /// Never contains the unknown sentinel or the empty identity (a session
+    /// with no launch dir is not a pickable project).
+    pub projects: Vec<String>,
+    /// `Some(sentinel)` when session-less usage exists in the same window —
+    /// the「未知项目」option is offered exactly then. `None` = no unknown
+    /// usage, so the option stays hidden.
+    pub unknown: Option<String>,
+}
+
 /// Map a stored `project_dir` (the session's launch directory, collected raw
 /// from the source log) to the project identity the project dimension groups
 /// by: a Claude Code worktree suffix — a `.claude` path component immediately
@@ -250,7 +288,11 @@ pub struct SessionFilter {
     /// launch dir: the comparison runs through the `project_identity` SQL
     /// scalar, so a Claude Code worktree session (`<proj>\.claude\worktrees\…`)
     /// matches its parent project's bucket. Same rule the project aggregate
-    /// groups by. `None`/empty = no constraint.
+    /// groups by. The [`UNKNOWN_PROJECT`] sentinel matches sessions whose
+    /// identity is EMPTY (a session row exists but carries no launch dir) —
+    /// the sessions-side face of the unknown bucket; the usage-side face
+    /// (session-less usage, NOT EXISTS) lives on `UsageFilter.project`.
+    /// `None`/empty = no constraint.
     pub project: Option<String>,
     /// Inclusive lower bound on `last_active_at` (ISO8601).
     pub from_ts: Option<String>,
@@ -309,9 +351,18 @@ pub struct SessionGroupCounts {
 /// the project identity (the `project_identity` SQL scalar = the #84 rule), so
 /// a Claude Code worktree session and its usage land under the PARENT project,
 /// never as a one-session bucket of their own.
+///
+/// One SYNTHETIC row may carry the [`UNKNOWN_PROJECT`] sentinel as its key
+/// instead: the aggregate over usage with no session row (remote usage whose
+/// favorite snapshot was never pulled, session-less legacy rows). Its
+/// `session_count` is 0 by definition (no session rows exist) and its
+/// `last_active_at` is the MAX usage timestamp, so the bucket sorts by real
+/// recency.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, specta::Type)]
 pub struct ProjectStatsRow {
-    /// Project identity — the bucket key the filter's `project` matches.
+    /// Project identity — the bucket key the filter's `project` matches. One
+    /// synthetic row can carry the [`UNKNOWN_PROJECT`] sentinel instead: the
+    /// aggregate over session-less usage (see `Store::query_project_stats`).
     pub project_dir: String,
     /// Sessions in the bucket. Same grain as the session list: one row per
     /// (session id, device), so a session collected on two devices counts

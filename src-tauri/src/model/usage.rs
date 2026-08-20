@@ -178,6 +178,14 @@ pub struct TurnDuration {
     pub timestamp: String,
     /// Derived `yyyy-mm-dd` (UTC).
     pub day: String,
+    /// Session this turn belongs to (same grouping key as
+    /// [`UsageRecord::session_id`]): lets the per-turn aggregates resolve a
+    /// project through the sessions table, exactly like usage rows. Rows
+    /// collected before this field existed (and old `turns-*.jsonl` artifact
+    /// lines, which lack it) deserialize to `""` — no session, so they bucket
+    /// into the unknown project.
+    #[serde(default)]
+    pub session_id: String,
     /// Owning device's 12-hex id.
     pub device_id: String,
     /// Turn wall-clock in milliseconds.
@@ -299,9 +307,13 @@ pub struct UsageFilter {
     /// filter): a row matches when its session's `project_dir` maps to this
     /// project identity via the `project_identity` SQL scalar — so usage from
     /// a Claude Code worktree session counts under the PARENT project. Rows
-    /// without a session id belong to no project and never match. `None`/empty
-    /// = no constraint. Not applied to the per-turn aggregates in `UsageStats`
-    /// (`turn_durations` has no session dimension to filter on).
+    /// without a session id belong to no project and never match. The
+    /// [`UNKNOWN_PROJECT`](crate::model::UNKNOWN_PROJECT) sentinel inverts the
+    /// match to NOT EXISTS a session row — the unknown bucket (remote usage
+    /// without a pulled favorite snapshot, session-less legacy rows).
+    /// `None`/empty =
+    /// no constraint. Also applied to the per-turn aggregates in `UsageStats`
+    /// (`turn_durations` carries `session_id`).
     pub project: Option<String>,
 }
 
