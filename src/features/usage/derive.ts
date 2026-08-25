@@ -412,7 +412,7 @@ export function sessionSectionStats(
   for (const r of rows) {
     if (r.agent_type) subagents += 1
     turns += Number(r.turn_count)
-    const span = Date.parse(r.last_active_at) - Date.parse(r.started_at)
+    const span = dayjs(r.last_active_at).diff(r.started_at)
     if (Number.isFinite(span) && span > 0) {
       if (longest === null || span > longest) longest = span
     }

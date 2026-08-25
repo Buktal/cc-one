@@ -4,6 +4,8 @@
 // isolation (architecture.md: "关键不变量用代码表达") — the hook wires these to
 // React state + RTK Query, these own the math.
 
+import dayjs from "dayjs"
+
 import {
   FILTER_DIMENSIONS,
   type FilterState,
@@ -484,7 +486,7 @@ export function statsSpanMs(
   s: Pick<SessionStatsRow, "started_at" | "last_active_at">,
 ): number | null {
   if (!s.started_at || !s.last_active_at) return null
-  const ms = Date.parse(s.last_active_at) - Date.parse(s.started_at)
+  const ms = dayjs(s.last_active_at).diff(s.started_at)
   return Number.isFinite(ms) && ms > 0 ? ms : null
 }
 

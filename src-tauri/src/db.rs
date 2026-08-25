@@ -54,8 +54,8 @@ use crate::source_parser::{FileCursor, ScanProgress, ScanProgressDelta};
 /// 分页 limit 的唯一夹紧点：所有走 SQL `LIMIT` 的分页查询（请求日志
 /// `query_logs`、会话列表 `query_sessions_page`）统一经此规范化到
 /// [1, 1000]——越界值（0 / 超大）不得穿透（0 会错翻整页、超大一次物化全表；
-/// 历史反例见 architecture.md：前端 paginate 漏夹紧致页码越界，Rust 层不
-/// 重演两份实现各改各的）。
+/// 前端 paginate 曾两份分叉、一份漏夹紧致页码越界——Rust 层不重演两份实现
+/// 各改各的）。
 pub(crate) fn page_limit(limit: u32) -> i64 {
     limit.clamp(1, 1000) as i64
 }

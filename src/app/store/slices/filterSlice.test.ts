@@ -82,8 +82,8 @@ describe("toFilter", () => {
     )
     expect(f.from_ts).not.toBeNull()
     expect(f.to_ts).not.toBeNull()
-    expect(new Date(f.from_ts as string).getTime()).toBeLessThanOrEqual(
-      new Date(f.to_ts as string).getTime(),
+    expect(dayjs(f.from_ts as string).valueOf()).toBeLessThanOrEqual(
+      dayjs(f.to_ts as string).valueOf(),
     )
   })
 
