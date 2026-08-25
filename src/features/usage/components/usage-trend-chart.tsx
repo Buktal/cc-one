@@ -123,6 +123,9 @@ export function UsageTrendChart({ filter }: { filter: FilterState }) {
   // legend helper resolves label + color from payload.dataKey. stroke / dot
   // use the bucket's own color directly (var(--chart-*)), not the
   // ChartStyle-injected --color-<key> — keeps the source of truth in BUCKETS.
+  // X 轴刻度间隔按点数自适应（~7 个刻度）：preserveStartEnd 在 24 小时点上
+  // 只保首尾两个、中间刻度全被丢，长窗口与短窗口都看不清节奏。
+  const tickInterval = Math.max(0, Math.ceil(data.length / 7) - 1)
   const chartConfig = {
     input_tokens: {
       label: t("usage.tokens.input"),
@@ -167,7 +170,7 @@ export function UsageTrendChart({ filter }: { filter: FilterState }) {
           <ChartContainer config={chartConfig} className="h-72 w-full">
             <LineChart
               data={data}
-              margin={{ top: 8, right: 16, bottom: 0, left: 0 }}
+              margin={{ top: 8, right: 24, bottom: 0, left: 0 }}
             >
               <CartesianGrid
                 vertical={false}
@@ -176,7 +179,7 @@ export function UsageTrendChart({ filter }: { filter: FilterState }) {
               />
               <XAxis
                 dataKey="day"
-                interval="preserveStartEnd"
+                interval={tickInterval}
                 tickLine={false}
                 axisLine={false}
                 tickFormatter={(v) =>

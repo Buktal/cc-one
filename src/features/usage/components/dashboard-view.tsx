@@ -2,17 +2,19 @@
 // 概览 (总消耗 + KPI 带 + 趋势 + 模型分布) → 设备 → 项目 → 会话 → 请求 →
 // 近期请求, each a section with an indexed head carrying a summary line
 // (secondary aggregates only — never a repeat of the cards' big numbers). The
-// sticky tab bar holds the section tabs (scrollspy-highlighted), the shared
-// filter bar (time / source / model / project / device + reset) on its right
-// end, and the page scroll progress line on its bottom edge. Single frozen
-// layer by design: only the tab bar sticks — the filter row can wrap to a
-// second line at narrower widths, so a second frozen layer under it would
-// need measured geometry; section heads stay in flow and the tab highlight
-// already says where you are.
+// sticky layer is the section tabs only (scrollspy-highlighted, page scroll
+// progress line on its bottom edge); the shared filter bar (time / source /
+// model / project / device + reset) sits in flow above the sections — the
+// same shape as the logs view's header. Single frozen
+// layer by design: only the tab bar sticks; the filter row can wrap to a
+// second line at narrower widths, so the bar's height is MEASURED
+// (ResizeObserver) — anchor scroll margins and the scrollspy edge both track
+// the real bar, never a guessed constant. The bar is a flat solid card
+// surface (index.css 平面铁律: no glass, no backdrop-blur).
 
 import dayjs from "dayjs"
 import { RotateCcw } from "lucide-react"
-import { useRef } from "react"
+import { useEffect, useRef, useState } from "react"
 import { useTranslation } from "react-i18next"
 import {
   useDevicesQuery,
@@ -71,15 +73,27 @@ const SECTIONS = [
 ] as const
 const SECTION_IDS: readonly string[] = SECTIONS.map((s) => s.id)
 
-/** Anchor jumps must clear the frozen tab bar — the section's scroll margin
- *  matches the bar's height (single frozen layer, ~44px) plus breathing room. */
-const SCROLL_MARGIN = "scroll-mt-16"
-
 export function DashboardView() {
   const dispatch = useAppDispatch()
   const filter = useAppSelector((s) => s.filter.filter)
   const rootRef = useRef<HTMLDivElement>(null)
-  const { activeId, progress } = useSectionScroll(rootRef, SECTION_IDS)
+  const barRef = useRef<HTMLDivElement>(null)
+  // 吸顶栏实测高度（折行时变两行）。锚点 scroll-margin 与 scrollspy 边缘都
+  // 从它派生 —— 不变量「让位 ≥ 吸顶高度」由测量守住，不靠估计常量。
+  // 初值 48 = 单行形态（p-2 × 2 + 32px 内容），ResizeObserver 首帧即校正。
+  const [stickyBarH, setStickyBarH] = useState(48)
+  useEffect(() => {
+    const bar = barRef.current
+    if (!bar) return
+    const ro = new ResizeObserver(() => setStickyBarH(bar.offsetHeight))
+    ro.observe(bar)
+    return () => ro.disconnect()
+  }, [])
+  const { activeId, progress } = useSectionScroll(
+    rootRef,
+    SECTION_IDS,
+    stickyBarH,
+  )
   const { t } = useTranslation()
   const summaries = useSectionSummaries(filter)
 
@@ -96,8 +110,13 @@ export function DashboardView() {
       ref={rootRef}
       className="mx-auto flex w-full max-w-[1380px] flex-col gap-3 pb-4"
     >
-      {/* Sticky tab bar: section tabs + shared filters + reset + progress. */}
-      <div className="bg-card/90 supports-[backdrop-filter]:bg-card/75 sticky top-0 z-20 flex flex-wrap items-center gap-x-3 gap-y-2 rounded-lg border p-2 shadow-sm backdrop-blur">
+      {/* Sticky tabs — 吸顶只留 section tabs 单行（scrollspy 高亮 + 底边
+          进度线）。筛选不吸顶：与其他视图（日志页 / 会话工作台）一致，作
+          为页面顶部的常规 in-flow 行随页滚动。Flat solid bg-card（平面铁律）。 */}
+      <div
+        ref={barRef}
+        className="bg-card sticky top-0 z-20 rounded-lg border p-2 shadow-sm"
+      >
         <nav
           aria-label={t("usage.sections.aria")}
           className="flex flex-wrap items-center gap-0.5"
@@ -122,18 +141,6 @@ export function DashboardView() {
             </button>
           ))}
         </nav>
-        <div className="ml-auto flex min-w-0 flex-wrap items-center gap-2">
-          <ControlBar />
-          <Button
-            variant="ghost"
-            size="sm"
-            className="h-8 px-2.5 text-xs"
-            onClick={() => dispatch(resetFilter())}
-          >
-            <RotateCcw className="size-3.5" />
-            {summaries.resetLabel}
-          </Button>
-        </div>
         {/* Page scroll progress line hugging the bar's bottom edge. */}
         <div
           aria-hidden="true"
@@ -146,11 +153,31 @@ export function DashboardView() {
         </div>
       </div>
 
+      {/* 筛选行 —— 与日志页同形（整宽 in-flow，不吸顶）。flex-1 包裹给
+          ControlBar 确定宽度：其根节点是 @container（inline-size
+          containment，固有宽度为 0），不能直接当行向 flex 子项用，契约见
+          control-bar.tsx。重置右贴行尾。 */}
+      <div className="flex min-w-0 flex-wrap items-center gap-2">
+        <div className="min-w-0 flex-1">
+          <ControlBar />
+        </div>
+        <Button
+          variant="ghost"
+          size="sm"
+          className="h-8 px-2.5 text-xs"
+          onClick={() => dispatch(resetFilter())}
+        >
+          <RotateCcw className="size-3.5" />
+          {summaries.resetLabel}
+        </Button>
+      </div>
+
       <Section
         id="dash-overview"
         index={1}
         title={summaries.label("usage.sections.overview")}
         summary={summaries.overview}
+        stickyBarH={stickyBarH}
       >
         <div className="grid gap-3 min-[1080px]:grid-cols-12">
           <div className="min-[1080px]:col-span-4">
@@ -177,6 +204,7 @@ export function DashboardView() {
         index={2}
         title={summaries.label("usage.sections.devices")}
         summary={summaries.devices}
+        stickyBarH={stickyBarH}
       >
         <DeviceSection filter={filter} />
       </Section>
@@ -186,6 +214,7 @@ export function DashboardView() {
         index={3}
         title={summaries.label("usage.sections.projects")}
         summary={summaries.projects}
+        stickyBarH={stickyBarH}
       >
         <ProjectSection filter={filter} />
       </Section>
@@ -195,6 +224,7 @@ export function DashboardView() {
         index={4}
         title={summaries.label("usage.sections.sessions")}
         summary={summaries.sessions}
+        stickyBarH={stickyBarH}
       >
         <SessionSection filter={filter} />
       </Section>
@@ -204,6 +234,7 @@ export function DashboardView() {
         index={5}
         title={summaries.label("usage.sections.requests")}
         summary={summaries.requests}
+        stickyBarH={stickyBarH}
       >
         <RequestSection filter={filter} />
       </Section>
@@ -213,6 +244,7 @@ export function DashboardView() {
         index={6}
         title={summaries.label("usage.sections.recent")}
         summary={summaries.recent}
+        stickyBarH={stickyBarH}
       >
         <RecentRequests />
       </Section>
@@ -222,23 +254,30 @@ export function DashboardView() {
 
 /** One dashboard section: indexed head (title + secondary-aggregate summary)
  *  + the section body. Heads stay in flow (single frozen layer — see the file
- *  header); the scroll margin clears the frozen tab bar for anchor jumps. */
+ *  header); the scroll margin clears the frozen tab bar's MEASURED height
+ *  (plus a small breathing gap) for anchor jumps. */
 function Section({
   id,
   index,
   title,
   summary,
+  stickyBarH,
   children,
 }: {
   id: string
   index: number
   title: string
   summary: React.ReactNode
+  stickyBarH: number
   children: React.ReactNode
 }) {
   return (
-    <section id={id} className={cn("flex flex-col gap-2.5", SCROLL_MARGIN)}>
-      <header className="bg-card/60 flex flex-wrap items-baseline gap-x-2.5 rounded-md border px-2.5 py-1.5 backdrop-blur">
+    <section
+      id={id}
+      className="flex flex-col gap-2.5"
+      style={{ scrollMarginTop: stickyBarH + 12 }}
+    >
+      <header className="bg-card flex flex-wrap items-baseline gap-x-2.5 rounded-md border px-2.5 py-1.5">
         <span className="text-muted-foreground/60 text-[10px] font-semibold tracking-wider tabular-nums">
           {String(index).padStart(2, "0")}
         </span>

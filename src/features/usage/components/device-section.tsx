@@ -69,7 +69,7 @@ export function DeviceSection({ filter }: { filter: FilterState }) {
       <Card interactive>
         <CardHeader>
           <CardTitle>{t("usage.devices.rankTitle")}</CardTitle>
-          <span className="text-muted-foreground/70 self-end text-xs">
+          <span className="text-muted-foreground self-end text-xs">
             {t("usage.devices.count", { n: formatCount(stats.devices) })}
           </span>
         </CardHeader>
@@ -111,7 +111,7 @@ export function DeviceSection({ filter }: { filter: FilterState }) {
             )
           })}
         </CardContent>
-        <CardFooter className="text-muted-foreground/70 gap-2 text-[10.5px]">
+        <CardFooter className="text-muted-foreground gap-2 text-[11px]">
           <span>{t("usage.devices.shareNote")}</span>
         </CardFooter>
       </Card>

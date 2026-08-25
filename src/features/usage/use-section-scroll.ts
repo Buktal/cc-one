@@ -7,10 +7,11 @@
 
 import { useEffect, useState } from "react"
 
-/** The scrollspy edge: a section counts as active once its top has risen to
- *  the sticky tab bar's height (~44px) plus one section-head line, so the
- *  highlight flips as the head — not the card body — crosses the bar. */
-const SPY_EDGE_PX = 74
+/** The scrollspy edge's head allowance: past the sticky bar's bottom, one
+ *  section-head line — the highlight flips as the head (not the card body)
+ *  crosses the bar. The bar's own height is measured by the caller (it wraps
+ *  to a second line at narrower widths) and passed in. */
+const HEAD_LINE_PX = 30
 
 /** First scrollable ancestor (overflow-y auto/scroll) of `el`, or null at the
  *  document root. */
@@ -40,10 +41,14 @@ export function pickActiveSection<A>(
 
 /** Track which section id is current + the page scroll ratio (0–1) for the
  *  ids given. `ids` should be a stable array (module const) so the effect
- *  does not re-attach per render. */
+ *  does not re-attach per render. `stickyBarHeight` is the frozen tab bar's
+ *  measured height (ResizeObserver in dashboard-view) — the spy edge tracks
+ *  the real bar, not a guessed constant, so a wrapped two-line bar keeps the
+ *  highlight and the anchor clears in sync. */
 export function useSectionScroll<T extends HTMLElement>(
   rootRef: React.RefObject<T | null>,
   ids: readonly string[],
+  stickyBarHeight: number,
 ) {
   const [activeId, setActiveId] = useState(ids[0] ?? null)
   const [progress, setProgress] = useState(0)
@@ -55,7 +60,8 @@ export function useSectionScroll<T extends HTMLElement>(
     if (!scroller) return
 
     const sync = () => {
-      const edge = scroller.getBoundingClientRect().top + SPY_EDGE_PX
+      const edge =
+        scroller.getBoundingClientRect().top + stickyBarHeight + HEAD_LINE_PX
       const tops = ids.map((id) => {
         const el = document.getElementById(id)
         return { id, top: el ? el.getBoundingClientRect().top : Number.NaN }
@@ -76,7 +82,7 @@ export function useSectionScroll<T extends HTMLElement>(
     sync()
     scroller.addEventListener("scroll", sync, { passive: true })
     return () => scroller.removeEventListener("scroll", sync)
-  }, [rootRef, ids])
+  }, [rootRef, ids, stickyBarHeight])
 
   return { activeId, progress }
 }

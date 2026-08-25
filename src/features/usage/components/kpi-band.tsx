@@ -217,11 +217,11 @@ function KpiCell({ cell, first }: { cell: Cell; first: boolean }) {
       >
         {cell.value}
       </div>
-      <div className="text-muted-foreground mt-1 text-[11px] whitespace-nowrap">
+      <div className="text-muted-foreground mt-1 text-[11.5px] whitespace-nowrap">
         {cell.label}
       </div>
       {cell.sub ? (
-        <div className="text-muted-foreground/70 mt-0.5 truncate text-[10.5px] tabular-nums">
+        <div className="text-muted-foreground mt-0.5 truncate text-[11px] tabular-nums">
           {cell.sub}
         </div>
       ) : null}

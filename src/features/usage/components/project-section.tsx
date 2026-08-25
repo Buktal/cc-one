@@ -58,7 +58,7 @@ export function ProjectSection({ filter }: { filter: FilterState }) {
         <Card interactive className="min-[1080px]:col-span-8">
           <CardHeader>
             <CardTitle>{t("usage.projects.rankTitle")}</CardTitle>
-            <span className="text-muted-foreground/70 self-end text-xs">
+            <span className="text-muted-foreground self-end text-xs">
               {t("usage.projects.topN", { n: TOP_N })}
             </span>
           </CardHeader>
@@ -136,7 +136,7 @@ export function ProjectSection({ filter }: { filter: FilterState }) {
               />
             ) : null}
           </CardContent>
-          <CardFooter className="text-muted-foreground/70 gap-2 text-[10.5px]">
+          <CardFooter className="text-muted-foreground gap-2 text-[11px]">
             <span>{t("usage.projects.shareNote")}</span>
           </CardFooter>
         </Card>
@@ -170,7 +170,7 @@ export function ProjectSection({ filter }: { filter: FilterState }) {
               ) : null}
             </div>
           </CardContent>
-          <CardFooter className="text-muted-foreground/70 text-[10.5px]">
+          <CardFooter className="text-muted-foreground text-[11px]">
             <span>{t("usage.projects.qualityNote")}</span>
           </CardFooter>
         </Card>

@@ -51,7 +51,7 @@ export function SessionSection({ filter }: { filter: FilterState }) {
         <Card interactive className="min-[1080px]:col-span-5">
           <CardHeader>
             <CardTitle>{t("usage.sessions.turnDistTitle")}</CardTitle>
-            <span className="text-muted-foreground/70 self-end text-xs">
+            <span className="text-muted-foreground self-end text-xs">
               {t("usage.sessions.bySessionCount")}
             </span>
           </CardHeader>
@@ -81,7 +81,7 @@ export function SessionSection({ filter }: { filter: FilterState }) {
               </span>
             </div>
           </CardContent>
-          <CardFooter className="text-muted-foreground/70 text-[10.5px]">
+          <CardFooter className="text-muted-foreground text-[11px]">
             <span>{t("usage.sessions.turnDistNote")}</span>
           </CardFooter>
         </Card>
@@ -89,7 +89,7 @@ export function SessionSection({ filter }: { filter: FilterState }) {
         <Card interactive className="min-[1080px]:col-span-7">
           <CardHeader>
             <CardTitle>{t("usage.sessions.topTitle")}</CardTitle>
-            <span className="text-muted-foreground/70 self-end text-xs">
+            <span className="text-muted-foreground self-end text-xs">
               {t("usage.sessions.topByTokens", { n: TOP_N })}
             </span>
             <CardAction>
@@ -119,7 +119,7 @@ export function SessionSection({ filter }: { filter: FilterState }) {
               </div>
             ))}
           </CardContent>
-          <CardFooter className="text-muted-foreground/70 text-[10.5px]">
+          <CardFooter className="text-muted-foreground text-[11px]">
             <span>{t("usage.sessions.shareNote")}</span>
           </CardFooter>
         </Card>

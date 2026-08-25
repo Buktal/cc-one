@@ -90,7 +90,7 @@ export function DistRow({
         />
       </div>
       {sub ? (
-        <div className="text-muted-foreground/70 text-[10.5px] tabular-nums">
+        <div className="text-muted-foreground text-[11px] tabular-nums">
           {sub}
         </div>
       ) : null}

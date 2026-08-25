@@ -58,6 +58,9 @@ export function RequestSection({ filter }: { filter: FilterState }) {
   const bars = trend.slice(-BAR_COUNT)
   const headline = requestHeadline(bars, windowDayCount(from_day, to_day))
   const peakCount = headline.peakCount ?? 0
+  // X 轴刻度间隔按桶数自适应（~7 个）—— 与趋势图同规则：preserveStartEnd
+  // 在密桶时只保首尾两个刻度。
+  const tickInterval = Math.max(0, Math.ceil(bars.length / 7) - 1)
 
   const durLabels = [
     t("usage.requests.durBand1"),
@@ -80,7 +83,7 @@ export function RequestSection({ filter }: { filter: FilterState }) {
         <Card interactive className="min-[1080px]:col-span-7">
           <CardHeader>
             <CardTitle>{t("usage.requests.dailyTitle")}</CardTitle>
-            <span className="text-muted-foreground/70 self-end text-xs">
+            <span className="text-muted-foreground self-end text-xs">
               {hourly
                 ? t("usage.requests.todayHours")
                 : t("usage.requests.lastDays", { n: bars.length })}
@@ -94,7 +97,7 @@ export function RequestSection({ filter }: { filter: FilterState }) {
               >
                 <XAxis
                   dataKey="day"
-                  interval="preserveStartEnd"
+                  interval={tickInterval}
                   tickLine={false}
                   axisLine={false}
                   tickFormatter={(v) =>
@@ -126,7 +129,13 @@ export function RequestSection({ filter }: { filter: FilterState }) {
                     ) : null
                   }
                 />
-                <Bar dataKey="request_count" radius={[3, 3, 0, 0]}>
+                {/* maxBarSize 44：桶少时（单日 24 桶 / 单桶）柱不铺满全宽，
+                    仍是一条柱而非一面墙。 */}
+                <Bar
+                  dataKey="request_count"
+                  radius={[3, 3, 0, 0]}
+                  maxBarSize={44}
+                >
                   {bars.map((p) => (
                     <Cell
                       key={p.day}
@@ -142,7 +151,7 @@ export function RequestSection({ filter }: { filter: FilterState }) {
               </BarChart>
             </ChartContainer>
           </CardContent>
-          <CardFooter className="text-muted-foreground/70 text-[10.5px]">
+          <CardFooter className="text-muted-foreground text-[11px]">
             <span>{t("usage.requests.dailyNote")}</span>
           </CardFooter>
         </Card>
@@ -150,7 +159,7 @@ export function RequestSection({ filter }: { filter: FilterState }) {
         <Card interactive className="min-[1080px]:col-span-5">
           <CardHeader>
             <CardTitle>{t("usage.requests.durTitle")}</CardTitle>
-            <span className="text-muted-foreground/70 self-end text-xs">
+            <span className="text-muted-foreground self-end text-xs">
               {t("usage.requests.durSub")}
             </span>
           </CardHeader>
@@ -183,7 +192,7 @@ export function RequestSection({ filter }: { filter: FilterState }) {
               </DurRow>
             </div>
           </CardContent>
-          <CardFooter className="text-muted-foreground/70 text-[10.5px]">
+          <CardFooter className="text-muted-foreground text-[11px]">
             <span>{t("usage.requests.durNote")}</span>
           </CardFooter>
         </Card>

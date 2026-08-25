@@ -106,12 +106,16 @@ function SourceChip() {
   )
 }
 
-/** 横向条 — 看板 sticky tab 栏右端与日志页顶部共用。Filters only。Two
+/** 横向条 — 看板筛选行（in-flow）与日志页顶部共用。Filters only。Two
  *  groups in a fixed order: the date range anchors the first line; the
  *  model / source / device chips take their own line on narrow containers
  *  (w-full) and return inline on wide ones (@60rem:w-auto). Fold measures
  *  the bar's own width (@container), so the surrounding layout can't shift
- *  it. */
+ *  it.
+ *
+ *  契约：根节点的 @container = inline-size containment，固有宽度为 0 ——
+ *  父层必须给确定宽度（block 整宽、列向 flex 的 stretch、或 flex-1 包裹），
+ *  不能把它直接当行向 flex 子项用，否则缩成窄条、chips 逐个竖堆。 */
 export function ControlBar() {
   const { data: sources = [] } = useDistinctSourcesQuery(ALL_TIME_FILTER)
   const hasSources = sources.length > 0

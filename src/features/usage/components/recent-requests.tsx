@@ -15,14 +15,7 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card"
-import {
-  formatCost,
-  formatInt,
-  formatMetricLine,
-  formatMetricSeg,
-  formatTime,
-  formatTokens,
-} from "@/lib/format"
+import { formatCost, formatInt, formatTime, formatTokens } from "@/lib/format"
 import { cn } from "@/lib/utils"
 
 import { useDeviceLabelMap } from "../use-device-options"
@@ -71,38 +64,38 @@ export function RecentRequests() {
             <div
               key={r.uuid}
               className={cn(
-                "flex items-center gap-2 py-2.5",
+                "flex items-center gap-3 py-2.5",
                 i > 0 && "border-border/60 border-t",
               )}
             >
-              <span className="truncate font-mono text-xs font-medium">
+              <span className="max-w-[200px] shrink-0 truncate font-mono text-xs font-medium">
                 {r.model}
               </span>
-              {/* DSL 行指标：输入 · 输出 · 缓存命中 · 成本（全称标签段，废除
-                  「入 309」缩写文案）。逐请求时长无数据面（UsageLogRow 无
-                  duration 字段），不造段；时间 / 设备是上下文列，不是指标。 */}
+              {/* 行指标 = 标签-值对（值用前景色，行才有视觉锚点）：输入 /
+                  输出 / 缓存命中 / 成本。值格式化仍走 metric DSL 的
+                  formatTokens / formatCost，只有拼装从字符串（formatMetricLine
+                  无法给值单独上色）改为 JSX；挤不下时换行而非截断。逐请求
+                  时长无数据面（UsageLogRow 无 duration 字段），不造段；
+                  时间 / 设备是上下文列，不是指标。 */}
+              <div className="text-muted-foreground flex min-w-0 flex-wrap items-baseline gap-x-3 gap-y-0.5 text-[11px]">
+                <MetricPair
+                  label={t("usage.tokens.input")}
+                  value={formatTokens(r.tokens.input)}
+                />
+                <MetricPair
+                  label={t("usage.tokens.output")}
+                  value={formatTokens(r.tokens.output)}
+                />
+                <MetricPair
+                  label={t("usage.tokens.cacheRead")}
+                  value={formatTokens(r.tokens.cache_read)}
+                />
+                <MetricPair
+                  label={t("usage.metric.cost")}
+                  value={formatCost(r.total_cost_usd)}
+                />
+              </div>
               <div className="text-muted-foreground ml-auto flex shrink-0 items-center gap-2 text-[11px] tabular-nums">
-                <span>
-                  {formatMetricLine([
-                    formatMetricSeg(
-                      t("usage.tokens.input"),
-                      formatTokens(r.tokens.input),
-                    ),
-                    formatMetricSeg(
-                      t("usage.tokens.output"),
-                      formatTokens(r.tokens.output),
-                    ),
-                    formatMetricSeg(
-                      t("usage.tokens.cacheRead"),
-                      formatTokens(r.tokens.cache_read),
-                    ),
-                    formatMetricSeg(
-                      t("usage.metric.cost"),
-                      formatCost(r.total_cost_usd),
-                    ),
-                  ])}
-                </span>
-                <span aria-hidden="true">·</span>
                 <span>{formatTime(r.timestamp)}</span>
                 {deviceLabel.size > 0 ? (
                   <>
@@ -118,5 +111,15 @@ export function RecentRequests() {
         )}
       </CardContent>
     </Card>
+  )
+}
+
+/** 单个标签-值对：标签 muted、值前景色 —— 一行四对里值的亮度就是扫读锚点。 */
+function MetricPair({ label, value }: { label: string; value: string }) {
+  return (
+    <span className="inline-flex items-baseline gap-1 whitespace-nowrap">
+      {label}
+      <span className="text-foreground tabular-nums">{value}</span>
+    </span>
   )
 }
