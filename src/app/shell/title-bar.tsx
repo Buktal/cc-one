@@ -1,7 +1,16 @@
-// 顶栏 = 导航 + 状态 + 动作 + 窗口控制一行（#105 定稿 variant-a-v2-left-nav）：
-// 左簇导航（观察组 ‖ 管理组竖分隔）+ 模式徽标/设备名，中间弹性留白即拖拽区，
-// 右簇新鲜度/主题/采集 + 轻量两键（→中/→小），再接平台窗口控制。侧栏与竖屏
-// TopNav/StatusBar 已撤除，本行是唯一导航面。
+// 顶栏 = 导航 + 状态 + 动作 + 窗口控制一行（#105 定稿 variant-a-v2-left-nav，
+// 精修：选中底线 / 状态胶囊）：
+// 左簇导航（观察组 ‖ 管理组竖分隔，组间空隙拉大）→ 中间弹性留白即拖拽区
+// → 右簇状态胶囊/主题/采集（进行中图标旋转） ‖ 轻量两键，再接平台窗口
+// 控制。侧栏与竖屏 TopNav/StatusBar 已撤除，本行是唯一导航面。
+//
+// 精修两件：
+//  - 选中导航项贴 bar 底的品牌色短线（浏览器 tab 语言）：Windows 态与
+//    border-b 叠成「选中处底边点亮」，macOS 无底线时悬空也成立。Neutral
+//    皮肤下 tint 填充（10% 灰）淡于 hover 灰底、「hover 比选中还醒目」的
+//    层次倒挂由这根结构线兜底，不再动 tint 浓度。
+//  - 状态胶囊（status-capsule.tsx）收拢模式徽标/设备名/新鲜度，取代原
+//    左簇身份区与右簇 DataFreshness。
 //
 // 平台窗口控制（O_DeepSeek_Desktop ADR 0003 结论）：macOS 走 tauri.conf 的
 // titleBarStyle Overlay + 系统红绿灯（行内避让 84px、顶栏不画底线）；Windows/
@@ -13,16 +22,18 @@
 // 由 wry 按属性存在性自动豁免。恒渲染（无禁用场景）——禁用场景必须完全不
 // 渲染该属性，空串/"false" 仍会触发检测（tauri#13440）。
 //
-// 窄窗退化（纯 CSS 媒体查询，与原型同档）：≤1360 藏设备名 / ≤1180 导航收
-// 纯图标（title 补全称）/ ≤980 新鲜度文字退脉冲点 / ≤840 藏身份簇。
+// 窄窗退化（纯 CSS 媒体查询）：≤1360 胶囊藏时间 / ≤1180 导航收纯图标
+// （title 补全称）/ ≤980 胶囊藏设备名（心跳点恒显，状态永不整簇消失）。
 
 import { getCurrentWindow } from "@tauri-apps/api/window"
 import {
   Activity,
   AlignHorizontalJustifyEnd,
+  Coins,
   Copy,
+  FolderOpen,
   Gauge,
-  Library,
+  Loader2,
   MessagesSquare,
   Minus,
   PictureInPicture2,
@@ -30,12 +41,10 @@ import {
   Server,
   Settings,
   Square,
-  Tags,
   X,
 } from "lucide-react"
 import { type ReactNode, useEffect, useState } from "react"
 import { useTranslation } from "react-i18next"
-import { useAppInfoQuery } from "@/app/store/api"
 import { useAppDispatch, useAppSelector } from "@/app/store/hooks"
 import {
   setLightweightPhase,
@@ -53,7 +62,7 @@ import {
 import { useDeviceOptions } from "@/features/usage/use-device-options"
 import { useCollectAction } from "@/hooks/use-collect-action"
 import { cn } from "@/lib/utils"
-import { DataFreshness } from "./data-freshness"
+import { StatusCapsule } from "./status-capsule"
 import { currentPlatform, topbarLayout } from "./topbar-layout"
 
 // 7 views split into two groups — 观察 (data views) and 管理 (system config).
@@ -70,13 +79,13 @@ const NAV_GROUPS: Array<{
       { id: "dashboard", key: "nav.dashboard", icon: Gauge },
       { id: "sessions", key: "nav.sessions", icon: MessagesSquare },
       { id: "logs", key: "nav.logs", icon: ScrollText },
-      { id: "pricing", key: "nav.pricing", icon: Tags },
+      { id: "pricing", key: "nav.pricing", icon: Coins },
     ],
   },
   {
     heading: "nav.group.manage",
     items: [
-      { id: "library", key: "nav.library", icon: Library },
+      { id: "library", key: "nav.library", icon: FolderOpen },
       // 应用与供应商处于 beta：codex / gemini / grok / opencode 多应用接入与
       // opencode 附加模式刚上线，真实环境验证尚不充分。
       { id: "providers", key: "nav.providers", icon: Server, beta: true },
@@ -85,10 +94,14 @@ const NAV_GROUPS: Array<{
   },
 ]
 
-/** 组间的竖分隔符（观察 ‖ 管理）与右簇动作/轻量两键之间的分隔。 */
-function Vsep() {
+/** 竖分隔符。观察组 ‖ 管理组之间用宽档（间隙本身即分组语义，线居中再割
+ *  一刀）；右簇动作 ‖ 轻量两键之间用原窄档。 */
+function Vsep({ wide = false }: { wide?: boolean }) {
   return (
-    <span aria-hidden="true" className="bg-border mx-0.5 h-4 w-px shrink-0" />
+    <span
+      aria-hidden="true"
+      className={cn("bg-border mx-0.5 h-4 w-px shrink-0", wide && "mx-2")}
+    />
   )
 }
 
@@ -96,13 +109,8 @@ export function TitleBar() {
   const { t } = useTranslation()
   const dispatch = useAppDispatch()
   const view = useAppSelector((s) => s.view.view)
-  const { data: info } = useAppInfoQuery()
-  const synced = info?.mode === "synced"
 
   const layout = topbarLayout(currentPlatform())
-  const modeLabel = t(synced ? "shell.synced" : "shell.standalone")
-  const deviceName = info?.display_name || t("common.unnamed")
-  const deviceId = info?.device_id ?? "—"
 
   // Collect — the single entry point (same hook the old sidebar footer used):
   // Standalone ⇒ local collect, Synced ⇒ collect + pull + push; label covers
@@ -114,19 +122,19 @@ export function TitleBar() {
     <header
       data-tauri-drag-region="true"
       className={cn(
-        "bg-app text-foreground flex h-11 min-w-0 shrink-0 select-none items-center gap-2",
+        "bg-app text-foreground relative flex h-11 min-w-0 shrink-0 select-none items-center gap-2",
         layout.paddingClass,
         layout.borderClass,
       )}
     >
-      {/* 左簇之一：导航（观察组 ‖ 管理组）。≤1180 收纯图标（title 补全称）。 */}
+      {/* 导航（观察组 ‖ 管理组）。≤1180 收纯图标（title 补全称）。 */}
       <nav
         aria-label={t("nav.aria")}
-        className="flex shrink-0 items-center gap-0.5"
+        className="flex h-full shrink-0 items-center gap-0.5"
       >
         {NAV_GROUPS.map((group, gi) => (
           <div key={group.heading} className="flex items-center gap-0.5">
-            {gi > 0 ? <Vsep /> : null}
+            {gi > 0 ? <Vsep wide /> : null}
             {group.items.map((item) => (
               <TopNavBtn
                 key={item.id}
@@ -140,42 +148,14 @@ export function TitleBar() {
         ))}
       </nav>
 
-      {/* 左簇之二：身份状态（原 FooterDeck 身份区升格）。≤840 整簇隐藏，
-          ≤1360 藏设备名（模式徽标仍在）。 */}
-      <div className="flex shrink-0 items-center gap-2 max-[840px]:hidden">
-        <span
-          className={cn(
-            "inline-flex items-center rounded-full bg-muted px-2.5 py-0.5 text-[11px] font-medium whitespace-nowrap",
-            synced ? "text-primary" : "text-muted-foreground",
-          )}
-        >
-          {modeLabel}
-        </span>
-        <Tooltip>
-          <TooltipTrigger
-            render={
-              <button
-                type="button"
-                className="text-muted-foreground hover:bg-hover hover:text-foreground max-[1360px]:hidden rounded-md px-1.5 py-0.5 text-xs whitespace-nowrap"
-              />
-            }
-          >
-            {deviceName}
-          </TooltipTrigger>
-          <TooltipContent side="bottom">
-            {t("shell.deviceId")} {deviceId}
-          </TooltipContent>
-        </Tooltip>
-      </div>
-
       {/* 中间弹性留白：即拖拽区。wry 的 drag 检测按 mousedown target 元素本身
           的属性判定（非祖先冒泡），这个空隙 div 必须自带属性，否则落在其上
           的按下会被当成页面内容而不是拖拽。 */}
       <div className="min-w-2 flex-1" data-tauri-drag-region="true" />
 
-      {/* 右簇：新鲜度 + 主题 + 采集主按钮 ‖ 轻量两键。 */}
+      {/* 右簇：状态胶囊 + 主题 + 采集主按钮 ‖ 轻量两键。 */}
       <div className="flex shrink-0 items-center gap-2">
-        <DataFreshness />
+        <StatusCapsule />
         <ThemeToggle />
         <Button
           size="sm"
@@ -183,7 +163,11 @@ export function TitleBar() {
           disabled={collecting}
           onClick={onCollect}
         >
-          <Activity className="size-3.5" />
+          {collecting ? (
+            <Loader2 className="size-3.5 animate-spin" />
+          ) : (
+            <Activity className="size-3.5" />
+          )}
           {collectLabel}
         </Button>
         <Vsep />
@@ -219,7 +203,9 @@ export function TitleBar() {
 }
 
 /** 顶栏导航按钮：icon + label，≤1180 收纯图标（原生 title 补「名称 · 组」
- *  全称；beta 项追加提示句——图标态下 BETA 徽标随 label 一起隐藏）。 */
+ *  全称；beta 项追加提示句——图标态下 BETA 徽标随 label 一起隐藏）。
+ *  选中项 = tint 填充 + 品牌色文字（交互规则）＋ wrapper 贴 bar 底的品牌色
+ *  短线（结构指示，见文件头注释）；wrapper 拉满行高让线落在 header 底边。 */
 function TopNavBtn({
   item,
   group,
@@ -238,29 +224,34 @@ function TopNavBtn({
     ? `${label} · ${group} — ${t("nav.betaTitle")}`
     : `${label} · ${group}`
   return (
-    <button
-      type="button"
-      onClick={onClick}
-      aria-current={active ? "page" : undefined}
-      title={title}
-      className={cn(
-        "text-muted-foreground hover:bg-hover hover:text-foreground inline-flex h-7 items-center gap-2 rounded-md px-2.5 text-[12.5px] whitespace-nowrap transition-colors",
-        "max-[1180px]:size-8 max-[1180px]:justify-center max-[1180px]:px-0",
-        active
-          ? "bg-accent-tint font-medium text-accent-brand-strong hover:bg-accent-tint"
-          : "",
-      )}
-    >
-      <Icon className="size-[15px] shrink-0" />
-      <span className="max-[1180px]:hidden">
-        {label}
-        {item.beta ? (
-          <span className="text-accent-brand/80 ml-1.5 text-[9px] font-bold tracking-widest">
-            BETA
-          </span>
-        ) : null}
-      </span>
-    </button>
+    <div className="relative flex h-full items-center">
+      <button
+        type="button"
+        onClick={onClick}
+        aria-current={active ? "page" : undefined}
+        title={title}
+        className={cn(
+          "text-muted-foreground hover:bg-hover hover:text-foreground inline-flex h-7 items-center gap-2 rounded-md px-2.5 text-[12.5px] whitespace-nowrap transition-colors",
+          "max-[1180px]:size-8 max-[1180px]:justify-center max-[1180px]:px-0",
+          active
+            ? "bg-accent-tint font-medium text-accent-brand-strong hover:bg-accent-tint"
+            : "",
+        )}
+      >
+        <Icon className="size-[15px] shrink-0" />
+        <span className="max-[1180px]:hidden">
+          {label}
+          {item.beta ? (
+            <span className="text-accent-brand/80 ml-1.5 text-[9px] font-bold tracking-widest">
+              BETA
+            </span>
+          ) : null}
+        </span>
+      </button>
+      {active ? (
+        <span className="bg-accent-brand absolute inset-x-1 bottom-0 h-0.5 rounded-full" />
+      ) : null}
+    </div>
   )
 }
 

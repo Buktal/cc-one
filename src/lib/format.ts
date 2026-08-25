@@ -108,11 +108,16 @@ export function formatSize(bytes: number | null | undefined): string {
   return `${(v / 1024 ** 3).toFixed(2)} GB`
 }
 
-/** ISO timestamp → `MM/DD HH:mm`. Falls back to the raw string on bad input. */
-export function formatTime(ts: string | null | undefined): string {
+/** Timestamp (ISO string or epoch ms) → `MM/DD HH:mm`; 非当年补年份前缀
+ *  (`YYYY/MM/DD HH:mm`)——跨年的时间只写 MM/DD 会被读成今年。Falls back
+ *  to the raw value on bad input. */
+export function formatTime(ts: string | number | null | undefined): string {
   if (!ts) return "—"
   const d = dayjs(ts)
-  return d.isValid() ? d.format("MM/DD HH:mm") : ts
+  if (!d.isValid()) return String(ts)
+  return d.format(
+    d.isSame(dayjs(), "year") ? "MM/DD HH:mm" : "YYYY/MM/DD HH:mm",
+  )
 }
 
 /** ISO day `yyyy-mm-dd` → `MM/DD`. */
