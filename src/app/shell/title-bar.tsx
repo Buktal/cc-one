@@ -29,7 +29,6 @@ import { getCurrentWindow } from "@tauri-apps/api/window"
 import {
   Activity,
   AlignHorizontalJustifyEnd,
-  Coins,
   Copy,
   FolderOpen,
   Gauge,
@@ -37,10 +36,11 @@ import {
   MessagesSquare,
   Minus,
   PictureInPicture2,
-  ScrollText,
+  Rows3,
   Server,
   Settings,
   Square,
+  Tag,
   X,
 } from "lucide-react"
 import { type ReactNode, useEffect, useState } from "react"
@@ -78,8 +78,8 @@ const NAV_GROUPS: Array<{
     items: [
       { id: "dashboard", key: "nav.dashboard", icon: Gauge },
       { id: "sessions", key: "nav.sessions", icon: MessagesSquare },
-      { id: "logs", key: "nav.logs", icon: ScrollText },
-      { id: "pricing", key: "nav.pricing", icon: Coins },
+      { id: "logs", key: "nav.logs", icon: Rows3 },
+      { id: "pricing", key: "nav.pricing", icon: Tag },
     ],
   },
   {
