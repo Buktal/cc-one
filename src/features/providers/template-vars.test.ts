@@ -74,7 +74,6 @@ describe("extractTemplateVars / replaceTemplateVarsInText", () => {
   it("keeps the placeholder verbatim when a variable is missing or empty", () => {
     const text = JSON.stringify({
       env: {
-        // biome-ignore lint/suspicious/noTemplateCurlyInString: 断言字面量占位符文本
         ANTHROPIC_BASE_URL:
           "https://bedrock-runtime.${AWS_REGION}.amazonaws.com",
       },
@@ -104,7 +103,6 @@ describe("restoreTemplatePlaceholders", () => {
         // biome-ignore lint/suspicious/noTemplateCurlyInString: 断言字面量占位符文本
         ANTHROPIC_BASE_URL:
           "https://bedrock-runtime.${AWS_REGION}.amazonaws.com",
-        // biome-ignore lint/suspicious/noTemplateCurlyInString: 断言字面量占位符文本
         AWS_REGION: "${AWS_REGION}",
       },
     })
