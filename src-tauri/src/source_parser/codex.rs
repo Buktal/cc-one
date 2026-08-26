@@ -91,10 +91,6 @@ impl SourceParser for CodexSourceParser {
         ))
     }
 
-    fn parse(&self, files: &[PathBuf]) -> AppResult<CollectResult> {
-        super::parse_jsonl_full(self, files, fold_codex_file)
-    }
-
     /// Incremental collect: mtime-gate unchanged files; for a changed file,
     /// re-parse it fully to rebuild the cumulative baseline + event_index, but
     /// only EMIT events/messages past the recorded cursor. Session meta is
@@ -892,6 +888,17 @@ fn parse_cumulative_tokens(total_usage: &serde_json::Value) -> Option<Cumulative
     })
 }
 
+// ---------------------------------------------------------- 测试全量扫面 --
+// 昔年 trait 成员 `parse` 的降级（架构审查候选⑪）：test-only、走生产同款驱动
+// （fold_codex_file 等 fold 与 `collect_incremental` 共用），但不再是谎称生产的
+// trait 接口；需要「显式文件列表全量扫」的测试改走 parse_full。
+#[cfg(test)]
+impl CodexSourceParser {
+    pub(crate) fn parse_full(&self, files: &[PathBuf]) -> AppResult<CollectResult> {
+        super::parse_jsonl_full(self, files, fold_codex_file)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1112,7 +1119,7 @@ mod tests {
             ],
         );
         let p = CodexSourceParser::with_dir(dir.path().to_path_buf());
-        let result = p.parse(&p.discover().unwrap()).unwrap();
+        let result = p.parse_full(&p.discover().unwrap()).unwrap();
         assert_eq!(result.source, "codex_cli");
         assert_eq!(
             result.events.len(),
@@ -1155,7 +1162,7 @@ mod tests {
             ],
         );
         let p = CodexSourceParser::with_dir(dir.path().to_path_buf());
-        let result = p.parse(&p.discover().unwrap()).unwrap();
+        let result = p.parse_full(&p.discover().unwrap()).unwrap();
         let mut uuids: Vec<String> = result.events.iter().map(|e| e.uuid.clone()).collect();
         uuids.sort();
         assert_eq!(
@@ -1264,7 +1271,7 @@ mod tests {
             ],
         );
         let p = CodexSourceParser::with_dir(dir.path().to_path_buf());
-        let result = p.parse(&p.discover().unwrap()).unwrap();
+        let result = p.parse_full(&p.discover().unwrap()).unwrap();
         assert_eq!(result.events.len(), 3);
         assert!(
             result.events.iter().all(|e| e.model == "gpt-5.6-sol"),
@@ -1501,7 +1508,7 @@ mod tests {
             ],
         );
         let p = CodexSourceParser::with_dir(dir.path().to_path_buf());
-        let result = p.parse(&p.discover().unwrap()).unwrap();
+        let result = p.parse_full(&p.discover().unwrap()).unwrap();
 
         // One session, system data from the full file.
         assert_eq!(result.sessions.len(), 1);
@@ -1537,7 +1544,7 @@ mod tests {
             ],
         );
         let p = CodexSourceParser::with_dir(dir.path().to_path_buf());
-        let result = p.parse(&p.discover().unwrap()).unwrap();
+        let result = p.parse_full(&p.discover().unwrap()).unwrap();
         assert_eq!(result.sessions[0].title_orig, "O_cc one");
         assert_eq!(result.sessions[0].project_dir, "/home/me/O_cc one");
     }
@@ -1576,7 +1583,7 @@ mod tests {
             ],
         );
         let p = CodexSourceParser::with_dir(dir.path().to_path_buf());
-        let result = p.parse(&p.discover().unwrap()).unwrap();
+        let result = p.parse_full(&p.discover().unwrap()).unwrap();
         assert_eq!(result.sessions[0].title_orig, "Fix the login bug");
     }
 
@@ -1601,7 +1608,7 @@ mod tests {
             ],
         );
         let p = CodexSourceParser::with_dir(dir.path().to_path_buf());
-        let result = p.parse(&p.discover().unwrap()).unwrap();
+        let result = p.parse_full(&p.discover().unwrap()).unwrap();
         assert_eq!(
             result.sessions[0].title_orig,
             "Fix the session title preview"
@@ -1635,7 +1642,7 @@ mod tests {
             ],
         );
         let p = CodexSourceParser::with_dir(dir.path().to_path_buf());
-        let result = p.parse(&p.discover().unwrap()).unwrap();
+        let result = p.parse_full(&p.discover().unwrap()).unwrap();
         assert_eq!(result.sessions[0].title_orig, "Fix the login bug");
     }
 
@@ -1677,7 +1684,7 @@ mod tests {
             ],
         );
         let p = CodexSourceParser::with_dir(dir.path().to_path_buf());
-        let result = p.parse(&p.discover().unwrap()).unwrap();
+        let result = p.parse_full(&p.discover().unwrap()).unwrap();
 
         let roles: Vec<_> = result.messages.iter().map(|m| m.role).collect();
         use crate::model::SessionMessageRole::*;
@@ -1782,7 +1789,7 @@ mod tests {
             ],
         );
         let p = CodexSourceParser::with_dir(dir.path().to_path_buf());
-        let result = p.parse(&p.discover().unwrap()).unwrap();
+        let result = p.parse_full(&p.discover().unwrap()).unwrap();
         assert!(result.sessions.is_empty(), "sub-agent emits no session");
         assert!(result.messages.is_empty(), "sub-agent emits no transcript");
         // Usage still emitted, with empty session_id (no top-level session).
@@ -1819,7 +1826,7 @@ mod tests {
             ],
         );
         let p = CodexSourceParser::with_dir(dir.path().to_path_buf());
-        let result = p.parse(&p.discover().unwrap()).unwrap();
+        let result = p.parse_full(&p.discover().unwrap()).unwrap();
         assert_eq!(result.sessions.len(), 1);
         assert_eq!(
             result.sessions[0].id,

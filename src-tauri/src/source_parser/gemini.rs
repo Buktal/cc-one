@@ -65,12 +65,6 @@ impl SourceParser for GeminiCliSourceParser {
         ))
     }
 
-    fn parse(&self, files: &[PathBuf]) -> AppResult<CollectResult> {
-        // Gemini is one JSON object per file (no line cursor); `fold_file`
-        // ignores start_line and re-parses the whole text.
-        super::parse_jsonl_full(self, files, |file, text, _| fold_file(file, text))
-    }
-
     /// Gemini session ids live in the file's JSON `sessionId`, not the stem —
     /// reconcile needs the real ids or it would mis-delete sessions. Bounded
     /// head read; on any failure fall back to the stem (a fallback can only
@@ -393,6 +387,17 @@ fn first_tool_name(msg: &serde_json::Value) -> Option<String> {
         })
 }
 
+// ---------------------------------------------------------- 测试全量扫面 --
+// 昔年 trait 成员 `parse` 的降级（架构审查候选⑪）：test-only、走生产同款驱动
+// （|file, text, _| fold_file(file, text) 等 fold 与 `collect_incremental` 共用），但不再是谎称生产的
+// trait 接口；需要「显式文件列表全量扫」的测试改走 parse_full。
+#[cfg(test)]
+impl GeminiCliSourceParser {
+    pub(crate) fn parse_full(&self, files: &[PathBuf]) -> AppResult<CollectResult> {
+        super::parse_jsonl_full(self, files, |file, text, _| fold_file(file, text))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -466,7 +471,7 @@ mod tests {
         }"#;
         write_gemini_session(dir.path(), "hashA", "session-1.json", json);
         let p = GeminiCliSourceParser::with_dir(dir.path().to_path_buf());
-        let result = p.parse(&p.discover().unwrap()).unwrap();
+        let result = p.parse_full(&p.discover().unwrap()).unwrap();
         assert_eq!(result.source, "gemini_cli");
         assert_eq!(
             result.events.len(),
@@ -549,7 +554,7 @@ mod tests {
         write_project_root(dir.path(), "hashA", "/home/me/project");
 
         let p = GeminiCliSourceParser::with_dir(dir.path().to_path_buf());
-        let result = p.parse(&p.discover().unwrap()).unwrap();
+        let result = p.parse_full(&p.discover().unwrap()).unwrap();
 
         // ---- RawSession ----
         assert_eq!(result.sessions.len(), 1);
@@ -611,8 +616,8 @@ mod tests {
         write_gemini_session(dir.path(), "h", "session-1.json", json);
         let p = GeminiCliSourceParser::with_dir(dir.path().to_path_buf());
 
-        let r1 = p.parse(&p.discover().unwrap()).unwrap();
-        let r2 = p.parse(&p.discover().unwrap()).unwrap();
+        let r1 = p.parse_full(&p.discover().unwrap()).unwrap();
+        let r2 = p.parse_full(&p.discover().unwrap()).unwrap();
         let ids1: Vec<&str> = r1.messages.iter().map(|m| m.uuid.as_str()).collect();
         let ids2: Vec<&str> = r2.messages.iter().map(|m| m.uuid.as_str()).collect();
         assert_eq!(ids1, vec!["m1", "m2"]);
@@ -628,7 +633,7 @@ mod tests {
         write_gemini_session(dir.path(), "h", "session-1.json", json);
         // No .project_root written.
         let p = GeminiCliSourceParser::with_dir(dir.path().to_path_buf());
-        let result = p.parse(&p.discover().unwrap()).unwrap();
+        let result = p.parse_full(&p.discover().unwrap()).unwrap();
         assert_eq!(result.sessions[0].project_dir, "");
     }
 
@@ -642,7 +647,7 @@ mod tests {
         );
         write_gemini_session(dir.path(), "h", "session-1.json", &json);
         let p = GeminiCliSourceParser::with_dir(dir.path().to_path_buf());
-        let result = p.parse(&p.discover().unwrap()).unwrap();
+        let result = p.parse_full(&p.discover().unwrap()).unwrap();
         assert_eq!(result.messages.len(), 1);
         let content = &result.messages[0].content;
         assert!(content.ends_with('…'), "truncated with ellipsis");
@@ -688,7 +693,7 @@ mod tests {
         ]}"#;
         write_gemini_session(dir.path(), "h", "session-1.json", json);
         let p = GeminiCliSourceParser::with_dir(dir.path().to_path_buf());
-        let result = p.parse(&p.discover().unwrap()).unwrap();
+        let result = p.parse_full(&p.discover().unwrap()).unwrap();
         // Only the "ok" message survives (non-empty content + has id).
         assert_eq!(result.messages.len(), 1);
         assert_eq!(result.messages[0].uuid, "ok");

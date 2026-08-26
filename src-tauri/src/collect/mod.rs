@@ -222,10 +222,6 @@ mod tests {
             self.inner.discover()
         }
 
-        fn parse(&self, files: &[PathBuf]) -> AppResult<CollectResult> {
-            self.inner.parse(files)
-        }
-
         fn collect_incremental(
             &self,
             progress: &ScanProgress,

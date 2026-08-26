@@ -323,14 +323,6 @@ impl SourceParser for ClaudeCodeSourceParser {
         ))
     }
 
-    fn parse(&self, files: &[PathBuf]) -> AppResult<CollectResult> {
-        // Dedup by Anthropic message id lives in `fold_file` (one message id ⇒
-        // one record; without it one API call inflates tokens/cost N×). Runs
-        // through the shared `parse_jsonl_full` so the test path reuses the
-        // production fold + ordering, not a divergent copy.
-        super::parse_jsonl_full(self, files, Self::fold_file)
-    }
-
     /// Incremental collect: parse only lines past each file's recorded cursor
     /// and return the advanced cursors to persist. The mtime gate skips
     /// unchanged files (no IO/serde); a never-seen file ({0,0}) falls through to
@@ -674,6 +666,17 @@ fn should_replace(existing: &RawUsage, candidate: &RawUsage) -> bool {
     }
 }
 
+// ---------------------------------------------------------- 测试全量扫面 --
+// 昔年 trait 成员 `parse` 的降级（架构审查候选⑪）：test-only、走生产同款驱动
+// （Self::fold_file 等 fold 与 `collect_incremental` 共用），但不再是谎称生产的
+// trait 接口；需要「显式文件列表全量扫」的测试改走 parse_full。
+#[cfg(test)]
+impl ClaudeCodeSourceParser {
+    pub(crate) fn parse_full(&self, files: &[PathBuf]) -> AppResult<CollectResult> {
+        super::parse_jsonl_full(self, files, Self::fold_file)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -699,7 +702,7 @@ mod tests {
         let p = ClaudeCodeSourceParser::with_dir(dir.path().to_path_buf());
         let files = p.discover().unwrap();
         assert_eq!(files.len(), 1);
-        let result = p.parse(&files).unwrap();
+        let result = p.parse_full(&files).unwrap();
         assert_eq!(result.source, "claude_code");
         assert_eq!(result.events.len(), 1);
         assert!(result.turn_durations.is_empty());
@@ -728,7 +731,7 @@ mod tests {
         write_lines(&file, &[td, not_td]);
 
         let p = ClaudeCodeSourceParser::with_dir(dir.path().to_path_buf());
-        let result = p.parse(&p.discover().unwrap()).unwrap();
+        let result = p.parse_full(&p.discover().unwrap()).unwrap();
         assert_eq!(result.turn_durations.len(), 1);
         assert_eq!(result.events.len(), 0);
         let td = &result.turn_durations[0];
@@ -750,7 +753,7 @@ mod tests {
         );
         write_lines(&file, &[zero]);
         let p = ClaudeCodeSourceParser::with_dir(dir.path().to_path_buf());
-        let result = p.parse(&p.discover().unwrap()).unwrap();
+        let result = p.parse_full(&p.discover().unwrap()).unwrap();
         assert_eq!(result.events.len(), 0);
     }
 
@@ -767,7 +770,7 @@ mod tests {
         write_lines(&file, &[a1, a2, b1]);
 
         let p = ClaudeCodeSourceParser::with_dir(dir.path().to_path_buf());
-        let result = p.parse(&p.discover().unwrap()).unwrap();
+        let result = p.parse_full(&p.discover().unwrap()).unwrap();
         assert_eq!(
             result.events.len(),
             2,
@@ -792,14 +795,14 @@ mod tests {
         // Snapshot first, then final.
         write_lines(&file, &[start, final_block]);
         let p = ClaudeCodeSourceParser::with_dir(dir.path().to_path_buf());
-        let result = p.parse(&p.discover().unwrap()).unwrap();
+        let result = p.parse_full(&p.discover().unwrap()).unwrap();
         assert_eq!(result.events.len(), 1);
         assert_eq!(result.events[0].tokens.output, 1349);
         assert_eq!(result.events[0].stop_reason, "end_turn");
 
         // Order-independent: final block first, then a late snapshot — final still wins.
         write_lines(&file, &[final_block, start]);
-        let result = p.parse(&p.discover().unwrap()).unwrap();
+        let result = p.parse_full(&p.discover().unwrap()).unwrap();
         assert_eq!(result.events.len(), 1);
         assert_eq!(result.events[0].tokens.output, 1349);
         assert_eq!(result.events[0].stop_reason, "end_turn");
@@ -982,7 +985,7 @@ mod tests {
         write_lines(&file, &[user, assistant]);
 
         let p = ClaudeCodeSourceParser::with_dir(dir.path().to_path_buf());
-        let result = p.parse(&p.discover().unwrap()).unwrap();
+        let result = p.parse_full(&p.discover().unwrap()).unwrap();
 
         // One session, id = file stem.
         assert_eq!(result.sessions.len(), 1);
@@ -1007,7 +1010,7 @@ mod tests {
         let user = r#"{"type":"user","timestamp":"2026-08-01T10:00:00Z","uuid":"u1","message":{"role":"user","content":"Please refactor this function for me"}}"#;
         write_lines(&file, &[user]);
         let p = ClaudeCodeSourceParser::with_dir(dir.path().to_path_buf());
-        let result = p.parse(&p.discover().unwrap()).unwrap();
+        let result = p.parse_full(&p.discover().unwrap()).unwrap();
         assert_eq!(result.sessions.len(), 1);
         assert!(result.sessions[0].title_orig.starts_with("Please refactor"));
         // Truncated at TITLE_MAX (80) with an ellipsis when exceeded.
@@ -1016,7 +1019,7 @@ mod tests {
             r#"{{"type":"user","timestamp":"2026-08-01T10:00:00Z","uuid":"u2","message":{{"role":"user","content":"{long}"}}}}"#
         );
         write_lines(&file, &[user2]);
-        let result = p.parse(&p.discover().unwrap()).unwrap();
+        let result = p.parse_full(&p.discover().unwrap()).unwrap();
         let t = &result.sessions[0].title_orig;
         assert!(t.ends_with('…'), "long title truncated with ellipsis: {t}");
         assert!(t.chars().count() <= 80);
@@ -1032,7 +1035,7 @@ mod tests {
         let assistant = r#"{"type":"assistant","timestamp":"2026-08-01T10:01:00Z","uuid":"a1","message":{"id":"m1","model":"glm-5.2","role":"assistant","content":[{"type":"thinking","thinking":"internal reasoning"},{"type":"text","text":"Sure"},{"type":"tool_use","name":"Read","input":{"path":"/x"}}]}}"#;
         write_lines(&file, &[user, assistant]);
         let p = ClaudeCodeSourceParser::with_dir(dir.path().to_path_buf());
-        let result = p.parse(&p.discover().unwrap()).unwrap();
+        let result = p.parse_full(&p.discover().unwrap()).unwrap();
 
         let roles: Vec<_> = result.messages.iter().map(|m| m.role).collect();
         use crate::model::SessionMessageRole::*;
@@ -1113,7 +1116,7 @@ mod tests {
         ];
         write_lines(&file, &lines);
         let p = ClaudeCodeSourceParser::with_dir(dir.path().to_path_buf());
-        let result = p.parse(&p.discover().unwrap()).unwrap();
+        let result = p.parse_full(&p.discover().unwrap()).unwrap();
         assert_eq!(result.sessions.len(), 1);
         // Latest custom-title wins over summary and the first prompt.
         assert_eq!(result.sessions[0].title_orig, "New name");
@@ -1131,7 +1134,7 @@ mod tests {
         ];
         write_lines(&file, &lines);
         let p = ClaudeCodeSourceParser::with_dir(dir.path().to_path_buf());
-        let result = p.parse(&p.discover().unwrap()).unwrap();
+        let result = p.parse_full(&p.discover().unwrap()).unwrap();
         assert_eq!(result.sessions[0].title_orig, "Late summary");
     }
 
@@ -1148,7 +1151,7 @@ mod tests {
         ];
         write_lines(&file, &lines);
         let p = ClaudeCodeSourceParser::with_dir(dir.path().to_path_buf());
-        let result = p.parse(&p.discover().unwrap()).unwrap();
+        let result = p.parse_full(&p.discover().unwrap()).unwrap();
         assert!(
             result.sessions[0]
                 .title_orig
@@ -1170,7 +1173,7 @@ mod tests {
         let line = r#"{"type":"assistant","timestamp":"2026-08-01T10:00:00Z","uuid":"a1","cwd":"/home/me/O_cc one","message":{"id":"m1","model":"glm-5.2","role":"assistant","usage":{"input_tokens":1,"output_tokens":1}}}"#;
         write_lines(&file, &[line]);
         let p = ClaudeCodeSourceParser::with_dir(dir.path().to_path_buf());
-        let result = p.parse(&p.discover().unwrap()).unwrap();
+        let result = p.parse_full(&p.discover().unwrap()).unwrap();
         assert_eq!(result.sessions[0].title_orig, "O_cc one");
         assert_eq!(result.sessions[0].project_dir, "/home/me/O_cc one");
     }
@@ -1190,7 +1193,7 @@ mod tests {
         let sub2 = r#"{"type":"assistant","timestamp":"2026-08-01T11:00:00Z","uuid":"a2","cwd":"D:\\Project\\O_CC_One\\src-tauri","message":{"id":"m2","model":"glm-5.2","role":"assistant","usage":{"input_tokens":1,"output_tokens":1}}}"#;
         write_lines(&file, &[root, sub1, sub2]);
         let p = ClaudeCodeSourceParser::with_dir(dir.path().to_path_buf());
-        let result = p.parse(&p.discover().unwrap()).unwrap();
+        let result = p.parse_full(&p.discover().unwrap()).unwrap();
         assert_eq!(
             result.sessions[0].project_dir, "D:\\Project\\O_CC_One",
             "first cwd (launch dir) wins even when the subdir is the mode (2×)"
@@ -1208,12 +1211,12 @@ mod tests {
         let real = r#"{"type":"user","timestamp":"2026-08-01T09:01:00Z","uuid":"u2","cwd":"/home/me/proj","message":{"role":"user","content":"again"}}"#;
         write_lines(&file, &[empty_cwd, real]);
         let p = ClaudeCodeSourceParser::with_dir(dir.path().to_path_buf());
-        let result = p.parse(&p.discover().unwrap()).unwrap();
+        let result = p.parse_full(&p.discover().unwrap()).unwrap();
         assert_eq!(result.sessions[0].project_dir, "/home/me/proj");
 
         let no_cwd = r#"{"type":"assistant","timestamp":"2026-08-01T09:02:00Z","uuid":"a1","message":{"id":"m1","model":"glm-5.2","role":"assistant","usage":{"input_tokens":1,"output_tokens":1}}}"#;
         write_lines(&file, &[no_cwd]);
-        let result = p.parse(&p.discover().unwrap()).unwrap();
+        let result = p.parse_full(&p.discover().unwrap()).unwrap();
         assert_eq!(result.sessions[0].project_dir, "");
     }
 
@@ -1338,7 +1341,7 @@ mod tests {
             ],
         );
         let p = ClaudeCodeSourceParser::with_dir(dir.path().to_path_buf());
-        let outcome = p.parse(&p.discover().unwrap()).unwrap();
+        let outcome = p.parse_full(&p.discover().unwrap()).unwrap();
 
         let by_id = |id: &str| {
             outcome
@@ -1389,7 +1392,7 @@ mod tests {
             &[assistant_line("u3", "msg_C", 30)],
         );
         let p = ClaudeCodeSourceParser::with_dir(dir.path().to_path_buf());
-        let outcome = p.parse(&p.discover().unwrap()).unwrap();
+        let outcome = p.parse_full(&p.discover().unwrap()).unwrap();
 
         let by_id = |id: &str| {
             outcome

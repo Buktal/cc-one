@@ -139,19 +139,12 @@ pub trait SourceParser: Send + Sync {
     /// Discover Source files for this parser.
     fn discover(&self) -> AppResult<Vec<PathBuf>>;
 
-    /// Full-scan parse of the given files into usage events + turn durations.
-    /// Diagnostic/test surface and the semantic reference for a "parse
-    /// everything" run; the production collect path is
-    /// [`SourceParser::collect_incremental`] (which, with empty progress, also
-    /// yields a full scan). Each parser's `parse` delegates to the same
-    /// parsing helpers its `collect_incremental` closure uses, so testing via
-    /// `parse` exercises production logic — not a divergent path.
-    #[allow(dead_code)] // off the production path by design; kept as the test/diagnostic full-scan surface
-    fn parse(&self, files: &[PathBuf]) -> AppResult<CollectResult>;
-
     /// Incremental collect: parse only what each file's recorded cursor says is
     /// new, returning the advanced cursors to persist. This is the ONLY collect
-    /// entry point the production path (`collect_into`) calls. Each parser
+    /// entry point — production (`collect_into`) calls it; with EMPTY progress
+    /// it degenerates to a full scan, which is exactly what tests should use
+    /// when they want "everything". 解析器自带 test-only 的
+    /// `parse_full`（见各文件）满足「显式给文件列表」的旧扫面习惯。 Each parser
     /// implements its own — the JSONL parsers delegate to the shared
     /// [`collect_jsonl_incremental`] driver; OpenCode (SQLite, two-level
     /// watermark) keeps its own. There is intentionally no default impl: a
@@ -391,14 +384,13 @@ pub(super) fn order_results(
 }
 
 /// Full-scan parse for line-oriented JSONL sources — the shared "parse every
-/// discovered file in full" loop that each JSONL parser's `parse` used to
-/// inline. Hands each file's text to `parse_file` (start_line 0 — full scan),
-/// aggregates events / turn durations / sessions / messages, and applies the
-/// deterministic ordering. The only per-parser thing is "how a file's text
-/// becomes events", supplied as the same `parse_file` closure the parser's
-/// `collect_incremental` uses — so the test path (`parse`) and the production
-/// path (`collect_incremental`) run identical per-file logic. OpenCode (SQLite)
-/// keeps its own `parse`; its source shape does not fit this driver.
+/// given file in full" loop (start_line 0), aggregating events / turn durations
+/// / sessions / messages and applying the deterministic ordering. TEST-ONLY
+/// surface (架构审查候选⑪)：生产只走 [`collect_jsonl_incremental`]——空进度即
+/// 全量扫描，两者共享每文件 fold，trait 不再有自认不走生产的成员；但「给定文
+/// 件列表全量扫」仍是各 parser 测试的需要，故降级为这里的 cfg(test) 驱动 +
+/// 各 parser 的 `parse_full`。OpenCode（SQLite）的形状不走本驱动。
+#[cfg(test)]
 pub(super) fn parse_jsonl_full(
     parser: &dyn SourceParser,
     files: &[PathBuf],

@@ -61,47 +61,6 @@ impl SourceParser for OpenCodeSourceParser {
         }
     }
 
-    fn parse(&self, files: &[PathBuf]) -> AppResult<CollectResult> {
-        let mut events = Vec::new();
-        let mut corrections = Vec::new();
-        let mut sessions = Vec::new();
-        let mut messages = Vec::new();
-        let mut skipped = 0u32;
-        let mut files_scanned = 0u32;
-        for db_path in files {
-            files_scanned += 1;
-            let conn = match open_opencode_readonly(db_path) {
-                Ok(c) => c,
-                Err(_) => {
-                    skipped += 1;
-                    continue;
-                }
-            };
-            match collect_all(&conn) {
-                Ok((ev, ss, ms)) => {
-                    events.extend(ev);
-                    sessions.extend(ss);
-                    messages.extend(ms);
-                }
-                Err(_) => skipped += 1,
-            }
-        }
-        super::order_results(&mut events, &mut sessions, &mut corrections);
-        Ok(CollectResult {
-            source: self.name().to_string(),
-            events,
-            corrections,
-            turn_durations: Vec::new(),
-            sessions,
-            messages,
-            files_scanned,
-            lines_skipped: skipped,
-            // SQLite session table is self-managed (per-session watermark) —
-            // file-backed reconciliation must not touch it.
-            session_ids: Vec::new(),
-        })
-    }
-
     /// Two-level watermark incremental: file-level mtime gate (db + `-wal`
     /// merged) skips an unchanged db; per-session `time_updated` skips sessions
     /// already synced. A session with an in-progress message (no `time.completed`)
@@ -264,10 +223,10 @@ fn open_opencode_readonly(db_path: &Path) -> AppResult<rusqlite::Connection> {
 }
 
 /// Full-scan collect: every session's [`RawSession`] + completed-assistant
-/// usage events + transcript messages (no watermark gate). Reached only from
-/// [`SourceParser::parse`] — the test/diagnostic full-scan path. Production runs
-/// [`OpenCodeSourceParser::collect_incremental`] (per-session, two-level watermark).
-#[allow(dead_code)] // parse-only; production runs collect_incremental
+/// usage events + transcript messages (no watermark gate). TEST-ONLY（架构审查
+/// 候选⑪）：唯一调用方是 `parse_full`；生产的全量扫照走
+/// `collect_incremental` 空进度，水位线永不旁路。
+#[cfg(test)]
 fn collect_all(
     conn: &rusqlite::Connection,
 ) -> AppResult<(Vec<RawUsage>, Vec<RawSession>, Vec<SessionMessage>)> {
@@ -650,6 +609,54 @@ fn opencode_raw_usage(session_id: &str, message_id: &str, msg: &OpenCodeMessageD
     }
 }
 
+// ---------------------------------------------------------- 测试全量扫面 --
+// 昔年 trait 成员 `parse` 的降级（架构审查候选⑪）：test-only 全量读——SQLite
+// 源形状不走共享 JSONL 驱动，本函数保持「给定 db 列表全量收集」的测试面，
+// 但不再是谎称生产的 trait 接口（生产只走 collect_incremental 的双层水位线）。
+#[cfg(test)]
+impl OpenCodeSourceParser {
+    pub(crate) fn parse_full(&self, files: &[PathBuf]) -> AppResult<CollectResult> {
+        let mut events = Vec::new();
+        let mut corrections = Vec::new();
+        let mut sessions = Vec::new();
+        let mut messages = Vec::new();
+        let mut skipped = 0u32;
+        let mut files_scanned = 0u32;
+        for db_path in files {
+            files_scanned += 1;
+            let conn = match open_opencode_readonly(db_path) {
+                Ok(c) => c,
+                Err(_) => {
+                    skipped += 1;
+                    continue;
+                }
+            };
+            match collect_all(&conn) {
+                Ok((ev, ss, ms)) => {
+                    events.extend(ev);
+                    sessions.extend(ss);
+                    messages.extend(ms);
+                }
+                Err(_) => skipped += 1,
+            }
+        }
+        super::order_results(&mut events, &mut sessions, &mut corrections);
+        Ok(CollectResult {
+            source: self.name().to_string(),
+            events,
+            corrections,
+            turn_durations: Vec::new(),
+            sessions,
+            messages,
+            files_scanned,
+            lines_skipped: skipped,
+            // SQLite session table is self-managed (per-session watermark) —
+            // file-backed reconciliation must not touch it.
+            session_ids: Vec::new(),
+        })
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -784,7 +791,7 @@ mod tests {
             .unwrap();
         }
         let p = OpenCodeSourceParser::with_db(db.clone());
-        let result = p.parse(&p.discover().unwrap()).unwrap();
+        let result = p.parse_full(&p.discover().unwrap()).unwrap();
         assert_eq!(result.source, "opencode");
         assert_eq!(result.events.len(), 2);
         let by_id: std::collections::HashMap<&str, &RawUsage> =
@@ -989,7 +996,7 @@ mod tests {
             .unwrap();
         }
         let p = OpenCodeSourceParser::with_db(db.clone());
-        let result = p.parse(&p.discover().unwrap()).unwrap();
+        let result = p.parse_full(&p.discover().unwrap()).unwrap();
 
         // RawSession: title from DB, ISO timestamps, source tagged opencode.
         assert_eq!(result.sessions.len(), 1);
