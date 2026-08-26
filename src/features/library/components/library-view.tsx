@@ -45,8 +45,8 @@ import {
   TooltipContent,
   TooltipTrigger,
 } from "@/components/ui/tooltip"
-import { deviceOptionLabel } from "@/features/usage/use-device-options"
 import { useConfirmDelete } from "@/hooks/use-confirm-delete"
+import { deviceOptionLabel } from "@/lib/device-labels"
 import { formatSize } from "@/lib/format"
 import { PAGE_SIZES } from "@/lib/pagination"
 import { cn } from "@/lib/utils"

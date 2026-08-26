@@ -19,9 +19,9 @@ import {
   useRenameInLibraryMutation,
   useScanLibraryQuery,
 } from "@/app/store/api"
-import { deviceOptionLabel } from "@/features/usage/use-device-options"
 import { usePagedBrowser } from "@/hooks/use-paged-browser"
 import { useMutateWithToast } from "@/hooks/use-toast-mutation"
+import { deviceOptionLabel } from "@/lib/device-labels"
 import { DEFAULT_PAGE_SIZE } from "@/lib/pagination"
 import { usePersistedState } from "@/lib/persistence"
 import type { LibraryEntry } from "@/types/generated/bindings"

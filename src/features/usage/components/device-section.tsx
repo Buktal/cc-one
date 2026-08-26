@@ -18,6 +18,7 @@ import { type FilterState, patchFilter } from "@/app/store/slices/filterSlice"
 import { QueryState } from "@/components/query-state"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { deviceSectionStats } from "@/features/usage/derive"
+import { deviceOptionLabel } from "@/lib/device-labels"
 import {
   formatCount,
   formatMetricLine,
@@ -26,7 +27,6 @@ import {
   formatSegValue,
   formatTokens,
 } from "@/lib/format"
-import { deviceOptionLabel } from "../use-device-options"
 import { DistRow } from "./dist-row"
 
 export function DeviceSection({ filter }: { filter: FilterState }) {

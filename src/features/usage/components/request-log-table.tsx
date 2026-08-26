@@ -42,6 +42,11 @@ import {
 import { collectLabelKey, useCollectAction } from "@/hooks/use-collect-action"
 import { usePagedBrowser } from "@/hooks/use-paged-browser"
 import {
+  deviceLabelOf,
+  useDeviceLabelMap,
+  useDeviceOptions,
+} from "@/lib/device-labels"
+import {
   formatCost,
   formatCostPrecise,
   formatDay,
@@ -55,7 +60,6 @@ import { tokenTotal } from "@/lib/usage"
 import { cn } from "@/lib/utils"
 import type { UsageLogRow } from "@/types/generated/bindings"
 import { sourceLabel } from "../source-labels"
-import { useDeviceLabelMap, useDeviceOptions } from "../use-device-options"
 import { SessionLink } from "./session-link"
 
 // 每页条数密度跨重启记忆，键名沿用 sessions-page-size 的约定。
@@ -256,11 +260,7 @@ function LogRow({
         {r.device_id ? (
           <Tooltip>
             <TooltipTrigger
-              render={
-                <span>
-                  {deviceLabel.get(r.device_id) ?? r.device_id.slice(0, 8)}
-                </span>
-              }
+              render={<span>{deviceLabelOf(deviceLabel, r.device_id)}</span>}
             />
             <TooltipContent>{r.device_id}</TooltipContent>
           </Tooltip>

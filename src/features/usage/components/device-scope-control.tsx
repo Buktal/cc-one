@@ -18,9 +18,8 @@ import { useTranslation } from "react-i18next"
 import { useAppDispatch, useAppSelector } from "@/app/store/hooks"
 import { patchFilter } from "@/app/store/slices/filterSlice"
 import { FilterSelect } from "@/components/filter-select"
+import { useDeviceOptions } from "@/lib/device-labels"
 import { cn } from "@/lib/utils"
-
-import { useDeviceOptions } from "../use-device-options"
 
 export function DeviceScopeControl({ compact = false }: { compact?: boolean }) {
   const { t } = useTranslation()

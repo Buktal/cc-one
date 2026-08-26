@@ -59,8 +59,8 @@ import {
   TooltipContent,
   TooltipTrigger,
 } from "@/components/ui/tooltip"
-import { useDeviceOptions } from "@/features/usage/use-device-options"
 import { useCollectAction } from "@/hooks/use-collect-action"
+import { useDeviceOptions } from "@/lib/device-labels"
 import { cn } from "@/lib/utils"
 import { StatusCapsule } from "./status-capsule"
 import { currentPlatform, topbarLayout } from "./topbar-layout"

@@ -42,7 +42,9 @@ import {
   TooltipContent,
   TooltipTrigger,
 } from "@/components/ui/tooltip"
+import { DeviceScopeControl } from "@/features/usage/components/device-scope-control"
 import { ProjectSelect } from "@/features/usage/components/project-select"
+import { deviceLabelOf } from "@/lib/device-labels"
 import type { FilterOption } from "@/lib/filter-options"
 import {
   formatCost,
@@ -115,7 +117,7 @@ export function SessionsView() {
     sessionStats,
     transcript: b.transcript,
     transcriptLoading: b.transcriptLoading,
-    deviceLabel: (id: string) => b.deviceLabel.get(id) ?? id.slice(0, 8),
+    deviceLabel: (id: string) => deviceLabelOf(b.deviceLabels, id),
     projectIdentity,
   }
 
@@ -248,20 +250,10 @@ function WorkbenchToolbar({ b }: { b: ReturnType<typeof useSessionsBrowser> }) {
             选中也写同一份状态。候选取自 distinct-projects 端点，含「未知
             项目」特殊选项。 */}
         <ProjectSelect />
-        {/* Device dropdown — only in the favorites universe (收藏轨）and only
-            when more than one device exists. */}
-        {b.deviceOptions.length > 0 && b.track === "favorites" ? (
-          <FilterSelect
-            ariaLabel={t("sessions.filter.device")}
-            allLabel={t("sessions.filter.allDevices")}
-            options={b.deviceOptions.map((o) => ({
-              value: o.id,
-              label: o.label,
-            }))}
-            value={b.deviceScope}
-            onChange={b.setDeviceScope}
-          />
-        ) : null}
+        {/* 设备维度下拉（架构审查候选⑥）：复用看板/日志的共享控件——读写同是
+            全局 filter.device_scope，显隐策略（≤1 台不渲染）内聚在控件里；本轨
+            只管收藏宇宙的门控。 */}
+        {b.track === "favorites" ? <DeviceScopeControl /> : null}
       </div>
 
       {/* 右：批量操作 + 搜索。宽裕时右贴（ml-auto 在无剩余空间时自然失效，
@@ -461,7 +453,7 @@ function ListPane({
             onToggleFavorite={b.toggleFavorite}
             onOpen={b.setPreview}
             showDeviceColumn={b.showDeviceColumn}
-            deviceLabel={b.deviceLabel}
+            deviceLabels={b.deviceLabels}
             openFavKey={b.preview ? favKey(b.preview) : null}
             search={b.search}
             isChecked={b.isChecked}
@@ -494,7 +486,7 @@ function SessionsTable({
   onToggleFavorite,
   onOpen,
   showDeviceColumn,
-  deviceLabel,
+  deviceLabels,
   openFavKey,
   search,
   isChecked,
@@ -507,7 +499,7 @@ function SessionsTable({
   onToggleFavorite: (s: SessionRow) => void
   onOpen: (s: SessionRow) => void
   showDeviceColumn: boolean
-  deviceLabel: Map<string, string>
+  deviceLabels: Map<string, string>
   /** favKey of the open detail row — that row gets a tinted selected state. */
   openFavKey: string | null
   /** Live search box value — matched title spans get highlighted. */
@@ -705,7 +697,7 @@ function SessionsTable({
                 {showDeviceColumn ? (
                   <TableCell>
                     <span className="text-muted-foreground text-xs">
-                      {deviceLabel.get(s.device_id) ?? s.device_id.slice(0, 8)}
+                      {deviceLabelOf(deviceLabels, s.device_id)}
                     </span>
                   </TableCell>
                 ) : null}

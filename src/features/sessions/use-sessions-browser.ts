@@ -20,7 +20,6 @@ import {
   useDeleteLocalGroupMutation,
   useDeleteSessionsMutation,
   useDeleteSyncedGroupMutation,
-  useDevicesQuery,
   useDistinctModelsQuery,
   useListGroupsQuery,
   useListSessionsQuery,
@@ -39,12 +38,12 @@ import {
 import { useAppDispatch, useAppSelector } from "@/app/store/hooks"
 import { patchFilter } from "@/app/store/slices/filterSlice"
 import { setView } from "@/app/store/slices/viewSlice"
-import { deviceOptionLabel } from "@/features/usage/use-device-options"
 import { useProjectCandidates } from "@/features/usage/use-project-candidates"
 import { useDateRangeFilter } from "@/hooks/use-date-range-filter"
 import { useDebouncedValue } from "@/hooks/use-debounced-value"
 import { usePagedBrowser } from "@/hooks/use-paged-browser"
 import { useMutateWithToast } from "@/hooks/use-toast-mutation"
+import { useDeviceLabels, useDeviceOptions } from "@/lib/device-labels"
 import { facetOptions } from "@/lib/filter-options"
 import { DEFAULT_PAGE_SIZE } from "@/lib/pagination"
 import { usePersistedState } from "@/lib/persistence"
@@ -163,13 +162,10 @@ export function useSessionsBrowser() {
   // useDateRangeFilter 单一归属（补丁形状在 filterSlice 的 presetPatch /
   // dayPatch）。
   const dateRange = useDateRangeFilter()
-  const deviceScope = filter.device_scope
   // Setters patch the shared slice so the view's contract (b.setSource / …) is
   // unchanged — the values now flow through Redux instead of local state.
   const setSource = (v: string) => dispatch(patchFilter({ source: v }))
   const setModel = (v: string) => dispatch(patchFilter({ model: v }))
-  const setDeviceScope = (v: string) =>
-    dispatch(patchFilter({ device_scope: v }))
   // 项目维度与左树项目轨道统一（#102）：树的项目桶选中和工具栏的项目下拉
   // 是同一份状态——共享 filterSlice.project。selectedProject（视图契约不变）
   // 由筛选值映射回树的 identity 空间（哨兵 → "" 无启动目录桶）；哨兵值从候选
@@ -297,7 +293,6 @@ export function useSessionsBrowser() {
 
   const groupsQuery = useListGroupsQuery()
   const groups = groupsQuery.data ?? []
-  const { data: devices = [] } = useDevicesQuery()
   const transcriptQuery = useSessionTranscriptQuery(
     previewKey
       ? { id: previewKey.id, deviceId: previewKey.device_id }
@@ -535,31 +530,12 @@ export function useSessionsBrowser() {
     setPreview(target)
   }, [visibleSessions, previewKey])
 
-  // id → display label for the favorites tab's source-device column. Self is
-  // "This device"; a peer is its display name (or "Unnamed").
-  const deviceLabel = useMemo(() => {
-    const m = new Map<string, string>()
-    for (const d of devices) {
-      m.set(d.device_id, deviceOptionLabel(d, t))
-    }
-    return m
-  }, [devices, t])
-  // Device-picker options for the Favorites-tab device filter. Same label logic
-  // as deviceLabel; empty when ≤1 device so a single-machine setup renders no
-  // device filter (mirrors the usage view's useDeviceOptions).
-  const deviceOptions = useMemo(
-    () =>
-      devices.length <= 1
-        ? []
-        : devices.map((d) => ({
-            id: d.device_id,
-            label: deviceOptionLabel(d, t),
-          })),
-    [devices, t],
-  )
-  // The device column only matters in the favorites tab, and only when there
-  // is more than one device (otherwise every row is "This device" — noise).
-  const showDeviceColumn = tab === "favorites" && devices.length > 1
+  // 设备标签面（架构审查候选⑥）：标签与选项表来自共享 lib/device-labels，本域
+  // 不再手抄同一套 label 派生（is_self 有无的漂移即出自旧手抄版）。选项表自带
+  // 「≤1 台返回 []」策略——设备列随之只在多设备的收藏轨出现。
+  const deviceLabels = useDeviceLabels()
+  const deviceOptions = useDeviceOptions()
+  const showDeviceColumn = tab === "favorites" && deviceOptions.length > 0
 
   // ---- session row actions ----
   // Favorite toggle is an optimistic state machine (stamp → mutate → rollback
@@ -803,16 +779,14 @@ export function useSessionsBrowser() {
     container,
     selectAll,
     effectiveTrack,
-    // toolbar filters (time range · device)
+    // toolbar filters (time range)。设备维度读写在全局 filter（DeviceScopeControl
+    // 直连 filterSlice），不再经本出口；device_scope 的后端语义随 spec.filter 生效。
     rangePreset: dateRange.preset,
     fromDay: dateRange.fromDay,
     toDay: dateRange.toDay,
     setRangePreset: dateRange.onPreset,
     setFromDay: dateRange.onFromDay,
     setToDay: dateRange.onToDay,
-    deviceScope,
-    setDeviceScope,
-    deviceOptions,
     // data
     isLoading: sessionsQuery.isLoading,
     isFetching: sessionsQuery.isFetching,
@@ -838,7 +812,7 @@ export function useSessionsBrowser() {
     pageSize,
     setPageSize,
     // device labels (favorites universe)
-    deviceLabel,
+    deviceLabels,
     showDeviceColumn,
     // session row actions
     effectiveFavorite: (s: SessionRow) => effectiveFavorite(s, favOverrides),

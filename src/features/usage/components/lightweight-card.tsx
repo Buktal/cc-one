@@ -54,10 +54,9 @@ import {
   TooltipContent,
   TooltipTrigger,
 } from "@/components/ui/tooltip"
+import { deviceOptionLabel } from "@/lib/device-labels"
 import { formatTokens } from "@/lib/format"
 import { cn } from "@/lib/utils"
-
-import { deviceOptionLabel } from "../use-device-options"
 import { DeviceScopeControl } from "./device-scope-control"
 import { TokenHero } from "./token-hero"
 

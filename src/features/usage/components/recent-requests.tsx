@@ -15,10 +15,9 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card"
+import { deviceLabelOf, useDeviceLabelMap } from "@/lib/device-labels"
 import { formatCost, formatInt, formatTime, formatTokens } from "@/lib/format"
 import { cn } from "@/lib/utils"
-
-import { useDeviceLabelMap } from "../use-device-options"
 
 const LIMIT = 10
 
@@ -101,7 +100,7 @@ export function RecentRequests() {
                   <>
                     <span aria-hidden="true">·</span>
                     <span className="max-w-24 truncate">
-                      {deviceLabel.get(r.device_id) ?? r.device_id.slice(0, 8)}
+                      {deviceLabelOf(deviceLabel, r.device_id)}
                     </span>
                   </>
                 ) : null}
