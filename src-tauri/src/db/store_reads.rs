@@ -260,7 +260,7 @@ impl super::Store {
         // same OTHER dimensions (time on usage timestamps — the unknown bucket
         // is a usage-side concept)?
         let (mut uclause, uparams) = build_where(filter, true, true, false, "usage_records");
-        let unknown_cond = project_condition("usage_records", UNKNOWN_PROJECT).0;
+        let unknown_cond = super::filter_sql::project_condition("usage_records", UNKNOWN_PROJECT).0;
         if uclause.is_empty() {
             uclause = format!("WHERE {unknown_cond}");
         } else {
@@ -557,37 +557,6 @@ impl super::Store {
     }
 }
 
-/// The project facet's SQL condition over `driving`, a table carrying the
-/// `(session_id, device_id)` grouping pair (`usage_records`, `turn_durations`).
-/// A known project identity matches via the `project_identity` SQL scalar —
-/// the one Rust rule — so usage from a Claude Code worktree session matches
-/// its PARENT project. The [`UNKNOWN_PROJECT`] sentinel inverts to NOT EXISTS:
-/// the unknown bucket (remote usage without a pulled favorite snapshot,
-/// session-less rows). `driving` is a fixed literal from the call sites, never
-/// user input. Returns `(condition, param)`: the sentinel form binds no param.
-fn project_condition(driving: &str, project: &str) -> (String, Option<SqlValue>) {
-    if project == UNKNOWN_PROJECT {
-        (
-            format!(
-                "NOT EXISTS (SELECT 1 FROM sessions s \
-                 WHERE s.id = {driving}.session_id \
-                   AND s.device_id = {driving}.device_id)"
-            ),
-            None,
-        )
-    } else {
-        (
-            format!(
-                "EXISTS (SELECT 1 FROM sessions s \
-                 WHERE s.id = {driving}.session_id \
-                   AND s.device_id = {driving}.device_id \
-                   AND project_identity(s.project_dir) = ?)"
-            ),
-            Some(SqlValue::Text(project.to_string())),
-        )
-    }
-}
-
 /// Build a `WHERE` clause + bound params for a `UsageFilter` (timestamp range,
 /// model, source, device scope, project) over `driving` — the table the query
 /// reads, which must carry the filter's columns (`timestamp`, `device_id`, and
@@ -599,6 +568,9 @@ fn project_condition(driving: &str, project: &str) -> (String, Option<SqlValue>)
 /// other facets + time + device. `include_project` gates the project facet
 /// (the facet-ignoring caller is the project dropdown itself).
 /// Returns `("WHERE ...", vec![...])` or `("", [])`.
+///
+/// 「非空才约束」样板与项目维度条件（含 UNKNOWN 哨兵）收口在
+/// [`super::filter_sql`]（架构审查候选④）；本函数只保留轴的门控与次序。
 fn build_where(
     filter: &UsageFilter,
     include_model: bool,
@@ -606,42 +578,23 @@ fn build_where(
     include_project: bool,
     driving: &str,
 ) -> (String, Vec<SqlValue>) {
+    use super::filter_sql::{project_condition, push_nonempty_eq, push_ts_range};
     let mut conds: Vec<String> = Vec::new();
     let mut params: Vec<SqlValue> = Vec::new();
-    if let Some(ts) = &filter.from_ts {
-        if !ts.is_empty() {
-            conds.push("timestamp >= ?".into());
-            params.push(SqlValue::Text(ts.clone()));
-        }
-    }
-    if let Some(ts) = &filter.to_ts {
-        if !ts.is_empty() {
-            conds.push("timestamp <= ?".into());
-            params.push(SqlValue::Text(ts.clone()));
-        }
-    }
+    push_ts_range(
+        &mut conds,
+        &mut params,
+        "timestamp",
+        &filter.from_ts,
+        &filter.to_ts,
+    );
     if include_model {
-        if let Some(m) = &filter.model {
-            if !m.is_empty() {
-                conds.push("model = ?".into());
-                params.push(SqlValue::Text(m.clone()));
-            }
-        }
+        push_nonempty_eq(&mut conds, &mut params, "model", &filter.model);
     }
     if include_source {
-        if let Some(s) = &filter.source {
-            if !s.is_empty() {
-                conds.push("source = ?".into());
-                params.push(SqlValue::Text(s.clone()));
-            }
-        }
+        push_nonempty_eq(&mut conds, &mut params, "source", &filter.source);
     }
-    if let Some(d) = &filter.device_scope {
-        if !d.is_empty() {
-            conds.push("device_id = ?".into());
-            params.push(SqlValue::Text(d.clone()));
-        }
-    }
+    push_nonempty_eq(&mut conds, &mut params, "device_id", &filter.device_scope);
     if include_project {
         if let Some(p) = &filter.project {
             if !p.is_empty() {

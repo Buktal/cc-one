@@ -512,41 +512,23 @@ impl super::Store {
             // the model asymmetry: known buckets gate "session USED the model"
             // then sum its FULL usage, while the unknown bucket can only match
             // per-row (`u.model = ?`) — it has no session to gate on.
-            let mut conds: Vec<String> = vec!["NOT EXISTS (SELECT 1 FROM sessions s \
-                  WHERE s.id = u.session_id AND s.device_id = u.device_id)"
-                .into()];
+            // 「非空才约束」样板与哨兵文本收口在 [`super::filter_sql`]（架构审
+            // 查候选④）——known/unknown 口径两侧同步不再靠人眼。
+            use super::filter_sql::{project_condition, push_nonempty_eq, push_ts_range};
+            let (unknown_cond, _) = project_condition("u", UNKNOWN_PROJECT);
+            let mut conds: Vec<String> = vec![unknown_cond];
             let mut uparams: Vec<SqlValue> = Vec::new();
             if let Some(f) = filter {
-                if let Some(d) = &f.device_scope {
-                    if !d.is_empty() {
-                        conds.push("u.device_id = ?".into());
-                        uparams.push(SqlValue::Text(d.clone()));
-                    }
-                }
-                if let Some(s) = &f.source {
-                    if !s.is_empty() {
-                        conds.push("u.source = ?".into());
-                        uparams.push(SqlValue::Text(s.clone()));
-                    }
-                }
-                if let Some(m) = &f.model {
-                    if !m.is_empty() {
-                        conds.push("u.model = ?".into());
-                        uparams.push(SqlValue::Text(m.clone()));
-                    }
-                }
-                if let Some(ts) = &f.from_ts {
-                    if !ts.is_empty() {
-                        conds.push("u.timestamp >= ?".into());
-                        uparams.push(SqlValue::Text(ts.clone()));
-                    }
-                }
-                if let Some(ts) = &f.to_ts {
-                    if !ts.is_empty() {
-                        conds.push("u.timestamp <= ?".into());
-                        uparams.push(SqlValue::Text(ts.clone()));
-                    }
-                }
+                push_nonempty_eq(&mut conds, &mut uparams, "u.device_id", &f.device_scope);
+                push_nonempty_eq(&mut conds, &mut uparams, "u.source", &f.source);
+                push_nonempty_eq(&mut conds, &mut uparams, "u.model", &f.model);
+                push_ts_range(
+                    &mut conds,
+                    &mut uparams,
+                    "u.timestamp",
+                    &f.from_ts,
+                    &f.to_ts,
+                );
             }
             let usql = format!(
                 "SELECT COUNT(*),
@@ -799,23 +781,14 @@ pub(super) fn mark_sessions_dirty(
 /// view action). `pub(super)` so the distinct-projects read (store_reads)
 /// reuses the same sessions-side narrowing — one builder, no drifting copy.
 pub(super) fn build_session_where(filter: Option<&SessionFilter>) -> (String, Vec<SqlValue>) {
+    use super::filter_sql::{push_nonempty_eq, push_ts_range};
     let mut conds: Vec<String> = vec!["s.excluded = 0".into()];
     let mut params: Vec<SqlValue> = Vec::new();
     let Some(f) = filter else {
         return (format!("WHERE {}", conds.join(" AND ")), params);
     };
-    if let Some(d) = &f.device_scope {
-        if !d.is_empty() {
-            conds.push("s.device_id = ?".into());
-            params.push(SqlValue::Text(d.clone()));
-        }
-    }
-    if let Some(s) = &f.source {
-        if !s.is_empty() {
-            conds.push("s.source = ?".into());
-            params.push(SqlValue::Text(s.clone()));
-        }
-    }
+    push_nonempty_eq(&mut conds, &mut params, "s.device_id", &f.device_scope);
+    push_nonempty_eq(&mut conds, &mut params, "s.source", &f.source);
     if let Some(fav) = f.favorited {
         conds.push(format!("s.favorited = {}", fav as i64));
     }
@@ -845,18 +818,15 @@ pub(super) fn build_session_where(filter: Option<&SessionFilter>) -> (String, Ve
             }
         }
     }
-    if let Some(ts) = &f.from_ts {
-        if !ts.is_empty() {
-            conds.push("s.last_active_at >= ?".into());
-            params.push(SqlValue::Text(ts.clone()));
-        }
-    }
-    if let Some(ts) = &f.to_ts {
-        if !ts.is_empty() {
-            conds.push("s.last_active_at <= ?".into());
-            params.push(SqlValue::Text(ts.clone()));
-        }
-    }
+    // 时间区间走 sessions 粒的时间列（last_active_at）；usage-粒的 u.timestamp
+    // 区间见 query_project_stats 的未知桶直读。
+    push_ts_range(
+        &mut conds,
+        &mut params,
+        "s.last_active_at",
+        &f.from_ts,
+        &f.to_ts,
+    );
     if let Some(m) = &f.model {
         if !m.is_empty() {
             // EXISTS semantics: the session matched iff ANY usage record in

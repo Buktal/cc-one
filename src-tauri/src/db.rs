@@ -16,6 +16,7 @@
 //! migrate and testutil are infrastructure, not method blocks. This file keeps
 //! only the `Store` type, the `open` constructor, and the module wiring.
 
+mod filter_sql;
 mod migrate;
 mod schema;
 mod store_devices;
