@@ -1,10 +1,10 @@
-// Token hero — token-first Tier 1 anchor. 总消耗 headline + delta
-// (多日: vs 窗首; 单日: vs 昨日同时段) + 日均/近 N 小时均 + 四桶堆叠
-// composition bar + legend (label/value 行) + DSL footer (请求 · 命中率 · 成本).
+// Token hero — token-first Tier 1 anchor. 总消耗大数字 + delta (多日: vs 窗首;
+// 单日: vs 昨日同时段) + 日均/近 N 小时均，下接四桶堆叠 composition bar +
+// 竖排 legend (label/value 行) + DSL footer (请求 · 命中率 · 成本).
 //
-// 概览区宽布局(#106): 与 KPI 带等高并排占概览首行左 1/3。颜色全部走 CSS
-// 变量，换主题不改本件。delta/日均口径收敛在 use-token-snapshot（与 KPI 带
-// 共享同一次派生）。
+// 概览区宽布局(#106 R1 定稿): 4/12 左卡竖排，与右侧 8/12 KPI 卡同高
+// (justify-center 撑满)。颜色全部走 CSS 变量，换主题不改本件。
+// delta/日均口径收敛在 use-token-snapshot（与 KPI 带共享同一次派生）。
 
 import dayjs from "dayjs"
 import { useTranslation } from "react-i18next"
@@ -63,12 +63,13 @@ export function TokenHero({ filter }: { filter: FilterState }) {
 
   return (
     <Card interactive className="h-full">
-      <CardContent className="flex h-full flex-col gap-4">
-        <div className="flex flex-1 flex-col justify-center gap-1.5">
+      <CardContent className="flex h-full flex-1 flex-col justify-center gap-3.5">
+        {/* 总消耗大数字 + delta/日均 */}
+        <div className="flex flex-col gap-2">
           <span className="text-muted-foreground text-xs">
             {t("usage.hero.total")}
           </span>
-          <span className="text-4xl font-semibold leading-none tabular-nums">
+          <span className="text-[38px] leading-[1.05] font-semibold tracking-tight tabular-nums">
             {formatTokens(s.total_tokens)}
           </span>
           <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
@@ -92,7 +93,8 @@ export function TokenHero({ filter }: { filter: FilterState }) {
           </div>
         </div>
 
-        <div className="bg-muted flex h-2 w-full overflow-hidden rounded-full">
+        {/* 四桶堆叠 + 竖排 legend + 口径行 */}
+        <div className="bg-muted flex h-2.5 w-full overflow-hidden rounded-full">
           {SEGMENTS.map((seg) => {
             const v = Number(s[seg.key] ?? 0)
             const pct = (v / total) * 100
@@ -106,7 +108,7 @@ export function TokenHero({ filter }: { filter: FilterState }) {
           })}
         </div>
 
-        <div className="grid grid-cols-2 gap-x-4 gap-y-2">
+        <div className="flex flex-col gap-1.5">
           {SEGMENTS.map((seg) => {
             const v = Number(s[seg.key] ?? 0)
             return (
@@ -123,7 +125,7 @@ export function TokenHero({ filter }: { filter: FilterState }) {
                     {t(seg.label)}
                   </span>
                 </span>
-                {/* DSL: 数量 · 占比（占比恒一位小数，标签在行左由布局渲染）。 */}
+                {/* DSL: 数量 · 占比（占比恒一位小数）。 */}
                 <span className="shrink-0 tabular-nums">
                   {formatSegValue(formatTokens(v), v / total)}
                 </span>
@@ -133,7 +135,7 @@ export function TokenHero({ filter }: { filter: FilterState }) {
         </div>
 
         {/* DSL footer 行：请求 · 命中率 · 成本（标签 数量 段拼装）。 */}
-        <div className="text-muted-foreground border-border/60 flex items-center border-t pt-2.5 text-xs">
+        <div className="text-muted-foreground border-border/60 mt-auto flex items-center border-t pt-2.5 text-xs">
           <span className="tabular-nums">
             {formatMetricLine([
               formatMetricSeg(

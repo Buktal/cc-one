@@ -10,13 +10,7 @@ import { Bar, BarChart, Cell, XAxis } from "recharts"
 import { useStatsQuery, useTrendQuery } from "@/app/store/api"
 import type { FilterState } from "@/app/store/slices/filterSlice"
 import { QueryState } from "@/components/query-state"
-import {
-  Card,
-  CardContent,
-  CardFooter,
-  CardHeader,
-  CardTitle,
-} from "@/components/ui/card"
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import {
   type ChartConfig,
   ChartContainer,
@@ -151,9 +145,6 @@ export function RequestSection({ filter }: { filter: FilterState }) {
               </BarChart>
             </ChartContainer>
           </CardContent>
-          <CardFooter className="text-muted-foreground text-[11px]">
-            <span>{t("usage.requests.dailyNote")}</span>
-          </CardFooter>
         </Card>
 
         <Card interactive className="min-[1080px]:col-span-5">
@@ -192,9 +183,6 @@ export function RequestSection({ filter }: { filter: FilterState }) {
               </DurRow>
             </div>
           </CardContent>
-          <CardFooter className="text-muted-foreground text-[11px]">
-            <span>{t("usage.requests.durNote")}</span>
-          </CardFooter>
         </Card>
       </div>
     </QueryState>

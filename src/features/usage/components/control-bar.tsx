@@ -3,9 +3,11 @@
 // collect / sync action lives in the topbar). One consumer-flavored shape:
 // every chip is a "bar" chip (a bare value that widens to 全部模型 / 全部来源 /
 // 全部项目 / 全部设备 when "all" is selected, so the chip carries its own
-// identity without an external label). The dashboard's sticky tab bar
-// (#106) and the logs view's header both render it as-is. 来源 (source) 在
-// 多来源 (sources.length > 0) 时才出现 —— 采到任意来源就显示, 与设备维度同理。
+// identity without an external label). The dashboard's filter row (in flow)
+// and the logs view's header both render it as-is. Chips 按内容自适应宽度
+// (SelectTrigger 默认 w-fit + max-w-* 上限): 「全部」态窄, 长名截断 —— 小窗口
+// 一行能多塞几个 chip。 来源 (source) 在 多来源 (sources.length > 0) 时才出现
+// —— 采到任意来源就显示, 与设备维度同理。
 
 import { useMemo } from "react"
 import { useTranslation } from "react-i18next"
@@ -68,8 +70,8 @@ function ModelChip() {
       options={options}
       value={filter.model}
       onChange={(v) => dispatch(patchFilter({ model: v }))}
-      // 模型名最长且不可控 → 横排给最宽。
-      className="border-border bg-card hover:bg-hover h-8 w-48 rounded-md"
+      // 模型名最长且不可控 → 横排给最宽上限（内容自适应，超长截断）。
+      className="border-border bg-card hover:bg-hover h-8 max-w-48 rounded-md"
       align="start"
     />
   )
@@ -100,36 +102,27 @@ function SourceChip() {
       options={options}
       value={filter.source}
       onChange={(v) => dispatch(patchFilter({ source: v }))}
-      className="border-border bg-card hover:bg-hover h-8 w-30 rounded-md"
+      className="border-border bg-card hover:bg-hover h-8 max-w-30 rounded-md"
       align="start"
     />
   )
 }
 
-/** 横向条 — 看板筛选行（in-flow）与日志页顶部共用。Filters only。Two
- *  groups in a fixed order: the date range anchors the first line; the
- *  model / source / device chips take their own line on narrow containers
- *  (w-full) and return inline on wide ones (@60rem:w-auto). Fold measures
- *  the bar's own width (@container), so the surrounding layout can't shift
- *  it.
- *
- *  契约：根节点的 @container = inline-size containment，固有宽度为 0 ——
- *  父层必须给确定宽度（block 整宽、列向 flex 的 stretch、或 flex-1 包裹），
- *  不能把它直接当行向 flex 子项用，否则缩成窄条、chips 逐个竖堆。 */
+/** 横向条 — 看板筛选行（in-flow）与日志页顶部共用。Filters only。单一
+ *  flex-wrap 行：chips 内容自适应，一行放不下才自然换行 —— 不做按宽度阈值
+ *  的强制折行（曾按 @container 60rem 折两行，但侧边栏占宽后主容器永远到
+ *  不了 60rem，等于无条件折两行；小窗口换行的真因是 chip 写死宽度，已改
+ *  自适应）。 */
 export function ControlBar() {
   const { data: sources = [] } = useDistinctSourcesQuery(ALL_TIME_FILTER)
   const hasSources = sources.length > 0
   return (
-    <div className="@container flex flex-wrap items-center gap-2">
-      <div className="flex shrink-0 items-center gap-2">
-        <DateRangeChip />
-      </div>
-      <div className="flex w-full min-w-0 flex-wrap items-center gap-2 @[60rem]:w-auto">
-        {hasSources ? <SourceChip /> : null}
-        <ModelChip />
-        <ProjectSelect />
-        <DeviceScopeControl />
-      </div>
+    <div className="flex flex-wrap items-center gap-2">
+      <DateRangeChip />
+      {hasSources ? <SourceChip /> : null}
+      <ModelChip />
+      <ProjectSelect />
+      <DeviceScopeControl />
     </div>
   )
 }

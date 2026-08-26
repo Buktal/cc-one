@@ -16,13 +16,7 @@ import { useDevicesQuery, useDeviceUsageQuery } from "@/app/store/api"
 import { useAppDispatch, useAppSelector } from "@/app/store/hooks"
 import { type FilterState, patchFilter } from "@/app/store/slices/filterSlice"
 import { QueryState } from "@/components/query-state"
-import {
-  Card,
-  CardContent,
-  CardFooter,
-  CardHeader,
-  CardTitle,
-} from "@/components/ui/card"
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { deviceSectionStats } from "@/features/usage/derive"
 import {
   formatCount,
@@ -111,9 +105,6 @@ export function DeviceSection({ filter }: { filter: FilterState }) {
             )
           })}
         </CardContent>
-        <CardFooter className="text-muted-foreground gap-2 text-[11px]">
-          <span>{t("usage.devices.shareNote")}</span>
-        </CardFooter>
       </Card>
     </QueryState>
   )

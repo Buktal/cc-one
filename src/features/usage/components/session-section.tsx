@@ -17,7 +17,6 @@ import {
   Card,
   CardAction,
   CardContent,
-  CardFooter,
   CardHeader,
   CardTitle,
 } from "@/components/ui/card"
@@ -67,23 +66,7 @@ export function SessionSection({ filter }: { filter: FilterState }) {
                 )}
               />
             ))}
-            <div className="border-border/60 mt-2 flex items-baseline justify-between gap-2 border-t pt-2 text-xs">
-              <span className="text-muted-foreground">
-                {t("usage.sessions.subagents")}
-              </span>
-              <span className="font-semibold tabular-nums">
-                {stats.subagentShare != null
-                  ? formatSegValue(
-                      formatCount(stats.subagents),
-                      stats.subagentShare,
-                    )
-                  : formatCount(stats.subagents)}
-              </span>
-            </div>
           </CardContent>
-          <CardFooter className="text-muted-foreground text-[11px]">
-            <span>{t("usage.sessions.turnDistNote")}</span>
-          </CardFooter>
         </Card>
 
         <Card interactive className="min-[1080px]:col-span-7">
@@ -119,9 +102,6 @@ export function SessionSection({ filter }: { filter: FilterState }) {
               </div>
             ))}
           </CardContent>
-          <CardFooter className="text-muted-foreground text-[11px]">
-            <span>{t("usage.sessions.shareNote")}</span>
-          </CardFooter>
         </Card>
       </div>
     </QueryState>

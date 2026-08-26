@@ -46,9 +46,9 @@ export function DeviceScopeControl({ compact = false }: { compact?: boolean }) {
       value={active}
       onChange={(v) => dispatch(patchFilter({ device_scope: v }))}
       className={cn(
-        // 横排与来源下拉同宽 w-30；compact 小窗字号更小更没问题。长设备名由
-        // line-clamp-1 截断。
-        "border-border bg-card hover:bg-hover h-8 w-30 rounded-md",
+        // 横排与来源下拉同上限 max-w-30（宽度内容自适应）；compact 小窗字号
+        // 更小更没问题。长设备名由 line-clamp-1 截断。
+        "border-border bg-card hover:bg-hover h-8 max-w-30 rounded-md",
         compact && "text-[11px]",
       )}
       // compact 时下拉字号跟随 trigger (11px)。

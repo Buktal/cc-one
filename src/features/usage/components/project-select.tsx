@@ -50,9 +50,9 @@ export function ProjectSelect({
       onChange={(v) => dispatch(patchFilter({ project: v }))}
       className={
         className ??
-        // 横排项目路径偏长给 w-40，超长由 line-clamp-1 截断（全路径在
-        // 下拉项内同样截断）。
-        "border-border bg-card hover:bg-hover h-8 w-40 rounded-md"
+        // 横排项目路径偏长，宽度内容自适应、上限 w-40，超长由 line-clamp-1
+        // 截断（全路径在下拉项内同样截断）。
+        "border-border bg-card hover:bg-hover h-8 max-w-40 rounded-md"
       }
       align="start"
     />

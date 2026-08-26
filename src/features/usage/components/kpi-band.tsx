@@ -1,11 +1,12 @@
-// KPI band — the overview's second card (#106): two equal-height rows of
-// KPI cells beside the TokenHero. Main row (5): 平均时长 / 请求·轮 / 会话 /
-// 项目 / 设备; secondary row (4): 命中率 / 成本 / 日均 Token / 最长会话 —
-// cost and hit rate promoted to second-tier KPIs per the #96 decision
-// (variant-c-v2). Cell = big number + label + sub line; every number flows
-// through the metric DSL. The token delta/daily-average caliber comes from
-// use-token-snapshot (shared with the hero); the 会话/项目/设备 cells read the
-// SAME projectUsage / sessionUsage / deviceUsage queries the sections below
+// KPI band — the overview's second card (#106 R1 定稿), beside the TokenHero
+// (4/12 + 8/12 两卡同高). Main row (5 大数字格): 平均时长 / 请求·轮 / 会话 /
+// 项目 / 设备; secondary row (4 格): 命中率 / 成本 / 日均 Token / 最长会话 —
+// 副行是 R1 的降级形态: 15px 值 + 单行 label (补充口径并进 label, · 分隔),
+// 与主行 20px 拉开层级。两行固定列数 (5 / 4) 永不折行 — 格宽随容器伸缩,
+// 小窗口靠 min-w-0 + truncate 兜底。Every number flows through the metric
+// DSL. The token delta/daily-average caliber comes from use-token-snapshot
+// (shared with the hero); the 会话/项目/设备 cells read the SAME
+// projectUsage / sessionUsage / deviceUsage queries the sections below
 // consume (one cache entry per filter).
 
 import { useTranslation } from "react-i18next"
@@ -142,20 +143,14 @@ export function KpiBand({ filter }: { filter: FilterState }) {
     {
       key: "dailyTokens",
       // 单日窗口的「日均」退化为今日总量，语义失真 — 改显小时均（与 hero
-      // 的口径切换一致），标签跟随。
+      // 的口径切换一致），标签跟随。delta 只显箭头+幅度，vs 口径已在 hero。
       value: formatTokens(singleDay ? hourlyAvg : dailyAvg),
       label: singleDay
         ? t("usage.kpi.hourlyTokens")
         : t("usage.kpi.dailyTokens"),
       sub:
         deltaPct != null
-          ? t("usage.kpi.deltaSub", {
-              dir: deltaPct >= 0 ? "↑" : "↓",
-              pct: formatPct(Math.abs(deltaPct)),
-              vs: singleDay
-                ? t("usage.hero.vsYesterday")
-                : t("usage.hero.vsStart"),
-            })
+          ? `${deltaPct >= 0 ? "↑" : "↓"} ${formatPct(Math.abs(deltaPct))}`
           : undefined,
     },
     {
@@ -178,46 +173,46 @@ export function KpiBand({ filter }: { filter: FilterState }) {
       <CardHeader>
         <CardTitle>{t("usage.kpi.title")}</CardTitle>
       </CardHeader>
-      <CardContent className="flex h-full flex-1 flex-col justify-center gap-3">
-        <div className="@container">
-          <div className="grid grid-cols-2 gap-x-4 gap-y-3 @[34rem]:grid-cols-3 @[54rem]:grid-cols-5">
-            {main.map((c, i) => (
-              <KpiCell key={c.key} cell={c} first={i === 0} />
-            ))}
-          </div>
-          <div className="border-border/60 mt-3 grid grid-cols-2 gap-x-4 gap-y-3 border-t pt-3 @[34rem]:grid-cols-4">
-            {secondary.map((c, i) => (
-              <KpiCell key={c.key} cell={c} first={i === 0} />
-            ))}
-          </div>
+      <CardContent className="flex h-full flex-1 flex-col justify-center gap-3.5">
+        {/* 主行：固定 5 列不折行 — 格宽随容器伸缩，min-w-0 + truncate 兜底。 */}
+        <div className="grid grid-cols-5 gap-x-4">
+          {main.map((c, i) => (
+            <KpiCell key={c.key} cell={c} first={i === 0} />
+          ))}
+        </div>
+        {/* 副行：固定 4 列，降级形态（15px 值 + label 并口径单行）。 */}
+        <div className="border-border/60 grid grid-cols-4 gap-x-6 border-t pt-3">
+          {secondary.map((c) => (
+            <SubCell key={c.key} cell={c} />
+          ))}
         </div>
       </CardContent>
     </Card>
   )
 }
 
+/** accent 色的单一映射 —— 主行格子与副行格子共用。 */
+function accentStyle(accent?: "cost" | "accent") {
+  return accent === "cost"
+    ? { color: "var(--metric-cost)" }
+    : accent === "accent"
+      ? { color: "var(--primary)" }
+      : undefined
+}
+
 function KpiCell({ cell, first }: { cell: Cell; first: boolean }) {
   return (
     <div
       className={cn(
-        "@[34rem]:border-border/60 min-w-0",
-        // 容器 ≥34rem 时竖分隔线（首列无线）；以下靠行距分格。
-        !first && "@[34rem]:border-l @[34rem]:pl-4",
+        "min-w-0",
+        // 竖分隔线（首列无线）在任意宽度都画 —— 行永不折行，分隔不依赖断点。
+        !first && "border-border/60 border-l pl-4",
       )}
     >
-      <div
-        className="text-xl leading-tight font-semibold tabular-nums"
-        style={
-          cell.accent === "cost"
-            ? { color: "var(--metric-cost)" }
-            : cell.accent === "accent"
-              ? { color: "var(--primary)" }
-              : undefined
-        }
-      >
-        {cell.value}
+      <div className="text-xl leading-tight font-semibold tabular-nums">
+        <span style={accentStyle(cell.accent)}>{cell.value}</span>
       </div>
-      <div className="text-muted-foreground mt-1 text-[11.5px] whitespace-nowrap">
+      <div className="text-muted-foreground mt-1 truncate text-[11.5px]">
         {cell.label}
       </div>
       {cell.sub ? (
@@ -225,6 +220,19 @@ function KpiCell({ cell, first }: { cell: Cell; first: boolean }) {
           {cell.sub}
         </div>
       ) : null}
+    </div>
+  )
+}
+
+function SubCell({ cell }: { cell: Cell }) {
+  return (
+    <div className="min-w-0">
+      <div className="text-[15px] leading-tight font-semibold tabular-nums">
+        <span style={accentStyle(cell.accent)}>{cell.value}</span>
+      </div>
+      <div className="text-muted-foreground mt-0.5 truncate text-[11px]">
+        {cell.sub ? `${cell.label} · ${cell.sub}` : cell.label}
+      </div>
     </div>
   )
 }

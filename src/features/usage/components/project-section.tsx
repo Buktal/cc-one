@@ -9,13 +9,7 @@ import { useProjectUsageQuery } from "@/app/store/api"
 import { useAppDispatch, useAppSelector } from "@/app/store/hooks"
 import { type FilterState, patchFilter } from "@/app/store/slices/filterSlice"
 import { QueryState } from "@/components/query-state"
-import {
-  Card,
-  CardContent,
-  CardFooter,
-  CardHeader,
-  CardTitle,
-} from "@/components/ui/card"
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { projectRanking } from "@/features/usage/derive"
 import {
   formatCost,
@@ -28,6 +22,7 @@ import {
   formatTokens,
 } from "@/lib/format"
 import { projectBasename } from "@/lib/paths"
+import { cn } from "@/lib/utils"
 import { DistRow } from "./dist-row"
 
 const TOP_N = 5
@@ -55,7 +50,13 @@ export function ProjectSection({ filter }: { filter: FilterState }) {
       emptyDescription={t("usage.projects.emptyDesc")}
     >
       <div className="grid gap-3 min-[1080px]:grid-cols-12">
-        <Card interactive className="min-[1080px]:col-span-8">
+        <Card
+          interactive
+          className={cn(
+            // 未知用量存在时才有数据质量卡 → 排行让出右侧 1/3；否则整宽。
+            unknown ? "min-[1080px]:col-span-8" : "min-[1080px]:col-span-12",
+          )}
+        >
           <CardHeader>
             <CardTitle>{t("usage.projects.rankTitle")}</CardTitle>
             <span className="text-muted-foreground self-end text-xs">
@@ -136,44 +137,40 @@ export function ProjectSection({ filter }: { filter: FilterState }) {
               />
             ) : null}
           </CardContent>
-          <CardFooter className="text-muted-foreground gap-2 text-[11px]">
-            <span>{t("usage.projects.shareNote")}</span>
-          </CardFooter>
         </Card>
 
-        <Card interactive className="min-[1080px]:col-span-4">
-          <CardHeader>
-            <CardTitle>{t("usage.projects.qualityTitle")}</CardTitle>
-          </CardHeader>
-          <CardContent className="flex flex-1 flex-col justify-center gap-3">
-            <div>
-              <div className="text-2xl font-semibold tabular-nums">
-                {ranking.unknown
-                  ? formatSegValue(
-                      formatTokens(ranking.unknown.total_tokens),
-                      ranking.unknown.total_tokens / ranking.totalTokens,
-                    )
-                  : t("usage.projects.noUnknown")}
+        {unknown ? (
+          <Card interactive className="min-[1080px]:col-span-4">
+            <CardHeader>
+              <CardTitle>{t("usage.projects.qualityTitle")}</CardTitle>
+            </CardHeader>
+            <CardContent className="flex flex-1 flex-col justify-center gap-3">
+              <div>
+                <div className="text-2xl font-semibold tabular-nums">
+                  {formatSegValue(
+                    formatTokens(unknown.total_tokens),
+                    unknown.total_tokens / ranking.totalTokens,
+                  )}
+                </div>
+                <div className="text-muted-foreground mt-1 text-[11px]">
+                  {t("usage.projects.unknownLabel")}
+                </div>
               </div>
-              <div className="text-muted-foreground mt-1 text-[11px]">
-                {t("usage.projects.unknownLabel")}
-              </div>
-            </div>
-            <div className="flex flex-col">
-              <KRow label={t("usage.projects.top3")}>
-                {ranking.top3Share != null ? formatPct(ranking.top3Share) : "—"}
-              </KRow>
-              {ranking.rest ? (
-                <KRow label={t("usage.projects.otherProjects")}>
-                  {formatCount(ranking.rest.count)}
+              <div className="flex flex-col">
+                <KRow label={t("usage.projects.top3")}>
+                  {ranking.top3Share != null
+                    ? formatPct(ranking.top3Share)
+                    : "—"}
                 </KRow>
-              ) : null}
-            </div>
-          </CardContent>
-          <CardFooter className="text-muted-foreground text-[11px]">
-            <span>{t("usage.projects.qualityNote")}</span>
-          </CardFooter>
-        </Card>
+                {ranking.rest ? (
+                  <KRow label={t("usage.projects.otherProjects")}>
+                    {formatCount(ranking.rest.count)}
+                  </KRow>
+                ) : null}
+              </div>
+            </CardContent>
+          </Card>
+        ) : null}
       </div>
     </QueryState>
   )
