@@ -2,10 +2,10 @@
 
 use tauri::State;
 
-use super::live_import::read_live_texts;
 use super::AppState;
 use crate::error::{AppError, AppResult};
 use crate::model::{App, CommonConfigSnippet};
+use crate::provider::live;
 
 /// 读某应用的通用配置片段（内容 + 启用开关）。按应用各存一份（claude /
 /// codex / gemini），存本机 config.json。缺省键按应用回退默认（claude 为
@@ -55,7 +55,7 @@ pub async fn format_toml_cmd(text: String) -> AppResult<String> {
 /// `live_adapter` 的 [`App::extract_snippet`]；无可提取 → None）。opencode 无
 /// 片段概念 → None。gemini 只需 env（settings.json 的非受控键进片段零效果）。
 fn read_live_snippet_extract(app: App) -> AppResult<Option<String>> {
-    let Some(texts) = read_live_texts(app)? else {
+    let Some(texts) = live::read_app_live_texts(app)? else {
         return Ok(None);
     };
     Ok(app.extract_snippet(&texts))

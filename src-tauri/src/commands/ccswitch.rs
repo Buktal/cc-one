@@ -6,8 +6,7 @@ use std::path::PathBuf;
 use rusqlite::{Connection, OpenFlags};
 use tauri::State;
 
-use super::providers::emit_providers_changed;
-use super::AppState;
+use super::{emit_providers_changed, AppState};
 use crate::error::{AppError, AppResult};
 use crate::model::App;
 use crate::provider::import::{ImportKeyStrategy, ProviderImportMode};

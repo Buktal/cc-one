@@ -35,7 +35,7 @@ use std::path::{Path, PathBuf};
 use toml_edit::{DocumentMut, Table};
 
 use crate::error::{AppError, AppResult};
-use crate::model::{App, Provider};
+use crate::model::App;
 
 /// 写盘时从配置里剥掉的内部 meta 字段（类比 cc-switch
 /// `sanitize_claude_settings_for_live`）：这些键只供应用自己读，不是合法的
@@ -184,17 +184,19 @@ pub(crate) fn atomic_write_file(path: &Path, content: &str) -> AppResult<()> {
     Ok(())
 }
 
-/// 写盘分派：按应用解析 live 文件路径（[`App::live_paths`]，opencode 附加模式
-/// 无单份概念 → 空路径，其分支在 [`App::write_live`] 里防御性报错），交给
-/// per-app 写盘实现（单一 seam，见 `live_adapter.rs`）。各分支保持「只合并
-/// 受控字段、非受控原地保留、写前备份、原子写」，具体规格见各 live_* 模块与
-/// `live_adapter` 的声明表。
-///
-/// `snippet` 为写盘层片段内容（codex/grok，ADR-0010），空串即无操作；非写盘层
-/// 应用忽略（其片段已在调用方 settings_config 层并入）。
-pub fn write_live(app: App, provider: &Provider, snippet: &str) -> AppResult<()> {
-    let paths = app.live_paths()?.unwrap_or_default();
-    app.write_live(&paths, provider, snippet)
+/// 按 app 读 live 文件文本：路径映射收口在 [`App::live_paths`]（单一事实来源
+/// ——写盘 / 快照 / 片段提取共用）。opencode 无单份 live 配置概念 → `None`。
+/// 片段提取（commands::snippet 的 T6 提取入口）与 live 导入域共用此读取面。
+/// 写盘的同等分派在 `provider::activation::resolve_paths` + [`App::write_live`]。
+pub fn read_app_live_texts(app: App) -> AppResult<Option<Vec<String>>> {
+    let Some(paths) = app.live_paths()? else {
+        return Ok(None);
+    };
+    let mut texts = Vec::with_capacity(paths.len());
+    for p in paths {
+        texts.push(read_live_settings(&p)?);
+    }
+    Ok(Some(texts))
 }
 
 /// 切换写盘全流程（薄壳，按序调用）：读 live → 受控合并（含清洗）→ 无变化

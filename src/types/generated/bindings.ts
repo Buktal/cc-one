@@ -416,16 +416,11 @@ export const commands = {
 	deleteProviderCmd: (app: App, id: string) => typedError<null, AppError>(__TAURI_INVOKE("delete_provider_cmd", { app, id })),
 	reorderProvidersCmd: (app: App, orderedIds: string[]) => typedError<null, AppError>(__TAURI_INVOKE("reorder_providers_cmd", { app, orderedIds })),
 	/**
-	 *  切换供应商（核心动作）：按 (app, id) 查 provider → 按应用分派写盘 →
-	 *  记该应用的激活状态。写盘分派 `write_live(app, provider, snippet)` 与片段
-	 *  合并层（ADR-0010）都收口在 `provider::live_adapter` 的 per-app 方法（单一
-	 *  seam，见 [`App::snippet_layer`] / [`App::validates_template_vars`]）：
-	 *  claude/gemini 片段在 settings_config 层并入（先叠片段再写盘），codex/grok
-	 *  在写盘层补缺失（片段随 `snippet` 透传 `write_live`，受控合并后补进 live
-	 *  文件——否则被白名单滤掉→零效果）。各分支语义一致：只替换受控字段、非受控
-	 *  字段（hooks / MCP / permissions / model / mcp_servers 等）从 live 原地保留，
-	 *  不整文件覆盖、不做 Backfill。「保存」只写 DB（save_provider_cmd），本命令
-	 *  才真正写盘。
+	 *  切换供应商（核心动作）——薄壳：编排下沉 `provider::activation`。单激活
+	 *  「切换」与附加模式「加入 live」的组合次序（片段合并层 ADR-0010 分派、受控
+	 *  写盘、「写盘成功才落激活态」顺序不变量）都在那里表达并可测；本命令只剩
+	 *  spawn_blocking + 失效信号。「保存」只写 DB（save_provider_cmd），本命令才
+	 *  真正写盘。
 	 */
 	switchProviderCmd: (app: App, id: string) => typedError<Provider, AppError>(__TAURI_INVOKE("switch_provider_cmd", { app, id })),
 	/**

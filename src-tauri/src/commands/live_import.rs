@@ -1,39 +1,23 @@
 //! live 配置文件反向导入域：附加模式（OpenCode）写盘/移除/导入、单激活应用
 //! 快照导入、「从 live 导入」预览。纯转换与落库逻辑在 `provider::import_live`
 //! （快照解析 / opencode 反向导入 / 落库走 `provider::import` seam）与
-//! `provider::live_opencode`，本模块是文件 IO 的命令层薄壳。
+//! `provider::live_opencode`；附加模式「加入 live」的编排（ensure-in-live，
+//! switch_provider_cmd 的附加分支共用）已下沉 `provider::activation`（架构审
+//! 查候选③），本模块是文件 IO 的命令层薄壳。
 
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
 
 use tauri::State;
 
-use super::providers::emit_providers_changed;
-use super::AppState;
+use super::{emit_providers_changed, AppState};
 use crate::db::Store;
 use crate::error::{AppError, AppResult};
 use crate::model::{App, Provider};
+use crate::provider::activation;
 use crate::provider::{import_live, live, live_opencode};
 
 // ---------------- 附加模式（OpenCode）写盘命令 ----------------
-
-/// 附加模式核心动作（OpenCode）：把 provider ensure-in-live——写进 opencode.json
-/// 同时设 `meta.liveManaged = true` 并落库。key 由 `live_opencode::derive_live_key`
-/// 派生（优先沿用 meta.liveKey，改名不重算；首次按 name slugify，空 → 回落 id）。
-/// **不取消其它 provider、不碰 active_providers**（附加模式无唯一激活）。返回
-/// 更新了 meta 的 provider。
-pub(super) fn ensure_opencode_in_live(store: &Store, provider: Provider) -> AppResult<Provider> {
-    let path = live_opencode::opencode_config_path()?;
-    let live_text = live::read_live_settings(&path)?;
-    let key =
-        live_opencode::derive_live_key(&provider.name, &provider.id, &provider.meta, &live_text);
-    live_opencode::set_opencode_provider(&path, &key, &provider.settings_config)?;
-    let updated = Provider {
-        meta: live_opencode::with_meta_live_state(&provider.meta, &key, true)?,
-        ..provider
-    };
-    store.save_provider(updated)
-}
 
 /// 附加模式移除（OpenCode）：从 opencode.json 删 `provider.<liveKey>` + 设
 /// `meta.liveManaged = false`（保留 liveKey，便于再加回来）。撤除写盘走
@@ -84,25 +68,11 @@ fn import_single_activate_from_live(
     import_live::import_snapshot(store, app, &snap)
 }
 
-/// 按 app 读 live 文件文本：路径映射收口在 `live_adapter` 的
-/// [`App::live_paths`]（单一事实来源——写盘 / 快照 / 片段提取共用）。
-/// opencode 无单份 live 配置概念 → `None`。
-pub(super) fn read_live_texts(app: App) -> AppResult<Option<Vec<String>>> {
-    let Some(paths) = app.live_paths()? else {
-        return Ok(None);
-    };
-    let mut texts = Vec::with_capacity(paths.len());
-    for p in paths {
-        texts.push(live::read_live_settings(&p)?);
-    }
-    Ok(Some(texts))
-}
-
 /// 按 app 读 live 文件(s) + 反向解析为快照（分派在 `live_adapter` 的
 /// [`App::snapshot_from_texts`]）。opencode → `unreachable`（走 opencode
 /// 专属路径）。
 fn read_live_snapshot(app: App) -> AppResult<Option<import_live::LiveImportSnapshot>> {
-    let Some(texts) = read_live_texts(app)? else {
+    let Some(texts) = live::read_app_live_texts(app)? else {
         return Ok(None);
     };
     Ok(app.snapshot_from_texts(&texts))
@@ -148,7 +118,9 @@ pub async fn add_provider_to_live_cmd(
         let provider = store
             .get_provider(app, &id)?
             .ok_or_else(|| AppError::Config(format!("provider not found in {app:?} pool: {id}")))?;
-        ensure_opencode_in_live(&store, provider)
+        // 编排与 switch 的附加分支共用 provider::activation（单一归属）。
+        let paths = activation::resolve_paths(app)?;
+        activation::ensure_opencode_in_live(&store, provider, &paths.opencode_config)
     })
     .await
     .map_err(|e| AppError::Internal(format!("add_provider_to_live task failed: {e}")))??;

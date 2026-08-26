@@ -16,8 +16,11 @@
 //! (app,id) / name / liveKey 去重落库——导出文档 / CC-Switch / live 三条
 //! 路径共用，见本目录 `import.rs`），以及 `model_fetch`（拉取供应商的模型
 //! 列表：OpenAI 兼容 `GET /v1/models`，候选 URL 构造是纯函数、失败错误串带
-//! 分桶标签——见本目录 `model_fetch.rs`）。
+//! 分桶标签——见本目录 `model_fetch.rs`）。`activation` 是激活编排（单激活
+//! 「切换」与附加模式「加入 live」的组合次序权威：「写盘成功才落激活态」，
+//! 命令层只留薄壳，见本目录 `activation.rs`）。
 
+pub mod activation;
 pub mod export_import;
 pub mod import;
 pub mod import_ccswitch;

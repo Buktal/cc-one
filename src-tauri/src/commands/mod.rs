@@ -42,12 +42,20 @@ pub use usage::*;
 
 use std::sync::Arc;
 
-use tauri::State;
+use tauri::{Emitter, State};
 
 use crate::config::ConfigStore;
 use crate::db::Store;
 use crate::error::AppResult;
 use crate::model::RunMode;
+
+/// Emit `providers_changed` so the frontend's provider queries invalidate.
+/// 纯 Tauri 事件总线，与具体业务域无关——providers / live-import / CC-Switch
+/// 写库命令共用同一失效信号（架构审查候选③：从 providers.rs 上收至此，
+/// 解除兄弟模块对 providers 的业务外依赖）。
+pub(crate) fn emit_providers_changed(app_handle: &tauri::AppHandle) {
+    let _ = app_handle.emit("providers_changed", ());
+}
 
 /// App-wide managed state: the Local Store + local config, wrapped
 /// in `Arc` so blocking tasks can take owned clones.
