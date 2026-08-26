@@ -1,6 +1,7 @@
 // Popover primitive (base-ui + render composition, same pattern as tooltip).
 
 import { Popover as PopoverPrimitive } from "@base-ui/react/popover"
+import type { Ref } from "react"
 
 import { cn } from "@/lib/utils"
 
@@ -29,7 +30,11 @@ function PopoverContent({
   Pick<
     PopoverPrimitive.Positioner.Props,
     "side" | "align" | "sideOffset" | "alignOffset"
-  >) {
+  > & {
+    // React 19 ref-as-prop：调用方挂 ref 取弹层 DOM（统计浮卡用于给 blur
+    // 分辨焦点落点在弹层内外）。
+    ref?: Ref<HTMLDivElement>
+  }) {
   return (
     <PopoverPrimitive.Portal>
       <PopoverPrimitive.Positioner

@@ -12,6 +12,7 @@ import type { SessionMessage } from "@/types/generated/bindings"
 import {
   conversationLayout,
   groupConversation,
+  ownsFlowRow,
   toolSummary,
 } from "./conversation"
 
@@ -207,5 +208,48 @@ describe("toolSummary", () => {
     )
     expect(toolSummary("   ")).toBe("")
     expect(toolSummary("123")).toBe("123")
+  })
+})
+
+describe("ownsFlowRow", () => {
+  const index = (rows: SessionMessage[]) =>
+    Object.fromEntries(rows.map((r) => [r.uuid, r]))
+
+  it("tool rows absorbed by an assistant card own no row of their own", () => {
+    const rows = [
+      row("user", "u1", "edit the file"),
+      row("assistant", "a1", "on it"),
+      row("tool", "t1", '{"file_path":"x"}', "Edit"),
+    ]
+    const layout = conversationLayout(groupConversation(rows))
+    const m = index(rows)
+    expect(ownsFlowRow(m.t1, layout)).toBe(false)
+    expect(ownsFlowRow(m.a1, layout)).toBe(true)
+  })
+
+  it("a loose tool run renders once at its first member; later members do not", () => {
+    // No assistant text in the turn → tools stay standalone as a loose group.
+    const rows = [
+      row("user", "u2", "run something"),
+      row("tool", "t2", "{}", "Bash"),
+      row("tool", "t3", "{}", "Read"),
+    ]
+    const layout = conversationLayout(groupConversation(rows))
+    const m = index(rows)
+    expect(ownsFlowRow(m.t2, layout)).toBe(true)
+    expect(ownsFlowRow(m.t3, layout)).toBe(false)
+  })
+
+  it("every non-tool role owns its row", () => {
+    const rows = [
+      row("system", "sys", "context"),
+      row("user", "u3", "q"),
+      row("assistant", "a3", "r"),
+    ]
+    const layout = conversationLayout(groupConversation(rows))
+    const m = index(rows)
+    expect(ownsFlowRow(m.sys, layout)).toBe(true)
+    expect(ownsFlowRow(m.u3, layout)).toBe(true)
+    expect(ownsFlowRow(m.a3, layout)).toBe(true)
   })
 })

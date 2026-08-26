@@ -5,6 +5,11 @@
 // arguments), instead of interleaving as standalone rows. A turn with no AI
 // text row keeps its tool calls as a standalone dashed group.
 //
+// 折叠模型（嵌套开关修复后的定稿）：用户 / 系统气泡保持「点气泡=收成一行」
+// 的单层手势；AI 卡整体不可折叠——卡内是两层互不隶属的独立开关：工具列表
+// 总开关（数量徽标右侧的箭头按钮，默认收起）与每个工具自己的参数展开。
+// 过去三层嵌套（卡→列表→单工具）点击穿透、外层误触发，结构上不再可能。
+//
 // Drop-in for the detail view's transcript body: same props contract as the
 // previous TranscriptBody seam (loading / error / empty states, the Virtuoso
 // ref + rangeChanged wiring useTurnNav owns, per-row collapse set, flash ring).
@@ -20,17 +25,24 @@ import {
   Bot,
   ChevronDown,
   ChevronRight,
+  ChevronUp,
   Info,
   Loader2,
   User as UserIcon,
   Wrench,
 } from "lucide-react"
-import { type ReactNode, type RefObject, useMemo } from "react"
+import {
+  type KeyboardEvent as ReactKeyboardEvent,
+  type ReactNode,
+  type RefObject,
+  useMemo,
+} from "react"
 import { useTranslation } from "react-i18next"
 import { Virtuoso, type VirtuosoHandle } from "react-virtuoso"
 import { CopyButton } from "@/components/copy-button"
 import { EmptyState } from "@/components/empty-state"
 import { Badge } from "@/components/ui/badge"
+import { Button } from "@/components/ui/button"
 import {
   Tooltip,
   TooltipContent,
@@ -42,6 +54,7 @@ import type { SessionMessage } from "@/types/generated/bindings"
 import {
   conversationLayout,
   groupConversation,
+  ownsFlowRow,
   toolSummary,
 } from "../conversation"
 import { firstLine } from "../derive"
@@ -91,19 +104,24 @@ export function ConversationFlow({
         data={messages}
         computeItemKey={(_, m) => m.uuid}
         rangeChanged={onRangeChanged}
-        itemContent={(index, m) => (
+        itemContent={(index, m) =>
           // Padding lives on the row wrapper (not the list) so Virtuoso can
           // size each row independently; the first row carries the top padding.
-          <div className={cn("px-4 pb-2", index === 0 ? "pt-4" : "pt-2")}>
-            <FlowRow
-              message={m}
-              layout={layout}
-              isOpen={isOpen}
-              onToggle={onToggle}
-              flash={m.uuid === flash}
-            />
-          </div>
-        )}
+          // Absorbed tool rows skip even this wrapper — returning null keeps
+          // the measured height truly 0; a bare padded shell read as an
+          // “empty message”.
+          ownsFlowRow(m, layout) ? (
+            <div className={cn("px-4 pb-2", index === 0 ? "pt-4" : "pt-2")}>
+              <FlowRow
+                message={m}
+                layout={layout}
+                isOpen={isOpen}
+                onToggle={onToggle}
+                flash={m.uuid === flash}
+              />
+            </div>
+          ) : null
+        }
       />
     </TranscriptStates>
   )
@@ -177,12 +195,13 @@ function FlowRow({
   onToggle: (uuid: string) => void
   flash: boolean
 }) {
+  // Attached tool rows render inside their owner card; non-first members of a
+  // loose group render with the group's first member.
+  if (!ownsFlowRow(m, layout)) return null
   if (m.role === "tool") {
+    // ownsFlowRow 保证：走到这里的工具行必是 loose 组的首行。
     const group = layout.looseGroup.get(m.uuid)
-    // Attached rows render inside their owner card; non-first members of a
-    // loose group render with the group's first member.
-    if (layout.attachedTo.has(m.uuid) || !group || group[0].uuid !== m.uuid)
-      return null
+    if (!group) return null
     return (
       <div className="space-y-1.5">
         {group.map((tool) => (
@@ -206,17 +225,22 @@ function FlowRow({
         <AssistantRow
           message={m}
           tools={layout.toolsOf.get(m.uuid) ?? []}
-          open={isOpen(m.uuid, m.role)}
-          onToggle={() => onToggle(m.uuid)}
+          textOpen={isOpen(m.uuid, m.role)}
+          // 工具列表的开合复用同一张 collapsed 集合的 xor 语义：助手 uuid 以
+          // "tool" 角色读取 = 默认收起、命中即开（与单工具行同一默认，见
+          // derive.roleDefaultsCollapsed）——虚拟化卸载后状态仍在父级。
+          toolsOpen={isOpen(m.uuid, "tool")}
+          onToolsListToggle={() => onToggle(m.uuid)}
           flash={flash}
-          onToolToggle={onToggle}
           isToolOpen={isOpen}
+          onToolToggle={onToggle}
         />
       ) : (
         <BaseRow
           icon={m.role === "user" ? UserIcon : Info}
           tone={m.role === "user" ? "user" : "system"}
           time={m.ts}
+          collapsible
           open={isOpen(m.uuid, m.role)}
           onToggle={() => onToggle(m.uuid)}
           copyText={m.content}
@@ -246,64 +270,92 @@ function TurnDivider({ number }: { number: number }) {
   )
 }
 
-/** One assistant message card: the text bubble plus its attached tool calls
- *  indented below the body (title rows always visible, details on click).
- *  Collapsed, the card keeps the one-line body preview and folds the tool list
- *  into a count badge — the bulk "collapse all" gesture stays meaningful on
- *  tool-heavy turns. */
+/** One assistant message card: the body plus its attached tool calls. The
+ *  card does NOT collapse as a whole — two independent layers live inside:
+ *  the run-list toggle beside the count badge (default collapsed), and each
+ *  tool's own argument chevron (default collapsed). 正文的全局开合只由
+ *  工具栏「全部收起/展开」写入。 */
 function AssistantRow({
   message: m,
   tools,
-  open,
-  onToggle,
+  textOpen,
+  toolsOpen,
   flash,
-  onToolToggle,
   isToolOpen,
+  onToolsListToggle,
+  onToolToggle,
 }: {
   message: SessionMessage
   tools: SessionMessage[]
-  open: boolean
-  onToggle: () => void
+  /** 正文的展开态（批量手势可改写；卡片本体不可再整卡点收）。 */
+  textOpen: boolean
+  /** 挂载工具列表的展开态（默认收起——xor 规则同单工具行）。 */
+  toolsOpen: boolean
   flash: boolean
+  /** 工具列表总开关：写入的是本助手 uuid（collapsed 集合，xor 同工具行）。 */
+  onToolsListToggle: () => void
   onToolToggle: (uuid: string) => void
   isToolOpen: (uuid: string, role: string) => boolean
 }) {
   const { t } = useTranslation()
+  const listLabel = t("sessions.detail.toggleToolCalls")
   return (
     <BaseRow
       icon={Bot}
       tone="assistant"
       time={m.ts}
       model={m.model}
-      open={open}
-      onToggle={onToggle}
       copyText={m.content}
       flash={flash}
     >
-      <Content text={m.content} open={open} />
-      {tools.length > 0 &&
-        (open ? (
-          // 内缩工具列表：左缘细线 + 缩进，视觉上「该 AI 消息做的事」。
-          <div className="border-border/70 mt-2 space-y-1.5 border-l-2 pl-2.5">
-            {tools.map((tool) => (
-              <ToolBlock
-                key={tool.uuid}
-                tool={tool}
-                open={isToolOpen(tool.uuid, tool.role)}
-                onToggle={() => onToolToggle(tool.uuid)}
-              />
-            ))}
-          </div>
-        ) : (
-          <div className="mt-1.5">
+      <Content text={m.content} open={textOpen} />
+      {tools.length > 0 && (
+        <>
+          {/* 数量徽标恒显作列表锚点；右侧箭头按钮是整列的唯一总开关——
+              收起即折叠成徽标 + 箭头，展开后徽标仍可见。 */}
+          <div className="mt-1.5 flex items-center gap-1">
             <Badge
               variant="outline"
               className="text-muted-foreground h-4 px-1.5 font-normal text-[10px] leading-none"
             >
               {t("sessions.detail.toolCalls", { n: tools.length })}
             </Badge>
+            <Tooltip>
+              <TooltipTrigger
+                render={
+                  <Button
+                    variant="ghost"
+                    size="icon-xs"
+                    aria-expanded={toolsOpen}
+                    aria-label={listLabel}
+                    onClick={onToolsListToggle}
+                  />
+                }
+              >
+                {toolsOpen ? (
+                  <ChevronUp className="size-3" />
+                ) : (
+                  <ChevronDown className="size-3" />
+                )}
+              </TooltipTrigger>
+              <TooltipContent>{listLabel}</TooltipContent>
+            </Tooltip>
           </div>
-        ))}
+          {toolsOpen && (
+            // 内缩工具列表：左缘细线 + 缩进，视觉上「该 AI 消息做的事」。
+            <div className="border-border/70 mt-2 space-y-1.5 border-l-2 pl-2.5">
+              {tools.map((tool) => (
+                <ToolBlock
+                  key={tool.uuid}
+                  tool={tool}
+                  open={isToolOpen(tool.uuid, tool.role)}
+                  onToggle={() => onToolToggle(tool.uuid)}
+                />
+              ))}
+            </div>
+          )}
+        </>
+      )}
     </BaseRow>
   )
 }
@@ -416,23 +468,16 @@ function ToolRow({
   )
 }
 
-/** Copy-to-clipboard for one message body. Hidden until the row is hovered (or
- *  focused); lives inside the row's collapse trigger, hence stopPropagation on
- *  click. */
+/** Copy-to-clipboard for one message body. Constantly visible（hover 藏按钮
+ *  在触屏与扫读时不可发现——定稿固定显示）; lives inside user/system rows'
+ *  collapse trigger, hence stopPropagation on click. */
 function MessageCopyButton({ text }: { text: string }) {
   const { t } = useTranslation()
   const label = t("sessions.detail.copyMessage")
   return (
     <Tooltip>
       <TooltipTrigger
-        render={
-          <CopyButton
-            value={text}
-            label={label}
-            stopPropagation
-            className="opacity-0 transition-opacity group-hover:opacity-100 focus-visible:opacity-100"
-          />
-        }
+        render={<CopyButton value={text} label={label} stopPropagation />}
       />
       <TooltipContent>{label}</TooltipContent>
     </Tooltip>
@@ -440,29 +485,34 @@ function MessageCopyButton({ text }: { text: string }) {
 }
 
 /** The chat bubble frame. Assistant floats left, user floats right (mirrored),
- *  system spans full width; the whole bubble is the collapse toggle. Same
- *  layout contract as the detail view's rows. */
+ *  system spans full width. User / system bubbles fold on click (collapsible);
+ *  assistant cards omit that gesture entirely——其内部已有两层独立开关
+ *  （列表总开关、单工具箭头），整卡再叠一层曾是点击穿透的根源。 */
 function BaseRow({
   icon: Icon,
   tone,
   time,
   model,
-  open,
-  onToggle,
   copyText,
   flash,
   children,
+  collapsible = false,
+  open = false,
+  onToggle,
 }: {
   icon: typeof Bot
   tone: "assistant" | "user" | "system"
   time: string
   model?: string | null
-  open: boolean
-  onToggle: () => void
   copyText: string
   /** Ring the bubble briefly after a turn-nav jump lands on it. */
   flash?: boolean
   children: ReactNode
+  /** 点气泡=收成一行预览的手势；仅单层气泡行（用户/系统）启用。 */
+  collapsible?: boolean
+  /** 折叠态（仅 collapsible 行有意义）。 */
+  open?: boolean
+  onToggle?: () => void
 }) {
   const voiceClass =
     tone === "assistant"
@@ -471,78 +521,82 @@ function BaseRow({
         ? "ml-auto max-w-[min(72ch,80%)] rounded-lg rounded-br-sm bg-accent-tint"
         : "bg-transparent"
   return (
-    <>
-      {/* biome-ignore lint/a11y/useSemanticElements: collapse trigger must
-        not be a <button> — the header row embeds the copy <button>, and
-        nested buttons are invalid HTML; div keeps the same keyboard
-        contract. */}
-      <div
-        role="button"
-        tabIndex={0}
-        onClick={onToggle}
-        onKeyDown={(e) => {
-          if (e.key === "Enter" || e.key === " ") {
-            e.preventDefault()
-            onToggle()
+    // 折叠触发器不能是 <button>：头部内嵌复制 <button>，HTML 不允许按钮嵌
+    // 套；div 承担同一键盘契约（collapsible 分支动态挂载触发属性）。
+    <div
+      {...(collapsible
+        ? {
+            role: "button",
+            tabIndex: 0,
+            onClick: onToggle,
+            onKeyDown: (e: ReactKeyboardEvent<HTMLDivElement>) => {
+              if (e.key === "Enter" || e.key === " ") {
+                e.preventDefault()
+                onToggle?.()
+              }
+            },
+            "aria-expanded": open,
           }
-        }}
-        aria-expanded={open}
-        className={cn(
-          "group focus-visible:ring-ring/40 flex cursor-pointer px-3 py-2 text-left text-sm focus-visible:ring-2 focus-visible:outline-none",
-          voiceClass,
-          flash && "msg-flash",
-        )}
-      >
-        <div className="min-w-0 flex-1">
+        : {})}
+      className={cn(
+        "group flex px-3 py-2 text-left text-sm",
+        collapsible &&
+          "focus-visible:ring-ring/40 cursor-pointer focus-visible:ring-2 focus-visible:outline-none",
+        voiceClass,
+        flash && "msg-flash",
+      )}
+    >
+      <div className="min-w-0 flex-1">
+        <div
+          className={cn(
+            "text-muted-foreground mb-1 flex items-center justify-between gap-1.5 text-[10px]",
+            tone === "user" && "flex-row-reverse",
+          )}
+        >
           <div
             className={cn(
-              "text-muted-foreground mb-1 flex items-center justify-between gap-1.5 text-[10px]",
+              "flex items-center gap-1.5",
               tone === "user" && "flex-row-reverse",
             )}
           >
-            <div
+            <Icon
               className={cn(
-                "flex items-center gap-1.5",
-                tone === "user" && "flex-row-reverse",
+                "size-3.5 shrink-0",
+                tone === "system" && "text-muted-foreground/60",
               )}
-            >
-              <Icon
-                className={cn(
-                  "size-3.5 shrink-0",
-                  tone === "system" && "text-muted-foreground/60",
-                )}
-              />
-              {/* ts can be an empty string (codex/claude pass through whatever
-              the source file has), so guard it. */}
-              <span>{time ? dayjs(time).format("MM/DD HH:mm") : "—"}</span>
-              {model ? (
-                <Badge
-                  variant="secondary"
-                  className="h-4 px-1.5 font-mono text-[10px] leading-none"
-                >
-                  {model}
-                </Badge>
-              ) : null}
-            </div>
-            <div
-              className={cn(
-                "flex items-center gap-0.5",
-                tone === "user" && "flex-row-reverse",
-              )}
-            >
+            />
+            {/* ts can be an empty string (codex/claude pass through whatever
+            the source file has), so guard it. */}
+            <span>{time ? dayjs(time).format("MM/DD HH:mm") : "—"}</span>
+            {model ? (
+              <Badge
+                variant="secondary"
+                className="h-4 px-1.5 font-mono text-[10px] leading-none"
+              >
+                {model}
+              </Badge>
+            ) : null}
+          </div>
+          <div
+            className={cn(
+              "flex items-center gap-0.5",
+              tone === "user" && "flex-row-reverse",
+            )}
+          >
+            {collapsible ? (
               <ChevronDown
                 className={cn(
                   "size-3 transition-transform",
                   !open && "rotate-90",
                 )}
               />
-              <MessageCopyButton text={copyText} />
-            </div>
+            ) : null}
+            <MessageCopyButton text={copyText} />
           </div>
-          {children}
         </div>
+        {children}
       </div>
-    </>
+    </div>
   )
 }
 

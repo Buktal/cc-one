@@ -87,8 +87,10 @@ export function SessionTree({
   const nothingSelected =
     selectedGroupId === ALL_GROUPS && selectedProject == null
 
+  // 显隐量外层命名容器 /sessions：48rem 上台后恒在（右栏上台点在 76rem，
+  // 树 13rem 不与之冲突，永不让位——曾让树在右栏档出列，等于树常年消失）。
   return (
-    <div className="border-border bg-card hidden min-h-0 w-52 shrink-0 flex-col rounded-lg border @[48rem]:flex">
+    <div className="border-border bg-card hidden min-h-0 w-52 shrink-0 flex-col rounded-lg border @min-[48rem]/sessions:flex">
       {/* 图标轨道条：三轨宇宙开关（图标 + 小字竖排）。 */}
       <div className="border-border flex items-center gap-1 border-b p-2">
         <Tabs

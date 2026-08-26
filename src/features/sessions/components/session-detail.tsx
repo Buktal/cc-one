@@ -4,9 +4,9 @@
 //
 // The transcript is a three-voice timeline: assistant bubbles sit left, user
 // bubbles right (mirrored, corner-cut toward the edge), tool / system rows
-// span full width in the middle as the "workbench". Messages collapse on
-// click, expanded by default; tool rows collapse to their name, collapsed by
-// default. Esc / ← 返回容器态（onClose）。
+// span full width in the middle as the "workbench". 用户/系统气泡点一下收成
+// 一行（默认展开）；AI 卡整体不可折叠——卡内工具列表默认收起（徽标右侧箭
+// 头总开关），单工具再各自展开。Esc / ← 返回容器态（onClose）。
 //
 // Pure rendering — all state + queries live in useSessionsBrowser. The only
 // local state here is transient UI interaction that does not belong in the
@@ -32,6 +32,7 @@ import {
   X,
 } from "lucide-react"
 import {
+  type ReactNode,
   useCallback,
   useEffect,
   useLayoutEffect,
@@ -82,11 +83,13 @@ const TURN_OFFSET = 72
  *  and the ring is never left half-drawn). */
 const FLASH_MS = 1200
 
-/** Turn-nav column 的显隐类：钻入行（标题列 + 本列 + 详情，@container 在
- *  sessions-view）不足 56rem 时整列隐藏，宽度让给正文 —— 标题列(w-44) 与
- *  本列(w-56) 之外，正文再窄就不可读了。必须是完整类名字面量（不能由常量
- *  拼接）—— Tailwind 扫描器只认源码里的字面量，拼出来的类不会生成。 */
-const TURN_NAV_VISIBILITY = "hidden @[56rem]:flex"
+// Turn-nav 列恒在——它是阅读的坐标系，优先级高于统计栏。显隐与压缩全部
+// 引用外层命名容器 /sessions（sessions-view 的 @container/sessions），与树/
+// 右栏/统计图标同一把尺：60rem 以下收成纯编号窄条（序号仍可点跳转、悬停
+// 仍有全文 tooltip；60 档与「半屏/小窗」手感对齐，由用户标定），60rem 起为
+// 完整目录（编号+首行，w-56）；76rem 右栏才上台——树（13）+ 右栏（16）+
+// 完整导航（14）+ 详情最小（26）＋间隙 ≈71.25rem 并存且留余量的宽度，低于
+// 它统计走 hover 图标。类名一律源码字面量（Tailwind 扫描器只认字面量）。
 
 export interface SessionDetailProps {
   session: SessionRow
@@ -108,6 +111,9 @@ export interface SessionDetailProps {
   onNext: () => void
   canPrev: boolean
   canNext: boolean
+  /** 窄容器的统计浮卡入口（NarrowStatsTrigger），渲染进标题行右侧操作排；
+   *  宽容器右栏本体常驻，此件自身隐身。 */
+  statsSlot?: ReactNode
 }
 
 export function SessionDetail(props: SessionDetailProps) {
@@ -127,6 +133,7 @@ export function SessionDetail(props: SessionDetailProps) {
     onNext,
     canPrev,
     canNext,
+    statsSlot,
   } = props
   const turnNav = useTurnNav(transcript)
   // Esc = 返回列表。详情内更里层的 Esc 语义（重命名取消、轮次搜索退出）由
@@ -177,9 +184,10 @@ export function SessionDetail(props: SessionDetailProps) {
       <Card
         // 钻入态详情卡：档案头（border-b）+ 对话流各占上下，gap-0 py-0 推掉
         // Card 基类的节距（header 自带 p-4，transcript 行自管 padding）。
-        // min-w 兜底：容器再窄（横屏最小窗口）也保持正文可读，超出部分
-        // 由钻入行整体收缩（轮次导航列已先让位）。
-        className="flex min-h-0 min-w-[26rem] flex-1 gap-0 py-0"
+        // min-w 兜底：容器再窄（横屏最小窗口）也保持正文可读；下限同时被
+        // min(…,100%) 钳在自身可用宽内，极窄时不再溢出到栏外（右栏在根
+        // 容器 58rem 以下已退位，见 stats-rail）。
+        className="flex min-h-0 min-w-[min(26rem,100%)] flex-1 gap-0 py-0"
       >
         {/* Header: 标题行（定稿 §2「详情头瘦身只留标题行」）——返回 + 标题
             （就地重命名）+ 收藏 + 分组归属 + 来源徽章；身份与统计全部在右栏
@@ -192,6 +200,7 @@ export function SessionDetail(props: SessionDetailProps) {
           trackGroups={trackGroups}
           currentGroupId={currentGroupId}
           onSetGroup={onSetGroup}
+          statsSlot={statsSlot}
         />
 
         {/* Body: transcript timeline */}
@@ -239,6 +248,7 @@ function SessionHeader({
   trackGroups,
   currentGroupId,
   onSetGroup,
+  statsSlot,
 }: {
   session: SessionRow
   favorited: boolean
@@ -248,6 +258,8 @@ function SessionHeader({
   trackGroups: SessionGroup[]
   currentGroupId: string
   onSetGroup: (groupId: string | null) => void
+  /** 窄容器统计浮卡入口（见 SessionDetailProps.statsSlot）。 */
+  statsSlot?: ReactNode
 }) {
   const { t } = useTranslation()
   // Title-rename 状态就地管理（useSessionTitleRename——不再经三层 props 传递）。
@@ -342,12 +354,13 @@ function SessionHeader({
           options={trackGroups.map((g) => ({ value: g.id, label: g.name }))}
           value={currentGroupId}
           onChange={(v) => onSetGroup(v || null)}
-          className="h-8 w-44"
-          triggerSize="sm"
+          // 不传 triggerSize：默认 h-8 与收藏按钮（Button sm 同为 h-8）对齐，
+          // sm 档是 h-7，并排会一高一矮。
           // 分组被删后会话仍可能挂着旧 group id：不在候选里时显示「无分组」
           // 而非原值。
           fallbackLabel={t("sessions.detail.noGroup")}
         />
+        {statsSlot}
       </div>
     </div>
   )
@@ -525,11 +538,12 @@ function TurnNavPanel({
   return (
     <nav
       aria-label={t("sessions.detail.turnNav")}
-      // 钻入态第三栏（详情右列）：随容器宽度显隐（TURN_NAV_VISIBILITY）。
+      // 钻入态第三栏（详情右列）：恒在，仅形态随 /sessions 档位变化（60rem
+      // 以下纯序号窄条，以上完整目录）——见本文件头部的阶梯注释。
       // 卡片面同标题列/详情卡（bg-card），与左栏同一节奏。
       className={cn(
-        "w-56 shrink-0 flex-col rounded-lg border border-border bg-card p-1",
-        TURN_NAV_VISIBILITY,
+        "flex w-56 shrink-0 flex-col rounded-lg border border-border bg-card p-1",
+        "@max-[60rem]/sessions:w-auto @max-[60rem]/sessions:p-0.5",
       )}
     >
       {/* Toolbar: prev / next session on the left (audit walks between
@@ -538,7 +552,9 @@ function TurnNavPanel({
         the ACTION it performs next (collapse when rows are open, expand
         when collapsed). Tooltips open ABOVE the buttons — top 在满高列里
         也无裁剪风险（列左缘贴详情卡，tooltip 浮层盖在其上不影响阅读）。 */}
-      <div className="mb-0.5 flex shrink-0 items-center justify-between gap-1 pr-0.5">
+      {/* 纯编号窄条档位下工具栏（跨会话/搜索/批量开合）让位——窄条只保留
+          跳转坐标系本身；这些操作在宽档随时可用。 */}
+      <div className="mb-0.5 flex shrink-0 items-center justify-between gap-1 pr-0.5 @max-[60rem]/sessions:hidden">
         <div className="flex items-center gap-0.5">
           <Tooltip>
             <TooltipTrigger
@@ -765,7 +781,7 @@ function TurnNavPanel({
                   >
                     {i + 1}
                   </span>
-                  <span className="min-w-0 truncate">
+                  <span className="min-w-0 truncate @max-[60rem]/sessions:hidden">
                     {firstLine(turn.content) || "—"}
                   </span>
                 </TooltipTrigger>

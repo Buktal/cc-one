@@ -10,24 +10,35 @@
 // - 分组态（选中分组/未分组）= 轻量汇总一张卡：会话数 + 四桶 + 命中率 +
 //   成本，不过度展开（验收清单指定）。
 //
-// 窄容器（< 48rem，768 档）整栏折叠为「统计」浮动按钮开抽屉——卡片组同一份
-// 渲染进右栏与抽屉两处。数据全部来自 useSessionsBrowser 的 selection-free
-// session_stats 读（aggregateStats 纯聚合），无第二条统计路径。
+// 窄档（外层命名容器 /sessions < 76rem）右栏整栏让位：统计入口缩成一个图标
+// （NarrowStatsTrigger——列表态在卡片头右上、会话态在详情标题行），hover 原位
+// 浮出统计小卡。fixed 浮动按钮会盖分页条、按钮 + 遮罩弹出层打断浏览，皆已撤。
+// 卡片组同一份渲染进右栏与浮卡两处。76rem 的几何依据：树 13 + 右栏 16 + 完整
+// 轮次导航 14 + 详情最小可读 26 + 间隙 ≈ 71.25rem，留约 5rem 阅读余量——低于
+// 它四列挤不下，右栏就地转图标（曾定 58rem：四列装不下，还把左树挤得让位、
+// 覆盖了几乎所有真实窗口，皆翻车；后按手感上调至 76）。右栏与图标共用
+// /sessions 这把尺，76rem 一刻度互斥。数据全部来自 useSessionsBrowser 的
+// selection-free session_stats 读（aggregateStats 纯聚合），无第二条统计路径。
 
 import dayjs from "dayjs"
 import relativeTime from "dayjs/plugin/relativeTime"
 import { BarChart3 } from "lucide-react"
-import { type ReactNode, useMemo, useState } from "react"
+import { type ReactNode, useMemo, useRef } from "react"
 import { useTranslation } from "react-i18next"
 import { CopyButton } from "@/components/copy-button"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
-import { Sheet, SheetContent } from "@/components/ui/sheet"
+import {
+  Popover,
+  PopoverContent,
+  PopoverTrigger,
+} from "@/components/ui/popover"
 import {
   Tooltip,
   TooltipContent,
   TooltipTrigger,
 } from "@/components/ui/tooltip"
+import { useHoverIntent } from "@/hooks/use-hover-intent"
 import {
   formatCost,
   formatCount,
@@ -71,17 +82,8 @@ const TAG_KEYS = {
 
 export type StatsScopeTag = keyof typeof TAG_KEYS
 
-export function StatsRail({
-  scopeTag,
-  scopeLabel,
-  aggregate,
-  session,
-  sessionStats,
-  transcript,
-  transcriptLoading,
-  deviceLabel,
-  projectIdentity,
-}: {
+/** 统计数据切片 —— 右栏本体与窄容器浮卡消费同一份（口径派生只有一处）。 */
+export interface StatsData {
   /** 口径 tag：会话态 / 项目态 / 分组态——由「是否打开会话 + 容器选中」派生
    *  （useSessionsBrowser），用户不可手切（口径 tab 已删）。 */
   scopeTag: StatsScopeTag
@@ -97,24 +99,35 @@ export function StatsRail({
   deviceLabel: (id: string) => string
   /** 项目态的身份卡数据（项目目录 + subagent 数）；非项目态为 null。 */
   projectIdentity: { dir: string; subagents: number } | null
-}) {
-  const { t } = useTranslation()
-  const cards =
-    session !== null ? (
-      <SessionCards
-        session={session}
-        stats={sessionStats}
-        aggregate={aggregate}
-        transcript={transcript}
-        transcriptLoading={transcriptLoading}
-        deviceLabel={deviceLabel}
+}
+
+export function StatsRail(props: StatsData) {
+  return (
+    // 右栏本体：58rem 容器以下整栏让位（NarrowStatsTrigger 浮卡接管）——见
+    // 文件头注释的门槛推导。
+    <aside className="border-border bg-card hidden min-h-0 w-64 shrink-0 flex-col gap-2 rounded-lg border p-2 @min-[76rem]/sessions:flex">
+      <StatsScopeHeader
+        scopeTag={props.scopeTag}
+        scopeLabel={props.scopeLabel}
       />
-    ) : scopeTag === "group" ? (
-      <GroupSummaryCard aggregate={aggregate} />
-    ) : (
-      <AggregateCards aggregate={aggregate} projectIdentity={projectIdentity} />
-    )
-  const header = (
+      <div className="min-h-0 flex-1 overflow-y-auto pr-0.5">
+        {/* 恒单列：窄档的两列迷你卡（单卡内容仅约 90px）连「累计时长」这类
+            标签都装不下，故撤；整宽卡片里公式小字等长文案不再换行。 */}
+        <div className="flex flex-col gap-2">
+          <StatsCards {...props} />
+        </div>
+      </div>
+    </aside>
+  )
+}
+
+/** 口径行（scope 说明 + 口径 tag）——右栏与浮卡共用。 */
+function StatsScopeHeader({
+  scopeTag,
+  scopeLabel,
+}: Pick<StatsData, "scopeTag" | "scopeLabel">) {
+  const { t } = useTranslation()
+  return (
     <div className="flex min-w-0 items-center gap-2">
       <Tooltip>
         <TooltipTrigger
@@ -136,54 +149,98 @@ export function StatsRail({
       </span>
     </div>
   )
+}
 
-  return (
-    <>
-      {/* 右栏本体：48rem 容器以下整栏让位（抽屉接管）。 */}
-      <aside className="border-border bg-card hidden min-h-0 w-64 shrink-0 flex-col gap-2 rounded-lg border p-2 @[48rem]:flex @[64rem]:w-72">
-        {header}
-        <div className="min-h-0 flex-1 overflow-y-auto pr-0.5">
-          <div className="grid grid-cols-2 gap-2 @[64rem]:grid-cols-1">
-            {cards}
-          </div>
-        </div>
-      </aside>
-      {/* 窄容器：浮动按钮 + 抽屉（卡片同一渲染）。 */}
-      <StatsDrawer header={header}>{cards}</StatsDrawer>
-    </>
+/** 卡片组——口径派生（会话 > 分组 > 项目），两种载体同一渲染（无第二份分支）。 */
+function StatsCards(data: StatsData) {
+  return data.session !== null ? (
+    <SessionCards
+      session={data.session}
+      stats={data.sessionStats}
+      aggregate={data.aggregate}
+      transcript={data.transcript}
+      transcriptLoading={data.transcriptLoading}
+      deviceLabel={data.deviceLabel}
+    />
+  ) : data.scopeTag === "group" ? (
+    <GroupSummaryCard aggregate={data.aggregate} />
+  ) : (
+    <AggregateCards
+      aggregate={data.aggregate}
+      projectIdentity={data.projectIdentity}
+    />
   )
 }
 
-/** 768 档的「统计」浮动按钮 + 抽屉。 */
-function StatsDrawer({
-  header,
-  children,
-}: {
-  header: ReactNode
-  children: ReactNode
-}) {
+// 开合规则与计时全在 use-hover-intent（进触发器/弹层立即亮出、离开留缓冲穿
+// 缝隙再收；反射焦点恒等——此前 onFocus 直接收下 base-ui 关闭后的还焦，零输
+// 入自持振荡反复弹窗，见该模块头注）。
+
+/** 窄容器统计入口：图标 hover 原位浮出统计小卡（无遮罩、不打断浏览——弹出
+ *  层与浮动按钮均已撤，见文件头注释）。宽档（/sessions ≥76rem）右栏本体接管，
+ *  此件整体隐身。 */
+export function NarrowStatsTrigger(props: StatsData) {
   const { t } = useTranslation()
-  const [open, setOpen] = useState(false)
+  const { open, advance } = useHoverIntent()
+  // 弹层 DOM 引用：blur 时分辨焦点是搬进弹层内部（内部编排）还是真去往外处。
+  const popupRef = useRef<HTMLDivElement>(null)
   return (
-    <>
-      <Button
-        size="sm"
-        onClick={() => setOpen(true)}
-        aria-label={t("sessions.stats.open")}
-        className="fixed right-4 bottom-16 z-40 h-8 rounded-full px-3 text-xs shadow-lg @[48rem]:hidden"
+    // 开合唯一入口是状态机：hover 进出、键盘聚焦、点击/Esc 的切换意图统统
+    // 送进同一张表驱动转换表。显隐引用外层命名容器 /sessions——与右栏本体
+    // 同一把尺、同一刻度（76rem）精确互斥：图标量的是「最近祖先容器」，本
+    // 组件身处中列，若不点名 /sessions 就会量到窄得多的中列，永不合格（曾
+    // 与右栏同屏翻车）；另外 "@?" 不是 Tailwind 语法，类不会生成。
+    <span className="@min-[76rem]/sessions:hidden">
+      <Popover
+        open={open}
+        onOpenChange={(o) => advance(o ? "enter" : "dismiss")}
       >
-        <BarChart3 className="size-3.5" />
-        {t("sessions.stats.open")}
-      </Button>
-      <Sheet open={open} onOpenChange={setOpen}>
-        <SheetContent side="right" className="w-80 gap-2 p-2 sm:max-w-[85vw]">
-          {header}
-          <div className="min-h-0 flex-1 overflow-y-auto pr-0.5">
-            <div className="grid grid-cols-1 gap-2">{children}</div>
+        <PopoverTrigger
+          render={
+            <Button
+              variant="ghost"
+              size="icon-sm"
+              aria-label={t("sessions.stats.open")}
+              onMouseEnter={() => advance("enter")}
+              onMouseLeave={() => advance("leave")}
+              onFocus={(e) =>
+                advance(
+                  e.currentTarget.matches(":focus-visible")
+                    ? "enter-keyboard"
+                    : "focus-reflected",
+                )
+              }
+              onBlur={(e) =>
+                advance(
+                  e.relatedTarget instanceof Node &&
+                    popupRef.current?.contains(e.relatedTarget)
+                    ? "blur-inside"
+                    : "blur-outside",
+                )
+              }
+            />
+          }
+        >
+          <BarChart3 className="text-muted-foreground size-4" />
+        </PopoverTrigger>
+        <PopoverContent
+          ref={popupRef}
+          align="end"
+          sideOffset={8}
+          className="max-h-[min(70vh,32rem)] w-80 gap-2 overflow-y-auto rounded-lg p-3"
+          onMouseEnter={() => advance("enter")}
+          onMouseLeave={() => advance("leave")}
+        >
+          <div className="grid grid-cols-1 gap-2">
+            <StatsScopeHeader
+              scopeTag={props.scopeTag}
+              scopeLabel={props.scopeLabel}
+            />
+            <StatsCards {...props} />
           </div>
-        </SheetContent>
-      </Sheet>
-    </>
+        </PopoverContent>
+      </Popover>
+    </span>
   )
 }
 
@@ -252,12 +309,7 @@ function SessionCards({
 
   return (
     <>
-      <UsageCard
-        tokens={agg.tokens}
-        hitRate={agg.hitRate}
-        cost={agg.cost}
-        className="col-span-2 @[64rem]:col-span-1"
-      />
+      <UsageCard tokens={agg.tokens} hitRate={agg.hitRate} cost={agg.cost} />
       <Card title={t("sessions.stats.activity")}>
         <ActGrid
           cells={[
@@ -301,7 +353,6 @@ function AggregateCards({
         tokens={aggregate.tokens}
         hitRate={aggregate.hitRate}
         cost={aggregate.cost}
-        className="col-span-2 @[64rem]:col-span-1"
       />
       <Card title={t("sessions.stats.activity")}>
         <ActGrid
@@ -309,7 +360,7 @@ function AggregateCards({
             [formatCount(aggregate.sessions), t("sessions.stats.sessions")],
             [totalSpanLabel, t("sessions.stats.totalDuration")],
             [formatCount(aggregate.requests), t("sessions.detail.requests")],
-            [formatCount(aggregate.messages), t("sessions.stats.messages")],
+            [formatCount(aggregate.messages), t("sessions.detail.messages")],
           ]}
         />
       </Card>
@@ -333,10 +384,7 @@ function AggregateCards({
 function GroupSummaryCard({ aggregate }: { aggregate: StatsAggregate }) {
   const { t } = useTranslation()
   return (
-    <Card
-      title={t("sessions.stats.groupSummary")}
-      className="col-span-2 @[64rem]:col-span-1"
-    >
+    <Card title={t("sessions.stats.groupSummary")}>
       {/* DSL 段：会话数 N。 */}
       <div className="text-[13px] tabular-nums">
         {formatMetricSeg(
@@ -384,16 +432,14 @@ function UsageCard({
   tokens,
   hitRate,
   cost,
-  className,
 }: {
   tokens: StatsAggregate["tokens"]
   hitRate: number | null
   cost: number | null
-  className?: string
 }) {
   const { t } = useTranslation()
   return (
-    <Card title={t("sessions.stats.usage")} className={className}>
+    <Card title={t("sessions.stats.usage")}>
       <UsageBody tokens={tokens} hitRate={hitRate} cost={cost} />
     </Card>
   )
@@ -490,9 +536,6 @@ function UsageBody({
           >
             {formatPct(hitRate)}
           </div>
-          <div className="text-muted-foreground/60 mt-0.5 text-[9.5px] leading-tight">
-            {t("sessions.stats.hitRateFormula")}
-          </div>
         </div>
         <div>
           <div className="text-muted-foreground text-[10px]">
@@ -500,9 +543,6 @@ function UsageBody({
           </div>
           <div className="text-accent-brand-strong text-[15px] font-semibold tabular-nums">
             {formatCost(cost)}
-          </div>
-          <div className="text-muted-foreground/60 mt-0.5 text-[9.5px] leading-tight">
-            {t("sessions.stats.costNote")}
           </div>
         </div>
       </div>
@@ -598,10 +638,7 @@ function IdentityCard({
   const copyLabel = t("sessions.detail.copySessionId")
   const model = stats?.models[0]?.model
   return (
-    <Card
-      title={t("sessions.stats.identity")}
-      className="col-span-2 mt-auto @[64rem]:col-span-1"
-    >
+    <Card title={t("sessions.stats.identity")} className="mt-auto">
       <div className="mb-1.5 flex min-w-0 items-center gap-1.5">
         <span className="truncate text-xs font-semibold">
           {s.project_dir
@@ -617,7 +654,8 @@ function IdentityCard({
           </Badge>
         ) : null}
       </div>
-      <div className="flex flex-col gap-1 text-[11px]">
+      {/* 首列 auto＝全卡最宽标签：所有 KvRow 的值列共用一条对齐线。 */}
+      <div className="grid grid-cols-[auto_1fr] items-baseline gap-x-2 gap-y-1 text-[11px]">
         <KvRow label={t("sessions.stats.idPath")}>
           <Tooltip>
             <TooltipTrigger render={<span className="block w-full truncate" />}>
@@ -680,14 +718,12 @@ function ProjectIdentityCard({
 }) {
   const { t } = useTranslation()
   return (
-    <Card
-      title={t("sessions.stats.identity")}
-      className="col-span-2 mt-auto @[64rem]:col-span-1"
-    >
+    <Card title={t("sessions.stats.identity")} className="mt-auto">
       <div className="mb-1.5 truncate text-xs font-semibold">
         {dir ? projectBasename(dir) : t("sessions.tree.noProject")}
       </div>
-      <div className="flex flex-col gap-1 text-[11px]">
+      {/* 首列 auto＝全卡最宽标签：所有 KvRow 的值列共用一条对齐线。 */}
+      <div className="grid grid-cols-[auto_1fr] items-baseline gap-x-2 gap-y-1 text-[11px]">
         <KvRow label={t("sessions.stats.idPath")}>
           <Tooltip>
             <TooltipTrigger render={<span className="block w-full truncate" />}>
@@ -722,9 +758,13 @@ function ProjectIdentityCard({
 
 function KvRow({ label, children }: { label: string; children: ReactNode }) {
   return (
-    <div className="flex min-w-0 gap-2">
-      <span className="text-muted-foreground w-12 shrink-0">{label}</span>
-      <span className="text-foreground min-w-0 flex-1">{children}</span>
+    // display:contents——标签/值两格直接成为父级 grid 的行成员。父列定义
+    // grid-cols-[auto_1fr]：首列 auto 取当前语言下最宽标签，全卡值列共用一
+    // 条左缘对齐线（标签各自定宽时 Path/Session ID/Device/Last active 的值
+    // 参差起始，被用户否掉）；标签不折行，值格 min-w-0 保住 UUID 截断。
+    <div className="contents">
+      <span className="text-muted-foreground whitespace-nowrap">{label}</span>
+      <span className="text-foreground min-w-0">{children}</span>
     </div>
   )
 }

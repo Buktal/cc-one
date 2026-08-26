@@ -6,8 +6,9 @@
 // 入口。
 //
 // 中内容区两态：列表态（未选会话）= 分页会话列表（每页 20/50/100）；会话态
-// = 标题行 + 对话流（session-detail，其余统计全在右栏）。窄容器（< 48rem ≈
-// 768 档）左树收成工具条下拉、右栏折叠为浮动按钮开抽屉。
+// = 标题行 + 对话流（session-detail，其余统计全在右栏）。窄容器让位分两档：
+// < 48rem（768 档）左树先收成工具条下拉；< 58rem（928 档）右栏再折叠为
+// 浮动按钮开抽屉（门槛推导见 stats-rail）——导航优先级高于统计。
 //
 // Pure rendering only — all state, queries, mutations and the optimistic
 // favorite / pending-group handling live in useSessionsBrowser (./use-sessions-
@@ -17,7 +18,7 @@
 import dayjs from "dayjs"
 import relativeTime from "dayjs/plugin/relativeTime"
 import { MessagesSquare, Search, Star, Trash2, X } from "lucide-react"
-import { useState } from "react"
+import { type ReactNode, useState } from "react"
 import { useTranslation } from "react-i18next"
 import { ConfirmDialog } from "@/components/confirm-dialog"
 import { DateRangeChip } from "@/components/date-range-chip"
@@ -59,7 +60,7 @@ import { PAGE_SIZES, useSessionsBrowser } from "../use-sessions-browser"
 import { GroupCreateDialog } from "./group-create-dialog"
 import { SessionDetail } from "./session-detail"
 import { SessionTree } from "./session-tree"
-import { StatsRail, type StatsScopeTag } from "./stats-rail"
+import { NarrowStatsTrigger, StatsRail, type StatsScopeTag } from "./stats-rail"
 
 dayjs.extend(relativeTime)
 
@@ -103,13 +104,32 @@ export function SessionsView() {
         }
       : null
 
+  // 统计数据切片：右栏本体与窄容器浮卡入口（hover 出小卡）消费同一份。
+  const statsData = {
+    scopeTag,
+    scopeLabel,
+    aggregate: b.selectionAggregate,
+    session: preview,
+    sessionStats,
+    transcript: b.transcript,
+    transcriptLoading: b.transcriptLoading,
+    deviceLabel: (id: string) => b.deviceLabel.get(id) ?? id.slice(0, 8),
+    projectIdentity,
+  }
+
   return (
-    // @container 驱动工作台自身的折叠（48rem ≈ 768 档树/右栏让位；64rem ≈
-    // 1024 档右栏卡两列）——量的是内容区自身宽度，主导航折叠不牵动它。
+    // @container/sessions 是工作台唯一的响应式坐标系：60rem 导航收窄条 /
+    // 48rem 左树上台 / 76rem 右栏上台（四列几何真正并存且留余量的宽度，见
+    // stats-rail 头注；右栏恒宽 256px 不再分级加宽）。所有组件（含中列内部
+    // 的轮次导航与统计图标）
+    // 一律用 @min-*/@max-*/sessions: 引用这把尺——曾各找最近祖先容器，两层
+    // 嵌套尺让「图标与右栏同屏」「右栏在而导航没了」先后翻车。左树 ≥48rem
+    // 恒在、不让位（曾让树在 ≥58 让位——那覆盖了几乎所有真实窗口，等于树
+    // 常年消失，已撤）。主导航折叠不牵动它。
     // 高度模型：本视图在外壳是 fill 型（App 的 FILL_VIEWS 直挂 main flex
     // 列），高度严格 = 视口剩余空间、无外层滚动；下面整条链 min-h-0 +
     // 各面板自带滚动容器。
-    <div className="@container flex min-h-0 flex-1 flex-col gap-3">
+    <div className="@container/sessions flex min-h-0 flex-1 flex-col gap-3">
       <WorkbenchToolbar b={b} />
 
       <div className="flex min-h-0 flex-1 gap-3">
@@ -133,9 +153,10 @@ export function SessionsView() {
           busyGroupId={b.busyGroupId}
         />
 
-        {/* 中内容区（两态：列表 / 会话详情）。@container 在此列——详情里的
-            轮次导航列（TURN_NAV_VISIBILITY）以本列宽度显隐。 */}
-        <div className="@container flex min-h-0 min-w-0 flex-1 flex-col">
+        {/* 中内容区（两态：列表 / 会话详情）。不再自带 @container——历史上
+            这把「第二把尺」让详情内部的组件量中列宽度、与外层档位错位；
+            显隐与压缩一律引用外层的 /sessions 命名容器。 */}
+        <div className="flex min-h-0 min-w-0 flex-1 flex-col">
           {preview ? (
             <SessionDetail
               session={preview}
@@ -157,23 +178,14 @@ export function SessionsView() {
               onNext={() => b.openNeighbor(1)}
               canPrev={b.canPrev}
               canNext={b.canNext}
+              statsSlot={<NarrowStatsTrigger {...statsData} />}
             />
           ) : (
-            <ListPane b={b} />
+            <ListPane b={b} statsSlot={<NarrowStatsTrigger {...statsData} />} />
           )}
         </div>
 
-        <StatsRail
-          scopeTag={scopeTag}
-          scopeLabel={scopeLabel}
-          aggregate={b.selectionAggregate}
-          session={preview}
-          sessionStats={sessionStats}
-          transcript={b.transcript}
-          transcriptLoading={b.transcriptLoading}
-          deviceLabel={(id) => b.deviceLabel.get(id) ?? id.slice(0, 8)}
-          projectIdentity={projectIdentity}
-        />
+        <StatsRail {...statsData} />
       </div>
 
       <GroupCreateDialog
@@ -189,12 +201,16 @@ export function SessionsView() {
 
 // ------------------------------------------------------------- 工具条 ----
 
-/** 顶部工具条：时间 pill + 筛选 + 搜索 + 批量操作；窄容器加树容器下拉。 */
+/** 顶部工具条：筛选下拉全部居左（与看板 ControlBar 同序：时间 · 来源 · 模型
+ *  · 项目 · 设备），搜索 + 批量操作居右；窄容器在时间后追加树容器下拉。
+ *  统计入口不在此条——它是内容口径随选中对象走，放在卡片头/详情标题行的
+ *  NarrowStatsTrigger 上。单行不换行——chips 内容自适应（FilterSelect 统一
+ *  策略），一行放不下由工具条横向滚动兜底（scrollbar-none 隐轨道）。 */
 function WorkbenchToolbar({ b }: { b: ReturnType<typeof useSessionsBrowser> }) {
   const { t } = useTranslation()
   return (
-    <div className="@container flex flex-wrap items-center gap-2">
-      <div className="order-1 flex shrink-0 items-center gap-2">
+    <div className="scrollbar-none flex items-center gap-2 overflow-x-auto">
+      <div className="flex shrink-0 items-center gap-2">
         <DateRangeChip
           preset={b.rangePreset}
           fromDay={b.fromDay}
@@ -203,35 +219,16 @@ function WorkbenchToolbar({ b }: { b: ReturnType<typeof useSessionsBrowser> }) {
           onFromDay={b.setFromDay}
           onToDay={b.setToDay}
         />
-        {/* 窄容器的树下拉（左树 < 48rem 让位）：列出当前轨道的容器。 */}
-        <div className="@[48rem]:hidden">
+        {/* 窄档（左树 <48rem 未上台）的容器下拉。 */}
+        <div className="hidden @max-[48rem]/sessions:block">
           <NarrowTreeSelect b={b} />
         </div>
-      </div>
-
-      {/* Search rides line 1 (right-pinned); secondary filters wrap on line 2
-          on narrow containers and inline before the search on wide ones. */}
-      <div className="order-3 ml-auto flex shrink-0 items-center gap-2 @[60rem]:order-4">
-        <BatchBar b={b} />
-        <div className="relative w-56 @[48rem]:w-40 @[60rem]:w-56">
-          <Search className="text-muted-foreground absolute top-1/2 left-2 size-3.5 -translate-y-1/2" />
-          <Input
-            value={b.search}
-            onChange={(e) => b.setSearch(e.target.value)}
-            placeholder={t("sessions.searchPlaceholder")}
-            className="h-8 pl-7"
-            aria-label={t("sessions.searchPlaceholder")}
-          />
-        </div>
-      </div>
-      <div className="order-4 flex w-full min-w-0 flex-wrap items-center gap-2 @[60rem]:order-3 @[60rem]:w-auto">
         <FilterSelect
           ariaLabel={t("sessions.filter.source")}
           allLabel={t("sessions.filter.allSources")}
           options={SOURCE_OPTIONS}
           value={b.source}
           onChange={b.setSource}
-          className="h-8 w-30"
         />
         <FilterSelect
           ariaLabel={t("sessions.filter.model")}
@@ -239,12 +236,11 @@ function WorkbenchToolbar({ b }: { b: ReturnType<typeof useSessionsBrowser> }) {
           options={b.modelOptions.map((m) => ({ value: m, label: m }))}
           value={b.model}
           onChange={b.setModel}
-          className="h-8 w-40"
         />
         {/* 项目维度：共享 filterSlice（与看板 / 日志一致），左树项目轨道的
             选中也写同一份状态。候选取自 distinct-projects 端点，含「未知
             项目」特殊选项。 */}
-        <ProjectSelect className="h-8 w-40" />
+        <ProjectSelect />
         {/* Device dropdown — only in the favorites universe (收藏轨）and only
             when more than one device exists. */}
         {b.deviceOptions.length > 0 && b.track === "favorites" ? (
@@ -257,9 +253,24 @@ function WorkbenchToolbar({ b }: { b: ReturnType<typeof useSessionsBrowser> }) {
             }))}
             value={b.deviceScope}
             onChange={b.setDeviceScope}
-            className="h-8 w-30"
           />
         ) : null}
+      </div>
+
+      {/* 右：批量操作 + 搜索。宽裕时右贴（ml-auto 在无剩余空间时自然失效，
+          不阻止滚动）。 */}
+      <div className="ml-auto flex shrink-0 items-center gap-2">
+        <BatchBar b={b} />
+        <div className="relative w-40 @min-[48rem]/sessions:w-56">
+          <Search className="text-muted-foreground absolute top-1/2 left-2 size-3.5 -translate-y-1/2" />
+          <Input
+            value={b.search}
+            onChange={(e) => b.setSearch(e.target.value)}
+            placeholder={t("sessions.searchPlaceholder")}
+            className="h-8 pl-7"
+            aria-label={t("sessions.searchPlaceholder")}
+          />
+        </div>
       </div>
     </div>
   )
@@ -290,7 +301,6 @@ function BatchBar({ b }: { b: ReturnType<typeof useSessionsBrowser> }) {
         options={b.trackGroups.map((g) => ({ value: g.id, label: g.name }))}
         value=""
         onChange={(v) => void b.batchSetGroup(v || null)}
-        className="h-8 w-32"
         triggerSize="sm"
       />
       <Tooltip>
@@ -371,7 +381,6 @@ function NarrowTreeSelect({ b }: { b: ReturnType<typeof useSessionsBrowser> }) {
         else if (v.startsWith("p:")) b.selectProject(v.slice(2))
         else b.selectGroup(v.slice(2))
       }}
-      className="h-8 w-40"
       fallbackLabel={t("sessions.tree.all")}
     />
   )
@@ -379,10 +388,16 @@ function NarrowTreeSelect({ b }: { b: ReturnType<typeof useSessionsBrowser> }) {
 
 // ------------------------------------------------------------- 中栏 ----
 
-/** 列表态骨架：头部（标题 + 项目路径 + 会话数）+ 表格 + 分页（每页 20/50/
- *  100）。selectedProject 以 != null 判选中："" = 未知项目桶。项目统计头
- *  已上移右栏（项目态项目卡），中栏只管列表。 */
-function ListPane({ b }: { b: ReturnType<typeof useSessionsBrowser> }) {
+/** 列表态骨架：头部（标题 + 项目路径 + 会话数 + 窄容器统计入口）+ 表格 +
+ *  分页（每页 20/50/100）。selectedProject 以 != null 判选中："" = 未知项目
+ *  桶。项目统计头已上移右栏（项目态项目卡），中栏只管列表。 */
+function ListPane({
+  b,
+  statsSlot,
+}: {
+  b: ReturnType<typeof useSessionsBrowser>
+  statsSlot: ReactNode
+}) {
   const { t } = useTranslation()
   const headTitle =
     b.selectedProject != null
@@ -396,22 +411,26 @@ function ListPane({ b }: { b: ReturnType<typeof useSessionsBrowser> }) {
   const headDesc = b.selectedProject ?? ""
 
   return (
-    <Card className="flex min-h-0 min-w-0 flex-1 flex-col">
-      <CardContent className="flex min-h-0 flex-1 flex-col gap-2 p-4">
-        <div className="flex shrink-0 items-baseline gap-2.5 px-0.5">
+    // gap-0 py-0 推掉 Card 基类的 py-(--card-spacing)=20px 节距（与详情卡
+    // 同手法）——内距全权由 CardContent 的 p-3 负责，两态头部节奏一致。
+    <Card className="flex min-h-0 min-w-0 flex-1 flex-col gap-0 py-0">
+      <CardContent className="flex min-h-0 flex-1 flex-col gap-2 p-3">
+        <div className="flex shrink-0 items-center gap-2.5 px-0.5">
           <h3 className="text-sm font-semibold">{headTitle}</h3>
           {headDesc ? (
             <span className="text-muted-foreground min-w-0 flex-1 truncate text-xs">
               {headDesc}
             </span>
           ) : null}
-          {/* DSL 段：会话数 N（与分页条同源的 viewTotal）。 */}
+          {/* DSL 段：会话数 N（与分页条同源的 viewTotal）；其后是窄容器统计
+              入口（宽容器整体隐身，故正常态此行右端就是会话数）。 */}
           <span className="text-muted-foreground ml-auto shrink-0 text-xs tabular-nums">
             {formatMetricSeg(
               t("sessions.stats.sessions"),
               formatCount(b.viewTotal),
             )}
           </span>
+          {statsSlot}
         </div>
 
         <QueryState
@@ -512,21 +531,22 @@ function SessionsTable({
           numeric columns are never stretched by extra horizontal space. min-w
           keeps the title readable below the fixed sum — the outer overflow-auto
           scrolls horizontally instead of squeezing columns into overlap. */}
-      <Table className="table-fixed min-w-[58rem]">
+      {/* 列宽按内容收紧（类型/设备/项目各缩一档），min-w 相应 58→53rem：
+          更小的窗口也能整表放下，标题列的剩余空间少挤一点。 */}
+      <Table className="table-fixed min-w-[53rem]">
         <TableHeader>
           <TableRow>
-            {/* 批量勾选列（定稿 §6 批量操作入口）。 */}
-            <TableHead className="w-9" />
+            {/* 图标槽列（默认星标；悬停时让位给批量勾选框，见 TableCell）。 */}
             <TableHead className="w-9" />
             <TableHead className="max-w-[24rem]">
               {t("sessions.col.title")}
             </TableHead>
-            <TableHead className="w-36">{t("sessions.col.type")}</TableHead>
+            <TableHead className="w-24">{t("sessions.col.type")}</TableHead>
             {showDeviceColumn ? (
-              <TableHead className="w-28">{t("sessions.col.device")}</TableHead>
+              <TableHead className="w-24">{t("sessions.col.device")}</TableHead>
             ) : null}
             {showProjectColumn ? (
-              <TableHead className="w-44">
+              <TableHead className="w-40">
                 {t("sessions.col.project")}
               </TableHead>
             ) : null}
@@ -557,53 +577,66 @@ function SessionsTable({
             return (
               <TableRow
                 key={favKey(s)}
-                // Selected row keeps its tint on hover too — the default
-                // hover:bg-hover would otherwise flash grey over it.
-                className={cn(open && "bg-accent-tint hover:bg-accent-tint")}
+                // group/row 驱动图标槽的悬停换位；selected 行 hover 也保持品
+                // 牌底色（默认 hover:bg-hover 会闪灰盖过它）。
+                className={cn(
+                  "group/row",
+                  open && "bg-accent-tint hover:bg-accent-tint",
+                )}
               >
                 <TableCell>
-                  <Checkbox
-                    checked={isChecked(s)}
-                    onCheckedChange={() => onToggleCheck(s)}
-                    aria-label={t("sessions.batch.check", {
-                      title: s.title || t("sessions.untitled"),
-                    })}
-                  />
-                </TableCell>
-                <TableCell>
-                  <Tooltip>
-                    <TooltipTrigger
-                      render={
-                        <Button
-                          variant="ghost"
-                          size="icon-sm"
-                          aria-label={
+                  {/* 单一图标槽：静止显星标；悬停时批量勾选框原位淡入替换星
+                      标，已勾选恒显勾选框——不为复选框保留整列空占位（用户
+                      定稿）。透明态 pointer-events 关闭，避免挡住下层星标。
+                      DOM 常驻，测试与键盘路径不受影响。 */}
+                  <span className="relative flex size-6 items-center justify-center">
+                    <Tooltip>
+                      <TooltipTrigger
+                        render={
+                          <Button
+                            variant="ghost"
+                            size="icon-sm"
+                            aria-label={
+                              fav
+                                ? t("sessions.row.unfavorite")
+                                : t("sessions.row.favorite")
+                            }
+                            onClick={(e: React.MouseEvent) => {
+                              e.stopPropagation()
+                              onToggleFavorite(s)
+                            }}
+                            className={cn("absolute", isChecked(s) && "hidden")}
+                          />
+                        }
+                      >
+                        <Star
+                          className={cn(
+                            "size-4",
                             fav
-                              ? t("sessions.row.unfavorite")
-                              : t("sessions.row.favorite")
-                          }
-                          onClick={(e: React.MouseEvent) => {
-                            e.stopPropagation()
-                            onToggleFavorite(s)
-                          }}
+                              ? "fill-accent-brand text-accent-brand"
+                              : "text-muted-foreground",
+                          )}
                         />
-                      }
-                    >
-                      <Star
-                        className={cn(
-                          "size-4",
-                          fav
-                            ? "fill-accent-brand text-accent-brand"
-                            : "text-muted-foreground",
-                        )}
-                      />
-                    </TooltipTrigger>
-                    <TooltipContent>
-                      {fav
-                        ? t("sessions.row.unfavorite")
-                        : t("sessions.row.favorite")}
-                    </TooltipContent>
-                  </Tooltip>
+                      </TooltipTrigger>
+                      <TooltipContent>
+                        {fav
+                          ? t("sessions.row.unfavorite")
+                          : t("sessions.row.favorite")}
+                      </TooltipContent>
+                    </Tooltip>
+                    <Checkbox
+                      checked={isChecked(s)}
+                      onCheckedChange={() => onToggleCheck(s)}
+                      aria-label={t("sessions.batch.check", {
+                        title: s.title || t("sessions.untitled"),
+                      })}
+                      className={cn(
+                        "absolute transition-opacity",
+                        !isChecked(s) &&
+                          "pointer-events-none opacity-0 group-hover/row:pointer-events-auto group-hover/row:opacity-100 focus-visible:pointer-events-auto focus-visible:opacity-100",
+                      )}
+                    />
+                  </span>
                 </TableCell>
                 <TableCell>
                   {/* trackCursorAxis: the trigger is the full column width, so

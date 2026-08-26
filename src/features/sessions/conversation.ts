@@ -151,6 +151,18 @@ export function conversationLayout(
   return { turnOf, attachedTo, toolsOf, looseGroup }
 }
 
+/** 这条消息在虚拟流里是否拥有自己的可见行：被助手卡吸收的工具行与 loose 组
+ *  的非首行都渲染在别处，它们自身的索引必须贡献零高度。判定必须在行内边距
+ *  壳之前短路——壳照包、内容却返回 null 时会留下只剩 padding 的空壳行，被
+ *  用户看成「空消息」。Pure。 */
+export function ownsFlowRow(
+  m: SessionMessage,
+  layout: ConversationLayout,
+): boolean {
+  if (m.role !== "tool") return true
+  return layout.looseGroup.get(m.uuid)?.[0]?.uuid === m.uuid
+}
+
 /** Keys probed (in order) for the `Write · path`-style title summary — the
  *  argument field each common tool carries. Not exhaustive by design: a miss
  *  falls through to the first string-valued key, then to the raw text. */
