@@ -14,9 +14,9 @@
 // does not parse to an object (half-broken JSON is never swallowed: the
 // editor's in-progress edit survives until it parses again). The round-trip
 // rules live in the codecs (codecs/claude.ts etc.) as pure functions; the
-// guard itself is lib/json's `guardedRewrite`. On save the snapshot is
-// normalized via the codec helpers, which preserve every field the form does
-// not own.
+// guard itself is lib/json's `guardedRewrite`. Draft seeding on open and
+// save-time finalization go through the per-app ports in codecs/draft — the
+// sheet itself carries no app-specific step.
 
 import { RefreshCw } from "lucide-react"
 import { useEffect, useState } from "react"
@@ -40,6 +40,9 @@ import {
   SheetTitle,
 } from "@/components/ui/sheet"
 import { Textarea } from "@/components/ui/textarea"
+// 草稿种子 / 保存收敛端口（codecs/draft）：按 app 分派的纯函数,骨架不内联
+// 任何 app 特殊步骤——不进 derive 聚合重导出（保持 draft → derive 单向）。
+import { finalizeDraft, seedDraftText } from "@/features/providers/codecs/draft"
 import { ClaudeFormFields } from "@/features/providers/components/claude-form-fields"
 import {
   BasicSection,
@@ -54,26 +57,20 @@ import {
   configApiKey,
   configEndpoint,
   emptyProvider,
-  extractTemplateVars,
   geminiApiKey,
   geminiBaseUrl,
   geminiModel,
   grokConfigToml,
-  MODEL_ROLES,
   metaTemplateValues,
-  normalizeBasicFieldsInText,
   openCodeApiKey,
   openCodeBaseUrl,
   providerFromPreset,
   providerLiveManaged,
-  replaceTemplateVarsInText,
   restoreTemplatePlaceholders,
   withCodexApiKey,
   withCodexConfigToml,
   withGeminiEnv,
   withGrokConfigToml,
-  withMetaTemplateValues,
-  withRoleOneMInText,
 } from "@/features/providers/derive"
 import {
   bucketFetchModelsError,
@@ -150,21 +147,13 @@ export function ProviderFormSheet({
     // 已被物化，先把这些值还原回占位符，重编体验与从预设新建一致。
     const values = metaTemplateValues(b.meta)
     setName(b.name)
-    // 真·新建（非复制）默认 1M：对支持 1M 的角色模型加 [1M] 标记（空模型无
-    // 标记可加，跳过）；编辑/复制保留既有配置原样。
+    // 编辑/复制保留既有配置原样；真·新建的种子策略按 app 分派到
+    // seedDraftText（claude 默认 [1M]，其余 app 恒等——"{}" 留成 "{}"）。
     const baseText =
       Object.keys(values).length > 0
         ? restoreTemplatePlaceholders(b.settingsConfig, values)
         : b.settingsConfig
-    setConfigText(
-      editing
-        ? baseText
-        : MODEL_ROLES.reduce(
-            (text, def) =>
-              def.supportsOneM ? withRoleOneMInText(text, def.id, true) : text,
-            baseText,
-          ),
-    )
+    setConfigText(editing ? baseText : seedDraftText(effectiveApp, baseText))
     setTemplateValues(values)
     // 自动应用开关：新建/复制默认开（编辑任一模型同步全部角色），编辑已有
     // 供应商默认关（不动用户配置）。
@@ -368,33 +357,28 @@ export function ProviderFormSheet({
       })
       return
     }
-    // Claude：把模板变量物化进快照；仍残留 `${VAR}` 说明有变量未填——拒绝
-    // 保存，避免把字面量占位符写进 live 配置（后端切换时同样拦截）。物化后
-    // 做字段归一（normalizeBasicFieldsInText：端点收尾 trim——输入过程中不
-    // trim，保存才 trim；空端点 / 空 key 清键）——字段值已直写 configText，
-    // 归一从物化后的文本重读，不再经 withBasicFields 二次合并。其它 app：
-    // configText 即真相源，原样持久化。
-    let settingsConfig = configText
-    let meta = base.meta
-    if (effectiveApp === "claude") {
-      settingsConfig = replaceTemplateVarsInText(configText, templateValues)
-      const unfilled = extractTemplateVars(settingsConfig)
-      if (unfilled.length > 0) {
-        toast.error(
-          t("providers.toast.unfilledTemplateVars", {
-            vars: unfilled.map((v) => `\${${v}}`).join(", "),
-          }),
-        )
-        return
-      }
-      settingsConfig = normalizeBasicFieldsInText(settingsConfig)
-      // 模板变量值随 meta 记录，重编时预填输入框（live 文件不落 meta）。
-      meta = withMetaTemplateValues(base.meta, templateValues)
+    // 按 app 收敛保存结果（finalizeDraft）：claude 物化模板变量并校验残留、
+    // 归一基础字段、meta 记录变量值；其余 app 的 configText 即真相源，原样
+    // 持久化。返回不 ok（有 `${VAR}` 未填值）则拒绝保存——字面量占位符绝不
+    // 写进快照/live 配置（后端切换时同样拦截）。
+    const finalized = finalizeDraft(
+      effectiveApp,
+      configText,
+      templateValues,
+      base.meta,
+    )
+    if (!finalized.ok) {
+      toast.error(
+        t("providers.toast.unfilledTemplateVars", {
+          vars: finalized.unfilled.map((v) => `\${${v}}`).join(", "),
+        }),
+      )
+      return
     }
     const next = {
       ...base,
-      settingsConfig,
-      meta,
+      settingsConfig: finalized.settingsConfig,
+      meta: finalized.meta,
       app: effectiveApp,
       name: name.trim(),
     }
