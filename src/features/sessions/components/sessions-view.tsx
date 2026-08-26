@@ -69,7 +69,10 @@ import {
 } from "../derive"
 import { highlight } from "../highlight"
 import { sessionAgentKind, sessionSourceLabel } from "../source-labels"
-import { useSessionsBrowser } from "../use-sessions-browser"
+import {
+  type UseSessionsBrowser,
+  useSessionsBrowser,
+} from "../use-sessions-browser"
 import { GroupCreateDialog } from "./group-create-dialog"
 import { SessionDetail } from "./session-detail"
 import { SessionTree } from "./session-tree"
@@ -136,7 +139,7 @@ export function SessionsView() {
     // 列），高度严格 = 视口剩余空间、无外层滚动；下面整条链 min-h-0 +
     // 各面板自带滚动容器。
     <div className="@container/sessions flex min-h-0 flex-1 flex-col gap-3">
-      <WorkbenchToolbar b={b} />
+      <WorkbenchToolbar {...b} />
 
       <div className="flex min-h-0 flex-1 gap-3">
         <SessionTree
@@ -188,7 +191,7 @@ export function SessionsView() {
             />
           ) : (
             <ListPane
-              b={b}
+              {...b}
               headTitle={scopeLabel}
               headDesc={headDesc}
               statsSlot={<NarrowStatsTrigger {...statsData} />}
@@ -216,8 +219,57 @@ export function SessionsView() {
  *  · 项目 · 设备），搜索 + 批量操作居右；窄容器在时间后追加树容器下拉。
  *  统计入口不在此条——它是内容口径随选中对象走，放在卡片头/详情标题行的
  *  NarrowStatsTrigger 上。单行不换行——chips 内容自适应（FilterSelect 统一
- *  策略），一行放不下由工具条横向滚动兜底（scrollbar-none 隐轨道）。 */
-function WorkbenchToolbar({ b }: { b: ReturnType<typeof useSessionsBrowser> }) {
+ *  策略），一行放不下由工具条横向滚动兜底（scrollbar-none 隐轨道）。
+ *
+ *  接口按列收窄（架构审查候选⑧）：不再接收整包浏览器对象——此处（含转传给
+ *  BatchBar / NarrowTreeSelect 的键）与其它子件一样只声明自己的依赖清单，
+ *  hook 出口删键即在此处编译失败。 */
+function WorkbenchToolbar({
+  track,
+  search,
+  setSearch,
+  rangePreset,
+  fromDay,
+  toDay,
+  setRangePreset,
+  setFromDay,
+  setToDay,
+  selectedProject,
+  selectedGroupId,
+  projectBuckets,
+  trackGroups,
+  selectAll,
+  selectProject,
+  selectGroup,
+  checkedCount,
+  batchFavorite,
+  batchSetGroup,
+  batchDelete,
+  clearChecked,
+}: Pick<
+  UseSessionsBrowser,
+  | "track"
+  | "search"
+  | "setSearch"
+  | "rangePreset"
+  | "fromDay"
+  | "toDay"
+  | "setRangePreset"
+  | "setFromDay"
+  | "setToDay"
+  | "selectedProject"
+  | "selectedGroupId"
+  | "projectBuckets"
+  | "trackGroups"
+  | "selectAll"
+  | "selectProject"
+  | "selectGroup"
+  | "checkedCount"
+  | "batchFavorite"
+  | "batchSetGroup"
+  | "batchDelete"
+  | "clearChecked"
+>) {
   const { t } = useTranslation()
   // 来源 / 模型维度（架构审查候选⑦）：共享 useFacetDimension 直连全局
   // filter——候选口径（窗口内 distinct + 已选值并回）与看板 / 日志对齐，
@@ -233,16 +285,25 @@ function WorkbenchToolbar({ b }: { b: ReturnType<typeof useSessionsBrowser> }) {
     <div className="scrollbar-none flex items-center gap-2 overflow-x-auto">
       <div className="flex shrink-0 items-center gap-2">
         <DateRangeChip
-          preset={b.rangePreset}
-          fromDay={b.fromDay}
-          toDay={b.toDay}
-          onPreset={b.setRangePreset}
-          onFromDay={b.setFromDay}
-          onToDay={b.setToDay}
+          preset={rangePreset}
+          fromDay={fromDay}
+          toDay={toDay}
+          onPreset={setRangePreset}
+          onFromDay={setFromDay}
+          onToDay={setToDay}
         />
         {/* 窄档（左树 <48rem 未上台）的容器下拉。 */}
         <div className="hidden @max-[48rem]/sessions:block">
-          <NarrowTreeSelect b={b} />
+          <NarrowTreeSelect
+            track={track}
+            projectBuckets={projectBuckets}
+            trackGroups={trackGroups}
+            selectedProject={selectedProject}
+            selectedGroupId={selectedGroupId}
+            selectAll={selectAll}
+            selectProject={selectProject}
+            selectGroup={selectGroup}
+          />
         </div>
         {anySources.length > 0 ? (
           <FilterSelect
@@ -267,18 +328,25 @@ function WorkbenchToolbar({ b }: { b: ReturnType<typeof useSessionsBrowser> }) {
         {/* 设备维度下拉（架构审查候选⑥）：复用看板/日志的共享控件——读写同是
             全局 filter.device_scope，显隐策略（≤1 台不渲染）内聚在控件里；本轨
             只管收藏宇宙的门控。 */}
-        {b.track === "favorites" ? <DeviceScopeControl /> : null}
+        {track === "favorites" ? <DeviceScopeControl /> : null}
       </div>
 
       {/* 右：批量操作 + 搜索。宽裕时右贴（ml-auto 在无剩余空间时自然失效，
           不阻止滚动）。 */}
       <div className="ml-auto flex shrink-0 items-center gap-2">
-        <BatchBar b={b} />
+        <BatchBar
+          checkedCount={checkedCount}
+          trackGroups={trackGroups}
+          batchFavorite={batchFavorite}
+          batchSetGroup={batchSetGroup}
+          batchDelete={batchDelete}
+          clearChecked={clearChecked}
+        />
         <div className="relative w-40 @min-[48rem]/sessions:w-56">
           <Search className="text-muted-foreground absolute top-1/2 left-2 size-3.5 -translate-y-1/2" />
           <Input
-            value={b.search}
-            onChange={(e) => b.setSearch(e.target.value)}
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
             placeholder={t("sessions.searchPlaceholder")}
             className="h-8 pl-7"
             aria-label={t("sessions.searchPlaceholder")}
@@ -291,29 +359,40 @@ function WorkbenchToolbar({ b }: { b: ReturnType<typeof useSessionsBrowser> }) {
 
 /** 批量操作入口（定稿 §6）：勾选后出现——批量收藏 / 归组（下拉选组）/
  *  删除（#91 软删除，ConfirmDialog 二次确认后执行）+ 清除多选。 */
-function BatchBar({ b }: { b: ReturnType<typeof useSessionsBrowser> }) {
+function BatchBar({
+  checkedCount,
+  trackGroups,
+  batchFavorite,
+  batchSetGroup,
+  batchDelete,
+  clearChecked,
+}: Pick<
+  UseSessionsBrowser,
+  | "checkedCount"
+  | "trackGroups"
+  | "batchFavorite"
+  | "batchSetGroup"
+  | "batchDelete"
+  | "clearChecked"
+>) {
   const { t } = useTranslation()
   const [deleteOpen, setDeleteOpen] = useState(false)
-  if (b.checkedCount === 0) return null
+  if (checkedCount === 0) return null
   return (
     <div className="flex items-center gap-1.5">
       <span className="bg-accent-tint text-accent-brand-strong rounded-full px-2 py-0.5 text-xs tabular-nums">
-        {t("sessions.batch.selected", { n: b.checkedCount })}
+        {t("sessions.batch.selected", { n: checkedCount })}
       </span>
-      <Button
-        variant="outline"
-        size="sm"
-        onClick={() => void b.batchFavorite()}
-      >
+      <Button variant="outline" size="sm" onClick={() => void batchFavorite()}>
         <Star className="size-3.5" />
         {t("sessions.batch.favorite")}
       </Button>
       <FilterSelect
         ariaLabel={t("sessions.batch.group")}
         allLabel={t("sessions.batch.group")}
-        options={b.trackGroups.map((g) => ({ value: g.id, label: g.name }))}
+        options={trackGroups.map((g) => ({ value: g.id, label: g.name }))}
         value=""
-        onChange={(v) => void b.batchSetGroup(v || null)}
+        onChange={(v) => void batchSetGroup(v || null)}
         triggerSize="sm"
       />
       <Tooltip>
@@ -338,7 +417,7 @@ function BatchBar({ b }: { b: ReturnType<typeof useSessionsBrowser> }) {
               variant="ghost"
               size="icon-sm"
               aria-label={t("sessions.batch.clear")}
-              onClick={b.clearChecked}
+              onClick={clearChecked}
               className="text-muted-foreground"
             />
           }
@@ -351,12 +430,12 @@ function BatchBar({ b }: { b: ReturnType<typeof useSessionsBrowser> }) {
         open={deleteOpen}
         onOpenChange={setDeleteOpen}
         title={t("sessions.delete.title")}
-        description={t("sessions.delete.desc", { n: b.checkedCount })}
+        description={t("sessions.delete.desc", { n: checkedCount })}
         confirmLabel={t("sessions.delete.confirm")}
         onConfirm={() => {
           // Close-then-delete：确认即关对话再执行，结果由汇总 toast 反馈。
           setDeleteOpen(false)
-          void b.batchDelete()
+          void batchDelete()
         }}
       />
     </div>
@@ -367,17 +446,36 @@ function BatchBar({ b }: { b: ReturnType<typeof useSessionsBrowser> }) {
  *  是树容器的镜像控件，会话维度不进树——resolveContainer 传 null 得到纯树视
  *  图；p:/g: 值编码与反解（treeSelectValue / parseTreeSelectValue）收口在
  *  derive。项目 identity 为 ""（未知项目桶）时编码为 "p:"，round-trip 安全。 */
-function NarrowTreeSelect({ b }: { b: ReturnType<typeof useSessionsBrowser> }) {
+function NarrowTreeSelect({
+  track,
+  projectBuckets,
+  trackGroups,
+  selectedProject,
+  selectedGroupId,
+  selectAll,
+  selectProject,
+  selectGroup,
+}: Pick<
+  UseSessionsBrowser,
+  | "track"
+  | "projectBuckets"
+  | "trackGroups"
+  | "selectedProject"
+  | "selectedGroupId"
+  | "selectAll"
+  | "selectProject"
+  | "selectGroup"
+>) {
   const { t } = useTranslation()
   const options: FilterOption[] =
-    b.track === "projects"
-      ? b.projectBuckets.map((n) => ({
+    track === "projects"
+      ? projectBuckets.map((n) => ({
           value: `p:${n.project}`,
           label: projectBasename(n.project) || t("sessions.tree.noProject"),
         }))
-      : b.trackGroups.map((g) => ({ value: `g:${g.id}`, label: g.name }))
+      : trackGroups.map((g) => ({ value: `g:${g.id}`, label: g.name }))
   const value = treeSelectValue(
-    resolveContainer(null, b.selectedProject, b.selectedGroupId),
+    resolveContainer(null, selectedProject, selectedGroupId),
   )
   return (
     <FilterSelect
@@ -387,9 +485,9 @@ function NarrowTreeSelect({ b }: { b: ReturnType<typeof useSessionsBrowser> }) {
       value={value}
       onChange={(v) => {
         const action = parseTreeSelectValue(v)
-        if (action.type === "all") b.selectAll()
-        else if (action.type === "project") b.selectProject(action.id)
-        else b.selectGroup(action.id)
+        if (action.type === "all") selectAll()
+        else if (action.type === "project") selectProject(action.id)
+        else selectGroup(action.id)
       }}
       fallbackLabel={t("sessions.tree.all")}
     />
@@ -403,12 +501,56 @@ function NarrowTreeSelect({ b }: { b: ReturnType<typeof useSessionsBrowser> }) {
  *  containerLabel，无第二份判定链）。项目统计头已上移右栏（项目态项目卡），
  *  中栏只管列表。 */
 function ListPane({
-  b,
+  isLoading,
+  isFetching,
+  error,
+  visibleSessions,
+  search,
+  track,
+  effectiveFavorite,
+  toggleFavorite,
+  setPreview,
+  preview,
+  showDeviceColumn,
+  deviceLabels,
+  isChecked,
+  toggleCheck,
+  selectedProject,
+  nestedSessionKeys,
+  viewTotal,
+  page,
+  totalPages,
+  goToPage,
+  pageSize,
+  setPageSize,
   headTitle,
   headDesc,
   statsSlot,
-}: {
-  b: ReturnType<typeof useSessionsBrowser>
+}: Pick<
+  UseSessionsBrowser,
+  | "isLoading"
+  | "isFetching"
+  | "error"
+  | "visibleSessions"
+  | "search"
+  | "track"
+  | "effectiveFavorite"
+  | "toggleFavorite"
+  | "setPreview"
+  | "preview"
+  | "showDeviceColumn"
+  | "deviceLabels"
+  | "isChecked"
+  | "toggleCheck"
+  | "selectedProject"
+  | "nestedSessionKeys"
+  | "viewTotal"
+  | "page"
+  | "totalPages"
+  | "goToPage"
+  | "pageSize"
+  | "setPageSize"
+> & {
   headTitle: string
   headDesc: string
   statsSlot: ReactNode
@@ -432,61 +574,61 @@ function ListPane({
           <span className="text-muted-foreground ml-auto shrink-0 text-xs tabular-nums">
             {formatMetricSeg(
               t("sessions.stats.sessions"),
-              formatCount(b.viewTotal),
+              formatCount(viewTotal),
             )}
           </span>
           {statsSlot}
         </div>
 
         <QueryState
-          isLoading={b.isLoading}
-          error={b.error}
-          isEmpty={!b.isLoading && b.visibleSessions.length === 0}
+          isLoading={isLoading}
+          error={error}
+          isEmpty={!isLoading && visibleSessions.length === 0}
           emptyIcon={MessagesSquare}
           // Empty means different things per universe: 项目/分组轨 = nothing
           // collected yet (go run a CLI), 收藏轨 = nothing starred yet. Same
           // copy for both would mislead.
           emptyLabel={
-            b.search
+            search
               ? t("sessions.noMatch")
-              : b.track === "favorites"
+              : track === "favorites"
                 ? t("sessions.empty.favoritesTitle")
                 : t("sessions.empty.title")
           }
           emptyDescription={
-            b.search
+            search
               ? undefined
-              : b.track === "favorites"
+              : track === "favorites"
                 ? t("sessions.empty.favoritesDesc")
                 : t("sessions.empty.desc")
           }
         >
           <SessionsTable
-            rows={b.visibleSessions}
-            effectiveFavorite={b.effectiveFavorite}
-            onToggleFavorite={b.toggleFavorite}
-            onOpen={b.setPreview}
-            showDeviceColumn={b.showDeviceColumn}
-            deviceLabels={b.deviceLabels}
-            openFavKey={b.preview ? favKey(b.preview) : null}
-            search={b.search}
-            isChecked={b.isChecked}
-            onToggleCheck={b.toggleCheck}
-            showProjectColumn={b.selectedProject == null}
-            nestedKeys={b.nestedSessionKeys}
+            rows={visibleSessions}
+            effectiveFavorite={effectiveFavorite}
+            onToggleFavorite={toggleFavorite}
+            onOpen={setPreview}
+            showDeviceColumn={showDeviceColumn}
+            deviceLabels={deviceLabels}
+            openFavKey={preview ? favKey(preview) : null}
+            search={search}
+            isChecked={isChecked}
+            onToggleCheck={toggleCheck}
+            showProjectColumn={selectedProject == null}
+            nestedKeys={nestedSessionKeys}
           />
         </QueryState>
 
         <PaginationBar
-          page={b.page}
-          totalPages={b.totalPages}
-          total={b.viewTotal}
-          loading={b.isFetching}
-          onPageChange={b.goToPage}
+          page={page}
+          totalPages={totalPages}
+          total={viewTotal}
+          loading={isFetching}
+          onPageChange={goToPage}
           pageSize={{
-            value: b.pageSize,
+            value: pageSize,
             options: PAGE_SIZES,
-            onChange: b.setPageSize,
+            onChange: setPageSize,
           }}
         />
       </CardContent>
