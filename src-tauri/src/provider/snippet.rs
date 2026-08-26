@@ -197,46 +197,53 @@ fn validate_gemini_extras(obj: &serde_json::Value) -> AppResult<()> {
 /// 发往供应商端点。codex / grok 片段写的是 `mcp_servers` 等（不经 LLM 端点），
 /// **不**用本函数（允许 `mcp_servers` 含凭据），只禁身份键。`import_live` 反向
 /// 导入也用它判定「片段候选」里剔除凭据键（前后端各一镜像，ADR-0010）。
+/// 凭据键精确匹配表（转大写后全等）。模块级化（原函数体内私有 const）以便
+/// security parity 测试从同一份权威组装 fixture——表本身仍只有这一处。
+pub(crate) const SENSITIVE_EXACT: &[&str] = &[
+    "APIKEY",
+    "API_KEY",
+    "TOKEN",
+    "SECRET",
+    "PASSWORD",
+    "CREDENTIALS",
+];
+
+/// 凭据键后缀表（转大写后以此结尾）。
+pub(crate) const SENSITIVE_SUFFIXES: &[&str] = &[
+    "_KEY",
+    "_API_KEY",
+    "_ACCESS_KEY",
+    "_ACCESS_KEY_ID",
+    "_KEY_ID",
+    "_PRIVATE_KEY",
+    "_APIKEY",
+    "_ACCESSKEY",
+    "_SECRETKEY",
+    "_APITOKEN",
+    "_AUTH_TOKEN",
+    "_TOKEN",
+    "_PAT",
+    "_PWD",
+    "_PASS",
+    "_PASSPHRASE",
+    "_CREDS",
+];
+
+/// 凭据键子串表（转大写后包含）。
+pub(crate) const SENSITIVE_CONTAINS: &[&str] = &[
+    "SECRET",
+    "PASSWORD",
+    "PASSWD",
+    "CREDENTIAL",
+    "PRIVATE_KEY",
+    "BEARER_TOKEN",
+];
+
 pub(crate) fn is_sensitive_config_key(name: &str) -> bool {
-    const EXACT: &[&str] = &[
-        "APIKEY",
-        "API_KEY",
-        "TOKEN",
-        "SECRET",
-        "PASSWORD",
-        "CREDENTIALS",
-    ];
-    const SUFFIXES: &[&str] = &[
-        "_KEY",
-        "_API_KEY",
-        "_ACCESS_KEY",
-        "_ACCESS_KEY_ID",
-        "_KEY_ID",
-        "_PRIVATE_KEY",
-        "_APIKEY",
-        "_ACCESSKEY",
-        "_SECRETKEY",
-        "_APITOKEN",
-        "_AUTH_TOKEN",
-        "_TOKEN",
-        "_PAT",
-        "_PWD",
-        "_PASS",
-        "_PASSPHRASE",
-        "_CREDS",
-    ];
-    const CONTAINS: &[&str] = &[
-        "SECRET",
-        "PASSWORD",
-        "PASSWD",
-        "CREDENTIAL",
-        "PRIVATE_KEY",
-        "BEARER_TOKEN",
-    ];
     let upper = name.to_ascii_uppercase();
-    EXACT.iter().any(|e| &upper == e)
-        || SUFFIXES.iter().any(|s| upper.ends_with(s))
-        || CONTAINS.iter().any(|c| upper.contains(c))
+    SENSITIVE_EXACT.iter().any(|e| &upper == e)
+        || SENSITIVE_SUFFIXES.iter().any(|s| upper.ends_with(s))
+        || SENSITIVE_CONTAINS.iter().any(|c| upper.contains(c))
 }
 
 /// 解析片段：空串/纯空白 → `{}`；非法 JSON 或非对象 → `Err`。

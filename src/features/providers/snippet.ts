@@ -9,8 +9,9 @@
 // `provider::snippet::is_sensitive_config_key`，**逐字一致**（ADR-0010：
 // 前后端判定必须一致，否则后端拦了、前端还允许写回）。
 
-/** 写盘路径承认的受控字段（镜像后端常量；仅供 UI 提示使用，写盘权威在后端）。 */
-const CONTROLLED_FIELDS = [
+/** 写盘路径承认的受控字段（镜像后端常量；仅供 UI 提示使用，写盘权威在后端）。
+ *  导出仅供 security-parity.test.ts 做跨端一致性断言（架构审查候选⑩）。 */
+export const CONTROLLED_FIELDS = [
   "env",
   "includeCoAuthoredBy",
   "attribution",
@@ -182,8 +183,9 @@ export function pairModelNameKeys(keys: string[]): string[] {
 // env、随请求发往对方 base_url）。仅 claude / gemini 片段用（两者写 env 认证
 // 通道）；codex / grok 片段写 mcp_servers（不经 LLM 端点），允许凭据，不用本判定。
 
-/** 凭据键精确匹配表（转大写后全等）。与后端 EXACT 逐字一致。 */
-const SENSITIVE_EXACT = [
+/** 凭据键精确匹配表（转大写后全等）。与后端 EXACT 逐字一致——一致性由
+ *  security-parity 测试机器裁决（架构审查候选⑩），不再依赖注释人肉守护。 */
+export const SENSITIVE_EXACT = [
   "APIKEY",
   "API_KEY",
   "TOKEN",
@@ -192,8 +194,8 @@ const SENSITIVE_EXACT = [
   "CREDENTIALS",
 ] as const
 
-/** 凭据键后缀表（转大写后以此结尾）。与后端 SUFFIXES 逐字一致。 */
-const SENSITIVE_SUFFIXES = [
+/** 凭据键后缀表（转大写后以此结尾）。与后端 SUFFIXES 逐字一致（同上）。 */
+export const SENSITIVE_SUFFIXES = [
   "_KEY",
   "_API_KEY",
   "_ACCESS_KEY",
@@ -213,8 +215,8 @@ const SENSITIVE_SUFFIXES = [
   "_CREDS",
 ] as const
 
-/** 凭据键子串表（转大写后包含）。与后端 CONTAINS 逐字一致。 */
-const SENSITIVE_CONTAINS = [
+/** 凭据键子串表（转大写后包含）。与后端 CONTAINS 逐字一致（同上）。 */
+export const SENSITIVE_CONTAINS = [
   "SECRET",
   "PASSWORD",
   "PASSWD",

@@ -35,3 +35,81 @@ pub mod live_opencode;
 pub mod model_fetch;
 pub mod snippet;
 pub mod sync;
+
+// ------------------------------------------------------------ 安全 parity --
+//
+// ADR-0010 的第二道防线（架构审查候选⑩）：受控字段与凭据键模式的前端 TS 镜像
+// （src/features/providers/snippet.ts）过去只靠注释里的「必须逐字一致」人肉
+// 守护；现在 Rust 权威组装出 fixture JSON（repo 内
+// src/features/providers/security-parity.json），本测试裁决它是否与权威同步，
+// vitest 侧的 security-parity.test.ts 裁决 TS 镜像是否与同一份 fixture 等价
+// ——两侧各自独立红灯，改任一侧都必须重新生成 fixture 并更新另一侧。
+#[cfg(test)]
+mod security_parity {
+    use serde_json::json;
+
+    use super::live::CONTROLLED_FIELDS;
+    use super::snippet::{SENSITIVE_CONTAINS, SENSITIVE_EXACT, SENSITIVE_SUFFIXES};
+    use crate::model::App;
+
+    const FIXTURE_REL: &str = "../src/features/providers/security-parity.json";
+
+    fn file_names(paths: Vec<std::path::PathBuf>) -> Vec<String> {
+        paths
+            .iter()
+            .map(|p| p.file_name().unwrap().to_string_lossy().into_owned())
+            .collect()
+    }
+
+    /// 从 Rust 权威组装期望值。live 文件名取自 `App::live_paths` 与
+    /// opencode 的存储路径函数——不是手抄第二份字面量。
+    fn authoritative_tables() -> serde_json::Value {
+        let names = |app: App| -> Vec<String> {
+            let paths = app.live_paths().expect("home dir resolves in tests");
+            file_names(paths.expect("单激活 app 均有 live 路径"))
+        };
+        json!({
+            "controlled_fields": CONTROLLED_FIELDS,
+            "sensitive": {
+                "exact": SENSITIVE_EXACT,
+                "suffixes": SENSITIVE_SUFFIXES,
+                "contains": SENSITIVE_CONTAINS,
+            },
+            "live_files": {
+                "claude": names(App::Claude),
+                "codex": names(App::Codex),
+                "gemini": names(App::Gemini),
+                "grok": names(App::Grok),
+                "opencode": file_names(vec![
+                    super::live_opencode::opencode_config_path()
+                        .expect("home dir resolves"),
+                ]),
+            },
+        })
+    }
+
+    #[test]
+    fn ts_mirror_fixture_matches_security_authority() {
+        let expected = authoritative_tables();
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(FIXTURE_REL);
+        if std::env::var("UPDATE_SECURITY_PARITY").as_deref() == Ok("1") {
+            let pretty = serde_json::to_string_pretty(&expected).unwrap();
+            std::fs::write(&path, format!("{pretty}\n")).expect("write parity fixture");
+        }
+        let raw = std::fs::read_to_string(&path).unwrap_or_else(|e| {
+            panic!(
+                "读取 parity fixture 失败（{e}）：{} —— 在仓库根运行 \
+                 `UPDATE_SECURITY_PARITY=1 cargo test security_parity` 生成",
+                path.display()
+            )
+        });
+        let committed: serde_json::Value =
+            serde_json::from_str(&raw).expect("fixture is valid JSON");
+        assert_eq!(
+            committed, expected,
+            "parity fixture 已落后于 Rust 权威 —— 改了受控字段 / 凭据键表 / live 路径？\
+             重新生成：UPDATE_SECURITY_PARITY=1 cargo test security_parity，\
+             并同批次更新 TS 镜像（vitest security-parity.test.ts 会同时给 TS 侧判据）"
+        );
+    }
+}

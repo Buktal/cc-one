@@ -1,0 +1,54 @@
+{
+  "controlled_fields": [
+    "env",
+    "includeCoAuthoredBy",
+    "attribution",
+    "effortLevel",
+    "enabledPlugins",
+    "skipWebFetchPreflight"
+  ],
+  "live_files": {
+    "claude": ["settings.json"],
+    "codex": ["config.toml", "auth.json"],
+    "gemini": [".env", "settings.json"],
+    "grok": ["config.toml"],
+    "opencode": ["opencode.json"]
+  },
+  "sensitive": {
+    "contains": [
+      "SECRET",
+      "PASSWORD",
+      "PASSWD",
+      "CREDENTIAL",
+      "PRIVATE_KEY",
+      "BEARER_TOKEN"
+    ],
+    "exact": [
+      "APIKEY",
+      "API_KEY",
+      "TOKEN",
+      "SECRET",
+      "PASSWORD",
+      "CREDENTIALS"
+    ],
+    "suffixes": [
+      "_KEY",
+      "_API_KEY",
+      "_ACCESS_KEY",
+      "_ACCESS_KEY_ID",
+      "_KEY_ID",
+      "_PRIVATE_KEY",
+      "_APIKEY",
+      "_ACCESSKEY",
+      "_SECRETKEY",
+      "_APITOKEN",
+      "_AUTH_TOKEN",
+      "_TOKEN",
+      "_PAT",
+      "_PWD",
+      "_PASS",
+      "_PASSPHRASE",
+      "_CREDS"
+    ]
+  }
+}
