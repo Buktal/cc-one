@@ -54,7 +54,15 @@ import { PAGE_SIZES } from "@/lib/pagination"
 import { SOURCE_TAGS } from "@/lib/source-tags"
 import { cn } from "@/lib/utils"
 import type { SessionRow } from "@/types/generated/bindings"
-import { ALL_GROUPS, favKey, projectBasename, UNGROUPED } from "../derive"
+import {
+  containerLabel,
+  containerScopeTag,
+  favKey,
+  parseTreeSelectValue,
+  projectBasename,
+  resolveContainer,
+  treeSelectValue,
+} from "../derive"
 import { highlight } from "../highlight"
 import { sessionAgentKind, sessionSourceLabel } from "../source-labels"
 import { useSessionsBrowser } from "../use-sessions-browser"
@@ -73,37 +81,30 @@ export function SessionsView() {
   // that read the field later).
   const preview = b.preview
 
-  // 右栏口径对象名 + 会话粒度统计行（按会话卡的数据源）。selectedProject 用
-  // != null 判空："" 是未知项目桶（哨兵映射后的 identity），真值语义。
-  const scopeLabel = preview
-    ? preview.title || t("sessions.untitled")
-    : b.selectedProject != null
-      ? projectBasename(b.selectedProject) || t("sessions.tree.noProject")
-      : b.selectedGroupId === UNGROUPED
-        ? t("sessions.group.ungrouped")
-        : b.selectedGroupId === ALL_GROUPS
-          ? t("sessions.stats.allSessions")
-          : (b.trackGroups.find((g) => g.id === b.selectedGroupId)?.name ??
-            t("sessions.stats.allSessions"))
+  // 容器选中（架构审查候选⑤）：b.container 是「当前在看谁」的唯一编码，右栏
+  // 口径 tag、口径名与中栏列表头是同一判别联合的两个读端；优先级阶梯（会话 >
+  // 项目 > 分组 > 未分组 > 全部）住在 derive.resolveContainer 的分支次序里。
+  const containerLbl = containerLabel(
+    b.container,
+    (id) => b.trackGroups.find((g) => g.id === id)?.name,
+  )
+  const scopeLabel =
+    "text" in containerLbl ? containerLbl.text : t(containerLbl.key)
   const sessionStats = preview
     ? (b.statsByKey.get(favKey(preview)) ?? null)
     : null
-  // 右栏口径 tag 与项目态身份卡数据：口径由选中对象派生（会话 > 项目 > 分组），
-  // 与 selectionAggregate 的容器判定同一优先级——tab 删除后不再有第二份手设。
-  const groupSelected =
-    b.selectedProject == null && b.selectedGroupId !== ALL_GROUPS
-  const scopeTag: StatsScopeTag = preview
-    ? "session"
-    : groupSelected
-      ? "group"
-      : "project"
+  // 右栏口径 tag 与项目态身份卡数据：口径由选中对象派生，与 selectionAggregate
+  // 的容器切片（containerStatsRows）共用同一份联合——不再有第二份手设。
+  const scopeTag: StatsScopeTag = containerScopeTag(b.container)
   const projectIdentity =
-    !preview && b.selectedProject != null
+    b.container.kind === "project"
       ? {
-          dir: b.selectedProject,
+          dir: b.container.id,
           subagents: b.selectionRows.filter((r) => r.agent_type !== "").length,
         }
       : null
+  // 列表态（无会话打开）的头部：标题读同一份容器联合，副题仅项目桶显示路径。
+  const headDesc = b.container.kind === "project" ? b.container.id : ""
 
   // 统计数据切片：右栏本体与窄容器浮卡入口（hover 出小卡）消费同一份。
   const statsData = {
@@ -182,7 +183,12 @@ export function SessionsView() {
               statsSlot={<NarrowStatsTrigger {...statsData} />}
             />
           ) : (
-            <ListPane b={b} statsSlot={<NarrowStatsTrigger {...statsData} />} />
+            <ListPane
+              b={b}
+              headTitle={scopeLabel}
+              headDesc={headDesc}
+              statsSlot={<NarrowStatsTrigger {...statsData} />}
+            />
           )}
         </div>
 
@@ -351,9 +357,10 @@ function BatchBar({ b }: { b: ReturnType<typeof useSessionsBrowser> }) {
   )
 }
 
-/** 窄容器的容器下拉：全部 + 当前轨道的容器（项目 basename / 组名）。值编码
- *  "p:<dir>" / "g:<id>"，onChange 解码回选中动作。项目 identity 为 ""（未知
- *  项目桶）时编码为 "p:"——用 != null 区分「未选」与「空桶」。 */
+/** 窄容器的容器下拉：全部 + 当前轨道的容器（项目 basename / 组名）。树上拉
+ *  是树容器的镜像控件，会话维度不进树——resolveContainer 传 null 得到纯树视
+ *  图；p:/g: 值编码与反解（treeSelectValue / parseTreeSelectValue）收口在
+ *  derive。项目 identity 为 ""（未知项目桶）时编码为 "p:"，round-trip 安全。 */
 function NarrowTreeSelect({ b }: { b: ReturnType<typeof useSessionsBrowser> }) {
   const { t } = useTranslation()
   const options: FilterOption[] =
@@ -363,14 +370,9 @@ function NarrowTreeSelect({ b }: { b: ReturnType<typeof useSessionsBrowser> }) {
           label: projectBasename(n.project) || t("sessions.tree.noProject"),
         }))
       : b.trackGroups.map((g) => ({ value: `g:${g.id}`, label: g.name }))
-  const value =
-    b.selectedProject != null
-      ? `p:${b.selectedProject}`
-      : b.selectedGroupId === UNGROUPED
-        ? `g:${UNGROUPED}`
-        : b.selectedGroupId === ALL_GROUPS
-          ? ""
-          : `g:${b.selectedGroupId}`
+  const value = treeSelectValue(
+    resolveContainer(null, b.selectedProject, b.selectedGroupId),
+  )
   return (
     <FilterSelect
       ariaLabel={t("sessions.tree.all")}
@@ -378,9 +380,10 @@ function NarrowTreeSelect({ b }: { b: ReturnType<typeof useSessionsBrowser> }) {
       options={options}
       value={value}
       onChange={(v) => {
-        if (!v) b.selectAll()
-        else if (v.startsWith("p:")) b.selectProject(v.slice(2))
-        else b.selectGroup(v.slice(2))
+        const action = parseTreeSelectValue(v)
+        if (action.type === "all") b.selectAll()
+        else if (action.type === "project") b.selectProject(action.id)
+        else b.selectGroup(action.id)
       }}
       fallbackLabel={t("sessions.tree.all")}
     />
@@ -390,26 +393,21 @@ function NarrowTreeSelect({ b }: { b: ReturnType<typeof useSessionsBrowser> }) {
 // ------------------------------------------------------------- 中栏 ----
 
 /** 列表态骨架：头部（标题 + 项目路径 + 会话数 + 窄容器统计入口）+ 表格 +
- *  分页（每页 20/50/100）。selectedProject 以 != null 判选中："" = 未知项目
- *  桶。项目统计头已上移右栏（项目态项目卡），中栏只管列表。 */
+ *  分页（每页 20/50/100）。标题/副题由视图层从容器联合派生后下发（同一份
+ *  containerLabel，无第二份判定链）。项目统计头已上移右栏（项目态项目卡），
+ *  中栏只管列表。 */
 function ListPane({
   b,
+  headTitle,
+  headDesc,
   statsSlot,
 }: {
   b: ReturnType<typeof useSessionsBrowser>
+  headTitle: string
+  headDesc: string
   statsSlot: ReactNode
 }) {
   const { t } = useTranslation()
-  const headTitle =
-    b.selectedProject != null
-      ? projectBasename(b.selectedProject) || t("sessions.tree.noProject")
-      : b.selectedGroupId === UNGROUPED
-        ? t("sessions.group.ungrouped")
-        : b.selectedGroupId === ALL_GROUPS
-          ? t("sessions.tree.all")
-          : (b.trackGroups.find((g) => g.id === b.selectedGroupId)?.name ??
-            t("sessions.tree.all"))
-  const headDesc = b.selectedProject ?? ""
 
   return (
     // gap-0 py-0 推掉 Card 基类的 py-(--card-spacing)=20px 节距（与详情卡

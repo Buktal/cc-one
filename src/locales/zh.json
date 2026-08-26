@@ -626,7 +626,6 @@
   "sessions.stats.byGroup": "按分组",
   "sessions.stats.groupSummary": "分组汇总",
   "sessions.stats.scope": "统计对象：",
-  "sessions.stats.allSessions": "全部会话",
   "sessions.stats.open": "统计",
   "sessions.stats.usage": "用量 · Token 四桶",
   "sessions.stats.usageTotal": "总量 {{n}}",

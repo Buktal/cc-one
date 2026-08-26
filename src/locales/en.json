@@ -628,7 +628,6 @@
   "sessions.stats.byGroup": "By group",
   "sessions.stats.groupSummary": "Group summary",
   "sessions.stats.scope": "Scope:",
-  "sessions.stats.allSessions": "All sessions",
   "sessions.stats.open": "Stats",
   "sessions.stats.usage": "Usage · Token buckets",
   "sessions.stats.usageTotal": "Total {{n}}",

@@ -11,6 +11,7 @@ import {
   type FilterState,
 } from "@/app/store/slices/filterSlice"
 import { dayRangeToTs, effectiveDays } from "@/lib/date-range"
+import { projectBasename } from "@/lib/paths"
 import { ALL_FILTER } from "@/lib/source-tags"
 import type {
   SessionFilter,
@@ -455,6 +456,172 @@ export function applyGroupOrder(
   )
 }
 
+// ------------------------------------------ container selection (候选⑤) --
+
+/**
+ * 容器选中(container selection)——工作台「当前在看谁」的唯一编码。一个判别
+ * 联合、一处构造(resolveContainer):右栏口径行、中栏列表头、窄容器下拉与
+ * 统计切片都读它。此前这一概念以五种形状散布在视图与 hook 里(scopeLabel /
+ * scopeTag / 树下拉的 p:/g: 编解码 / headTitle / selectionStatsRows),优先级
+ * 阶梯只活在注释里——现在阶梯就是 resolveContainer 的分支次序:
+ * 会话打开 > 项目 > 分组 > 未分组 > 全部。
+ */
+export type ContainerSelection =
+  | {
+      /** 打开的会话:id = favKey 复合键;title 为展示名(空串由渲染方落到
+       *  untitled 键);dir 直通行的项目 identity。 */
+      kind: "session"
+      id: string
+      title: string
+      dir: string
+    }
+  /** 项目桶(id 是 identity 空间:"" = 无启动目录桶,哨兵映射后)。 */
+  | { kind: "project"; id: string }
+  | { kind: "group"; id: string }
+  | { kind: "ungrouped" }
+  | { kind: "all" }
+
+/**
+ * Resolve the container selection. `preview` 非空即会话态——树选中让位但不丢
+ * 失(selectProject/selectGroup/selectAll 才会改写它,打开会话不动树);调用
+ * 方传 null 得到的是纯树容器视图(树镜像控件用),传真值得到工作台口径对象。
+ */
+export function resolveContainer(
+  preview: Pick<
+    SessionRow,
+    "id" | "device_id" | "title" | "project_dir"
+  > | null,
+  selectedProject: string | null,
+  selectedGroupId: string,
+): ContainerSelection {
+  if (preview)
+    return {
+      kind: "session",
+      id: favKey(preview),
+      title: preview.title,
+      dir: preview.project_dir,
+    }
+  // 项目选中以 != null 判定("":未知项目桶,真值语义);分组选中按哨兵
+  // 识别,其余 id 即具体组(含组刚被删的陈旧 id —— 由 label/切片端兜底)。
+  if (selectedProject != null) return { kind: "project", id: selectedProject }
+  if (selectedGroupId === UNGROUPED) return { kind: "ungrouped" }
+  if (selectedGroupId === ALL_GROUPS) return { kind: "all" }
+  return { kind: "group", id: selectedGroupId }
+}
+
+/** 容器的右栏口径 tag(#108 定稿三态):会话态 / 分组态(含未分组)/ 项目态
+ *  ——未选任何容器时照旧共用项目卡组(无身份卡的全量聚合),不加第四档。 */
+export function containerScopeTag(
+  c: ContainerSelection,
+): "session" | "project" | "group" {
+  switch (c.kind) {
+    case "session":
+      return "session"
+    case "group":
+    case "ungrouped":
+      return "group"
+    case "project":
+    case "all":
+      return "project"
+  }
+}
+
+/**
+ * The container's display name — scopeLabel and the list pane's header share
+ * this one rule (四层嵌套三元 ×2 的归属). 只产原始文本或 i18n 键,翻译由调用
+ * 方 t() 完成(spanLabelKey 同一分工)。组名缺失(组刚被删的竞态)回落到
+ * sessions.tree.all,与收编前各手写副本的 fallback 一致。
+ */
+export type ContainerLabel =
+  | { text: string }
+  | {
+      key:
+        | "sessions.untitled"
+        | "sessions.tree.noProject"
+        | "sessions.group.ungrouped"
+        | "sessions.tree.all"
+    }
+
+export function containerLabel(
+  c: ContainerSelection,
+  groupNameOf: (id: string) => string | undefined,
+): ContainerLabel {
+  switch (c.kind) {
+    case "session":
+      return c.title ? { text: c.title } : { key: "sessions.untitled" }
+    case "project": {
+      const base = c.id ? projectBasename(c.id) : ""
+      return base ? { text: base } : { key: "sessions.tree.noProject" }
+    }
+    case "group": {
+      const name = groupNameOf(c.id)
+      return name ? { text: name } : { key: "sessions.tree.all" }
+    }
+    case "ungrouped":
+      return { key: "sessions.group.ungrouped" }
+    case "all":
+      return { key: "sessions.tree.all" }
+  }
+}
+
+/**
+ * 窄容器下拉的值编码(p:/g: DSL 的唯一归属):p:<identity> / g:<id> /
+ * g:__ungrouped__ / ""(全部)。会话维度不进树——树上拉是树容器的镜像控件,
+ * 调用方对它传 preview=null 的 resolveContainer 结果;parseTreeSelectValue 是
+ * 它的逆映射,两者 round-trip 有测试钉住。
+ */
+export function treeSelectValue(c: ContainerSelection): string {
+  switch (c.kind) {
+    case "project":
+      return `p:${c.id}`
+    case "ungrouped":
+      return `g:${UNGROUPED}`
+    case "group":
+      return `g:${c.id}`
+    case "session":
+    case "all":
+      return ""
+  }
+}
+
+export type TreeSelectAction =
+  | { type: "all" }
+  | { type: "project"; id: string }
+  | { type: "group"; id: string }
+
+export function parseTreeSelectValue(v: string): TreeSelectAction {
+  if (!v) return { type: "all" }
+  if (v.startsWith("p:")) return { type: "project", id: v.slice(2) }
+  return { type: "group", id: v.slice(2) }
+}
+
+/**
+ * 容器的统计行切片(一次聚合,三种容器同一口径——hook 里那条手写 if 链的
+ * 归属)。会话态取整份宇宙读数:统计源本就是 selection-free 的全宇宙读取,
+ * 会话卡的聚合只在其统计行缺席时兜底展示,退回全宇宙比受树选中抽样的伪切片
+ * 更稳(见 stats-rail SessionCards 的 fallback 注释)。
+ */
+export function containerStatsRows(
+  c: ContainerSelection,
+  universe: readonly SessionStatsRow[],
+  buckets: Readonly<{
+    grouped: ReadonlyMap<string, readonly SessionStatsRow[]>
+    ungrouped: readonly SessionStatsRow[]
+  }>,
+): readonly SessionStatsRow[] {
+  switch (c.kind) {
+    case "session":
+    case "all":
+      return universe
+    case "project":
+      return universe.filter((r) => r.project_dir === c.id)
+    case "ungrouped":
+      return buckets.ungrouped
+    case "group":
+      return buckets.grouped.get(c.id) ?? []
+  }
+}
+
 // ------------------------------------------------------- workbench stats ----
 
 /**
@@ -698,8 +865,9 @@ export function nestSubagents(rows: readonly SessionRow[]): NestedSessions {
 
 // projectBasename moved to lib/paths (the project filter dropdown — a usage-
 // feature surface — shares it); re-exported so the sessions call sites keep
-// their import seam (same pattern as reorderIds below).
-export { projectBasename } from "@/lib/paths"
+// their import seam (same pattern as reorderIds below). containerLabel above
+// also reads it for the project bucket's display name.
+export { projectBasename }
 
 // ------------------------------------------------------------- transcript --
 

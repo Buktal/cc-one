@@ -263,8 +263,8 @@ function SessionCards({
   deviceLabel: (id: string) => string
 }) {
   const { t } = useTranslation()
-  // 选中会话但统计行尚未到位（跨页回退行不在当前宇宙）→ 用容器聚合兜底，
-  // 卡片不空转。
+  // 选中会话但统计行尚未到位（跨页回退行不在当前宇宙）→ 用容器聚合兜底
+  // （containerStatsRows 的会话态切片 = 整份宇宙读数），卡片不空转。
   const agg = stats
     ? {
         tokens: {

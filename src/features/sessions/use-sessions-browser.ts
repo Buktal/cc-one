@@ -58,6 +58,7 @@ import {
   aggregateStats,
   applyGroupOrder,
   canCreateSyncedGroup,
+  containerStatsRows,
   effectiveFavorite,
   favKey,
   type GroupTrack,
@@ -68,10 +69,10 @@ import {
   nextFavValue,
   projectFilterOfIdentity,
   projectNodes,
+  resolveContainer,
   type SessionScopeSpec,
   type TreeTrack,
   trackUniverseTab,
-  UNGROUPED,
   withFavOverride,
   withoutFavOverride,
 } from "./derive"
@@ -388,18 +389,8 @@ export function useSessionsBrowser() {
   }, [statsRows])
   // 右栏「按项目」聚合对象：项目选中 = 该项目桶（identity "" = 无启动目录
   // 桶，哨兵映射后）；分组选中 = 该组行；未选中 = 全量。一次聚合，三种容器
-  // 同一口径。
-  const selectionStatsRows = useMemo(() => {
-    if (selectedProject != null)
-      return statsRows.filter((r) => r.project_dir === selectedProject)
-    if (selectedGroupId === ALL_GROUPS) return statsRows
-    if (selectedGroupId === UNGROUPED) return groupBuckets.ungrouped
-    return groupBuckets.grouped.get(selectedGroupId) ?? []
-  }, [statsRows, groupBuckets, selectedProject, selectedGroupId])
-  const selectionAggregate = useMemo(
-    () => aggregateStats(selectionStatsRows),
-    [selectionStatsRows],
-  )
+  // 同一口径。（架构审查候选⑤：切片规则与视图侧口径对象共用 ./derive 的
+  // containerStatsRows / resolveContainer，不再有第二份手写 if 链。）
 
   // sessions lookup by composite key — O(1) resolve for the derived preview.
   // Reuses the favKey shape ("device_id/id") so favorite + preview agree on
@@ -428,6 +419,24 @@ export function useSessionsBrowser() {
     if (livePreview) lastKnownRef.current = livePreview
   }, [livePreview])
   const preview = previewKey ? (livePreview ?? lastKnownRef.current) : null
+
+  // ---- 容器选中（架构审查候选⑤）：「当前在看谁」的唯一编码在 ./derive 的
+  // resolveContainer——会话 > 项目 > 分组 > 未分组 > 全部的阶梯由其分支次序
+  // 表达、测试钉住；此处构造一份供本 hook 与视图层共用（b.container），统计
+  // 切片（containerStatsRows）随之收敛：三种容器一次聚合。会话态切片 = 整份
+  // 宇宙读数，见 containerStatsRows 注释。
+  const container = useMemo(
+    () => resolveContainer(preview, selectedProject, selectedGroupId),
+    [preview, selectedProject, selectedGroupId],
+  )
+  const selectionStatsRows = useMemo(
+    () => containerStatsRows(container, statsRows, groupBuckets),
+    [container, statsRows, groupBuckets],
+  )
+  const selectionAggregate = useMemo(
+    () => aggregateStats(selectionStatsRows),
+    [selectionStatsRows],
+  )
 
   // setPreview keeps the caller contract (SessionRow | null) but stores only
   // the composite key — so the transcript query and title/favorite lookups
@@ -789,6 +798,9 @@ export function useSessionsBrowser() {
     selectGroup,
     selectedProject,
     selectProject,
+    // 容器选中（架构审查候选⑤）：会话/项目/分组/未分组/全部的判别联合，
+    // 视图层的口径 tag、口径名、列表头、窄容器下拉都从它派生。
+    container,
     selectAll,
     effectiveTrack,
     // toolbar filters (time range · device)

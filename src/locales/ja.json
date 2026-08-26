@@ -626,7 +626,6 @@
   "sessions.stats.byGroup": "グループ別",
   "sessions.stats.groupSummary": "グループ概要",
   "sessions.stats.scope": "対象：",
-  "sessions.stats.allSessions": "すべてのセッション",
   "sessions.stats.open": "統計",
   "sessions.stats.usage": "使用量 · Token バケット",
   "sessions.stats.usageTotal": "合計 {{n}}",

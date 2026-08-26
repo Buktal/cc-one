@@ -18,8 +18,12 @@ import {
   ALL_GROUPS,
   aggregateStats,
   applyGroupOrder,
+  type ContainerSelection,
   canCreateSyncedGroup,
   collapseAllMessages,
+  containerLabel,
+  containerScopeTag,
+  containerStatsRows,
   effectiveFavorite,
   expandAllMessages,
   favKey,
@@ -32,17 +36,21 @@ import {
   neighborNav,
   nestSubagents,
   nextFavValue,
+  parseTreeSelectValue,
   projectFilterOfIdentity,
   projectNodes,
   reorderGroupIds,
+  resolveContainer,
   roleDefaultsCollapsed,
   type SessionScopeSpec,
   sessionSpan,
   sessionSpecId,
   sessionTabFilter,
   spanLabelKey,
+  type TreeSelectAction,
   tokensHitRate,
   transcriptMatches,
+  treeSelectValue,
   tryFormatJson,
   UNGROUPED,
   withFavOverride,
@@ -771,7 +779,209 @@ describe("projectFilterOfIdentity / identityOfProjectFilter (tree ↔ filter)", 
   })
 })
 
-// ---------------------------------------------------- workbench stats ----
+// ------------------------------------- container selection (架构审查候选⑤) --
+
+describe("resolveContainer (priority ladder)", () => {
+  const preview = row({
+    id: "s1",
+    title: "Refactor the parser",
+    project_dir: "/p/alpha",
+  })
+
+  it("an open session beats every tree signal", () => {
+    expect(resolveContainer(preview, "/p/alpha", "g1")).toEqual({
+      kind: "session",
+      id: "dev-self/s1",
+      title: "Refactor the parser",
+      dir: "/p/alpha",
+    })
+  })
+
+  it('project beats group; the "" identity is a real selection, not "unset"', () => {
+    expect(resolveContainer(null, "/p/alpha", "g1")).toEqual({
+      kind: "project",
+      id: "/p/alpha",
+    })
+    // "" = 无启动目录桶（哨兵映射后的 identity），以 != null 判定，仍压过分组。
+    expect(resolveContainer(null, "", UNGROUPED)).toEqual({
+      kind: "project",
+      id: "",
+    })
+  })
+
+  it("group sentinels resolve in order: ungrouped → all → concrete id", () => {
+    expect(resolveContainer(null, null, UNGROUPED)).toEqual({
+      kind: "ungrouped",
+    })
+    expect(resolveContainer(null, null, ALL_GROUPS)).toEqual({ kind: "all" })
+    expect(resolveContainer(null, null, "g-rename")).toEqual({
+      kind: "group",
+      id: "g-rename",
+    })
+  })
+
+  it("no signals at all resolves to all", () => {
+    expect(resolveContainer(null, null, ALL_GROUPS)).toEqual({ kind: "all" })
+  })
+})
+
+describe("containerScopeTag", () => {
+  it("maps five kinds onto the rail's three tags; all shares the project cards", () => {
+    const preview = row({ id: "s1", title: "T" })
+    expect(containerScopeTag(resolveContainer(preview, null, ALL_GROUPS))).toBe(
+      "session",
+    )
+    expect(containerScopeTag(resolveContainer(null, "/p/a", "g1"))).toBe(
+      "project",
+    )
+    expect(containerScopeTag(resolveContainer(null, "", "g1"))).toBe("project")
+    // 未选任何容器照旧共用项目卡组（无身份卡的全量聚合）——不加第四档。
+    expect(containerScopeTag(resolveContainer(null, null, ALL_GROUPS))).toBe(
+      "project",
+    )
+    expect(containerScopeTag(resolveContainer(null, null, UNGROUPED))).toBe(
+      "group",
+    )
+    expect(containerScopeTag(resolveContainer(null, null, "g1"))).toBe("group")
+  })
+})
+
+describe("containerLabel", () => {
+  const groupNameOf = (id: string) => ({ g1: "Renamed group" })[id as "g1"]
+
+  it("session uses its title, falling back to the untitled key", () => {
+    expect(
+      containerLabel(
+        resolveContainer(row({ id: "s1", title: "T" }), null, ""),
+        groupNameOf,
+      ),
+    ).toEqual({ text: "T" })
+    expect(
+      containerLabel(
+        resolveContainer(row({ id: "s1", title: "" }), null, ""),
+        groupNameOf,
+      ),
+    ).toEqual({ key: "sessions.untitled" })
+  })
+
+  it("project shows the basename; empty identity falls to noProject", () => {
+    expect(
+      containerLabel(resolveContainer(null, "/p/alpha", ""), groupNameOf),
+    ).toEqual({ text: "alpha" })
+    expect(containerLabel(resolveContainer(null, "", ""), groupNameOf)).toEqual(
+      {
+        key: "sessions.tree.noProject",
+      },
+    )
+  })
+
+  it("group resolves its name; a stale id falls back to tree.all", () => {
+    expect(
+      containerLabel(resolveContainer(null, null, "g1"), groupNameOf),
+    ).toEqual({ text: "Renamed group" })
+    expect(
+      containerLabel(resolveContainer(null, null, "gone"), groupNameOf),
+    ).toEqual({ key: "sessions.tree.all" })
+  })
+
+  it("sentinel kinds map to their keys", () => {
+    expect(
+      containerLabel(resolveContainer(null, null, UNGROUPED), groupNameOf),
+    ).toEqual({
+      key: "sessions.group.ungrouped",
+    })
+    expect(
+      containerLabel(resolveContainer(null, null, ALL_GROUPS), groupNameOf),
+    ).toEqual({
+      key: "sessions.tree.all",
+    })
+  })
+})
+
+describe("treeSelectValue / parseTreeSelectValue round-trip", () => {
+  it("every tree-expressible container survives encode → decode-as-action", () => {
+    const cases: Array<[ContainerSelection, TreeSelectAction]> = [
+      [{ kind: "all" }, { type: "all" }],
+      [{ kind: "ungrouped" }, { type: "group", id: UNGROUPED }],
+      [
+        { kind: "group", id: "g1" },
+        { type: "group", id: "g1" },
+      ],
+      [
+        { kind: "project", id: "/p/alpha" },
+        { type: "project", id: "/p/alpha" },
+      ],
+      // 未知项目桶编码为 "p:"——前缀下的空 identity 无歧义。
+      [
+        { kind: "project", id: "" },
+        { type: "project", id: "" },
+      ],
+    ]
+    for (const [container, action] of cases) {
+      expect(parseTreeSelectValue(treeSelectValue(container))).toEqual(action)
+    }
+  })
+
+  it('encodes the documented DSL shape ("p:<identity>" / "g:<id>" / "")', () => {
+    expect(treeSelectValue({ kind: "all" })).toBe("")
+    expect(treeSelectValue({ kind: "ungrouped" })).toBe(`g:${UNGROUPED}`)
+    expect(treeSelectValue({ kind: "group", id: "g1" })).toBe("g:g1")
+    expect(treeSelectValue({ kind: "project", id: "/p/alpha" })).toBe(
+      "p:/p/alpha",
+    )
+    expect(parseTreeSelectValue("")).toEqual({ type: "all" })
+    expect(parseTreeSelectValue("p:x")).toEqual({ type: "project", id: "x" })
+    expect(parseTreeSelectValue("g:y")).toEqual({ type: "group", id: "y" })
+  })
+})
+
+describe("containerStatsRows", () => {
+  const alpha = statsRow({ id: "a", project_dir: "/p/alpha" })
+  const beta = statsRow({ id: "b", project_dir: "/p/beta" })
+  const universe = [alpha, beta]
+  const buckets = {
+    grouped: new Map([["g1", [alpha]]]),
+    ungrouped: [beta],
+  }
+
+  it("project slices by identity (including the '' bucket)", () => {
+    expect(
+      containerStatsRows(
+        { kind: "project", id: "/p/alpha" },
+        universe,
+        buckets,
+      ),
+    ).toEqual([alpha])
+    expect(
+      containerStatsRows({ kind: "project", id: "" }, universe, buckets),
+    ).toEqual([])
+  })
+
+  it("group reads its bucket; an unknown id is empty, never the universe", () => {
+    expect(
+      containerStatsRows({ kind: "group", id: "g1" }, universe, buckets),
+    ).toEqual([alpha])
+    expect(
+      containerStatsRows({ kind: "group", id: "gone" }, universe, buckets),
+    ).toEqual([])
+    expect(
+      containerStatsRows({ kind: "ungrouped" }, universe, buckets),
+    ).toEqual([beta])
+  })
+
+  it("all and session take the whole universe read", () => {
+    expect(containerStatsRows({ kind: "all" }, universe, buckets)).toBe(
+      universe,
+    )
+    expect(
+      containerStatsRows(
+        { kind: "session", id: "dev-self/s1", title: "T", dir: "" },
+        universe,
+        buckets,
+      ),
+    ).toBe(universe)
+  })
+})
 
 /** Minimal factory over a zero-valued SessionStatsRow (mirrors the backend
  *  shape; only the fields a case cares about get spelled out). */
