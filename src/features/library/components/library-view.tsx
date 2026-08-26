@@ -132,8 +132,8 @@ export function LibraryView() {
         ) : null}
 
         {atRoot ? (
-          /* w-30: 「全部设备」4 字 + padding 约 102px；长设备名由
-            SelectValue 的 line-clamp-1 截断。与其它模块的设备下拉同宽。 */
+          /* 宽度策略（自适应 + 上限）收敛在 FilterSelect 本体；长设备名由
+            SelectValue 的 line-clamp-1 截断。 */
           <FilterSelect
             ariaLabel={t("library.scope.all")}
             allLabel={t("library.scope.all")}
@@ -143,7 +143,6 @@ export function LibraryView() {
             }))}
             value={deviceScope}
             onChange={setDeviceScope}
-            className="border-border bg-card hover:bg-hover h-8 w-30 rounded-md"
           />
         ) : null}
 

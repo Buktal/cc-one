@@ -5,6 +5,10 @@
 // label 解析、空串禁忌。本组件把规则收敛到一处——调用方只接触「空串 =
 // 全部」域（value / onChange / options），哨兵完全不漏到组件外。
 //
+// 宽度策略也在此统一（不再由调用方传）：trigger 内容自适应（SelectTrigger
+// 基类 w-fit，「全部」态窄、选中长值变宽），统一上限 max-w-48 超长截断。
+// 小窗口筛选条因此能一行多塞几个下拉，不会因写死宽度提前换行。
+//
 // 哨兵往返映射是纯函数（toSelectValue / fromSelectValue，见
 // @/lib/filter-options），filter-options.test.ts 直接断言生产路径。
 // 弹出层固定从 trigger 底部往下展开（列表顶对齐 trigger 底，而非把选中项
@@ -23,6 +27,7 @@ import {
   toSelectValue,
 } from "@/lib/filter-options"
 import { ALL_FILTER } from "@/lib/source-tags"
+import { cn } from "@/lib/utils"
 
 export interface FilterSelectProps {
   /** 「全部」选项的显示名（trigger 选中态与下拉首项共用）。 */
@@ -35,7 +40,8 @@ export interface FilterSelectProps {
   onChange: (value: string) => void
   /** trigger 的无障碍标签。 */
   ariaLabel?: string
-  /** SelectTrigger 的 className（宽度 / 主题样式）。 */
+  /** SelectTrigger 的 className（追加覆盖，如 compact 字号；宽度策略见
+   *  文件头注释，不再由此传入）。 */
   className?: string
   /** SelectContent 的 className。 */
   contentClassName?: string
@@ -69,7 +75,9 @@ export function FilterSelect({
       onValueChange={(v) => onChange(fromSelectValue(v ?? ""))}
     >
       <SelectTrigger
-        className={className}
+        // 面样式（border/bg/h-8）在 SelectTrigger 基类；这里只补 hover 与
+        // 统一宽度上限（见文件头注释）。
+        className={cn("hover:bg-hover max-w-48", className)}
         size={triggerSize}
         aria-label={ariaLabel}
       >

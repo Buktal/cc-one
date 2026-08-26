@@ -148,11 +148,9 @@ export function PaginationBar({
                 if (v != null) pageSize.onChange(Number(v))
               }}
             >
-              <SelectTrigger
-                size="sm"
-                className="w-15"
-                aria-label={t("pagination.perPage")}
-              >
+              {/* 宽度自适应（trigger 本体 w-fit）：写死 w-15 会被 px-3 内距 +
+                  箭头挤到裁掉「20」，删掉交给内容。 */}
+              <SelectTrigger size="sm" aria-label={t("pagination.perPage")}>
                 <SelectValue />
               </SelectTrigger>
               <SelectContent align="end">

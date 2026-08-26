@@ -208,7 +208,6 @@
      sage 是橙、azure 是黄绿，借它当分类色换肤即漂移。分类语义色固定，皮肤
      不覆盖。 */
   --cat-official: #2563eb;
-  --row-hover-shadow: 0 4px 12px -4px rgba(0, 0, 0, 0.15);
   /* Scrollbar — thin, no arrows (Windows WebView2). Flat semi-transparent
      thumb over a transparent track, darkens on hover. */
   --scrollbar-thumb: rgba(0, 0, 0, 0.18);
@@ -321,7 +320,6 @@
      black card instead of vanishing. */
   --accent-tint: color-mix(in srgb, var(--brand) 16%, transparent);
   --hover: #343438;
-  --row-hover-shadow: 0 4px 12px -4px rgba(0, 0, 0, 0.5);
   --scrollbar-thumb: rgba(255, 255, 255, 0.16);
   --scrollbar-thumb-hover: rgba(255, 255, 255, 0.28);
   /* Code pane — dark mode: GitHub Dark pane + tokens. */
@@ -548,6 +546,16 @@
 [data-slot="sheet-content"] .cm-editor,
 [data-slot="sheet-content"] .cm-gutters {
   background-color: var(--input);
+}
+
+/* Scrollable region without a visible scrollbar — horizontal toolbars that
+   must never wrap scroll instead (wheel / drag still work); a visible track
+   would fight the toolbar's own rhythm. */
+.scrollbar-none {
+  scrollbar-width: none;
+}
+.scrollbar-none::-webkit-scrollbar {
+  display: none;
 }
 
 /* Dot-grid backdrop utility (opt-in; default surface is flat solid). */

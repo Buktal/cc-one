@@ -70,8 +70,7 @@ function ModelChip() {
       options={options}
       value={filter.model}
       onChange={(v) => dispatch(patchFilter({ model: v }))}
-      // 模型名最长且不可控 → 横排给最宽上限（内容自适应，超长截断）。
-      className="border-border bg-card hover:bg-hover h-8 max-w-48 rounded-md"
+      // 宽度策略（自适应 + max-w-48 上限）收敛在 FilterSelect 本体。
       align="start"
     />
   )
@@ -102,7 +101,6 @@ function SourceChip() {
       options={options}
       value={filter.source}
       onChange={(v) => dispatch(patchFilter({ source: v }))}
-      className="border-border bg-card hover:bg-hover h-8 max-w-30 rounded-md"
       align="start"
     />
   )

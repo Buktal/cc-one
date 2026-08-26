@@ -54,8 +54,11 @@ function TableRow({ className, ...props }: React.ComponentProps<"tr">) {
   return (
     <tr
       data-slot="table-row"
+      // hover 指示只留背景提亮。曾加行首品牌色竖线（读不出含义已撤）、又试过
+      // 行投影 0 4px 12px -4px：x 零偏移的模糊外溢会在行盒左右缘各铺一条整行
+      // 高的暗带，左缘正贴卡片内距，看着就是行首竖线——都不如纯底色干净。
       className={cn(
-        "border-b transition-[background-color,box-shadow] duration-150 hover:relative hover:z-10 hover:bg-hover hover:shadow-[inset_2px_0_0_var(--accent-brand),var(--row-hover-shadow)] has-aria-expanded:bg-hover data-[state=selected]:bg-hover",
+        "border-b transition-colors duration-150 hover:bg-hover has-aria-expanded:bg-hover data-[state=selected]:bg-hover",
         className,
       )}
       {...props}
