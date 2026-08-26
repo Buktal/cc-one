@@ -20,7 +20,6 @@ import {
   useDeleteLocalGroupMutation,
   useDeleteSessionsMutation,
   useDeleteSyncedGroupMutation,
-  useDistinctModelsQuery,
   useListGroupsQuery,
   useListSessionsQuery,
   useRenameLocalGroupMutation,
@@ -44,7 +43,6 @@ import { useDebouncedValue } from "@/hooks/use-debounced-value"
 import { usePagedBrowser } from "@/hooks/use-paged-browser"
 import { useMutateWithToast } from "@/hooks/use-toast-mutation"
 import { useDeviceLabels, useDeviceOptions } from "@/lib/device-labels"
-import { facetOptions } from "@/lib/filter-options"
 import { DEFAULT_PAGE_SIZE } from "@/lib/pagination"
 import { usePersistedState } from "@/lib/persistence"
 import type {
@@ -155,17 +153,11 @@ export function useSessionsBrowser() {
   // the sessions-only dimensions (track / search / group selection) stay local
   // here.
   const filter = useAppSelector((s) => s.filter.filter)
-  const source = filter.source
-  const model = filter.model
   // 时间范围筛选：与 usage 视图共用同一份 filterSlice 写语义（ADR-0008）——
   // 动态预设只存 preset、不存具体日期；日历选日期转 custom。读写经
   // useDateRangeFilter 单一归属（补丁形状在 filterSlice 的 presetPatch /
   // dayPatch）。
   const dateRange = useDateRangeFilter()
-  // Setters patch the shared slice so the view's contract (b.setSource / …) is
-  // unchanged — the values now flow through Redux instead of local state.
-  const setSource = (v: string) => dispatch(patchFilter({ source: v }))
-  const setModel = (v: string) => dispatch(patchFilter({ model: v }))
   // 项目维度与左树项目轨道统一（#102）：树的项目桶选中和工具栏的项目下拉
   // 是同一份状态——共享 filterSlice.project。selectedProject（视图契约不变）
   // 由筛选值映射回树的 identity 空间（哨兵 → "" 无启动目录桶）；哨兵值从候选
@@ -246,18 +238,6 @@ export function useSessionsBrowser() {
     selectedGroupId: ALL_GROUPS,
     filter: { ...scope.filter, project: "" },
   }
-  // Model-dropdown candidates mirror the usage view's facet semantics: the
-  // sessions model list comes from usage_records (a session has no model column
-  // — the list query filters by EXISTS), so narrow by the time / source / device
-  // window but never by model itself. A FilterState facet (model cleared) feeds
-  // the endpoint, which derives bounds at query time.
-  const modelFacetFilter = useMemo(() => ({ ...filter, model: "" }), [filter])
-  const { data: distinctModels = [] } = useDistinctModelsQuery(modelFacetFilter)
-  // 并回规则（已选模型并入候选，窗口切换后下拉不空）收敛在 facetOptions。
-  const modelOptions = useMemo(
-    () => facetOptions(distinctModels, model),
-    [distinctModels, model],
-  )
   // 视图计数（分页 total）：跟随当前分组——列表已被分组过滤，分页总数必须
   // 匹配列表范围，否则翻页错位。（左栏计数清单是 selection-free 的 statsRows
   // 分桶，不走这份带选中的计数——两套口径见上。）
@@ -760,16 +740,12 @@ export function useSessionsBrowser() {
   }
 
   return {
-    // track (tree rail) / search / source / model / selection
+    // track (tree rail) / search / selection。source / model 维度（含候选下拉）
+    // 由视图经共享 useFacetDimension 直连全局 filter，不再走本出口。
     track,
     setTreeTrack,
     search,
     setSearch,
-    source,
-    setSource,
-    model,
-    setModel,
-    modelOptions,
     selectedGroupId,
     selectGroup,
     selectedProject,

@@ -25,6 +25,17 @@ import {
   sessionSpecId,
 } from "./derive"
 
+/**
+ * providesTags 样板收口（架构审查候选⑦顺带）：scope 粒读端点的 tag 集合都是
+ * 同一式——聚合 Store tag + 按 sessionSpecId 的细粒度 tag——仅 arg→spec 的
+ * 取法不同。行级缓存（getSession / sessionTranscript）与 void 端点形状独特，
+ * 保持手写。
+ */
+function scopeTags<Q>(specOf: (arg: Q) => SessionScopeSpec) {
+  return (_r: unknown, _e: unknown, arg: Q) =>
+    storeRead({ type: "Sessions", id: sessionSpecId(specOf(arg)) })
+}
+
 export const {
   useListSessionsQuery,
   useSessionCountsQuery,
@@ -69,10 +80,7 @@ export const {
           }),
         )
       },
-      providesTags: (_r, _e, q) => {
-        const { limit, offset, ...scope } = q
-        return storeRead({ type: "Sessions", id: sessionSpecId(scope) })
-      },
+      providesTags: scopeTags(({ limit, offset, ...scope }) => scope),
     }),
     /** Sidebar + paginator counts for one grouping track: total (All row +
      *  page count) and per-bucket counts (group rows). Paging-independent —
@@ -83,8 +91,7 @@ export const {
     >({
       queryFn: async ({ spec, track }) =>
         run(commands.countSessionsCmd(buildSessionFilter(spec), track)),
-      providesTags: (_r, _e, { spec }) =>
-        storeRead({ type: "Sessions", id: sessionSpecId(spec) }),
+      providesTags: scopeTags(({ spec }) => spec),
     }),
     /** The workbench's stats read at session grain: every session under the
      *  scope (unpaged) with its four-bucket usage / hit rate / cost, message
@@ -95,8 +102,7 @@ export const {
     sessionStats: b.query<SessionStatsRow[], SessionScopeSpec>({
       queryFn: async (spec) =>
         run(commands.querySessionStatsCmd(buildSessionFilter(spec))),
-      providesTags: (_r, _e, spec) =>
-        storeRead({ type: "Sessions", id: sessionSpecId(spec) }),
+      providesTags: scopeTags((spec) => spec),
     }),
     /** The project dimension (#85): per-project buckets under the scope for
      *  the tree's project nodes and the center's project stats head. Same
@@ -104,8 +110,7 @@ export const {
     projectStats: b.query<ProjectStatsRow[], SessionScopeSpec>({
       queryFn: async (spec) =>
         run(commands.queryProjectStatsCmd(buildSessionFilter(spec))),
-      providesTags: (_r, _e, spec) =>
-        storeRead({ type: "Sessions", id: sessionSpecId(spec) }),
+      providesTags: scopeTags((spec) => spec),
     }),
     /** One session row by its exact composite key — the "request log →
      *  session" jump channel's read. The usage side resolves a log row's

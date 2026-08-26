@@ -9,18 +9,13 @@
 // 一行能多塞几个 chip。 来源 (source) 在 多来源 (sources.length > 0) 时才出现
 // —— 采到任意来源就显示, 与设备维度同理。
 
-import { useMemo } from "react"
 import { useTranslation } from "react-i18next"
-import {
-  useDistinctModelsQuery,
-  useDistinctSourcesQuery,
-} from "@/app/store/api"
-import { useAppDispatch, useAppSelector } from "@/app/store/hooks"
-import { ALL_TIME_FILTER, patchFilter } from "@/app/store/slices/filterSlice"
+import { useDistinctSourcesQuery } from "@/app/store/api"
+import { ALL_TIME_FILTER } from "@/app/store/slices/filterSlice"
 import { DateRangeChip as SharedDateRangeChip } from "@/components/date-range-chip"
 import { FilterSelect } from "@/components/filter-select"
 import { useDateRangeFilter } from "@/hooks/use-date-range-filter"
-import { facetOptions } from "@/lib/filter-options"
+import { useFacetDimension } from "@/lib/facet-dimension"
 import { sourceLabel } from "../source-labels"
 import { DeviceScopeControl } from "./device-scope-control"
 import { ProjectSelect } from "./project-select"
@@ -48,59 +43,32 @@ function DateRangeChip() {
 
 function ModelChip() {
   const { t } = useTranslation()
-  const dispatch = useAppDispatch()
-  const filter = useAppSelector((s) => s.filter.filter)
-  // Facet filter = 看板筛选去掉 model 维度本身。模型下拉只列「所选时间 / 来源
-  // / 设备窗口内真正出现过的模型」, 不按 model 自身收窄 (否则选了 glm 下拉就
-  // 只剩 glm); 当前已选模型并回候选, 避免切到没用过它的窗口时 chip 变成空值。
-  // 候选跨天滚动靠采集间隔 → usage_changed → invalidate: 动态预设的
-  // filter 一天内引用稳定, 无需 dayStr() 触发器。
-  const facetFilter = useMemo(() => ({ ...filter, model: "" }), [filter])
-  const { data: models = [] } = useDistinctModelsQuery(facetFilter)
-  // 并回规则（已选模型并入候选，窗口切换后下拉不空）收敛在 facetOptions。
-  const options = useMemo(
-    () =>
-      facetOptions(models, filter.model).map((m) => ({ value: m, label: m })),
-    [models, filter.model],
-  )
+  // 装配壳（架构审查候选⑦）：facet 窗口 / 并回 / 读写映射收口在共享 hook。
+  const facet = useFacetDimension({ dimension: "model" })
   return (
     <FilterSelect
       ariaLabel={t("usage.control.model")}
       allLabel={t("usage.control.allModel")}
-      options={options}
-      value={filter.model}
-      onChange={(v) => dispatch(patchFilter({ model: v }))}
+      options={facet.options}
+      value={facet.value}
+      onChange={facet.onChange}
       // 宽度策略（自适应 + max-w-48 上限）收敛在 FilterSelect 本体。
       align="start"
     />
   )
 }
 
-/** 来源 (source) 维度筛选 — 与 ModelChip 对称, 选项来自 queryDistinctSources. */
+/** 来源 (source) 维度筛选 — 与 ModelChip 对称；label 走本域短名映射。 */
 function SourceChip() {
   const { t } = useTranslation()
-  const dispatch = useAppDispatch()
-  const filter = useAppSelector((s) => s.filter.filter)
-  // 与 ModelChip 对称: facet 去掉 source 自身, 候选只含所选窗口内出现过的来源;
-  // 已选来源并回候选。跨天滚动靠采集间隔刷新, 见 ModelChip。
-  const facetFilter = useMemo(() => ({ ...filter, source: "" }), [filter])
-  const { data: sources = [] } = useDistinctSourcesQuery(facetFilter)
-  // 并回规则（已选来源并入候选，窗口切换后下拉不空）收敛在 facetOptions。
-  const options = useMemo(
-    () =>
-      facetOptions(sources, filter.source).map((s) => ({
-        value: s,
-        label: sourceLabel(s),
-      })),
-    [sources, filter.source],
-  )
+  const facet = useFacetDimension({ dimension: "source", labelOf: sourceLabel })
   return (
     <FilterSelect
       ariaLabel={t("usage.control.source")}
       allLabel={t("usage.control.allSource")}
-      options={options}
-      value={filter.source}
-      onChange={(v) => dispatch(patchFilter({ source: v }))}
+      options={facet.options}
+      value={facet.value}
+      onChange={facet.onChange}
       align="start"
     />
   )

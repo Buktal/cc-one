@@ -20,6 +20,8 @@ import relativeTime from "dayjs/plugin/relativeTime"
 import { MessagesSquare, Search, Star, Trash2, X } from "lucide-react"
 import { type ReactNode, useState } from "react"
 import { useTranslation } from "react-i18next"
+import { useDistinctSourcesQuery } from "@/app/store/api"
+import { ALL_TIME_FILTER } from "@/app/store/slices/filterSlice"
 import { ConfirmDialog } from "@/components/confirm-dialog"
 import { DateRangeChip } from "@/components/date-range-chip"
 import { FilterSelect } from "@/components/filter-select"
@@ -45,6 +47,7 @@ import {
 import { DeviceScopeControl } from "@/features/usage/components/device-scope-control"
 import { ProjectSelect } from "@/features/usage/components/project-select"
 import { deviceLabelOf } from "@/lib/device-labels"
+import { useFacetDimension } from "@/lib/facet-dimension"
 import type { FilterOption } from "@/lib/filter-options"
 import {
   formatCost,
@@ -53,7 +56,6 @@ import {
   formatTokens,
 } from "@/lib/format"
 import { PAGE_SIZES } from "@/lib/pagination"
-import { SOURCE_TAGS } from "@/lib/source-tags"
 import { cn } from "@/lib/utils"
 import type { SessionRow } from "@/types/generated/bindings"
 import {
@@ -217,6 +219,16 @@ export function SessionsView() {
  *  策略），一行放不下由工具条横向滚动兜底（scrollbar-none 隐轨道）。 */
 function WorkbenchToolbar({ b }: { b: ReturnType<typeof useSessionsBrowser> }) {
   const { t } = useTranslation()
+  // 来源 / 模型维度（架构审查候选⑦）：共享 useFacetDimension 直连全局
+  // filter——候选口径（窗口内 distinct + 已选值并回）与看板 / 日志对齐，
+  // 旧版静态 SOURCE_OPTIONS 常开的两派分叉就此表态收敛。来源 chip 与看板
+  // 同规：任意历史窗口采到过来源才显示；label 走本域全名映射。
+  const sourceFacet = useFacetDimension({
+    dimension: "source",
+    labelOf: sessionSourceLabel,
+  })
+  const modelFacet = useFacetDimension({ dimension: "model" })
+  const { data: anySources = [] } = useDistinctSourcesQuery(ALL_TIME_FILTER)
   return (
     <div className="scrollbar-none flex items-center gap-2 overflow-x-auto">
       <div className="flex shrink-0 items-center gap-2">
@@ -232,19 +244,21 @@ function WorkbenchToolbar({ b }: { b: ReturnType<typeof useSessionsBrowser> }) {
         <div className="hidden @max-[48rem]/sessions:block">
           <NarrowTreeSelect b={b} />
         </div>
-        <FilterSelect
-          ariaLabel={t("sessions.filter.source")}
-          allLabel={t("sessions.filter.allSources")}
-          options={SOURCE_OPTIONS}
-          value={b.source}
-          onChange={b.setSource}
-        />
+        {anySources.length > 0 ? (
+          <FilterSelect
+            ariaLabel={t("sessions.filter.source")}
+            allLabel={t("sessions.filter.allSources")}
+            options={sourceFacet.options}
+            value={sourceFacet.value}
+            onChange={sourceFacet.onChange}
+          />
+        ) : null}
         <FilterSelect
           ariaLabel={t("sessions.filter.model")}
           allLabel={t("sessions.filter.allModels")}
-          options={b.modelOptions.map((m) => ({ value: m, label: m }))}
-          value={b.model}
-          onChange={b.setModel}
+          options={modelFacet.options}
+          value={modelFacet.value}
+          onChange={modelFacet.onChange}
         />
         {/* 项目维度：共享 filterSlice（与看板 / 日志一致），左树项目轨道的
             选中也写同一份状态。候选取自 distinct-projects 端点，含「未知
@@ -750,11 +764,3 @@ function SessionsTable({
     </div>
   )
 }
-
-/** Fixed source options — the sources sessions are collected from. Brand
- *  names are stable, so they live here rather than in i18n (mirrors the usage
- *  view's source-labels); only the "all" option and labels are localized. */
-const SOURCE_OPTIONS: readonly FilterOption[] = SOURCE_TAGS.map((src) => ({
-  value: src,
-  label: sessionSourceLabel(src),
-}))
