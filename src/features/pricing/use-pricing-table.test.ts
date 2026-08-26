@@ -17,9 +17,4 @@ describe("usePricingTable imports in a non-Tauri (node) environment", () => {
     const mod = await import("./use-pricing-table")
     expect(typeof mod.usePricingTable).toBe("function")
   })
-
-  it("exports the PAGE_SIZE constant the view needs for rendering", async () => {
-    const mod = await import("./use-pricing-table")
-    expect(mod.PAGE_SIZE).toBe(20)
-  })
 })

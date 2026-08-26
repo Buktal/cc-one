@@ -9,6 +9,13 @@ export interface PageStats {
   page: number
 }
 
+/** 分页视图共用的每页条数档（sessions / 请求日志 / 定价 / 文件库）——
+ *  PaginationBar 的 per-page 选择器与各视图的初始密度引用同一份。 */
+export const PAGE_SIZES: readonly number[] = [20, 50, 100]
+
+/** 默认每页条数——PAGE_SIZES 首项。 */
+export const DEFAULT_PAGE_SIZE = 20
+
 /** Offset → page stats. `totalPages` is at least 1 so a single-page control
  *  never disappears, and `page` is clamped into range — important when the row
  *  count shrinks beneath the current offset (e.g. forgetting a device removes

@@ -50,13 +50,14 @@ import {
   formatMetricSeg,
   formatTokens,
 } from "@/lib/format"
+import { PAGE_SIZES } from "@/lib/pagination"
 import { SOURCE_TAGS } from "@/lib/source-tags"
 import { cn } from "@/lib/utils"
 import type { SessionRow } from "@/types/generated/bindings"
 import { ALL_GROUPS, favKey, projectBasename, UNGROUPED } from "../derive"
 import { highlight } from "../highlight"
 import { sessionAgentKind, sessionSourceLabel } from "../source-labels"
-import { PAGE_SIZES, useSessionsBrowser } from "../use-sessions-browser"
+import { useSessionsBrowser } from "../use-sessions-browser"
 import { GroupCreateDialog } from "./group-create-dialog"
 import { SessionDetail } from "./session-detail"
 import { SessionTree } from "./session-tree"

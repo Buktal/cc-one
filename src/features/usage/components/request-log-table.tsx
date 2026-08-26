@@ -6,9 +6,10 @@
 // stop_reason renders a localized chip (`stopReasonLabelKey`) with the raw
 // English value in the tooltip; calls costing ≥ COST_NOTABLE_THRESHOLD get a
 // highlighted cost cell. Rows are time-desc grouped by local day with a day
-// separator. Paginated with the shared PaginationBar (ellipsis jumps); the
-// bar disables while a page refetches. Empty state offers an inline 采集 CTA
-// so the user isn't bounced to the command bar to seed the first rows.
+// separator. Paginated with the shared PaginationBar (ellipsis jumps + per-page
+// density); the bar disables while a page refetches. Empty state offers an
+// inline 采集 CTA so the user isn't bounced to the command bar to seed the
+// first rows.
 
 import { FileText } from "lucide-react"
 import { Fragment, type ReactNode, useState } from "react"
@@ -19,7 +20,7 @@ import type { FilterState } from "@/app/store/slices/filterSlice"
 import { CopyButton } from "@/components/copy-button"
 import { PaginationBar } from "@/components/pagination-bar"
 import { QueryState } from "@/components/query-state"
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
+import { Card, CardContent } from "@/components/ui/card"
 import {
   Table,
   TableBody,
@@ -48,6 +49,8 @@ import {
   formatTime,
   formatTokens,
 } from "@/lib/format"
+import { DEFAULT_PAGE_SIZE, PAGE_SIZES } from "@/lib/pagination"
+import { usePersistedState } from "@/lib/persistence"
 import { tokenTotal } from "@/lib/usage"
 import { cn } from "@/lib/utils"
 import type { UsageLogRow } from "@/types/generated/bindings"
@@ -55,19 +58,24 @@ import { sourceLabel } from "../source-labels"
 import { useDeviceLabelMap, useDeviceOptions } from "../use-device-options"
 import { SessionLink } from "./session-link"
 
-const PAGE_SIZE = 20
+// 每页条数密度跨重启记忆，键名沿用 sessions-page-size 的约定。
+const PAGE_SIZE_KEY = "cc-one:request-log-page-size"
 
 export function RequestLogTable({ filter }: { filter: FilterState }) {
   const { t } = useTranslation()
   const deviceLabel = useDeviceLabelMap()
   const [expandedId, setExpandedId] = useState<string | null>(null)
+  const [pageSize, setPageSize] = usePersistedState<number>(
+    PAGE_SIZE_KEY,
+    DEFAULT_PAGE_SIZE,
+  )
   const { data: total = 0 } = useCountQuery(filter)
   // 分页控制器（架构扫描候选⑧）：offset / 翻页单一归属；filter 身份变化 →
   // 回第 1 页并收起展开行（行所在页可能已不存在）——与 offset 重置同一触发
-  // 点。
+  // 点。pageSize 折进 scope：换密度也是维度变化，回第 1 页由控制器结构触发。
   const browser = usePagedBrowser({
-    scope: filter,
-    pageSize: PAGE_SIZE,
+    scope: { filter, pageSize },
+    pageSize,
     total,
     onScopeReset: () => setExpandedId(null),
   })
@@ -78,7 +86,7 @@ export function RequestLogTable({ filter }: { filter: FilterState }) {
     error,
   } = useLogsQuery({
     filter,
-    limit: PAGE_SIZE,
+    limit: pageSize,
     offset: browser.offset,
   })
   // 空状态 CTA 复用 sidebar 同一份采集动作 (useCollectAction) —— 不再在此
@@ -91,9 +99,6 @@ export function RequestLogTable({ filter }: { filter: FilterState }) {
 
   return (
     <Card className="min-h-0 flex-1">
-      <CardHeader>
-        <CardTitle>{t("usage.logs.title")}</CardTitle>
-      </CardHeader>
       <CardContent className="flex min-h-0 flex-1 flex-col">
         <QueryState
           isLoading={isLoading}
@@ -171,6 +176,11 @@ export function RequestLogTable({ filter }: { filter: FilterState }) {
           total={total}
           loading={isFetching}
           onPageChange={browser.goToPage}
+          pageSize={{
+            value: pageSize,
+            options: PAGE_SIZES,
+            onChange: setPageSize,
+          }}
         />
       </CardContent>
     </Card>

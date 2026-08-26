@@ -2,8 +2,9 @@
 // pricing / library). Left: "第 X / Y 页 · 共 N 条". Right: prev/next buttons
 // plus a numbered page bar with ellipsis gaps (pageNumbers — the single
 // sequence implementation), and — when the caller passes `pageSize` — a
-// per-page size selector (sessions 工作台的 20/50/100). `loading` disables the
-// controls while a page refetches so a page flip never goes feedback-less.
+// per-page size selector (四个分页视图共用 lib/pagination 的 PAGE_SIZES).
+// `loading` disables the controls while a page refetches so a page flip never
+// goes feedback-less.
 //
 // total === 0 renders nothing — the「0 条 + 两个禁用按钮」strip under a
 // centered empty state reads as broken（判断归这里，调用方不再各自复制

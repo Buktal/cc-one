@@ -46,6 +46,7 @@ import { useDebouncedValue } from "@/hooks/use-debounced-value"
 import { usePagedBrowser } from "@/hooks/use-paged-browser"
 import { useMutateWithToast } from "@/hooks/use-toast-mutation"
 import { facetOptions } from "@/lib/filter-options"
+import { DEFAULT_PAGE_SIZE } from "@/lib/pagination"
 import { usePersistedState } from "@/lib/persistence"
 import type {
   SessionGroup,
@@ -84,12 +85,6 @@ const TRACK_KEY = "cc-one:sessions-track"
 /** Persisted page-size key — the center list's per-page density (三栏定稿：
  *  每页 20/50/100) survives restarts. */
 const PAGE_SIZE_KEY = "cc-one:sessions-page-size"
-
-/** Default rows per page — the first option of PAGE_SIZES. */
-export const SESSIONS_PAGE_SIZE = 20
-
-/** The pager's per-page options (variant-a 定稿：20/50/100)。 */
-export const PAGE_SIZES: readonly number[] = [20, 50, 100]
 
 /** Title-rename 状态的单一归属（架构扫描候选⑨c）：详情头部的就地
  *  管理「编辑中 / 草稿 / 提交」，不再经 useSessionsBrowser → SessionDetail
@@ -149,7 +144,7 @@ export function useSessionsBrowser() {
   const tab = trackUniverseTab(track)
   const [pageSize, setPageSize] = usePersistedState<number>(
     PAGE_SIZE_KEY,
-    SESSIONS_PAGE_SIZE,
+    DEFAULT_PAGE_SIZE,
   )
   const [search, setSearch] = useState("")
   // Search is backend-side (the page query filters the whole set, not just

@@ -30,7 +30,7 @@ import { FilterSelect } from "@/components/filter-select"
 import { PaginationBar } from "@/components/pagination-bar"
 import { QueryState } from "@/components/query-state"
 import { Button } from "@/components/ui/button"
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
+import { Card, CardContent } from "@/components/ui/card"
 import { Input } from "@/components/ui/input"
 import {
   Table,
@@ -48,6 +48,7 @@ import {
 import { deviceOptionLabel } from "@/features/usage/use-device-options"
 import { useConfirmDelete } from "@/hooks/use-confirm-delete"
 import { formatSize } from "@/lib/format"
+import { PAGE_SIZES } from "@/lib/pagination"
 import { cn } from "@/lib/utils"
 import type { LibraryEntry } from "@/types/generated/bindings"
 import { kindIcon } from "../kind-icon"
@@ -65,6 +66,8 @@ export function LibraryView() {
     page,
     totalPages,
     goToPage,
+    pageSize,
+    setPageSize,
     isLoading,
     scanError,
     refetchScan,
@@ -112,7 +115,7 @@ export function LibraryView() {
         breadcrumb) on the left, search + add pinned right as one group —
         on a narrow container the group drops to its own right-aligned line
         instead of scattering between the breadcrumb crumbs. */}
-      <div className="@container flex flex-wrap items-center gap-2">
+      <div className="@container flex shrink-0 flex-wrap items-center gap-2">
         {!atRoot ? (
           <Tooltip>
             <TooltipTrigger
@@ -194,9 +197,6 @@ export function LibraryView() {
           dragging && "border-accent-brand bg-accent-tint",
         )}
       >
-        <CardHeader>
-          <CardTitle>{t("library.title")}</CardTitle>
-        </CardHeader>
         <CardContent className="flex min-h-0 flex-1 flex-col">
           {/* 加载/错误态统一走 QueryState（与 sessions/pricing/logs 同一呈现：
               居中 Skeleton / 可重试错误）。扫描失败不再伪装成「空文件夹」
@@ -505,12 +505,17 @@ export function LibraryView() {
           </QueryState>
 
           {/* Paged footer — the shared PaginationBar (page info left, numbered
-            pages with ellipsis jumps right). */}
+            pages with ellipsis jumps + per-page density right). */}
           <PaginationBar
             page={page}
             totalPages={totalPages}
             total={totalCount}
             onPageChange={goToPage}
+            pageSize={{
+              value: pageSize,
+              options: PAGE_SIZES,
+              onChange: setPageSize,
+            }}
           />
         </CardContent>
       </Card>

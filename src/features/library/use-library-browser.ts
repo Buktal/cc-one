@@ -22,6 +22,8 @@ import {
 import { deviceOptionLabel } from "@/features/usage/use-device-options"
 import { usePagedBrowser } from "@/hooks/use-paged-browser"
 import { useMutateWithToast } from "@/hooks/use-toast-mutation"
+import { DEFAULT_PAGE_SIZE } from "@/lib/pagination"
+import { usePersistedState } from "@/lib/persistence"
 import type { LibraryEntry } from "@/types/generated/bindings"
 import {
   buildBreadcrumb,
@@ -30,13 +32,16 @@ import {
   upFromSubpath,
 } from "./derive"
 
-/** Rows per page — the same density as the request-log and sessions tables.
- *  Exported for the view's paginator (disabled states must agree with the
- *  slice size — one source of truth). */
-export const LIBRARY_PAGE_SIZE = 20
+// 每页条数密度跨重启记忆（键名沿用 sessions-page-size 的约定）——与请求日
+// 志 / sessions 表同一密度档。
+const PAGE_SIZE_KEY = "cc-one:library-page-size"
 
 export function useLibraryBrowser() {
   const { t } = useTranslation()
+  const [pageSize, setPageSize] = usePersistedState<number>(
+    PAGE_SIZE_KEY,
+    DEFAULT_PAGE_SIZE,
+  )
   // 空串 = 「全部设备」：哨兵值由共享 FilterSelect 在组件内处理，状态只存
   // 「空串 = 全部」域的纯设备 id。
   const [deviceScope, setDeviceScope] = useState("")
@@ -72,12 +77,12 @@ export function useLibraryBrowser() {
     () => filterEntriesByName(entries, search),
     [entries, search],
   )
-  // 分页控制器（架构扫描候选⑧）：offset / 切片 / 翻页单一归属；导航或搜索
-  // 变化 → 回第 1 页（scope 身份变化，结构性规则——scope 里新增维度自动参
-  // 与）。
+  // 分页控制器（架构扫描候选⑧）：offset / 切片 / 翻页单一归属；导航、搜索
+  // 或密度变化 → 回第 1 页（scope 身份变化，结构性规则——scope 里新增维度
+  // 自动参与）。
   const browser = usePagedBrowser({
-    scope: { deviceScope, subpath, search },
-    pageSize: LIBRARY_PAGE_SIZE,
+    scope: { deviceScope, subpath, search, pageSize },
+    pageSize,
     total: filteredEntries.length,
   })
   const visibleEntries = browser.pageItems(filteredEntries)
@@ -220,6 +225,8 @@ export function useLibraryBrowser() {
     page: browser.page,
     totalPages: browser.totalPages,
     goToPage: browser.goToPage,
+    pageSize,
+    setPageSize,
     isLoading,
     scanError,
     refetchScan,

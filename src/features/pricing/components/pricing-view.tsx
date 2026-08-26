@@ -30,7 +30,7 @@ import { PaginationBar } from "@/components/pagination-bar"
 import { QueryState } from "@/components/query-state"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
+import { Card, CardContent } from "@/components/ui/card"
 import { Input } from "@/components/ui/input"
 import {
   Table,
@@ -50,6 +50,7 @@ import { usePricingTable } from "@/features/pricing/use-pricing-table"
 import { useConfirmDelete } from "@/hooks/use-confirm-delete"
 import { useMutateWithToast } from "@/hooks/use-toast-mutation"
 import { formatCostAmount } from "@/lib/format"
+import { PAGE_SIZES } from "@/lib/pagination"
 
 import type { PricingEntry } from "@/types/generated/bindings"
 import { EntryEditorDialog, emptyEntry } from "./entry-editor-dialog"
@@ -75,6 +76,8 @@ export function PricingView() {
     totalPages,
     paged,
     goToPage,
+    pageSize,
+    setPageSize,
   } = usePricingTable()
 
   const [editing, setEditing] = useState<PricingEntry | null>(null)
@@ -123,8 +126,9 @@ export function PricingView() {
       {/* Toolbar in a fixed element order: search + fetch + import/export
         form one group that wraps as a unit; the primary action (新增) pins
         right via ml-auto and drops to its own right-aligned line on narrow
-        containers — the old spacer div was a no-op once the row wrapped. */}
-      <div className="@container flex flex-wrap items-center gap-2">
+        containers — the old spacer div was a no-op once the row wrapped.
+        shrink-0：满高布局下工具行是卡片上方的兄弟 flex 项，不被压缩。 */}
+      <div className="@container flex shrink-0 flex-wrap items-center gap-2">
         <div className="flex shrink-0 flex-wrap items-center gap-2">
           <div className="relative">
             <Search className="text-muted-foreground absolute top-1/2 left-2 size-3.5 -translate-y-1/2" />
@@ -190,9 +194,6 @@ export function PricingView() {
         </div>
       </div>
       <Card className="min-h-0 flex-1">
-        <CardHeader>
-          <CardTitle>{t("pricing.title")}</CardTitle>
-        </CardHeader>
         <CardContent className="flex min-h-0 flex-1 flex-col">
           {/* 空态两分支：数据源为空 → EmptyState 引导拉取或新增；搜索无结果 →
             表格内的轻量提示行（total === 0 且搜索非空）。 */}
@@ -356,6 +357,11 @@ export function PricingView() {
             totalPages={totalPages}
             total={total}
             onPageChange={goToPage}
+            pageSize={{
+              value: pageSize,
+              options: PAGE_SIZES,
+              onChange: setPageSize,
+            }}
           />
         </CardContent>
       </Card>

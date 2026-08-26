@@ -15,12 +15,12 @@ import {
 } from "@/features/pricing/derive"
 import { usePagedBrowser } from "@/hooks/use-paged-browser"
 import { useMutateWithToast } from "@/hooks/use-toast-mutation"
+import { DEFAULT_PAGE_SIZE } from "@/lib/pagination"
+import { usePersistedState } from "@/lib/persistence"
 
-/** Client-side page size — the full list is already loaded; rendering all of
- * it at once jank-scrolls once it grows past a few hundred entries. 20 matches
- * the request-log / sessions / library tables so every paged view uses the
- * same density. */
-export const PAGE_SIZE = 20
+// 每页条数密度跨重启记忆。全量列表已在前端，分页只为 DOM 上限；键名沿用
+// sessions-page-size 的约定。
+const PAGE_SIZE_KEY = "cc-one:pricing-page-size"
 
 /**
  * Pricing table controller. Owns the data query, the search/sort/pagination
@@ -36,6 +36,10 @@ export function usePricingTable() {
   const [search, setSearchState] = useState("")
   const [sortKey, setSortKey] = useState<PricingSortKey | null>(null)
   const [sortDir, setSortDir] = useState<"asc" | "desc">("asc")
+  const [pageSize, setPageSize] = usePersistedState<number>(
+    PAGE_SIZE_KEY,
+    DEFAULT_PAGE_SIZE,
+  )
 
   const filtered = useMemo(
     () => filterAndSortPricing(entries, search, sortKey, sortDir),
@@ -43,11 +47,11 @@ export function usePricingTable() {
   )
 
   // 分页控制器（架构扫描候选⑧）：offset / 切片 / 翻页 / 删除后夹紧单一归
-  // 属。search / 排序变化 → 回第 1 页（scope 身份变化，结构性规则）；entries
-  // （查询数据）不在 scope——数据刷新不重置页，与原先行为一致。
+  // 属。search / 排序 / 密度变化 → 回第 1 页（scope 身份变化，结构性规则）；
+  // entries（查询数据）不在 scope——数据刷新不重置页，与原先行为一致。
   const browser = usePagedBrowser({
-    scope: { search, sortKey, sortDir },
-    pageSize: PAGE_SIZE,
+    scope: { search, sortKey, sortDir, pageSize },
+    pageSize,
     total: filtered.length,
   })
   const total = filtered.length
@@ -99,5 +103,7 @@ export function usePricingTable() {
     totalPages: browser.totalPages,
     paged,
     goToPage: browser.goToPage,
+    pageSize,
+    setPageSize,
   }
 }

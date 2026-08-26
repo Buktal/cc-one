@@ -114,8 +114,9 @@ function SourceChip() {
 export function ControlBar() {
   const { data: sources = [] } = useDistinctSourcesQuery(ALL_TIME_FILTER)
   const hasSources = sources.length > 0
+  // shrink-0：满高布局下筛选行是日志卡上方的兄弟 flex 项，不被压缩。
   return (
-    <div className="flex flex-wrap items-center gap-2">
+    <div className="flex shrink-0 flex-wrap items-center gap-2">
       <DateRangeChip />
       {hasSources ? <SourceChip /> : null}
       <ModelChip />

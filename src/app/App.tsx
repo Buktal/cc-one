@@ -30,9 +30,16 @@ const VIEWS: Record<ViewId, ComponentType> = {
   settings: SettingsView,
 }
 
-/** 满高型视图（工作台类）：直挂 main 的 flex 列，高度严格 = 视口剩余
- *  空间、无外层滚动，各面板自带滚动容器（见 Shell 的 fill 注释）。 */
-const FILL_VIEWS: ReadonlySet<ViewId> = new Set(["sessions"])
+/** 满高型视图：直挂 main 的 flex 列，高度严格 = 视口剩余空间、无外层
+ *  滚动，各面板自带滚动容器（见 Shell 的 fill 注释）。覆盖两类——工作台
+ *  （sessions）与带分页条的表格页（logs / pricing / library）：分页信息
+ *  钉在视口底部，滚动只发生在表格内部，不需要滚动到页尾才看到分页。 */
+const FILL_VIEWS: ReadonlySet<ViewId> = new Set([
+  "sessions",
+  "logs",
+  "pricing",
+  "library",
+])
 
 export default function App() {
   // Morph the OS window to match the mode. Mounted in App so it is
