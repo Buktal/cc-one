@@ -106,6 +106,9 @@ export function SessionsView() {
   return (
     // @container 驱动工作台自身的折叠（48rem ≈ 768 档树/右栏让位；64rem ≈
     // 1024 档右栏卡两列）——量的是内容区自身宽度，主导航折叠不牵动它。
+    // 高度模型：本视图在外壳是 fill 型（App 的 FILL_VIEWS 直挂 main flex
+    // 列），高度严格 = 视口剩余空间、无外层滚动；下面整条链 min-h-0 +
+    // 各面板自带滚动容器。
     <div className="@container flex min-h-0 flex-1 flex-col gap-3">
       <WorkbenchToolbar b={b} />
 
@@ -395,7 +398,7 @@ function ListPane({ b }: { b: ReturnType<typeof useSessionsBrowser> }) {
   return (
     <Card className="flex min-h-0 min-w-0 flex-1 flex-col">
       <CardContent className="flex min-h-0 flex-1 flex-col gap-2 p-4">
-        <div className="flex items-baseline gap-2.5 px-0.5">
+        <div className="flex shrink-0 items-baseline gap-2.5 px-0.5">
           <h3 className="text-sm font-semibold">{headTitle}</h3>
           {headDesc ? (
             <span className="text-muted-foreground min-w-0 flex-1 truncate text-xs">
@@ -500,7 +503,11 @@ function SessionsTable({
 }) {
   const { t } = useTranslation()
   return (
-    <div className="min-h-0 flex-1 -mr-2.5 overflow-auto pr-2.5">
+    // 唯一滚动容器：Table 自带的 table-container wrapper（overflow-x-auto）
+    // 会被 contents 推平，横向滚动条因此落在本容器底部——行数少时也贴着
+    // 视口底，而不是悬在表内容底下。pr-2 给 8px 竖向滚动条让位，-mr-2 抵
+    // 消常态下的右侧空隙。
+    <div className="min-h-0 flex-1 -mr-2 overflow-auto pr-2 [&>[data-slot=table-container]]:contents">
       {/* table-fixed: column widths come from the header row, so the narrow
           numeric columns are never stretched by extra horizontal space. min-w
           keeps the title readable below the fixed sum — the outer overflow-auto

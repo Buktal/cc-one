@@ -262,7 +262,7 @@ function SessionHeader({
 
   return (
     <div className="border-border flex shrink-0 items-center justify-between gap-3 border-b p-3">
-      <div className="flex min-w-0 flex-1 items-start gap-1">
+      <div className="flex min-w-0 flex-1 items-center gap-1">
         {/* 返回容器态 —— 显式出口（Esc 同一动作）。 */}
         <Tooltip>
           <TooltipTrigger
@@ -648,7 +648,7 @@ function TurnNavPanel({
 
       {/* 行区独立滚动（工具栏钉在列顶）——满高列里长轮次列表在列内滚，
             不把整个详情行撑高。 */}
-      <div className="scrollbar-none min-h-0 flex-1 overflow-y-auto">
+      <div className="min-h-0 flex-1 overflow-y-auto">
         {searching ? (
           /* 搜索模式 — 全量消息里扫关键词（不只用户轮次），命中行点击
             跳转到消息本身（复用 flash 反馈）。Esc 或工具栏按钮退出。 */

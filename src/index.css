@@ -471,8 +471,8 @@
    * inside the track (macOS-overlay feel) so it never kisses the edge.
    */
   ::-webkit-scrollbar {
-    width: 10px;
-    height: 10px;
+    width: 8px;
+    height: 8px;
   }
   ::-webkit-scrollbar-track {
     background: transparent;
@@ -548,17 +548,6 @@
 [data-slot="sheet-content"] .cm-editor,
 [data-slot="sheet-content"] .cm-gutters {
   background-color: var(--input);
-}
-
-/* Scrollable region without a visible scrollbar — used by the sidebar nav
-   column (a thin window must not show a scrollbar in a 16-wide gutter, but
-   the nav must still scroll to reach the footer's controls). Scrolling still
-   works with wheel / trackpad / arrow keys. */
-.scrollbar-none {
-  scrollbar-width: none;
-}
-.scrollbar-none::-webkit-scrollbar {
-  display: none;
 }
 
 /* Dot-grid backdrop utility (opt-in; default surface is flat solid). */

@@ -140,9 +140,9 @@ export function StatsRail({
   return (
     <>
       {/* 右栏本体：48rem 容器以下整栏让位（抽屉接管）。 */}
-      <aside className="border-border bg-card hidden min-h-0 w-72 shrink-0 flex-col gap-2 rounded-lg border p-2 @[48rem]:flex @[64rem]:w-80">
+      <aside className="border-border bg-card hidden min-h-0 w-64 shrink-0 flex-col gap-2 rounded-lg border p-2 @[48rem]:flex @[64rem]:w-72">
         {header}
-        <div className="scrollbar-none min-h-0 flex-1 overflow-y-auto pr-0.5">
+        <div className="min-h-0 flex-1 overflow-y-auto pr-0.5">
           <div className="grid grid-cols-2 gap-2 @[64rem]:grid-cols-1">
             {cards}
           </div>
@@ -178,7 +178,7 @@ function StatsDrawer({
       <Sheet open={open} onOpenChange={setOpen}>
         <SheetContent side="right" className="w-80 gap-2 p-2 sm:max-w-[85vw]">
           {header}
-          <div className="scrollbar-none min-h-0 flex-1 overflow-y-auto pr-0.5">
+          <div className="min-h-0 flex-1 overflow-y-auto pr-0.5">
             <div className="grid grid-cols-1 gap-2">{children}</div>
           </div>
         </SheetContent>
@@ -634,9 +634,16 @@ function IdentityCard({
           </KvRow>
         ) : null}
         <KvRow label={t("sessions.detail.sessionId")}>
-          <span className="inline-flex min-w-0 items-center gap-1">
-            <code className="truncate font-mono">{s.id}</code>
-            <CopyButton value={s.id} label={copyLabel} className="size-3.5" />
+          {/* block flex 而非 inline-flex：inline 级宽度不受父约束，UUID 长
+              文本会撑破卡片并把右栏的 overflow-y-auto 逼出横滚；flex 子项
+              配 min-w-0 才能真正收缩截断。 */}
+          <span className="flex min-w-0 items-center gap-1">
+            <code className="min-w-0 flex-1 truncate font-mono">{s.id}</code>
+            <CopyButton
+              value={s.id}
+              label={copyLabel}
+              className="size-3.5 shrink-0"
+            />
           </span>
         </KvRow>
         <KvRow label={t("sessions.detail.device")}>

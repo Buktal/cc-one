@@ -88,7 +88,7 @@ export function SessionTree({
     selectedGroupId === ALL_GROUPS && selectedProject == null
 
   return (
-    <div className="border-border bg-card hidden min-h-0 w-60 shrink-0 flex-col rounded-lg border @[48rem]:flex">
+    <div className="border-border bg-card hidden min-h-0 w-52 shrink-0 flex-col rounded-lg border @[48rem]:flex">
       {/* 图标轨道条：三轨宇宙开关（图标 + 小字竖排）。 */}
       <div className="border-border flex items-center gap-1 border-b p-2">
         <Tabs

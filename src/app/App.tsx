@@ -30,6 +30,10 @@ const VIEWS: Record<ViewId, ComponentType> = {
   settings: SettingsView,
 }
 
+/** 满高型视图（工作台类）：直挂 main 的 flex 列，高度严格 = 视口剩余
+ *  空间、无外层滚动，各面板自带滚动容器（见 Shell 的 fill 注释）。 */
+const FILL_VIEWS: ReadonlySet<ViewId> = new Set(["sessions"])
+
 export default function App() {
   // Morph the OS window to match the mode. Mounted in App so it is
   // always under the Redux store, regardless of which skin renders below.
@@ -49,7 +53,7 @@ export default function App() {
 
   const Active = VIEWS[view]
   return (
-    <Shell>
+    <Shell fill={FILL_VIEWS.has(view)}>
       <Active />
     </Shell>
   )
