@@ -54,6 +54,10 @@ import {
   TooltipTrigger,
 } from "@/components/ui/tooltip"
 import {
+  APP_PROFILES,
+  snippetSupportLanguage,
+} from "@/features/providers/app-profiles"
+import {
   groupSnippetCandidates,
   pairModelNameKeys,
   snippetCoveredKeys,
@@ -70,15 +74,6 @@ type Phase =
   | { kind: "ready"; entries: LiveImportPreviewEntry[] }
   | { kind: "result"; imported: number; entries: LiveImportPreviewEntry[] }
 
-/** 各应用 live 配置文件名（标题/空态提示用；与后端 live_* 路径一致）。 */
-const LIVE_FILE: Record<App, string> = {
-  claude: "settings.json",
-  codex: "config.toml",
-  gemini: ".env",
-  grok: "config.toml",
-  opencode: "opencode.json",
-}
-
 export function LiveImportDialog({
   open,
   onOpenChange,
@@ -89,6 +84,9 @@ export function LiveImportDialog({
   app: App
 }) {
   const { t } = useTranslation()
+  // 应用能力事实查表：live 文件名（标题/空态提示）、片段编辑器语言（T6 候选
+  // 过滤的覆盖键解析同语言）。
+  const profile = APP_PROFILES[app]
   const [preview] = usePreviewLiveImportMutation()
   const [importFromLive, { isLoading: importing }] =
     useImportProvidersFromLiveMutation()
@@ -105,7 +103,11 @@ export function LiveImportDialog({
   const pendingCandidates =
     phase.kind === "result" && phase.entries[0]
       ? phase.entries[0].snippetCandidates.filter(
-          (k) => !snippetCoveredKeys(app, snippet?.content ?? "").has(k),
+          (k) =>
+            !snippetCoveredKeys(
+              snippetSupportLanguage(profile.snippet),
+              snippet?.content ?? "",
+            ).has(k),
         )
       : []
 
@@ -170,7 +172,7 @@ export function LiveImportDialog({
       <DialogContent>
         <DialogHeader>
           <DialogTitle>
-            {t("providers.liveImport.title", { file: LIVE_FILE[app] })}
+            {t("providers.liveImport.title", { file: profile.liveFile })}
           </DialogTitle>
           <DialogDescription>
             {t("providers.liveImport.hint")}
@@ -197,7 +199,7 @@ export function LiveImportDialog({
         ) : phase.kind === "ready" && phase.entries.length === 0 ? (
           <EmptyState
             icon={FileJson}
-            title={t("providers.liveImport.empty", { file: LIVE_FILE[app] })}
+            title={t("providers.liveImport.empty", { file: profile.liveFile })}
           />
         ) : phase.kind === "ready" ? (
           <div className="flex flex-col gap-3">

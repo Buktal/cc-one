@@ -173,9 +173,9 @@ describe("geminiSnippetMissingKeys", () => {
 })
 
 describe("snippetCoveredKeys", () => {
-  it("collects top-level and env keys for JSON apps", () => {
+  it("JSON 语言收集顶层与 env 内键", () => {
     const covered = snippetCoveredKeys(
-      "claude",
+      "json",
       '{"env": {"ANTHROPIC_MODEL": "m"}, "includeCoAuthoredBy": false}',
     )
     expect(covered.has("env")).toBe(true)
@@ -183,9 +183,9 @@ describe("snippetCoveredKeys", () => {
     expect(covered.has("includeCoAuthoredBy")).toBe(true)
   })
 
-  it("collects top-level tables and scalar keys for TOML apps", () => {
+  it("TOML 语言收集顶层表与顶层标量键（写盘层应用的编辑器语言）", () => {
     const covered = snippetCoveredKeys(
-      "grok",
+      "toml",
       '[tui]\ntheme = "dark"\n\n[mcp_servers.github]\ncommand = "npx"',
     )
     expect(covered.has("tui")).toBe(true)
@@ -194,9 +194,9 @@ describe("snippetCoveredKeys", () => {
     expect(covered.has("theme")).toBe(false)
   })
 
-  it("returns an empty set for empty / unparseable snippets", () => {
-    expect(snippetCoveredKeys("codex", "")).toEqual(new Set())
-    expect(snippetCoveredKeys("claude", "{nope")).toEqual(new Set())
+  it("空 / 解析不了的片段 → 空集", () => {
+    expect(snippetCoveredKeys("toml", "")).toEqual(new Set())
+    expect(snippetCoveredKeys("json", "{nope")).toEqual(new Set())
   })
 })
 

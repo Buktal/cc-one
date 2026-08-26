@@ -7,8 +7,12 @@
 // 未知标签一律落 network 兜底，detail 保留原串不吞信息。标签清单与
 // src-tauri/src/provider/model_fetch.rs 的模块文档一一对应。
 
-import { configEndpoint } from "@/features/providers/derive"
+// 直连 codecs/claude（不经 derive 聚合层）：model-fetch 是被 app-profiles
+// 引用的底层域，保持对聚合层零依赖，避免 derive ↔ app-profiles 循环。
+import { configEndpoint } from "@/features/providers/codecs/claude"
 import type { ProviderPreset } from "@/features/providers/presets"
+
+import type { App } from "@/types/generated/bindings"
 
 /** 去首尾空白 + 尾部斜杠，端点比较用（候选构造也这么处理 baseURL）。 */
 function normalizeEndpoint(endpoint: string): string {
@@ -33,6 +37,22 @@ export function presetModelsUrl(
   }
   return null
 }
+
+/** 一次 fetch_models 调用的完整参数（app + 端点 + 认证 + modelsUrl 覆写）。
+ *  per-app 提取见 app-profiles 的 modelFetch 行。 */
+export interface FetchModelsArgs {
+  app: App
+  baseUrl: string
+  apiKey: string
+  modelsUrl: string | null
+}
+
+/** 拉模型参数的提取结果。判别联合：`ok: true` 时 args 必存在、`ok: false`
+ *  时 missing 给出缺的部分（endpoint / key，调用方提示对应文案）——互斥
+ *  不变量在类型里，不用 `!`。 */
+export type FetchArgsResult =
+  | { ok: true; args: FetchModelsArgs }
+  | { ok: false; missing: "endpoint" | "key" }
 
 /** 模型获取失败的分桶类型——决定 toast 标题。 */
 export type ModelsFetchErrorKind =

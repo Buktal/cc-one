@@ -54,6 +54,7 @@ import {
   TooltipContent,
   TooltipTrigger,
 } from "@/components/ui/tooltip"
+import { APP_PROFILES } from "@/features/providers/app-profiles"
 import {
   filterProviders,
   providerEndpoint,
@@ -207,10 +208,11 @@ export function ProvidersView() {
       : []
   }
 
-  // opencode 是附加模式（多供应商共存于 opencode.json，无唯一激活）：行交互走
+  // 附加模式（opencode：多供应商共存于 opencode.json，无唯一激活）：行交互走
   // 「加入 / 移出 live」而非「切换」，列表无「当前使用」标记，通用配置片段
-  // 无处合并 → 不显示。单激活四 app 恒 false。
-  const isAdditive = app === "opencode"
+  // 无处合并 → 不显示。单激活四 app 恒 false。模式事实查 app-profiles 表
+  // （镜像后端 App::is_additive_mode）。
+  const isAdditive = APP_PROFILES[app].additive
 
   /** 切换 app：重置 opencode 解释条（切走再切回重新提示）。 */
   function selectApp(a: App) {
@@ -426,12 +428,9 @@ export function ProvidersView() {
 
       {/* 通用配置片段：按应用分派合并层（ADR-0010）——claude/gemini 在
           settings_config 层并入、codex/grok 在写盘层补缺失进 live 文件。卡片只对
-          「切换时真正合并片段」的应用显示（#47 原则：不给配了不生效的应用展示控件）。
-          opencode 附加模式无「切换」概念，不显示。 */}
-      {app === "claude" ||
-      app === "codex" ||
-      app === "gemini" ||
-      app === "grok" ? (
+          「切换时真正合并片段」的应用显示（#47 原则：不给配了不生效的应用展示控
+          件）；附加模式无「切换」概念 → profile.snippet 为 none 不显示。 */}
+      {APP_PROFILES[app].snippet.kind !== "none" ? (
         <CommonConfigSnippetCard app={app} />
       ) : null}
 

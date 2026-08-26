@@ -7,6 +7,7 @@
 // `from "@/features/providers/derive"` import 不变。改单个 app 的 codec 不再
 // 需要打开这个聚合文件。
 
+import { APP_PROFILES } from "@/features/providers/app-profiles"
 import type { ProviderPreset } from "@/features/providers/presets"
 import { parseJsonObjectLenient } from "@/lib/json"
 import type { App, Provider } from "@/types/generated/bindings"
@@ -36,10 +37,10 @@ export function filterProviders(
 }
 
 /** A blank provider for the "new provider" sheet (custom category, empty
- *  env/config — the form starts fresh). `app` defaults to claude (the original
- *  pool); the settingsConfig shape matches the app: claude = `{"env": {}}`,
- *  codex / gemini = `"{}"` (both tolerate empty in their parsers). `id` is
- *  empty so `save_provider_cmd` allocates a fresh one. */
+ *  config — the form starts fresh). `app` defaults to claude (the original
+ *  pool); the blank settingsConfig shape is an app-profile fact (claude =
+ *  `{"env": {}}` container, the rest `"{}"`). `id` is empty so
+ *  `save_provider_cmd` allocates a fresh one. */
 export function emptyProvider(app: App = "claude"): Provider {
   return {
     id: "",
@@ -51,7 +52,7 @@ export function emptyProvider(app: App = "claude"): Provider {
     iconColor: "",
     sortIndex: 0,
     notes: "",
-    settingsConfig: app === "claude" ? '{\n  "env": {}\n}' : "{}",
+    settingsConfig: APP_PROFILES[app].newDraftText,
     meta: "{}",
     updatedAt: "",
   }

@@ -40,8 +40,9 @@ import {
   SheetTitle,
 } from "@/components/ui/sheet"
 import { Textarea } from "@/components/ui/textarea"
-// 草稿种子 / 保存收敛端口（codecs/draft）：按 app 分派的纯函数,骨架不内联
-// 任何 app 特殊步骤——不进 derive 聚合重导出（保持 draft → derive 单向）。
+// 草稿种子 / 保存收敛端口（codecs/draft）与应用能力事实表（app-profiles）：
+// 按 app 分派/查表，骨架不内联任何 app 特殊分支。
+import { APP_PROFILES } from "@/features/providers/app-profiles"
 import { finalizeDraft, seedDraftText } from "@/features/providers/codecs/draft"
 import { ClaudeFormFields } from "@/features/providers/components/claude-form-fields"
 import {
@@ -54,16 +55,12 @@ import { PresetPicker } from "@/features/providers/components/preset-picker"
 import {
   codexApiKey,
   codexConfigToml,
-  configApiKey,
-  configEndpoint,
   emptyProvider,
   geminiApiKey,
   geminiBaseUrl,
   geminiModel,
   grokConfigToml,
   metaTemplateValues,
-  openCodeApiKey,
-  openCodeBaseUrl,
   providerFromPreset,
   providerLiveManaged,
   restoreTemplatePlaceholders,
@@ -74,10 +71,9 @@ import {
 } from "@/features/providers/derive"
 import {
   bucketFetchModelsError,
-  presetModelsUrl,
+  type FetchModelsArgs,
 } from "@/features/providers/model-fetch"
 import {
-  PROVIDER_PRESETS,
   type ProviderPreset,
   presetsForApp,
 } from "@/features/providers/presets"
@@ -173,19 +169,9 @@ export function ProviderFormSheet({
     return true
   }
 
-  /** 一次 fetch_models 调用的完整参数（app + 端点 + 认证 + modelsUrl 覆写）。
-   *  per-app 提取见 fetchModelsArgsFor。 */
-  type FetchModelsArgs = {
-    app: App
-    baseUrl: string
-    apiKey: string
-    modelsUrl: string | null
-  }
-
   /** 调 fetchModels mutation 并处理结果（错误分桶 toast、成功填充
-   *  fetchedModels）——Claude / Gemini 两条路径同一套错误标签契约，共用这一
-   *  份错误渲染，避免分叉漂移。调用方负责各自的前置校验（端点 / key 是否
-   *  必填）与参数构造。 */
+   *  fetchedModels）——各应用同一套错误标签契约，共用这一份错误渲染，避免
+   *  分叉漂移。前置校验与参数构造在 app-profiles 的 modelFetch 行。 */
   async function runFetchModels(args: FetchModelsArgs): Promise<void> {
     const result = await fetchModels(args)
     if (result.error) {
@@ -208,67 +194,12 @@ export function ProviderFormSheet({
     }
   }
 
-  /** 各 app 拉模型列表的参数提取（per-app 小表——三份 fetch 处理器的差异只
-   *  在这一层：参数来源、前置校验、modelsUrl 覆写；错误分桶与成功填充共用
-   *  runFetchModels）。判别联合：`ok: true` 时 args 必存在、`ok: false` 时
-   *  missing 给出缺的部分（endpoint / key，调用方提示对应文案）——互斥
-   *  不变量在类型里，不用 `!`。codex / grok 无 fetch 入口，不在此表。 */
-  function fetchModelsArgsFor(
-    app: "claude" | "gemini" | "opencode",
-  ):
-    | { ok: true; args: FetchModelsArgs }
-    | { ok: false; missing: "endpoint" | "key" } {
-    switch (app) {
-      case "claude": {
-        const baseUrl = configEndpoint(configText).trim()
-        const key = configApiKey(configText).trim()
-        if (!baseUrl) return { ok: false, missing: "endpoint" }
-        if (!key) return { ok: false, missing: "key" }
-        return {
-          ok: true,
-          args: {
-            app,
-            baseUrl,
-            apiKey: key,
-            // 端点等于某预设默认值时，带上该预设声明的 modelsUrl 覆写（如火山
-            // /api/compatible 拼不出正确候选，必须精确指路）。
-            modelsUrl: presetModelsUrl(baseUrl, PROVIDER_PRESETS),
-          },
-        }
-      }
-      case "gemini": {
-        const key = geminiApiKey(configText).trim()
-        if (!key) return { ok: false, missing: "key" }
-        // Gemini 端点形状固定（GET /v1beta/models），不走 modelsUrl 覆写；
-        // 端点可空（后端 gemini_models_url 处理空→默认 generativelanguage 端点）。
-        return {
-          ok: true,
-          args: {
-            app,
-            baseUrl: geminiBaseUrl(configText).trim(),
-            apiKey: key,
-            modelsUrl: null,
-          },
-        }
-      }
-      case "opencode": {
-        const baseUrl = openCodeBaseUrl(configText).trim()
-        const key = openCodeApiKey(configText).trim()
-        if (!baseUrl) return { ok: false, missing: "endpoint" }
-        if (!key) return { ok: false, missing: "key" }
-        return {
-          ok: true,
-          args: { app, baseUrl, apiKey: key, modelsUrl: null },
-        }
-      }
-    }
-  }
-
-  /** 拉当前供应商的模型列表（统一入口）：参数提取与前置校验按 app 分表
-   *  （fetchModelsArgsFor），失败按后端错误串分桶提示（认证失败 / 端点未开放 /
-   *  超时 / 格式不支持 / 兜底）。 */
-  async function onFetchModelsFor(app: "claude" | "gemini" | "opencode") {
-    const result = fetchModelsArgsFor(app)
+  /** 拉当前供应商的模型列表（统一入口）：参数提取查 app-profiles 的
+   *  modelFetch 行（per-app 差异只在这一层；codex / grok 无此入口为 null），
+   *  缺必填项与失败按共用文案分桶提示。 */
+  async function onFetchModelsFor(a: App) {
+    const result = APP_PROFILES[a].modelFetch?.(configText)
+    if (!result) return
     if (!result.ok) {
       toast.error(
         t(
@@ -280,21 +211,6 @@ export function ProviderFormSheet({
       return
     }
     await runFetchModels(result.args)
-  }
-
-  /** Claude 区拉模型列表（OpenAI 兼容分支的后端入口是 fetch_models）。 */
-  function onFetchModels() {
-    void onFetchModelsFor("claude")
-  }
-
-  /** Gemini 区拉模型列表。 */
-  function onFetchGeminiModels() {
-    void onFetchModelsFor("gemini")
-  }
-
-  /** OpenCode 区拉模型列表（端点 = options.baseURL、认证 = options.apiKey）。 */
-  function onFetchOpenCodeModels() {
-    void onFetchModelsFor("opencode")
   }
 
   /** Gemini 下拉选中一个模型 → 写入 GEMINI_MODEL（Gemini 只有一个模型字段）。 */
@@ -428,9 +344,10 @@ export function ProviderFormSheet({
             >
               {t(`providers.app.${effectiveApp}`)}
             </Badge>
-            {/* 复制草稿（id 空）未加入 live，不显示「已启用」徽标。 */}
+            {/* 复制草稿（id 空）未加入 live，不显示「已启用」徽标；附加模式
+                标记查 app-profiles（单激活 app 的 meta 永不含 liveManaged）。 */}
             {editing?.id &&
-            effectiveApp === "opencode" &&
+            APP_PROFILES[effectiveApp].additive &&
             providerLiveManaged(editing) ? (
               <Badge
                 variant="outline"
@@ -473,7 +390,7 @@ export function ProviderFormSheet({
                 onChange={guardedWrite}
                 fetching={fetching}
                 fetchedModels={fetchedModels}
-                onFetchModels={onFetchModels}
+                onFetchModels={() => void onFetchModelsFor("claude")}
                 onEndpointEdited={() => setFetchedModels([])}
                 name={name}
                 onNameChange={setName}
@@ -530,7 +447,7 @@ export function ProviderFormSheet({
                         <Button
                           variant="outline"
                           size="sm"
-                          onClick={onFetchGeminiModels}
+                          onClick={() => void onFetchModelsFor("gemini")}
                           disabled={fetching}
                         >
                           <RefreshCw
@@ -587,7 +504,7 @@ export function ProviderFormSheet({
                     onChange={(next) => guardedWrite(() => next)}
                     fetching={fetching}
                     fetchedModels={fetchedModels}
-                    onFetchModels={onFetchOpenCodeModels}
+                    onFetchModels={() => void onFetchModelsFor("opencode")}
                   />
                 ) : null}
               </>

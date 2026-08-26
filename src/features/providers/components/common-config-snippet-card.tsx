@@ -5,8 +5,9 @@
 // 文件。供应商显式配置优先，片段只补缺失键。
 //
 // 编辑器按应用切换语言：claude/gemini 用 JSON（客户端 JSON 校验 + 格式化），
-// codex/grok 用 TOML（仅高亮，合法性 + 身份键由后端校验）。卡片底部只留动态
-// 校验反馈（gemini 凭据键警告、claude/gemini 子集判定），无常驻说明文。
+// codex/grok 用 TOML（仅高亮，合法性 + 身份键由后端校验）。语言与合并层等
+// 能力事实查 app-profiles 表。卡片底部只留动态校验反馈（gemini 凭据键警告、
+// claude/gemini 子集判定），无常驻说明文。
 
 import { useEffect, useState } from "react"
 import { useTranslation } from "react-i18next"
@@ -22,23 +23,21 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Label } from "@/components/ui/label"
 import { Switch } from "@/components/ui/switch"
 import {
-  geminiSnippetIssue,
-  geminiSnippetMissingKeys,
-  snippetMissingKeys,
-} from "@/features/providers/derive"
+  APP_PROFILES,
+  snippetSupportLanguage,
+} from "@/features/providers/app-profiles"
 import { useMutateWithToast } from "@/hooks/use-toast-mutation"
 import { parseJsonObject, tidyJson } from "@/lib/json"
 
 import type { App, CommonConfigSnippet } from "@/types/generated/bindings"
 
-/** codex/grok 片段写 TOML（写盘层补缺失进 config.toml）；claude/gemini 写 JSON。 */
-function isTomlApp(app: App): boolean {
-  return app === "codex" || app === "grok"
-}
-
 export function CommonConfigSnippetCard({ app }: { app: App }) {
   const { t } = useTranslation()
-  const isToml = isTomlApp(app)
+  // 片段支持形态查表：写盘层应用（codex/grok）编辑 TOML、合并发生在写盘层；
+  // settings_config 层应用（claude/gemini）编辑 JSON、可键级子集判定。
+  // 附加模式应用无片段卡片（providers-view 按 profile 只对前两者渲染本卡）。
+  const snippetSupport = APP_PROFILES[app].snippet
+  const isToml = snippetSupportLanguage(snippetSupport) === "toml"
   // 通用配置片段按应用独立：claude / codex / gemini / grok 各一份。
   const { data: snippet, isLoading } = useGetCommonConfigSnippetQuery(app)
   const { data: activeProvider } = useGetActiveProviderQuery(app)
@@ -106,40 +105,29 @@ export function CommonConfigSnippetCard({ app }: { app: App }) {
     if (!ok) setEnabled(!checked)
   }
 
-  // 子集判定提示：claude / gemini 在 settings_config 层合并（可键级判定，
-  // 镜像各自受控字段语义）；codex / grok 在写盘层补 live 非受控键——前端没有
-  // live 全文，settings_config 只存受控部分，无法键级判定，不做（US 19 仅对
+  // 子集判定提示（settings_config 层合并才可键级判定——profile.subsetKeys
+  // 镜像各自受控字段语义；写盘层应用前端没有 live 全文，不做，US 19 仅对
   // settings_config 层应用成立）。
   const missingKeys =
-    app === "claude" && activeProvider
-      ? snippetMissingKeys(activeProvider.settingsConfig, content)
-      : app === "gemini" && activeProvider
-        ? geminiSnippetMissingKeys(activeProvider.settingsConfig, content)
-        : []
+    activeProvider && snippetSupport.kind === "settings-config"
+      ? snippetSupport.subsetKeys(activeProvider.settingsConfig, content)
+      : []
 
-  // 底部提示只保留随内容变化的动态反馈：gemini 凭据/端点键警告（TS 镜像后端
-  // is_sensitive_config_key，ADR-0010）、claude/gemini 的子集判定（切换时将
-  // 补充哪些键 / 已全覆盖）。常驻静态说明（勿放账号信息、无激活供应商时的
-  // 生效说明等）已删——能放什么由校验反馈表达，不靠占着底部的说明文。
+  // 底部提示只保留随内容变化的动态反馈：draftIssue 先行（gemini 凭据/端点键
+  // 警告，TS 镜像后端 is_sensitive_config_key，ADR-0010），无问题再报子集判
+  // 定（切换时将补充哪些键 / 已全覆盖）。常驻静态说明已删——能放什么由校验
+  // 反馈表达，不靠占着底部的说明文。
   const bottomHint = (() => {
-    if (app === "gemini") {
-      const issue = geminiSnippetIssue(content)
-      if (issue) {
-        return t("providers.snippet.geminiCredentialWarn", { key: issue })
-      }
-      if (!activeProvider) return ""
-      return missingKeys.length > 0
-        ? t("providers.snippet.deltaHint", { keys: missingKeys.join(", ") })
-        : t("providers.snippet.coveredHint")
+    // 写盘层合并看不到 live 全文——无动态判定，不提示。
+    if (snippetSupport.kind !== "settings-config") return ""
+    const issue = snippetSupport.draftIssue?.(content)
+    if (issue) {
+      return t("providers.snippet.geminiCredentialWarn", { key: issue })
     }
-    if (app === "claude") {
-      if (!activeProvider) return ""
-      return missingKeys.length > 0
-        ? t("providers.snippet.deltaHint", { keys: missingKeys.join(", ") })
-        : t("providers.snippet.coveredHint")
-    }
-    // codex/grok 无动态判定（写盘层合并，前端看不到 live 全文）——无提示。
-    return ""
+    if (!activeProvider) return ""
+    return missingKeys.length > 0
+      ? t("providers.snippet.deltaHint", { keys: missingKeys.join(", ") })
+      : t("providers.snippet.coveredHint")
   })()
 
   // 卡片填充视口剩余高度（竖屏拉高时编辑器随之外伸，内容超出由 CodeMirror

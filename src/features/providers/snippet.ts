@@ -9,8 +9,6 @@
 // `provider::snippet::is_sensitive_config_key`，**逐字一致**（ADR-0010：
 // 前后端判定必须一致，否则后端拦了、前端还允许写回）。
 
-import type { App } from "@/types/generated/bindings"
-
 /** 写盘路径承认的受控字段（镜像后端常量；仅供 UI 提示使用，写盘权威在后端）。 */
 const CONTROLLED_FIELDS = [
   "env",
@@ -92,12 +90,17 @@ export function geminiSnippetMissingKeys(
 }
 
 /** 现有片段里已覆盖的键集合（T6「提取为通用片段」候选过滤用，ADR-0012「且片段
- *  缺」条件）：按应用片段语义解析片段内容——JSON 应用 = 顶层键 + env 内键；
- *  TOML 应用 = 顶层表 / 顶层标量键（行级容错解析，坏行忽略，能解析多少算多少）。
- *  解析不了的片段 → 空集（无键被覆盖，候选全保留）。 */
-export function snippetCoveredKeys(app: App, snippetText: string): Set<string> {
+ *  缺」条件）：按片段编辑器语言解析片段内容——JSON = 顶层键 + env 内键；
+ *  TOML = 顶层表 / 顶层标量键（行级容错解析，坏行忽略，能解析多少算多少）。
+ *  语言取自 app-profiles 的 snippetSupportLanguage（TOML = 写盘层合并应用），
+ *  本函数不再持有 app 身份分支。解析不了的片段 → 空集（无键被覆盖，候选全
+ *  保留）。 */
+export function snippetCoveredKeys(
+  language: "json" | "toml",
+  snippetText: string,
+): Set<string> {
   const covered = new Set<string>()
-  if (app === "codex" || app === "grok") {
+  if (language === "toml") {
     let inTable = false
     for (const line of snippetText.split("\n")) {
       const trimmed = line.trim()
