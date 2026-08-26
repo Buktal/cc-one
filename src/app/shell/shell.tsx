@@ -39,8 +39,11 @@ export function Shell({
           ) : (
             /* min-h-full: 内容至少占满滚动容器，但允许更高——超高内容（如
                providers 的多卡片堆叠）由这层 overflow-auto 滚动，而不是被
-               h-full 锁死在视口高度上裁掉。 */
-            <div className="flex-1 overflow-auto">
+               h-full 锁死在视口高度上裁掉。
+               -mr-4 + pr-2: 滚动条「坐进」右留白——负外边距抵消外层的
+               pr-4，滚动条贴到窗口右缘；8px 空隙 + 8px 轨道 = 16px，与左
+               留白严格相等（左右空白对称），滚动条也不再贴着卡片边缘。 */
+            <div className="flex-1 -mr-4 overflow-auto pr-2">
               <div className="flex min-h-full w-full flex-col">{children}</div>
             </div>
           )}
