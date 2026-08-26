@@ -34,7 +34,8 @@ import {
   ChartTooltip,
 } from "@/components/ui/chart"
 import { zeroFillTrend } from "@/features/usage/derive"
-import { dayRangeToTs, effectiveDays } from "@/lib/date-range"
+import { tickIntervalFor } from "@/lib/chart"
+import { dayRangeToTs, effectiveDays, sameDayWindow } from "@/lib/date-range"
 import { formatCost, formatDay, formatTokens } from "@/lib/format"
 import { cn } from "@/lib/utils"
 
@@ -84,9 +85,8 @@ export function UsageTrendChart({ filter }: { filter: FilterState }) {
   const { from_day, to_day } = effectiveDays(filter)
   const { from_ts: fromTs, to_ts: toTs } = dayRangeToTs(from_day, to_day)
   // A single local-day range collapses per-day resolution to one bar, so zoom
-  // to hourly; anything wider stays per-day. A UTC+8 "today" maps to a 24h UTC
-  // window that still falls on one local day, so isSame("day") catches it.
-  const hourly = !!fromTs && !!toTs && dayjs(fromTs).isSame(toTs, "day")
+  // to hourly; anything wider stays per-day. 谓词归 lib/date-range（时区语义见其注释）。
+  const hourly = sameDayWindow(fromTs, toTs)
   const bucket: TrendBucket = hourly ? "Hour" : "Day"
   // 图例显隐集合 —— 点击图例 toggle 单线显隐。隐藏的桶不再渲染 Line
   // (tooltip 也不含), 但手写图例始终全量, 保证能点回来。
@@ -125,7 +125,7 @@ export function UsageTrendChart({ filter }: { filter: FilterState }) {
   // ChartStyle-injected --color-<key> — keeps the source of truth in BUCKETS.
   // X 轴刻度间隔按点数自适应（~7 个刻度）：preserveStartEnd 在 24 小时点上
   // 只保首尾两个、中间刻度全被丢，长窗口与短窗口都看不清节奏。
-  const tickInterval = Math.max(0, Math.ceil(data.length / 7) - 1)
+  const tickInterval = tickIntervalFor(data.length)
   const chartConfig = {
     input_tokens: {
       label: t("usage.tokens.input"),

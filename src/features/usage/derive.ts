@@ -13,6 +13,7 @@ import {
 } from "@/app/store/slices/filterSlice"
 import { type FilterOption, facetOptions } from "@/lib/filter-options"
 import { projectBasename } from "@/lib/paths"
+import { totalTokensOf } from "@/lib/token-buckets"
 import type {
   DeviceUsageRow,
   ModelStatsRow,
@@ -395,16 +396,7 @@ export function sessionSectionStats(
   rows: readonly SessionUsageRow[],
   topN: number,
 ): SessionSectionStats {
-  const totalTokens =
-    rows.reduce(
-      (s, r) =>
-        s +
-        Number(r.input_tokens) +
-        Number(r.output_tokens) +
-        Number(r.cache_creation_tokens) +
-        Number(r.cache_read_tokens),
-      0,
-    ) || 1
+  const totalTokens = rows.reduce((s, r) => s + totalTokensOf(r), 0) || 1
   const turnBuckets: [number, number, number, number] = [0, 0, 0, 0]
   let subagents = 0
   let turns = 0
@@ -427,22 +419,16 @@ export function sessionSectionStats(
     longestSpanMs: longest,
     avgTurns: rows.length > 0 ? turns / rows.length : null,
     turnBuckets,
-    top: rows.slice(0, topN).map((r) => ({
-      session_id: r.session_id,
-      device_id: r.device_id,
-      title: r.title,
-      tokens:
-        Number(r.input_tokens) +
-        Number(r.output_tokens) +
-        Number(r.cache_creation_tokens) +
-        Number(r.cache_read_tokens),
-      share:
-        (Number(r.input_tokens) +
-          Number(r.output_tokens) +
-          Number(r.cache_creation_tokens) +
-          Number(r.cache_read_tokens)) /
-        totalTokens,
-    })),
+    top: rows.slice(0, topN).map((r) => {
+      const tokens = totalTokensOf(r)
+      return {
+        session_id: r.session_id,
+        device_id: r.device_id,
+        title: r.title,
+        tokens,
+        share: tokens / totalTokens,
+      }
+    }),
     totalTokens,
   }
 }

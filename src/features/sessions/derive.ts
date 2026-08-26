@@ -13,6 +13,7 @@ import {
 import { dayRangeToTs, effectiveDays } from "@/lib/date-range"
 import { projectBasename } from "@/lib/paths"
 import { ALL_FILTER } from "@/lib/source-tags"
+import { type TokenBuckets, totalTokensOf } from "@/lib/token-buckets"
 import type {
   SessionFilter,
   SessionGroup,
@@ -626,14 +627,10 @@ export function containerStatsRows(
 
 /**
  * The four token buckets the workbench aggregates over — the JS mirror of the
- * Rust `TokenCounts` u32 four-pack the backend rows carry.
+ * Rust `TokenCounts` u32 four-pack; 形状与总量口径归 lib/token-buckets（架构
+ * 审查候选⑨），此别名保留本域的接口词。
  */
-export interface StatsTokens {
-  input: number
-  output: number
-  cache_creation: number
-  cache_read: number
-}
+export type StatsTokens = TokenBuckets
 
 /**
  * Cache-hit ratio over the cacheable pool: cache_read / (input +
@@ -766,11 +763,7 @@ export function projectNodes(
       lastActiveAt: r.last_active_at,
     }
     node.sessions.push(r)
-    node.tokens +=
-      r.input_tokens +
-      r.output_tokens +
-      r.cache_creation_tokens +
-      r.cache_read_tokens
+    node.tokens += totalTokensOf(r)
     if (r.last_active_at > node.lastActiveAt)
       node.lastActiveAt = r.last_active_at
     byProject.set(r.project_dir, node)

@@ -12,7 +12,7 @@ import { useMemo } from "react"
 import { useStatsQuery, useTrendQuery, ZERO_STATS } from "@/app/store/api"
 import type { FilterState } from "@/app/store/slices/filterSlice"
 import { hourlySnapshot, tokenSnapshot } from "@/features/usage/derive"
-import { dayRangeToTs, effectiveDays } from "@/lib/date-range"
+import { dayRangeToTs, effectiveDays, sameDayWindow } from "@/lib/date-range"
 import type { TrendBucket } from "@/types/generated/bindings"
 
 export interface TokenSnapshotView {
@@ -35,7 +35,7 @@ export function useTokenSnapshot(filter: FilterState): TokenSnapshotView {
   // delta 恒 null, 日均退化回总量), 改走 hourlySnapshot 的「vs 昨日同时段」。
   const { from_day, to_day } = effectiveDays(filter)
   const { from_ts: fromTs, to_ts: toTs } = dayRangeToTs(from_day, to_day)
-  const singleDay = !!fromTs && !!toTs && dayjs(fromTs).isSame(toTs, "day")
+  const singleDay = sameDayWindow(fromTs, toTs)
   // 昨日 filter —— 与当前 filter 同维度 (model/source/device), 只把窗口换成
   // 昨天的具体日期。queryKey 一天内稳定, 跨天滚动自动重查。
   const yesterdayFilter = useMemo<FilterState>(

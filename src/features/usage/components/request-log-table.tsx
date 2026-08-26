@@ -56,7 +56,7 @@ import {
 } from "@/lib/format"
 import { DEFAULT_PAGE_SIZE, PAGE_SIZES } from "@/lib/pagination"
 import { usePersistedState } from "@/lib/persistence"
-import { tokenTotal } from "@/lib/usage"
+import { totalTokensOf } from "@/lib/token-buckets"
 import { cn } from "@/lib/utils"
 import type { UsageLogRow } from "@/types/generated/bindings"
 import { sourceLabel } from "../source-labels"
@@ -241,8 +241,10 @@ function LogRow({
       </TableCell>
       <TableCell className="text-right tabular-nums">
         <Tooltip>
-          <TooltipTrigger render={<span>{formatTokens(tokenTotal(r))}</span>} />
-          <TooltipContent>{formatInt(tokenTotal(r))}</TooltipContent>
+          <TooltipTrigger
+            render={<span>{formatTokens(totalTokensOf(r))}</span>}
+          />
+          <TooltipContent>{formatInt(totalTokensOf(r))}</TooltipContent>
         </Tooltip>
       </TableCell>
       <TableCell
@@ -367,7 +369,7 @@ function DetailRow({ r }: { r: UsageLogRow }) {
             />
             <CostLine
               label={t("usage.logs.col.cost")}
-              tokens={formatTokens(tokenTotal(r))}
+              tokens={formatTokens(totalTokensOf(r))}
               value={formatCostPrecise(r.total_cost_usd)}
             />
           </div>

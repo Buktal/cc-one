@@ -47,6 +47,7 @@ import {
   formatSegValue,
   formatTokens,
 } from "@/lib/format"
+import { sumBuckets, tokenBuckets } from "@/lib/token-buckets"
 import { cn } from "@/lib/utils"
 import type {
   SessionMessage,
@@ -267,12 +268,7 @@ function SessionCards({
   // （containerStatsRows 的会话态切片 = 整份宇宙读数），卡片不空转。
   const agg = stats
     ? {
-        tokens: {
-          input: stats.input_tokens,
-          output: stats.output_tokens,
-          cache_creation: stats.cache_creation_tokens,
-          cache_read: stats.cache_read_tokens,
-        },
+        tokens: tokenBuckets(stats),
         hitRate: stats.cache_hit_rate,
         cost: stats.total_cost_usd ?? 0,
         models: stats.models.map<ModelShare>((m) => ({
@@ -328,7 +324,7 @@ function SessionCards({
           ]}
         />
       </Card>
-      <ModelCard models={agg.models} total={sumTokens(agg.tokens)} />
+      <ModelCard models={agg.models} total={sumBuckets(agg.tokens)} />
       <IdentityCard session={s} stats={stats} deviceLabel={deviceLabel} />
     </>
   )
@@ -366,7 +362,7 @@ function AggregateCards({
       </Card>
       <ModelCard
         models={aggregate.models}
-        total={sumTokens(aggregate.tokens)}
+        total={sumBuckets(aggregate.tokens)}
         showSessionCounts
       />
       {projectIdentity ? (
@@ -459,7 +455,7 @@ function UsageBody({
   className?: string
 }) {
   const { t } = useTranslation()
-  const total = sumTokens(tokens)
+  const total = sumBuckets(tokens)
   const segments = [
     {
       label: t("sessions.stats.bucket.input"),
@@ -767,8 +763,4 @@ function KvRow({ label, children }: { label: string; children: ReactNode }) {
       <span className="text-foreground min-w-0">{children}</span>
     </div>
   )
-}
-
-function sumTokens(t: StatsAggregate["tokens"]): number {
-  return t.input + t.output + t.cache_creation + t.cache_read
 }

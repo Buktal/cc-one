@@ -4,7 +4,6 @@
 // (<10s / 10–30s / 30–60s / >60s) with avg / P95. The bars read the SAME
 // trend query the overview chart consumes (one cache entry per filter).
 
-import dayjs from "dayjs"
 import { useTranslation } from "react-i18next"
 import { Bar, BarChart, Cell, XAxis } from "recharts"
 import { useStatsQuery, useTrendQuery } from "@/app/store/api"
@@ -17,7 +16,8 @@ import {
   ChartTooltip,
 } from "@/components/ui/chart"
 import { requestHeadline, windowDayCount } from "@/features/usage/derive"
-import { dayRangeToTs, effectiveDays } from "@/lib/date-range"
+import { tickIntervalFor } from "@/lib/chart"
+import { dayRangeToTs, effectiveDays, sameDayWindow } from "@/lib/date-range"
 import {
   formatCount,
   formatDay,
@@ -42,7 +42,8 @@ export function RequestSection({ filter }: { filter: FilterState }) {
   // per-day resolution to one bar, so zoom to hourly.
   const { from_day, to_day } = effectiveDays(filter)
   const { from_ts: fromTs, to_ts: toTs } = dayRangeToTs(from_day, to_day)
-  const hourly = !!fromTs && !!toTs && dayjs(fromTs).isSame(toTs, "day")
+  // 单日本地日窗口折叠成一根天桶 → 升小时粒度；谓词归属 lib/date-range。
+  const hourly = sameDayWindow(fromTs, toTs)
   const bucket: TrendBucket = hourly ? "Hour" : "Day"
   const {
     data: trend = [],
@@ -54,7 +55,7 @@ export function RequestSection({ filter }: { filter: FilterState }) {
   const peakCount = headline.peakCount ?? 0
   // X 轴刻度间隔按桶数自适应（~7 个）—— 与趋势图同规则：preserveStartEnd
   // 在密桶时只保首尾两个刻度。
-  const tickInterval = Math.max(0, Math.ceil(bars.length / 7) - 1)
+  const tickInterval = tickIntervalFor(bars.length)
 
   const durLabels = [
     t("usage.requests.durBand1"),
