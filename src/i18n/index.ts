@@ -8,6 +8,10 @@
 import i18n from "i18next"
 import { initReactI18next } from "react-i18next"
 
+// dayjs 的语言层（locale 注册 + relativeTime 插件，即 fromNow）与 i18next
+// 同属「展示语言」的全局配置——import 本模块即一并就绪（架构审查Ⅲ候选②，
+// 此前插件注册散落各组件）。
+import "@/i18n/languages"
 import en from "@/locales/en.json"
 import ja from "@/locales/ja.json"
 import zh from "@/locales/zh.json"

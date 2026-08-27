@@ -8,8 +8,6 @@
 // useLibraryBrowser (./use-library-browser). This component owns JSX, styles,
 // i18n, and the pure display helper (kindIcon).
 
-import dayjs from "dayjs"
-import relativeTime from "dayjs/plugin/relativeTime"
 import {
   ArrowUp,
   Check,
@@ -29,6 +27,7 @@ import { EmptyState } from "@/components/empty-state"
 import { FilterSelect } from "@/components/filter-select"
 import { PaginationBar } from "@/components/pagination-bar"
 import { QueryState } from "@/components/query-state"
+import { RelativeTime } from "@/components/relative-time"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent } from "@/components/ui/card"
 import { Input } from "@/components/ui/input"
@@ -55,8 +54,6 @@ import { kindIcon } from "../kind-icon"
 import { useLibraryBrowser } from "../use-library-browser"
 import { PreviewSheet } from "./preview-sheet"
 import { UploadDialog } from "./upload-dialog"
-
-dayjs.extend(relativeTime)
 
 export function LibraryView() {
   const { t } = useTranslation()
@@ -406,18 +403,7 @@ export function LibraryView() {
                                 </Tooltip>
                               )
                             ) : (
-                              <Tooltip>
-                                <TooltipTrigger
-                                  render={
-                                    <span>
-                                      {dayjs(e.modified_ms).fromNow()}
-                                    </span>
-                                  }
-                                />
-                                <TooltipContent>
-                                  {dayjs(e.modified_ms).format("MM/DD HH:mm")}
-                                </TooltipContent>
-                              </Tooltip>
+                              <RelativeTime ts={e.modified_ms} />
                             )}
                           </TableCell>
                           <TableCell className="text-right">

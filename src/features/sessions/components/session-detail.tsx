@@ -18,8 +18,6 @@
 // Virtuoso measures each row's height dynamically, so collapsing a bubble
 // re-lays the list without any manual bookkeeping.
 
-import dayjs from "dayjs"
-import relativeTime from "dayjs/plugin/relativeTime"
 import {
   ArrowLeft,
   ChevronDown,
@@ -52,6 +50,7 @@ import {
   TooltipContent,
   TooltipTrigger,
 } from "@/components/ui/tooltip"
+import { formatTime } from "@/lib/format"
 import { cn } from "@/lib/utils"
 import type {
   SessionGroup,
@@ -72,8 +71,6 @@ import { initialTurnNav, reduceTurnNav, turnAnchors } from "../turn-nav"
 import { initialTurnSearch, reduceTurnSearch } from "../turn-search"
 import { useSessionTitleRename } from "../use-sessions-browser"
 import { ConversationFlow } from "./conversation-flow"
-
-dayjs.extend(relativeTime)
 
 /** How far below the transcript's top a jumped-to user turn lands. */
 const TURN_OFFSET = 72
@@ -740,7 +737,7 @@ function TurnNavPanel({
                 )}
               >
                 <span className="text-muted-foreground/70 font-mono text-[9px] tabular-nums">
-                  {message.ts ? dayjs(message.ts).format("MM/DD HH:mm") : "—"}
+                  {formatTime(message.ts)}
                 </span>
                 <span className="text-foreground w-full min-w-0 truncate text-[11px]">
                   {highlight(snippet, query)}
@@ -794,7 +791,7 @@ function TurnNavPanel({
                   className="max-h-72 max-w-md overflow-y-auto border border-border text-[13px]"
                 >
                   <div className="text-muted-foreground mb-1 text-[10px] tabular-nums">
-                    {turn.ts ? dayjs(turn.ts).format("MM/DD HH:mm") : "—"}
+                    {formatTime(turn.ts)}
                   </div>
                   <div className="break-words whitespace-pre-wrap">
                     {turn.content}

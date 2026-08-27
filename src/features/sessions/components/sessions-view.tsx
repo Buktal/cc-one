@@ -15,8 +15,6 @@
 // browser). This component owns JSX, styles, i18n and the source-display helper
 // (../source-labels). Mirrors library-view.tsx's split.
 
-import dayjs from "dayjs"
-import relativeTime from "dayjs/plugin/relativeTime"
 import { MessagesSquare, Search, Star, Trash2, X } from "lucide-react"
 import { type ReactNode, useState } from "react"
 import { useTranslation } from "react-i18next"
@@ -29,6 +27,7 @@ import { FilterSelect } from "@/components/filter-select"
 import { PaginationBar } from "@/components/pagination-bar"
 import { ProjectSelect } from "@/components/project-select"
 import { QueryState } from "@/components/query-state"
+import { RelativeTime } from "@/components/relative-time"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent } from "@/components/ui/card"
 import { Checkbox } from "@/components/ui/checkbox"
@@ -77,8 +76,6 @@ import { GroupCreateDialog } from "./group-create-dialog"
 import { SessionDetail } from "./session-detail"
 import { SessionTree } from "./session-tree"
 import { NarrowStatsTrigger, StatsRail, type StatsScopeTag } from "./stats-rail"
-
-dayjs.extend(relativeTime)
 
 export function SessionsView() {
   const b = useSessionsBrowser()
@@ -872,20 +869,7 @@ function SessionsTable({
                   </TableCell>
                 ) : null}
                 <TableCell className="text-muted-foreground text-xs">
-                  {s.last_active_at ? (
-                    <Tooltip>
-                      <TooltipTrigger
-                        render={
-                          <span>{dayjs(s.last_active_at).fromNow()}</span>
-                        }
-                      />
-                      <TooltipContent>
-                        {dayjs(s.last_active_at).format("YYYY-MM-DD HH:mm")}
-                      </TooltipContent>
-                    </Tooltip>
-                  ) : (
-                    "—"
-                  )}
+                  <RelativeTime ts={s.last_active_at} />
                 </TableCell>
                 <TableCell className="text-right text-xs tabular-nums">
                   {formatCount(s.request_count)}

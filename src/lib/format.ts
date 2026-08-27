@@ -183,6 +183,19 @@ export function formatTime(ts: string | number | null | undefined): string {
   )
 }
 
+/** Timestamp → `YYYY-MM-DD HH:mm`（含年份的精确时刻）。相对时间
+ *  （`fromNow`）悬浮展示的绝对时间用这版——相对措辞已经丢了精度，悬浮里
+ *  年份必须补全，不做跨年特例。空值 → `—`，坏输入回落原值（与 formatTime
+ *  同一对空值规则）。 */
+export function formatTimeExact(
+  ts: string | number | null | undefined,
+): string {
+  if (!ts) return "—"
+  const d = dayjs(ts)
+  if (!d.isValid()) return String(ts)
+  return d.format("YYYY-MM-DD HH:mm")
+}
+
 /** ISO day `yyyy-mm-dd` → `MM/DD`. */
 export function formatDay(day: string | null | undefined): string {
   if (!day) return "—"

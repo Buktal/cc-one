@@ -11,7 +11,6 @@
 // 相对时间随顶栏查询轮询重算（与原 DataFreshness 同一策略）。
 
 import dayjs from "dayjs"
-import relativeTime from "dayjs/plugin/relativeTime"
 import { useTranslation } from "react-i18next"
 
 import { useAppInfoQuery } from "@/app/store/api"
@@ -23,11 +22,6 @@ import {
 import { useFreshness } from "@/hooks/use-freshness"
 import { formatTime } from "@/lib/format"
 import { cn } from "@/lib/utils"
-
-// relativeTime gives us `fromNow()`; the locale it renders in is set globally by
-// `setDayjsLocale` (driven from the display-language preference) — not
-// hard-coded here.
-dayjs.extend(relativeTime)
 
 /** 心跳点：有数据 = 品牌 ping（顶栏唯一持续动画元素，数据的「生命体征」）；
  *  首启 = 静态灰点（还没有可跳的心跳）。 */

@@ -21,11 +21,11 @@
 // selection-free session_stats 读（aggregateStats 纯聚合），无第二条统计路径。
 
 import dayjs from "dayjs"
-import relativeTime from "dayjs/plugin/relativeTime"
 import { BarChart3 } from "lucide-react"
 import { type ReactNode, useMemo, useRef } from "react"
 import { useTranslation } from "react-i18next"
 import { CopyButton } from "@/components/copy-button"
+import { RelativeTime } from "@/components/relative-time"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import {
@@ -63,8 +63,6 @@ import {
   type StatsAggregate,
 } from "../derive"
 import { turnAnchors } from "../turn-nav"
-
-dayjs.extend(relativeTime)
 
 /** 四桶条形的分段色 —— 与 usage 域图表同一组 B 级语义 token。 */
 const BUCKET_COLORS = {
@@ -684,18 +682,11 @@ function IdentityCard({
           {deviceLabel(s.device_id)}
         </KvRow>
         <KvRow label={t("sessions.detail.lastActive")}>
-          {s.last_active_at ? (
-            <Tooltip>
-              <TooltipTrigger render={<span className="tabular-nums" />}>
-                {dayjs(s.last_active_at).fromNow()}
-              </TooltipTrigger>
-              <TooltipContent side="left">
-                {dayjs(s.last_active_at).format("YYYY-MM-DD HH:mm")}
-              </TooltipContent>
-            </Tooltip>
-          ) : (
-            "—"
-          )}
+          <RelativeTime
+            ts={s.last_active_at}
+            className="tabular-nums"
+            side="left"
+          />
         </KvRow>
       </div>
     </Card>
@@ -734,18 +725,11 @@ function ProjectIdentityCard({
           {t("sessions.stats.idSubagents", { n: formatCount(subagents) })}
         </KvRow>
         <KvRow label={t("sessions.detail.lastActive")}>
-          {lastActiveAt ? (
-            <Tooltip>
-              <TooltipTrigger render={<span className="tabular-nums" />}>
-                {dayjs(lastActiveAt).fromNow()}
-              </TooltipTrigger>
-              <TooltipContent side="left">
-                {dayjs(lastActiveAt).format("YYYY-MM-DD HH:mm")}
-              </TooltipContent>
-            </Tooltip>
-          ) : (
-            "—"
-          )}
+          <RelativeTime
+            ts={lastActiveAt}
+            className="tabular-nums"
+            side="left"
+          />
         </KvRow>
       </div>
     </Card>

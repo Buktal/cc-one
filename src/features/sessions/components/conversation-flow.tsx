@@ -20,7 +20,6 @@
 // attached tool row (an in-session search hit) is redirected to the assistant
 // card that renders it, so the ring always lands on a visible row.
 
-import dayjs from "dayjs"
 import {
   Bot,
   ChevronDown,
@@ -49,6 +48,7 @@ import {
   TooltipTrigger,
 } from "@/components/ui/tooltip"
 import { describeError } from "@/lib/error"
+import { formatTime } from "@/lib/format"
 import { cn } from "@/lib/utils"
 import type { SessionMessage } from "@/types/generated/bindings"
 import {
@@ -566,8 +566,8 @@ function BaseRow({
               )}
             />
             {/* ts can be an empty string (codex/claude pass through whatever
-            the source file has), so guard it. */}
-            <span>{time ? dayjs(time).format("MM/DD HH:mm") : "—"}</span>
+            the source file has) — formatTime 空值即「—」。 */}
+            <span>{formatTime(time)}</span>
             {model ? (
               <Badge
                 variant="secondary"

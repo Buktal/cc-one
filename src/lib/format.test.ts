@@ -1,3 +1,4 @@
+import dayjs from "dayjs"
 import { describe, expect, it } from "vitest"
 
 import {
@@ -15,6 +16,8 @@ import {
   formatRatio,
   formatSegValue,
   formatSize,
+  formatTime,
+  formatTimeExact,
   formatTokens,
   spanLabelKey,
   spanMsOf,
@@ -294,6 +297,36 @@ describe("formatSize", () => {
     expect(formatSize(2048)).toBe("2.0 KB")
     expect(formatSize(1024 * 1024 * 1.5)).toBe("1.5 MB")
     expect(formatSize(1024 ** 3 * 2)).toBe("2.00 GB")
+  })
+})
+
+describe("formatTime / formatTimeExact", () => {
+  it("formatTime：当年 MM/DD HH:mm；非当年补年份前缀（跨年防误读）", () => {
+    const now = dayjs()
+    expect(formatTime(now.toISOString())).toBe(now.format("MM/DD HH:mm"))
+    const otherYear =
+      now.year() > 2020
+        ? dayjs("2020-06-15T08:05:00")
+        : dayjs("2035-06-15T08:05:00")
+    expect(formatTime(otherYear.toISOString())).toMatch(
+      /^\d{4}\/\d{2}\/\d{2} \d{2}:\d{2}$/,
+    )
+  })
+
+  it("formatTimeExact：恒 YYYY-MM-DD HH:mm——相对时间悬浮的绝对时刻必须带年份", () => {
+    expect(formatTimeExact("2026-08-27T09:30:00")).toBe("2026-08-27 09:30")
+    expect(formatTimeExact(1_756_267_800_000)).toMatch(
+      /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}$/,
+    )
+  })
+
+  it("空值 → —；坏输入回落原值（两函数同一对空值规则）", () => {
+    expect(formatTime(null)).toBe("—")
+    expect(formatTimeExact(null)).toBe("—")
+    expect(formatTime("")).toBe("—")
+    expect(formatTimeExact("")).toBe("—")
+    expect(formatTime("not-a-time")).toBe("not-a-time")
+    expect(formatTimeExact("not-a-time")).toBe("not-a-time")
   })
 })
 
