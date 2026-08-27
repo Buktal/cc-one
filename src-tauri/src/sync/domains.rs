@@ -1,14 +1,18 @@
 //! Per-syncable-domain pairs — the single home for "what each domain syncs".
 //!
-//! Every domain that rides the git repo declares BOTH halves of its pair here:
-//! the push-side materialize (store → derived files) and the pull-side import
-//! (peer files → store). `flow` only composes these pairs with git primitives
-//! (order, retry, commit/push) — it no longer knows a domain's file shapes.
-//! Adding a new syncable domain = one module section here (its materialize +
-//! import) plus one line in each of `flow::push_usage` / `flow::pull_and_import`;
-//! the store never grows a new concern just to sync one.
+//! The domain list is DATA, not prose: the [`DOMAINS`] table below, one row
+//! per domain declaring BOTH halves of its pair — the push-side materialize
+//! (store → derived files) and the pull-side import (peer files → store).
+//! `flow` only composes the table with git primitives (pull order, retry,
+//! commit/push) by iterating it; it never names a domain, and no domain
+//! action has a second call site. Adding a new syncable domain = write its
+//! two actions (here or in the domain's owning module) and add ONE row to
+//! [`DOMAINS`]: a domain missing from the table fails the completeness test
+//! below, a half-written row must be a deliberate `None` on the materialize
+//! side, and a deleted action fails the compile. The store never grows a new
+//! concern just to sync one.
 //!
-//! The domains:
+//! The domains (each row's comment carries the file shapes):
 //!   - usage: per-day `usage-<day>.jsonl` / `turns-<day>.jsonl` Artifacts,
 //!     driven by the `dirty_days` flag (collect marks, push clears).
 //!   - sessions: per-session `sessions/<id>.jsonl` snapshots, driven by the
@@ -26,12 +30,113 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use crate::config::{ConfigData, Paths};
+use crate::config::Paths;
 use crate::db::{DaySnapshot, SessionCounts, Store};
 use crate::error::AppResult;
 use crate::sessions::snapshot_policy::{
     decide_snapshot_action, presence_mismatches, SnapshotAction,
 };
+
+// ---------------------------------------------------------------------------
+// The DOMAINS table — the syncable-domain list as data
+// ---------------------------------------------------------------------------
+
+/// Pull-side action: read the freshly checked-out worktree into the store
+/// (peer files; must tolerate files missing — a fresh clone has none).
+/// Uniform signature `(store, paths, self_device_id)`; the id exists for the
+/// domains that must skip their own files on read, not every action needs it.
+/// Returns the number of items the domain imported this pull (per-domain
+/// grain — usage rows / session snapshots / provider entries / registry
+/// rows), which the flow sums into the sync report's `imported` total.
+pub type ImportFn = fn(&Store, &Paths, &str) -> AppResult<u32>;
+
+/// Push-side action: materialize THIS device's files from the store into the
+/// worktree (byte-stable, so an unchanged store no-ops the commit). Returns
+/// the clear-phase state the write produced; the flow folds every domain's
+/// output into one [`PushMaterialized`] for the single clear transaction.
+pub type MaterializeFn = fn(&Store, &Paths, &str) -> AppResult<PushMaterialized>;
+
+/// One syncable domain: the pair of actions it contributes to the sync flow.
+pub struct DomainPair {
+    /// Stable domain id — read by the completeness test below (a domain
+    /// dropped from the table must fail the test, not vanish silently); not a
+    /// lookup key in non-test code.
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub name: &'static str,
+    /// Pull-side import ([`ImportFn`] contract).
+    pub import: ImportFn,
+    /// Push-side materialize ([`MaterializeFn`] contract). `None` = the
+    /// domain has no action in the push loop because its files are written
+    /// OUTSIDE the flow and merely ride the shared commit — a deliberate,
+    /// visible choice, never an omission.
+    pub materialize: Option<MaterializeFn>,
+}
+
+/// THE list of syncable domains. ROW ORDER IS EXECUTION ORDER: both flow
+/// loops (`flow::pull_and_import`, `flow::push_usage`) iterate this table and
+/// nothing else, so these rows are the whole story of which domains sync and
+/// in what order (import order and materialize order are the same row order).
+/// 加新同步域 = 写好它的 materialize + import 两个动作，再在本表加一行；
+/// 不属于推侧的域把 materialize 记 `None` 并注明谁在流程外写盘。
+pub static DOMAINS: &[DomainPair] = &[
+    // Per-day usage + turns Artifacts (`data/<id>/usage-<day>.jsonl` /
+    // `turns-<day>.jsonl`), driven by the `dirty_days` flag (collect marks,
+    // push clears).
+    DomainPair {
+        name: "usage",
+        import: usage_import,
+        materialize: Some(usage_materialize),
+    },
+    // Per-session snapshots (`data/<id>/sessions/<sid>.jsonl`, favorited
+    // only — "snapshot exists ⇔ favorited"), driven by `dirty_sessions`; the
+    // import half also propagates cross-device un-favorites.
+    DomainPair {
+        name: "sessions",
+        import: sessions_import,
+        materialize: Some(sessions_materialize),
+    },
+    // Per-device key-stripped `providers.json` (structure only — API keys
+    // stay in the local DB); byte-stable, so no dirty flag. Both actions live
+    // in the domain's owning module — the table points straight at them.
+    DomainPair {
+        name: "providers",
+        import: crate::provider::sync::import_peer_providers,
+        materialize: Some(providers_materialize),
+    },
+    // Per-device name artifacts (`config/devices_<id>.json`): import-only in
+    // this flow — the file is written on the config side
+    // (`devices::ensure_own_device_artifact`) and rides the shared commit,
+    // so the push half is `None`.
+    DomainPair {
+        name: "devices",
+        import: crate::devices::reload_devices_into_store,
+        materialize: None,
+    },
+];
+
+/// What one push-side pass produced, for the shared dirty-flag clear. Each
+/// domain's materialize fills only its own slice (usage → `days`, sessions →
+/// `sessions`, domains without clear state → empty); the flow folds all
+/// domains' outputs into one of these and hands it to the ONE
+/// [`Store::clear_dirty_flags_if_unchanged`] transaction — a mid-clear
+/// failure can never leave days-clean + sessions-dirty.
+#[derive(Default)]
+pub struct PushMaterialized {
+    /// Usage domain: per-day recompute-time row-count snapshots.
+    pub days: Vec<DaySnapshot>,
+    /// Sessions domain: recomputed + removed snapshots.
+    pub sessions: SessionsMaterialized,
+}
+
+impl PushMaterialized {
+    /// Fold one domain's materialize output into the running totals (folded
+    /// in table order, so clear-phase input order = execution order).
+    pub(crate) fn absorb(&mut self, other: PushMaterialized) {
+        self.days.extend(other.days);
+        self.sessions.recomputed.extend(other.sessions.recomputed);
+        self.sessions.removed.extend(other.sessions.removed);
+    }
+}
 
 // ---------------------------------------------------------------------------
 // usage — per-day usage + turns Artifacts
@@ -46,7 +151,7 @@ pub fn usage_materialize(
     store: &Store,
     paths: &Paths,
     device_id: &str,
-) -> AppResult<Vec<DaySnapshot>> {
+) -> AppResult<PushMaterialized> {
     let dirty = store.dirty_days()?;
     let mut day_snapshots: Vec<DaySnapshot> = Vec::with_capacity(dirty.len());
     for day in &dirty {
@@ -58,15 +163,20 @@ pub fn usage_materialize(
             turn_rows: turns,
         });
     }
-    Ok(day_snapshots)
+    Ok(PushMaterialized {
+        days: day_snapshots,
+        ..PushMaterialized::default()
+    })
 }
 
 /// Pull-side import: read every device's usage + turns Artifacts into the
 /// store, deduped by the `(uuid, device_id)` primary key. Imported rows are
 /// already on git, so their days are NOT marked dirty (the pull/collect split
 /// `Store::ingest` vs `Store::ingest_marking_dirty` encodes). Returns the
-/// number of newly inserted usage records.
-pub fn usage_import(store: &Store, paths: &Paths) -> AppResult<u32> {
+/// number of newly inserted usage records. The table's uniform signature
+/// carries `self_device_id`, but usage ignores it — this domain reads EVERY
+/// device's artifacts, self's included (the uuid key dedupes self's rows).
+pub fn usage_import(store: &Store, paths: &Paths, _self_device_id: &str) -> AppResult<u32> {
     let records = crate::collect::artifact::read_all_artifacts(paths)?;
     let inserted = store.ingest(&records)?;
     let turns = crate::collect::artifact::read_all_turn_artifacts(paths)?;
@@ -82,6 +192,7 @@ pub fn usage_import(store: &Store, paths: &Paths) -> AppResult<u32> {
 /// favorited sessions whose snapshot was recomputed (cleared only when their
 /// message count is unchanged) and the non-favorited sessions whose leftover
 /// snapshot was deleted (cleared unconditionally — deletion is idempotent).
+#[derive(Default)]
 pub struct SessionsMaterialized {
     pub recomputed: Vec<SessionCounts>,
     pub removed: Vec<String>,
@@ -96,7 +207,7 @@ pub fn sessions_materialize(
     store: &Store,
     paths: &Paths,
     device_id: &str,
-) -> AppResult<SessionsMaterialized> {
+) -> AppResult<PushMaterialized> {
     let dirty_sessions = store.dirty_sessions()?;
     let mut recomputed: Vec<SessionCounts> = Vec::with_capacity(dirty_sessions.len());
     let mut removed: Vec<String> = Vec::new();
@@ -126,9 +237,12 @@ pub fn sessions_materialize(
             }
         }
     }
-    Ok(SessionsMaterialized {
-        recomputed,
-        removed,
+    Ok(PushMaterialized {
+        sessions: SessionsMaterialized {
+            recomputed,
+            removed,
+        },
+        ..PushMaterialized::default()
     })
 }
 
@@ -139,10 +253,12 @@ pub fn sessions_materialize(
 /// For every peer that has (or had) a favorited session row, sessions whose
 /// snapshot file vanished since the last pull are un-favorited and their shared
 /// messages dropped — the pull-side counterpart to the push-side jsonl
-/// deletion.
-pub fn sessions_import(store: &Store, paths: &Paths, self_device_id: &str) -> AppResult<()> {
+/// deletion. Returns the number of peer snapshots imported (the sessions
+/// domain's `imported` count; self's own skipped files never count).
+pub fn sessions_import(store: &Store, paths: &Paths, self_device_id: &str) -> AppResult<u32> {
     let snapshots =
         crate::sessions::session_snapshot::read_all_session_snapshots(paths, self_device_id)?;
+    let imported = snapshots.len() as u32;
     // still-favorited ids per peer = the snapshot files that exist this pull.
     let mut per_device: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
     for snap in &snapshots {
@@ -166,7 +282,7 @@ pub fn sessions_import(store: &Store, paths: &Paths, self_device_id: &str) -> Ap
             presence_mismatches(&still_present, &peer_favorited).favorites_without_files;
         store.bulk_unfavorite_sessions(&peer, &to_unfavorite)?;
     }
-    Ok(())
+    Ok(imported)
 }
 
 // ---------------------------------------------------------------------------
@@ -176,29 +292,20 @@ pub fn sessions_import(store: &Store, paths: &Paths, self_device_id: &str) -> Ap
 /// Push-side materialize: write THIS device's `providers.json` from the store,
 /// key-stripped (API keys stay in the local DB — the file carries only
 /// structure). No dirty flag: the write is byte-stable, so an unchanged store
-/// rewrites identical bytes and the commit+push below no-ops.
-pub fn providers_materialize(store: &Store, paths: &Paths, device_id: &str) -> AppResult<()> {
-    crate::provider::sync::write_own_providers(store, paths, device_id)
-}
-
-/// Pull-side import: read peers' key-stripped provider structure into the
-/// store, latest-wins with local keys merged back (an import never overwrites
-/// a local key).
-pub fn providers_import(store: &Store, paths: &Paths, self_device_id: &str) -> AppResult<()> {
-    crate::provider::sync::import_peer_providers(store, paths, self_device_id)
-}
-
-// ---------------------------------------------------------------------------
-// devices — per-device name artifacts (registry)
-// ---------------------------------------------------------------------------
-
-/// Pull-side import: reload the (just-pulled) cloud device registry into the
-/// store and reconcile dirty devices (a device with no git presence is pruned).
-/// This domain has no push-side materialize — the name artifact is written on
-/// the config side (`devices::ensure_own_device_artifact`), not by the push
-/// flow; it rides the normal commit+push.
-pub fn devices_import(store: &Store, paths: &Paths, cfg: &ConfigData) -> AppResult<()> {
-    crate::devices::reload_devices_into_store(store, paths, cfg)
+/// rewrites identical bytes and the commit+push below no-ops. The import half
+/// lives in the domain's owning module
+/// ([`crate::provider::sync::import_peer_providers`] — the table points at it
+/// directly); this wrapper is a SIGNATURE ADAPTER, not logic:
+/// `write_own_providers` produces no clear-phase state, so the table's
+/// uniform materialize shape wraps the plain write in an empty
+/// [`PushMaterialized`].
+pub fn providers_materialize(
+    store: &Store,
+    paths: &Paths,
+    device_id: &str,
+) -> AppResult<PushMaterialized> {
+    crate::provider::sync::write_own_providers(store, paths, device_id)?;
+    Ok(PushMaterialized::default())
 }
 
 // ---------------------------------------------------------------------------
@@ -266,7 +373,7 @@ mod tests {
 
         // Materialize: both dirty days recomputed into per-day files.
         let snapshots = usage_materialize(&store_a, &paths, dev).unwrap();
-        assert_eq!(snapshots.len(), 2, "one snapshot per dirty day");
+        assert_eq!(snapshots.days.len(), 2, "one snapshot per dirty day");
         assert!(paths
             .device_data_dir(dev)
             .join("usage-2026-07-13.jsonl")
@@ -283,7 +390,7 @@ mod tests {
 
         // Import into a fresh store: same rows back, days NOT re-dirtied.
         let store_b = mem();
-        let n = usage_import(&store_b, &paths).unwrap();
+        let n = usage_import(&store_b, &paths, "001122334455").unwrap();
         assert_eq!(n, 2, "both usage records imported");
         assert_eq!(
             store_b.usage_for_day_device("2026-07-13", dev).unwrap(),
@@ -325,7 +432,7 @@ mod tests {
         .unwrap();
 
         let store = mem();
-        usage_import(&store, &paths).unwrap();
+        usage_import(&store, &paths, dev).unwrap();
         let turns = store.turns_for_day_device("2026-07-13", dev).unwrap();
         assert_eq!(turns.len(), 1, "legacy line imports, not skipped");
         assert_eq!(
@@ -369,9 +476,9 @@ mod tests {
         store_a.set_session_favorited(dev, "sx", true).unwrap();
 
         let m = sessions_materialize(&store_a, &paths, dev).unwrap();
-        assert_eq!(m.recomputed.len(), 1);
+        assert_eq!(m.sessions.recomputed.len(), 1);
         assert!(paths.session_snapshot_path(dev, "sx").exists());
-        assert!(m.removed.is_empty());
+        assert!(m.sessions.removed.is_empty());
 
         // A different device pulls: meta + favorited + message all arrive.
         let store_b = mem();
@@ -449,14 +556,10 @@ mod tests {
         crate::devices::ensure_own_device_artifact(&paths, peer, "Peer One").unwrap();
 
         // 本机第一轮同步：peer 的会话行、消息、用量、注册表行全部落地。
-        let cfg = ConfigData {
-            device_id: self_id.into(),
-            ..Default::default()
-        };
         let ours = mem();
-        usage_import(&ours, &paths).unwrap();
+        usage_import(&ours, &paths, self_id).unwrap();
         sessions_import(&ours, &paths, self_id).unwrap();
-        devices_import(&ours, &paths, &cfg).unwrap();
+        crate::devices::reload_devices_into_store(&ours, &paths, self_id).unwrap();
         assert!(
             ours.get_session("sx", peer).unwrap().is_some(),
             "前提：首轮同步已拉到 peer 的会话"
@@ -481,9 +584,9 @@ mod tests {
             paths.session_snapshot_path(peer, "sx").exists(),
             "前提：对端快照仍在仓库工作树"
         );
-        usage_import(&ours, &paths).unwrap();
+        usage_import(&ours, &paths, self_id).unwrap();
         sessions_import(&ours, &paths, self_id).unwrap();
-        devices_import(&ours, &paths, &cfg).unwrap();
+        crate::devices::reload_devices_into_store(&ours, &paths, self_id).unwrap();
 
         let row = ours
             .query_sessions(None)
@@ -541,7 +644,7 @@ mod tests {
         assert!(!file.contains("sk-a-secret"), "key never enters the file");
 
         let store_b = mem();
-        providers_import(&store_b, &paths, "001122334455").unwrap();
+        crate::provider::sync::import_peer_providers(&store_b, &paths, "001122334455").unwrap();
         let row = store_b
             .get_provider(App::Claude, &saved.id)
             .unwrap()
@@ -567,11 +670,7 @@ mod tests {
         crate::devices::ensure_own_device_artifact(&paths, peer, "Peer One").unwrap();
 
         let store = mem();
-        let cfg = ConfigData {
-            device_id: self_id.into(),
-            ..Default::default()
-        };
-        devices_import(&store, &paths, &cfg).unwrap();
+        crate::devices::reload_devices_into_store(&store, &paths, self_id).unwrap();
         let ids = store.list_device_ids().unwrap();
         assert!(ids.iter().any(|i| i == peer), "peer registry row landed");
         assert_eq!(ids.len(), 1, "only the published artifact lands");
@@ -614,13 +713,13 @@ mod tests {
             store_a.set_session_favorited(dev, sid, true).unwrap();
         }
         let m = sessions_materialize(&store_a, &paths, dev).unwrap();
-        assert_eq!(m.recomputed.len(), 2, "both snapshots written");
+        assert_eq!(m.sessions.recomputed.len(), 2, "both snapshots written");
         assert!(paths.session_snapshot_path(dev, "s1").exists());
 
         // s1 un-favorited ⇒ its snapshot file vanishes on the next materialize.
         store_a.set_session_favorited(dev, "s1", false).unwrap();
         let m = sessions_materialize(&store_a, &paths, dev).unwrap();
-        assert_eq!(m.removed, vec!["s1".to_string()]);
+        assert_eq!(m.sessions.removed, vec!["s1".to_string()]);
         assert!(!paths.session_snapshot_path(dev, "s1").exists());
         assert!(paths.session_snapshot_path(dev, "s2").exists());
 
@@ -673,5 +772,36 @@ mod tests {
             store_b.favorited_session_ids(peer).unwrap().is_empty(),
             "peer's vanished snapshot propagated an un-favorite"
         );
+    }
+
+    /// The table IS the domain list: exactly the shipped domains, in the row
+    /// order both flow loops execute (import and materialize iterate the same
+    /// rows — `flow::pull_and_import` / `flow::push_usage` have no other call
+    /// path), with every domain's push half either present or a deliberate
+    /// `None`. A domain dropped from the table fails HERE (not silently at
+    /// runtime); a deleted action fails the compile, and flipping the `None`
+    /// to `Some` without a real action is impossible to do by omission.
+    #[test]
+    fn domains_table_lists_every_domain_in_execution_order() {
+        let names: Vec<&str> = DOMAINS.iter().map(|d| d.name).collect();
+        assert_eq!(
+            names,
+            ["usage", "sessions", "providers", "devices"],
+            "the syncable-domain table drifted — update rows AND their actions together"
+        );
+        for pair in DOMAINS {
+            if pair.name == "devices" {
+                assert!(
+                    pair.materialize.is_none(),
+                    "devices writes its artifact on the config side — keep the None"
+                );
+            } else {
+                assert!(
+                    pair.materialize.is_some(),
+                    "{} must have a push-side materialize",
+                    pair.name
+                );
+            }
+        }
     }
 }

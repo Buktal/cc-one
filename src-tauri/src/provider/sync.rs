@@ -202,7 +202,12 @@ fn merge_local_keys(local: &Provider, peer: &Provider) -> AppResult<Provider> {
 ///
 /// A single bad provider logs and is skipped — it must not abort the whole
 /// pull.
-pub fn import_peer_providers(store: &Store, paths: &Paths, self_device_id: &str) -> AppResult<()> {
+///
+/// Returns the number of entries actually written into the store (inserts +
+/// structure updates; locally-fresher and unmergeable skips excluded) — the
+/// providers domain's `imported` count for the sync report.
+pub fn import_peer_providers(store: &Store, paths: &Paths, self_device_id: &str) -> AppResult<u32> {
+    let mut imported = 0u32;
     for peer in read_all_peer_providers(paths, self_device_id)? {
         let peer_id = peer.id.clone();
         let local = store.get_provider(peer.app, &peer_id)?;
@@ -212,12 +217,15 @@ pub fn import_peer_providers(store: &Store, paths: &Paths, self_device_id: &str)
             Some(l) => merge_local_keys(l, &peer).map(Some),
         };
         match import {
-            Ok(Some(p)) => store.import_provider(&p)?,
+            Ok(Some(p)) => {
+                store.import_provider(&p)?;
+                imported += 1;
+            }
             Ok(None) => {}
             Err(e) => eprintln!("[cc-one] provider {peer_id} skipped from import: {e}"),
         }
     }
-    Ok(())
+    Ok(imported)
 }
 
 #[cfg(test)]

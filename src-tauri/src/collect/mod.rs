@@ -90,7 +90,10 @@ pub fn collect_into_with(
 pub struct AlignReport {
     /// Local collect outcome (zeroed if collect itself failed — see `errors`).
     pub collected: IngestReport,
-    /// Rows imported from peer devices this round (Synced only).
+    /// Items imported from peer devices this round, summed across every sync
+    /// domain (usage rows / session snapshots / provider entries / registry
+    /// rows — the per-domain grains are documented on the sync domain table's
+    /// `import` contract) (Synced only).
     pub imported: u32,
     /// True iff a local change was committed and pushed (Synced only).
     pub pushed: bool,

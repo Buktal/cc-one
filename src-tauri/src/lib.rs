@@ -372,7 +372,7 @@ pub fn run() {
                 }
                 let paths = config.paths();
                 match crate::sync::pull_and_import(&store, &paths, &cfg) {
-                    Ok(n) => eprintln!("[cc-one] startup pull imported {n} row(s)"),
+                    Ok(n) => eprintln!("[cc-one] startup pull imported {n} item(s)"),
                     Err(e) => eprintln!("[cc-one] startup pull failed: {e}"),
                 }
             });

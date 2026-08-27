@@ -463,7 +463,7 @@
   "settings.toast.saveFailed": "保存失败",
   "settings.toast.syncEnabled": "已开启多设备同步",
   "settings.toast.syncFailed": "同步失败",
-  "settings.toast.synced": "已同步（导入 {{count}} 行）",
+  "settings.toast.synced": "已同步（导入 {{count}} 条）",
   "settings.toast.syncedPushed": "，已推送",
   "settings.toast.unbindFailed": "解绑失败",
   "settings.toast.unbound": "已切回单机（本地数据保留）",

@@ -2,9 +2,10 @@
 //!   - [`git`] — pure libgit2 primitives (credential callback, open/clone,
 //!     pull, rebase, commit, push, status queries). Knows nothing about the
 //!     Local Store or dirty flags.
-//!   - [`domains`] — the per-syncable-domain pairs (usage / sessions /
-//!     providers / devices): each domain's push-side materialize + pull-side
-//!     import, and the shared atomic dirty-flag clear. Knows nothing about git.
+//!   - [`domains`] — the syncable-domain list as data: one static table
+//!     (`DOMAINS`, a row per domain) holding each domain's push-side
+//!     materialize + pull-side import, plus the shared atomic dirty-flag
+//!     clear. Knows nothing about git.
 //!   - [`flow`] — the high-level pull → import → commit → push pipeline that
 //!     composes the git primitives with the domain pairs.
 //!

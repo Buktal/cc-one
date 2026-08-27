@@ -2,10 +2,11 @@
 //! with the per-domain sync pairs (`super::domains`) to form the full
 //! pull → import → commit → push pipeline. This is the only layer that knows
 //! about git — `super::git` stays pure git, the store stays pure SQL, and
-//! `super::domains` owns each syncable domain's materialize/import pair, so
-//! adding a domain never touches this file beyond one import call per side.
-//! Best-effort wrappers (`*_best_effort`) swallow errors for background/exit
-//! paths; their fallible counterparts propagate.
+//! `super::domains` owns the domain list as data (the [`super::domains`]
+//! `DOMAINS` table): both domain loops below iterate that table, so adding a
+//! domain never touches this file at all. Best-effort wrappers
+//! (`*_best_effort`) swallow errors for background/exit paths; their
+//! fallible counterparts propagate.
 
 use super::git::{
     author_email, commit_all, has_changes, is_ahead_of_origin, open_or_clone, pull, push,
@@ -19,8 +20,11 @@ use crate::error::AppResult;
 // High-level sync flow: pull → import JSONL → commit → push
 // ---------------------------------------------------------------------------
 
-/// Pull the remote and import every device's JSONL Artifact into the Local
-/// Store (deduped by the store's `(uuid, device_id)` primary key). Synced-only.
+/// Pull the remote and import every syncable domain's pulled files into the
+/// Local Store, in `super::domains::DOMAINS` row order. Returns the total
+/// number of items imported across all domains (per-domain grains differ —
+/// usage rows / session snapshots / provider entries / registry rows — the
+/// grains are documented on the table's `import` contract). Synced-only.
 ///
 /// A fast-forward force-checkout (or a diverge rebase's hard reset) may rewrite
 /// this device's own `data/<deviceId>/` files — fine: collect writes the store,
@@ -44,14 +48,13 @@ pub fn pull_and_import(store: &Store, paths: &Paths, cfg: &ConfigData) -> AppRes
         }
         PullOutcome::UpToDate | PullOutcome::FastForwarded => {}
     }
-    // Each syncable domain declares its pull-side import in `super::domains` —
-    // usage/turns Artifacts, session snapshots (+ un-favorite propagation),
-    // key-stripped provider structure, and the device-name registry.
-    let inserted = super::domains::usage_import(store, paths)?;
-    super::domains::sessions_import(store, paths, &cfg.device_id)?;
-    super::domains::providers_import(store, paths, &cfg.device_id)?;
-    super::domains::devices_import(store, paths, cfg)?;
-    Ok(inserted)
+    // The table is the domain list AND the execution order — iterating it is
+    // the only path a domain's import is ever reached by.
+    let mut imported = 0u32;
+    for pair in super::domains::DOMAINS {
+        imported += (pair.import)(store, paths, &cfg.device_id)?;
+    }
+    Ok(imported)
 }
 
 /// Commit any local Artifact/config change and push it (push). A clean worktree
@@ -124,20 +127,24 @@ pub fn commit_and_push_best_effort(paths: &Paths, cfg: &ConfigData, message: &st
 /// Library sync does NOT call this — it has no store/dirty concern and uses
 /// [`commit_and_push`] directly.
 pub fn push_usage(store: &Store, paths: &Paths, cfg: &ConfigData) -> AppResult<bool> {
-    // Each syncable domain declares its push-side materialize in
-    // `super::domains`; the recompute-time snapshots feed the shared clear.
-    let day_snapshots = super::domains::usage_materialize(store, paths, &cfg.device_id)?;
-    let sessions = super::domains::sessions_materialize(store, paths, &cfg.device_id)?;
-    super::domains::providers_materialize(store, paths, &cfg.device_id)?;
+    // The table is the domain list AND the execution order; the loop skips the
+    // domains whose files are written outside this flow (`materialize: None`).
+    // The folded output feeds the shared clear below.
+    let mut materialized = super::domains::PushMaterialized::default();
+    for pair in super::domains::DOMAINS {
+        if let Some(materialize) = pair.materialize {
+            materialized.absorb(materialize(store, paths, &cfg.device_id)?);
+        }
+    }
 
     let pushed = commit_and_push(paths, cfg, "cc-one: sync")?;
     // Unconditional (see the doc above). A push failure returns early via `?`
     // above, leaving both flag sets dirty for the next retry.
     store.clear_dirty_flags_if_unchanged(
         &cfg.device_id,
-        &day_snapshots,
-        &sessions.recomputed,
-        &sessions.removed,
+        &materialized.days,
+        &materialized.sessions.recomputed,
+        &materialized.sessions.removed,
     )?;
     Ok(pushed)
 }
