@@ -29,12 +29,12 @@ impl TokenCounts {
             .saturating_add(self.cache_read)
     }
 
-    /// "Nothing billable" — every bucket is zero. The single emit gate for the
-    /// source parsers (`claude` / `codex` / `gemini` / `grok`): a record
-    /// carrying no billable token in any bucket is never emitted. Cache reads
-    /// ARE billable, so a cache-read-only row survives this predicate; judged
-    /// on the FINAL four-pack (post normalization/clamping) — never on an
-    /// intermediate delta shape.
+    /// "Nothing billable" — every bucket is zero. The single emit gate for all
+    /// five source parsers (`claude` / `codex` / `gemini` / `grok` /
+    /// `opencode`): a record carrying no billable token in any bucket is never
+    /// emitted. Cache reads ARE billable, so a cache-read-only row survives
+    /// this predicate; judged on the FINAL four-pack (post normalization,
+    /// clamping, and bucket folding) — never on an intermediate delta shape.
     pub fn is_zero(self) -> bool {
         self.total() == 0
     }

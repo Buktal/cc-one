@@ -485,13 +485,11 @@ struct OpenCodeMessageQuery {
     has_incomplete_usage: bool,
 }
 
-/// Parsed `message.data` token fields (Anthropic-style: fresh input, cache split).
+/// Parsed `message.data` payload: the FINAL token four-pack (Anthropic-style
+/// fresh input, `cache.write` is the creation bucket, `reasoning` already
+/// folded into output) plus identity fields.
 struct OpenCodeMessageData {
-    input_tokens: u32,
-    output_tokens: u32,
-    reasoning_tokens: u32,
-    cache_read_tokens: u32,
-    cache_write_tokens: u32,
+    tokens: TokenCounts,
     model_id: String,
     timestamp_ms: i64,
 }
@@ -538,31 +536,35 @@ fn query_assistant_messages(
     })
 }
 
-/// Parse a `message.data` JSON value into token fields. Returns `None` for an
-/// all-zero message. OpenCode's self-reported `cost` is deliberately ignored —
-/// cc one recomputes cost from its own pricing so the four-bucket split stays
+/// Parse a `message.data` JSON value into its FINAL token four-pack plus
+/// identity fields. Returns `None` when the folded end-state carries no
+/// billable token — the shared [`TokenCounts::is_zero`] emit gate, judged ONCE
+/// on the final shape exactly like the other parsers (not on the five raw
+/// buckets). OpenCode's self-reported `cost` is deliberately ignored — cc one
+/// recomputes cost from its own pricing so the four-bucket split stays
 /// consistent across parsers.
 fn parse_opencode_message_data(value: &serde_json::Value) -> Option<OpenCodeMessageData> {
-    let tokens = value.get("tokens")?;
-    let n = |k: &str| tokens.get(k).and_then(|v| v.as_u64()).unwrap_or(0) as u32;
-    let input_tokens = n("input");
-    let output_tokens = n("output");
-    let reasoning_tokens = n("reasoning");
-    let cache_obj = tokens.get("cache");
-    let cache_read_tokens = cache_obj
-        .and_then(|c| c.get("read"))
-        .and_then(|v| v.as_u64())
-        .unwrap_or(0) as u32;
-    let cache_write_tokens = cache_obj
-        .and_then(|c| c.get("write"))
-        .and_then(|v| v.as_u64())
-        .unwrap_or(0) as u32;
-    if input_tokens == 0
-        && output_tokens == 0
-        && reasoning_tokens == 0
-        && cache_read_tokens == 0
-        && cache_write_tokens == 0
-    {
+    let tokens_obj = value.get("tokens")?;
+    let n = |k: &str| tokens_obj.get(k).and_then(|v| v.as_u64()).unwrap_or(0) as u32;
+    // Fold the five source buckets into the final four-pack first (fresh
+    // input stays fresh; reasoning bills as output; cache.write is the
+    // creation bucket), then judge the emit gate on that end-state.
+    // Saturating sums keep the judgment exact: the end-state total is 0 iff
+    // every one of the five raw buckets is 0.
+    let cache_obj = tokens_obj.get("cache");
+    let tokens = TokenCounts {
+        input: n("input"),
+        output: n("output").saturating_add(n("reasoning")),
+        cache_creation: cache_obj
+            .and_then(|c| c.get("write"))
+            .and_then(|v| v.as_u64())
+            .unwrap_or(0) as u32,
+        cache_read: cache_obj
+            .and_then(|c| c.get("read"))
+            .and_then(|v| v.as_u64())
+            .unwrap_or(0) as u32,
+    };
+    if tokens.is_zero() {
         return None;
     }
     let model_id = value
@@ -576,11 +578,7 @@ fn parse_opencode_message_data(value: &serde_json::Value) -> Option<OpenCodeMess
         .and_then(|v| v.as_i64())
         .unwrap_or(0);
     Some(OpenCodeMessageData {
-        input_tokens,
-        output_tokens,
-        reasoning_tokens,
-        cache_read_tokens,
-        cache_write_tokens,
+        tokens,
         model_id,
         timestamp_ms,
     })
@@ -599,12 +597,7 @@ fn opencode_raw_usage(session_id: &str, message_id: &str, msg: &OpenCodeMessageD
         model: msg.model_id.clone(),
         source: SOURCE_TAG.to_string(),
         session_id: session_id.to_string(),
-        tokens: TokenCounts {
-            input: msg.input_tokens,
-            output: msg.output_tokens + msg.reasoning_tokens,
-            cache_creation: msg.cache_write_tokens,
-            cache_read: msg.cache_read_tokens,
-        },
+        tokens: msg.tokens,
         ..Default::default()
     }
 }
@@ -691,28 +684,56 @@ mod tests {
             "time": { "created": 1779755333700i64, "completed": 1779755350639i64 }
         });
         let d = parse_opencode_message_data(&full).unwrap();
-        assert_eq!(d.input_tokens, 3272);
-        assert_eq!(d.output_tokens, 383);
-        assert_eq!(d.reasoning_tokens, 419);
-        assert_eq!(d.cache_read_tokens, 52480);
-        assert_eq!(d.cache_write_tokens, 0);
+        assert_eq!(d.tokens.input, 3272);
+        assert_eq!(d.tokens.output, 383 + 419, "reasoning folds into output");
+        assert_eq!(d.tokens.cache_read, 52480);
+        assert_eq!(d.tokens.cache_creation, 0);
         assert_eq!(d.model_id, "deepseek-v4-pro");
         assert_eq!(d.timestamp_ms, 1779755333700);
-        // missing cache ⇒ zeros.
+        // missing cache ⇒ zero cache buckets.
         let no_cache: serde_json::Value = serde_json::json!({
             "role": "assistant", "tokens": { "input": 1000, "output": 200 },
             "modelID": "m", "time": { "created": 1, "completed": 2 }
         });
         let d = parse_opencode_message_data(&no_cache).unwrap();
-        assert_eq!(d.cache_read_tokens, 0);
-        assert_eq!(d.cache_write_tokens, 0);
-        // all-zero ⇒ None.
+        assert_eq!(d.tokens.cache_read, 0);
+        assert_eq!(d.tokens.cache_creation, 0);
+        // all-zero (the gate's exact drop condition) ⇒ None.
         let zero: serde_json::Value = serde_json::json!({
             "role": "assistant",
             "tokens": { "input": 0, "output": 0, "reasoning": 0, "cache": { "read": 0, "write": 0 } },
             "modelID": "t", "time": { "created": 1, "completed": 2 }
         });
         assert!(parse_opencode_message_data(&zero).is_none());
+    }
+
+    /// The emit gate judges the FOLDED end-state: any single source bucket
+    /// being non-zero — including ones that only exist pre-fold (`reasoning`,
+    /// `cache.write`) — keeps the row alive, and only an all-zero five-bucket
+    /// message is dropped.
+    #[test]
+    fn opencode_zero_gate_judges_the_folded_end_state() {
+        let mk = |tokens: serde_json::Value| {
+            serde_json::json!({
+                "role": "assistant",
+                "tokens": tokens,
+                "modelID": "m",
+                "time": { "created": 1, "completed": 2 }
+            })
+        };
+        // Reasoning-only message: zero until folded into output, billable after.
+        let reasoning_only =
+            parse_opencode_message_data(&mk(serde_json::json!({ "reasoning": 419 }))).unwrap();
+        assert_eq!(reasoning_only.tokens.output, 419);
+        assert!(!reasoning_only.tokens.is_zero());
+        // Cache-write-only message: survives through the creation bucket.
+        let write_only = parse_opencode_message_data(&mk(serde_json::json!(
+            { "cache": { "read": 0, "write": 300 } }
+        )))
+        .unwrap();
+        assert_eq!(write_only.tokens.cache_creation, 300);
+        // A single non-zero raw bucket anywhere ⇒ Some.
+        assert!(parse_opencode_message_data(&mk(serde_json::json!({ "input": 1 }))).is_some());
     }
 
     #[test]
