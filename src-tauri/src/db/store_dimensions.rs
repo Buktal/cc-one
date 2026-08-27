@@ -17,6 +17,9 @@
 //! [`super::filter_sql::push_usage_facets`]——known/unknown 两桶的收窄口径
 //! 不再两份实现各改各的（#94/#100 的事故形态）。
 
+use super::aggregate_sql::{
+    read_bucket_sums, session_pair_join, session_pair_key, usage_driver_subquery,
+};
 use super::filter_sql::{build_where, project_condition, push_usage_facets, Facet, FacetGates};
 use super::store_transcript::build_session_where;
 use super::*;
@@ -64,20 +67,16 @@ impl super::Store {
                     COALESCE(SUM(agg.total_cost_usd), 0.0) AS total_cost_usd,
                     MAX(s.last_active_at) AS last_active_at
              FROM sessions s
-             LEFT JOIN ({agg}) agg ON agg.session_id = s.id AND agg.device_id = s.device_id
+             LEFT JOIN ({agg}) agg ON {pair}
              {clause}
              GROUP BY pid
              ORDER BY last_active_at DESC, pid",
-            agg = super::aggregate_sql::usage_agg_subquery(false)
+            agg = super::aggregate_sql::usage_agg_subquery(false),
+            pair = session_pair_join("agg", "s")
         );
         let mut stmt = conn.prepare(&sql)?;
         let rows = stmt.query_map(params_from_iter(params_vec.iter()), |r| {
-            let tokens = TokenCounts {
-                input: r.get::<_, i64>(3)? as u32,
-                output: r.get::<_, i64>(4)? as u32,
-                cache_creation: r.get::<_, i64>(5)? as u32,
-                cache_read: r.get::<_, i64>(6)? as u32,
-            };
+            let tokens = read_bucket_sums(r, 3)?;
             Ok(ProjectStatsRow {
                 project_dir: r.get(0)?,
                 session_count: r.get::<_, i64>(1)? as u32,
@@ -130,32 +129,12 @@ impl super::Store {
                 conds.join(" AND "),
                 sums = super::aggregate_sql::usage_sum_cols("u.")
             );
-            let (request_count, input, output, cc, cr, cost, last): (
-                i64,
-                i64,
-                i64,
-                i64,
-                i64,
-                f64,
-                String,
-            ) = conn.query_row(&usql, params_from_iter(uparams.iter()), |r| {
-                Ok((
-                    r.get(0)?,
-                    r.get(1)?,
-                    r.get(2)?,
-                    r.get(3)?,
-                    r.get(4)?,
-                    r.get(5)?,
-                    r.get(6)?,
-                ))
-            })?;
+            let (request_count, tokens, cost, last): (i64, TokenCounts, f64, String) = conn
+                .query_row(&usql, params_from_iter(uparams.iter()), |r| {
+                    let tokens = read_bucket_sums(r, 1)?;
+                    Ok((r.get::<_, i64>(0)?, tokens, r.get::<_, f64>(5)?, r.get(6)?))
+                })?;
             if request_count > 0 {
-                let tokens = TokenCounts {
-                    input: input as u32,
-                    output: output as u32,
-                    cache_creation: cc as u32,
-                    cache_read: cr as u32,
-                };
                 out.push(ProjectStatsRow {
                     project_dir: UNKNOWN_PROJECT.to_string(),
                     session_count: 0,
@@ -214,23 +193,22 @@ impl super::Store {
                     COALESCE(u.total_cost_usd, 0.0),
                     u.model
              FROM sessions s
-             LEFT JOIN ({uagg}) u ON u.session_id = s.id AND u.device_id = s.device_id
+             LEFT JOIN ({uagg}) u ON {upair}
              LEFT JOIN (
                 SELECT session_id, device_id, COUNT(*) AS message_count
                 FROM session_messages GROUP BY session_id, device_id
-             ) m ON m.session_id = s.id AND m.device_id = s.device_id
+             ) m ON {mpair}
              {clause}
              ORDER BY s.last_active_at DESC, s.device_id, s.id, u.model",
-            uagg = super::aggregate_sql::usage_agg_subquery(true)
+            uagg = super::aggregate_sql::usage_agg_subquery(true),
+            upair = session_pair_join("u", "s"),
+            mpair = session_pair_join("m", "s")
         );
         let mut stmt = conn.prepare(&sql)?;
         let raw = stmt.query_map(params_from_iter(params_vec.iter()), |r| {
             // Columns 13-16 are COALESCE'd to 0 for the usage-less LEFT JOIN
             // row, so a plain read works; only u.model (18) is nullable.
-            let input = r.get::<_, i64>(13)?;
-            let output = r.get::<_, i64>(14)?;
-            let cache_creation = r.get::<_, i64>(15)?;
-            let cache_read = r.get::<_, i64>(16)?;
+            let tokens = read_bucket_sums(r, 13)?;
             let model: Option<String> = r.get(18)?;
             let project_dir: String = r.get(3)?;
             let row = SessionStatsRow {
@@ -250,17 +228,17 @@ impl super::Store {
                 agent_type: r.get(10)?,
                 request_count: r.get::<_, i64>(11)? as u32,
                 message_count: r.get::<_, i64>(12)? as u32,
-                input_tokens: input as u32,
-                output_tokens: output as u32,
-                cache_creation_tokens: cache_creation as u32,
-                cache_read_tokens: cache_read as u32,
+                input_tokens: tokens.input,
+                output_tokens: tokens.output,
+                cache_creation_tokens: tokens.cache_creation,
+                cache_read_tokens: tokens.cache_read,
                 cache_hit_rate: 0.0,
                 total_cost_usd: r.get(17)?,
                 models: Vec::new(),
             };
             let slice = SessionModelTokens {
                 model: model.unwrap_or_default(),
-                tokens: (input + output + cache_creation + cache_read) as u32,
+                tokens: tokens.total(),
             };
             Ok((row, slice))
         })?;
@@ -331,7 +309,7 @@ impl super::Store {
         // valid (no join ambiguity); the LEFT JOIN lives outside it. The
         // identity expression COALESCEs the NULL of a session-less row (the
         // UDF takes TEXT, not NULL) and folds the empty identity in with the
-        // sentinel. `COUNT(DISTINCT a, b)` skips the NULL CASE arm, so only
+        // sentinel. The folded session key skips the NULL CASE arm, so only
         // buckets with a real session row count sessions. The projection is
         // the bare bucket columns (one list); the SUMs read them through the
         // shared prefix-parameterized list.
@@ -339,29 +317,23 @@ impl super::Store {
             "SELECT COALESCE(NULLIF(project_identity(COALESCE(s.project_dir, '')), ''), '{UNKNOWN_PROJECT}') AS pid,
                     COUNT(*),
                     COUNT(DISTINCT CASE WHEN s.id IS NOT NULL
-                         THEN sel.session_id || ':' || sel.device_id END),
+                         THEN {pairkey} END),
                     {sums},
                     COALESCE({total},0) AS total_tokens,
                     MAX(sel.timestamp)
-             FROM (
-                SELECT session_id, device_id, timestamp, {buckets}, total_cost_usd
-                FROM usage_records {clause}
-             ) sel
-             LEFT JOIN sessions s ON s.id = sel.session_id AND s.device_id = sel.device_id
+             FROM {driver}
+             LEFT JOIN sessions s ON {pair}
              GROUP BY pid
              ORDER BY total_tokens DESC, pid",
+            driver = usage_driver_subquery(&clause),
+            pair = session_pair_join("sel", "s"),
+            pairkey = session_pair_key("sel"),
             sums = super::aggregate_sql::usage_sum_cols("sel."),
-            total = super::aggregate_sql::usage_total_sum("sel."),
-            buckets = super::aggregate_sql::usage_bucket_cols("")
+            total = super::aggregate_sql::usage_total_sum("sel.")
         );
         let mut stmt = conn.prepare(&sql)?;
         let rows = stmt.query_map(params_from_iter(params_vec.iter()), |r| {
-            let tokens = TokenCounts {
-                input: r.get::<_, i64>(3)? as u32,
-                output: r.get::<_, i64>(4)? as u32,
-                cache_creation: r.get::<_, i64>(5)? as u32,
-                cache_read: r.get::<_, i64>(6)? as u32,
-            };
+            let tokens = read_bucket_sums(r, 3)?;
             let project: String = r.get(0)?;
             Ok(ProjectUsageRow {
                 is_unknown: project == UNKNOWN_PROJECT,
@@ -401,19 +373,18 @@ impl super::Store {
                     s.started_at,
                     MAX(sel.timestamp), COUNT(*),
                     {sums}
-             FROM (
-                SELECT session_id, device_id, timestamp, {buckets}, total_cost_usd
-                FROM usage_records {clause}
-             ) sel
-             JOIN sessions s ON s.id = sel.session_id AND s.device_id = sel.device_id
+             FROM {driver}
+             JOIN sessions s ON {pair}
              GROUP BY sel.session_id, sel.device_id
              ORDER BY COALESCE({total},0) DESC, sel.session_id",
+            driver = usage_driver_subquery(&clause),
+            pair = session_pair_join("sel", "s"),
             sums = super::aggregate_sql::usage_sum_cols("sel."),
-            buckets = super::aggregate_sql::usage_bucket_cols(""),
             total = super::aggregate_sql::usage_total_sum("sel.")
         );
         let mut stmt = conn.prepare(&sql)?;
         let rows = stmt.query_map(params_from_iter(params_vec.iter()), |r| {
+            let tokens = read_bucket_sums(r, 7)?;
             Ok(SessionUsageRow {
                 session_id: r.get(0)?,
                 device_id: r.get(1)?,
@@ -422,14 +393,11 @@ impl super::Store {
                 started_at: r.get(4)?,
                 last_active_at: r.get(5)?,
                 request_count: r.get::<_, i64>(6)? as u32,
-                input_tokens: r.get::<_, i64>(7)? as u32,
-                output_tokens: r.get::<_, i64>(8)? as u32,
-                cache_creation_tokens: r.get::<_, i64>(9)? as u32,
-                cache_read_tokens: r.get::<_, i64>(10)? as u32,
-                total_tokens: (r.get::<_, i64>(7)?
-                    + r.get::<_, i64>(8)?
-                    + r.get::<_, i64>(9)?
-                    + r.get::<_, i64>(10)?) as u32,
+                input_tokens: tokens.input,
+                output_tokens: tokens.output,
+                cache_creation_tokens: tokens.cache_creation,
+                cache_read_tokens: tokens.cache_read,
+                total_tokens: tokens.total(),
                 total_cost_usd: r.get(11)?,
                 turn_count: 0,
             })
@@ -493,12 +461,7 @@ impl super::Store {
         );
         let mut stmt = conn.prepare(&sql)?;
         let rows = stmt.query_map(params_from_iter(params_vec.iter()), |r| {
-            let tokens = TokenCounts {
-                input: r.get::<_, i64>(2)? as u32,
-                output: r.get::<_, i64>(3)? as u32,
-                cache_creation: r.get::<_, i64>(4)? as u32,
-                cache_read: r.get::<_, i64>(5)? as u32,
-            };
+            let tokens = read_bucket_sums(r, 2)?;
             Ok(DeviceUsageRow {
                 device_id: r.get(0)?,
                 request_count: r.get::<_, i64>(1)? as u32,

@@ -5,6 +5,7 @@
 //! favorites setters) and the `build_session_where` / `row_to_session_message`
 //! decode helpers.
 
+use super::aggregate_sql::session_pair_join;
 use super::store_sessions::{upsert_session_row, SessionUpsertPolicy};
 use super::*;
 
@@ -516,11 +517,11 @@ pub(super) fn build_session_where(filter: Option<&SessionFilter>) -> (String, Ve
             // EXISTS semantics: the session matched iff ANY usage record in
             // this session used the model. Both keys are required — a session
             // id is a parser file stem, so ids can collide across devices.
-            conds.push(
+            conds.push(format!(
                 "EXISTS (SELECT 1 FROM usage_records u \
-                 WHERE u.session_id = s.id AND u.device_id = s.device_id AND u.model = ?)"
-                    .into(),
-            );
+                 WHERE {} AND u.model = ?)",
+                session_pair_join("u", "s")
+            ));
             params.push(SqlValue::Text(m.clone()));
         }
     }
@@ -597,10 +598,11 @@ fn sessions_select_sql(clause: &str) -> String {
                 {total_of} AS total_tokens,
                 COALESCE(agg.total_cost_usd, 0.0)
          FROM sessions s
-         LEFT JOIN ({agg}) agg ON agg.session_id = s.id AND agg.device_id = s.device_id
+         LEFT JOIN ({agg}) agg ON {pair}
          {clause}
          ORDER BY s.last_active_at DESC, s.device_id, s.id",
         agg = super::aggregate_sql::usage_agg_subquery(false),
+        pair = session_pair_join("agg", "s"),
         total_of = super::aggregate_sql::usage_total_of_cols("agg.")
     )
 }

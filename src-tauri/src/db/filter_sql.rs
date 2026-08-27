@@ -68,25 +68,24 @@ pub(super) fn push_ts_range(
 /// the unknown bucket (remote usage without a pulled favorite snapshot,
 /// session-less rows). `driving` is a fixed literal from the call sites, never
 /// user input. Returns `(condition, param)`: the sentinel form binds no param.
+/// The key probe against `sessions` is the shared composite-identity
+/// predicate ([`super::aggregate_sql::session_pair_join`]) — the EXISTS forms
+/// here and every dimension JOIN stay one spelling.
 ///
 /// （架构审查候选④自 store_reads 收口至此：store_transcript 的未知桶种子与
 /// turn 侧的哨兵获取共用这一份实现。）
 pub(super) fn project_condition(driving: &str, project: &str) -> (String, Option<SqlValue>) {
+    let pair = super::aggregate_sql::session_pair_join(driving, "s");
     if project == UNKNOWN_PROJECT {
         (
-            format!(
-                "NOT EXISTS (SELECT 1 FROM sessions s \
-                 WHERE s.id = {driving}.session_id \
-                   AND s.device_id = {driving}.device_id)"
-            ),
+            format!("NOT EXISTS (SELECT 1 FROM sessions s WHERE {pair})"),
             None,
         )
     } else {
         (
             format!(
                 "EXISTS (SELECT 1 FROM sessions s \
-                 WHERE s.id = {driving}.session_id \
-                   AND s.device_id = {driving}.device_id \
+                 WHERE {pair} \
                    AND project_identity(s.project_dir) = ?)"
             ),
             Some(SqlValue::Text(project.to_string())),
@@ -261,14 +260,15 @@ mod tests {
             cond.contains("project_identity(s.project_dir) = ?"),
             "{cond}"
         );
-        assert!(cond.contains("s.id = usage_records.session_id"), "{cond}");
+        assert!(cond.contains("usage_records.session_id = s.id"), "{cond}");
         assert_eq!(param, Some(SqlValue::Text("D:\\AI\\proj".into())));
     }
 
     #[test]
     fn sentinel_condition_is_not_exists_without_params() {
         // 哨兵两侧面孔之一：任意驱动别名的 NOT EXISTS 文本一致——参数化别名，
-        // 两处消费方不可能再抄出第二份。
+        // 两处消费方不可能再抄出第二份。键对探针文本由
+        // aggregate_sql::session_pair_join 唯一决定。
         for driving in ["usage_records", "turn_durations", "u"] {
             let (cond, param) = project_condition(driving, UNKNOWN_PROJECT);
             assert!(param.is_none());
@@ -276,8 +276,8 @@ mod tests {
                 cond,
                 format!(
                     "NOT EXISTS (SELECT 1 FROM sessions s \
-                     WHERE s.id = {driving}.session_id \
-                       AND s.device_id = {driving}.device_id)"
+                     WHERE {driving}.session_id = s.id \
+                       AND {driving}.device_id = s.device_id)"
                 )
             );
         }
