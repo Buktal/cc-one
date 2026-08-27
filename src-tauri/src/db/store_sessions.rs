@@ -2,10 +2,67 @@
 //!
 //! Hosts the shared `upsert_session_row` / `SessionUpsertPolicy` core used by
 //! both collect ([`Store::upsert_session`]) and pull
-//! ([`super::transcript::Store::import_session_snapshot`]).
+//! ([`super::transcript::Store::import_session_snapshot`]), plus
+//! [`PushTrack`] — the single authority for which `sessions` columns ride git
+//! (and therefore which setters flag the session dirty for the push path).
 
-use super::store_transcript::mark_sessions_dirty;
+use super::store_transcript::{mark_sessions_dirty, tx_mark_session_dirty};
 use super::*;
+
+// ---- push-track classification: which `sessions` columns ride git ----
+//
+// The word pair "favorites-track vs device-local" has exactly one definition
+// in the store domain: the enum below. Setters name their column's track in
+// one closing [`tx_apply_push_track`] line; the upsert / pull / delete docs
+// here and in `store_transcript` point at it instead of re-arguing the split.
+
+/// Which sync track a user-writable `sessions` column rides — the single
+/// authority for the "favorites-track vs device-local" split, i.e. for which
+/// session fields ride git and which stay device-private. Every single-column
+/// setter names its column's track at its [`tx_apply_push_track`] line, so a
+/// new setter must classify its column against this enum instead of copying
+/// whatever the nearest sibling happens to do (the miscopy that would either
+/// silently never reach git, or churn empty pushes forever).
+///
+/// Why a `GitTracked` write must flag dirty: only a favorited session produces
+/// a git snapshot ("a snapshot file exists ⇔ the session is favorited" — see
+/// `snapshot_policy`), and that snapshot's meta line carries exactly the
+/// GitTracked columns. A write to one therefore changes what git must hold and
+/// reaches git only through the next push's snapshot recompute — which runs
+/// only for sessions flagged dirty. The flag lands in the SAME transaction as
+/// the write ([`tx_mark_session_dirty`]) so a crash can never commit the
+/// column change without its flag: unflagged, the change would sit local
+/// forever (the same "miss git" failure same-tx marking guards against for
+/// usage rows).
+///
+/// Why a `DeviceLocal` write must NOT flag dirty: those columns are never
+/// serialized into a snapshot, so a flag could only send the push path
+/// rewriting a snapshot this write cannot change — a fabricated empty push.
+pub(super) enum PushTrack {
+    /// `favorited` + `synced_group_id` — carried to peers by the snapshot's
+    /// meta line; writes flag the session dirty same-tx.
+    GitTracked,
+    /// `custom_title` + `local_group_id` + `excluded` — device-private, never
+    /// carried by a snapshot; writes never flag dirty.
+    DeviceLocal,
+}
+
+/// Apply the [`PushTrack`] coupling of the column a setter just wrote, inside
+/// the setter's transaction — the one closing line every single-column setter
+/// ends with. `GitTracked` flags the session dirty in this same transaction
+/// (the change rides the next push's snapshot recompute); `DeviceLocal` is a
+/// deliberate no-op. Call it with the track of the column the UPDATE above it
+/// just wrote — that pairing is the decision this module makes greppable.
+fn tx_apply_push_track(
+    tx: &rusqlite::Transaction,
+    session_id: &str,
+    track: PushTrack,
+) -> AppResult<()> {
+    match track {
+        PushTrack::GitTracked => tx_mark_session_dirty(tx, session_id),
+        PushTrack::DeviceLocal => Ok(()),
+    }
+}
 
 impl super::Store {
     // ---------------- Sessions ----------------
@@ -54,11 +111,8 @@ impl super::Store {
         Ok(fav)
     }
 
-    /// Set a session's favorited flag (user action). The push path materializes
-    /// the session's jsonl snapshot when this is true and REMOVES it when false,
-    /// so the toggle must flag the session dirty in the SAME transaction —
-    /// otherwise a favorite (or un-favorite) would never reach git (the exact
-    /// "miss git" failure the same-tx marking guards against for usage rows).
+    /// Set a session's favorited flag (user action). `PushTrack::GitTracked` —
+    /// see the enum for why the closing line flags the session dirty.
     pub fn set_session_favorited(
         &self,
         device_id: &str,
@@ -71,49 +125,54 @@ impl super::Store {
             "UPDATE sessions SET favorited = ?3 WHERE id = ?1 AND device_id = ?2",
             params![session_id, device_id, favorited as i64],
         )?;
-        let mut dirty = std::collections::BTreeSet::new();
-        dirty.insert(session_id.to_string());
-        mark_sessions_dirty(&tx, &dirty)?;
+        tx_apply_push_track(&tx, session_id, PushTrack::GitTracked)?;
         tx.commit()?;
         Ok(())
     }
 
-    /// Set/clear a session's custom title. `None` or empty clears it (reverts to
-    /// `title_orig` for display).
+    /// Set/clear a session's custom title. `None` or empty clears it (reverts
+    /// to `title_orig` for display). `PushTrack::DeviceLocal` — see the enum
+    /// for why this setter never flags dirty.
     pub fn set_session_custom_title(
         &self,
         device_id: &str,
         session_id: &str,
         title: Option<&str>,
     ) -> AppResult<()> {
-        let conn = self.conn.lock().expect("db mutex poisoned");
-        let t = title.unwrap_or("").trim();
-        conn.execute(
+        let mut conn = self.conn.lock().expect("db mutex poisoned");
+        let tx = conn.transaction()?;
+        tx.execute(
             "UPDATE sessions SET custom_title = ?3 WHERE id = ?1 AND device_id = ?2",
-            params![session_id, device_id, t],
+            params![session_id, device_id, title.unwrap_or("").trim()],
         )?;
+        tx_apply_push_track(&tx, session_id, PushTrack::DeviceLocal)?;
+        tx.commit()?;
         Ok(())
     }
 
     /// Set/clear a session's local group (device-private).
+    /// `PushTrack::DeviceLocal` — see the enum for why this setter never flags
+    /// dirty.
     pub fn set_session_local_group(
         &self,
         device_id: &str,
         session_id: &str,
         group_id: Option<&str>,
     ) -> AppResult<()> {
-        let conn = self.conn.lock().expect("db mutex poisoned");
-        let g = group_id.unwrap_or("");
-        conn.execute(
+        let mut conn = self.conn.lock().expect("db mutex poisoned");
+        let tx = conn.transaction()?;
+        tx.execute(
             "UPDATE sessions SET local_group_id = ?3 WHERE id = ?1 AND device_id = ?2",
-            params![session_id, device_id, g],
+            params![session_id, device_id, group_id.unwrap_or("")],
         )?;
+        tx_apply_push_track(&tx, session_id, PushTrack::DeviceLocal)?;
+        tx.commit()?;
         Ok(())
     }
 
-    /// Set/clear a session's synced group (cross-device — the synced_group_id
-    /// rides the jsonl snapshot's meta line, so a change must flag the session
-    /// dirty in the same transaction to reach git on the next push).
+    /// Set/clear a session's synced group (cross-device).
+    /// `PushTrack::GitTracked` — see the enum for why the closing line flags
+    /// the session dirty.
     pub fn set_session_synced_group(
         &self,
         device_id: &str,
@@ -121,15 +180,12 @@ impl super::Store {
         group_id: Option<&str>,
     ) -> AppResult<()> {
         let mut conn = self.conn.lock().expect("db mutex poisoned");
-        let g = group_id.unwrap_or("");
         let tx = conn.transaction()?;
         tx.execute(
             "UPDATE sessions SET synced_group_id = ?3 WHERE id = ?1 AND device_id = ?2",
-            params![session_id, device_id, g],
+            params![session_id, device_id, group_id.unwrap_or("")],
         )?;
-        let mut dirty = std::collections::BTreeSet::new();
-        dirty.insert(session_id.to_string());
-        mark_sessions_dirty(&tx, &dirty)?;
+        tx_apply_push_track(&tx, session_id, PushTrack::GitTracked)?;
         tx.commit()?;
         Ok(())
     }
@@ -143,6 +199,12 @@ impl super::Store {
     /// only passes a non-empty set anyway; this is the second line of defense).
     /// One transaction; `(device_id, source, id)` scoping never touches a
     /// peer's rows or another source.
+    ///
+    /// Ghosts are deleted outright, not dirty-flagged: a dirty flag drives the
+    /// push path's materialization of a LIVE row, and a ghost has none. The
+    /// git-side consequence (a formerly favorited ghost's snapshot file must
+    /// vanish) is discharged synchronously by the collect caller via
+    /// `decide_snapshot_action(false)` (best-effort unlink).
     pub fn reconcile_sessions(
         &self,
         device_id: &str,
@@ -200,12 +262,18 @@ impl super::Store {
     /// it, so neither a re-collect (`RefreshSystemOnly`) nor a peer-snapshot
     /// pull (`RefreshSystemAndFavorites`) can resurrect a deleted session.
     ///
-    /// Deleting also clears `favorited` and flags the sessions dirty in the
-    /// SAME transaction, so the next push drops their git snapshots — a
-    /// deleted session stops riding the favorites sync, and the
-    /// "snapshot exists ⇔ favorited" invariant keeps holding. Transcript
-    /// messages are kept (the exclusion is reversible in principle; messages
-    /// are re-collectable derived data anyway). Returns how many rows matched
+    /// Deleting also clears `favorited` and flags every deleted id dirty in
+    /// the SAME transaction. Clearing `favorited` is a
+    /// [`PushTrack::GitTracked`] write driven by a LOCAL user action, so the
+    /// same-tx flag is what makes the next push drop the sessions' git
+    /// snapshots — a deleted session stops riding the favorites sync, and the
+    /// "snapshot exists ⇔ favorited" invariant keeps holding (`excluded`
+    /// itself is [`PushTrack::DeviceLocal`]: device-private, never
+    /// serialized). This is the push-side mirror of a deletion; the pull-side
+    /// mirror (`bulk_unfavorite_sessions`) deliberately does NOT flag dirty —
+    /// an independent decision, see its doc. Transcript messages are kept (the
+    /// exclusion is reversible in principle; messages are re-collectable
+    /// derived data anyway). Returns how many rows matched
     /// (keys addressing no row simply don't count — a peer's row already
     /// reconciled away is not an error). Empty input is a no-op.
     pub fn delete_sessions(&self, keys: &[SessionKey]) -> AppResult<usize> {
@@ -251,19 +319,18 @@ pub(super) enum SessionUpsertPolicy {
     /// edits" invariant (which is also what keeps a soft-deleted session
     /// excluded across every re-collect).
     RefreshSystemOnly,
-    /// Pull / import: refresh the 7 system columns AND `favorited` /
-    /// `synced_group_id` — a peer's snapshot is authoritative for its own
-    /// row's favorites-track fields. `custom_title` / `local_group_id` /
-    /// `excluded` stay device-local either way (never carried by a snapshot).
+    /// Pull / import: refresh the 7 system columns AND the two
+    /// [`PushTrack::GitTracked`] columns — a peer's snapshot is authoritative
+    /// for its own row's git-riding fields. The [`PushTrack::DeviceLocal`]
+    /// columns stay untouched either way (never carried by a snapshot).
     RefreshSystemAndFavorites,
 }
 
 impl SessionUpsertPolicy {
     /// The `ON CONFLICT(id, device_id) DO UPDATE SET` clause this policy
     /// drives. Every policy refreshes the 7 shared system-data columns; pull
-    /// additionally takes the two favorites-track columns. The device-local
-    /// columns (`custom_title`, `local_group_id`, `excluded`) never appear
-    /// here.
+    /// additionally takes the two [`PushTrack::GitTracked`] columns. The
+    /// [`PushTrack::DeviceLocal`] columns never appear here.
     fn conflict_set(&self) -> String {
         // The refreshable system-data columns — shared by both policies, so
         // declared once (single source of truth).
@@ -533,6 +600,44 @@ mod tests {
 
         // Empty set is a no-op (no transaction, no error).
         assert_eq!(s.bulk_unfavorite_sessions("peer", &[]).unwrap(), 0);
+    }
+
+    /// The [`PushTrack`] rule at the setter level — the regression pin for the
+    /// "which session fields ride git" decision. GitTracked writes
+    /// (favorited / synced_group) flag the session dirty in their transaction
+    /// (the change must ride the next push's snapshot recompute); device-local
+    /// writes (custom_title / local_group) leave the dirty set untouched (they
+    /// cannot change a snapshot — flagging would fabricate an empty push).
+    #[test]
+    fn setter_dirty_marking_follows_push_track() {
+        let s = mem();
+        seed_session(&s, "local", "dev", "2026-08-01T10:00:00.000Z");
+        seed_session(&s, "fav-sid", "dev", "2026-08-02T10:00:00.000Z");
+        seed_session(&s, "grp-sid", "dev", "2026-08-03T10:00:00.000Z");
+        assert!(s.dirty_sessions().unwrap().is_empty(), "seeding is clean");
+
+        // DeviceLocal: written, never flagged.
+        s.set_session_custom_title("dev", "local", Some("Renamed"))
+            .unwrap();
+        s.set_session_local_group("dev", "local", Some("lg1"))
+            .unwrap();
+        assert!(
+            s.dirty_sessions().unwrap().is_empty(),
+            "device-local setters never flag dirty"
+        );
+
+        // GitTracked: each write flags its session dirty same-tx.
+        s.set_session_favorited("dev", "fav-sid", true).unwrap();
+        assert!(
+            s.dirty_sessions().unwrap().contains(&"fav-sid".to_string()),
+            "favorited flags dirty"
+        );
+        s.set_session_synced_group("dev", "grp-sid", Some("sg1"))
+            .unwrap();
+        assert!(
+            s.dirty_sessions().unwrap().contains(&"grp-sid".to_string()),
+            "synced_group flags dirty"
+        );
     }
 
     // ---- reconcile_sessions (ghost-session reality check) ----

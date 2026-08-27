@@ -1,9 +1,11 @@
 //! Session transcript: message 原文 ingest/reads, session queries, dirty-session
 //! tracking, and the pull-side snapshot import + favorites reconciliation.
 //!
-//! Hosts the shared `mark_sessions_dirty` helper (used by the sessions-domain
-//! favorites setters) and the `build_session_where` / `row_to_session_message`
-//! decode helpers.
+//! Hosts the shared dirty-flag core (`tx_mark_session_dirty` / its batch form
+//! `mark_sessions_dirty` — the same-tx rule the GitTracked session setters
+//! apply via `super::store_sessions::tx_apply_push_track`, whose column-track
+//! authority is `super::store_sessions::PushTrack`) and the
+//! `build_session_where` / `row_to_session_message` decode helpers.
 
 use super::aggregate_sql::session_pair_join;
 use super::store_sessions::{upsert_session_row, SessionUpsertPolicy};
@@ -90,8 +92,9 @@ impl super::Store {
 
     /// The meta line the push path writes as the first line of a session's jsonl
     /// snapshot, read straight from the sessions row (system data + the two
-    /// favorites-track user fields). `None` when the session is not in the table
-    /// — the caller treats that as "nothing to snapshot".
+    /// `PushTrack::GitTracked` user fields — the column-track authority is
+    /// `super::store_sessions::PushTrack`). `None` when the session is not in
+    /// the table — the caller treats that as "nothing to snapshot".
     pub fn get_session_snapshot_meta(
         &self,
         device_id: &str,
@@ -127,11 +130,12 @@ impl super::Store {
     /// Import a peer's session snapshot into the store (pull path). UPSERTs the
     /// session row keyed by `(meta.id, device_id)`; the peer's `favorited` and
     /// `synced_group_id` (carried by the snapshot) overwrite — the peer is
-    /// authoritative for its own row's favorites-track fields. System fields
-    /// refresh on conflict; `custom_title` / `local_group_id` are device-local
-    /// and never carried by the snapshot. Messages land deduped by
-    /// `(device_id, uuid)`, NOT marked dirty (pull data is already on git — the
-    /// same split as `ingest` vs `ingest_marking_dirty` for usage rows).
+    /// authoritative for its own row's `PushTrack::GitTracked` columns. System
+    /// fields refresh on conflict; the `PushTrack::DeviceLocal` columns
+    /// (`custom_title` / `local_group_id`) are never carried by the snapshot.
+    /// Messages land deduped by `(device_id, uuid)`, NOT marked dirty (pull
+    /// data is already on git — the same split as `ingest` vs
+    /// `ingest_marking_dirty` for usage rows).
     pub fn import_session_snapshot(
         &self,
         device_id: &str,
@@ -141,8 +145,8 @@ impl super::Store {
         let mut conn = self.conn.lock().expect("db mutex poisoned");
         let tx = conn.transaction()?;
         // Project the snapshot meta into the system-data carrier (the 7 fields
-        // a snapshot shares with a freshly collected session); the
-        // favorites-track fields ride the builder args + RefreshSystemAndFavorites.
+        // a snapshot shares with a freshly collected session); the GitTracked
+        // columns ride the builder args + RefreshSystemAndFavorites.
         upsert_session_row(
             &tx,
             device_id,
@@ -220,8 +224,16 @@ impl super::Store {
     /// half, already computed by the caller). One transaction: both writes land
     /// together or neither does; the meta row stays (its system data is
     /// harmless, and self may hold its own row for the same session). No-op
-    /// (returns 0) on an empty set. NOT marked dirty: a pull-side reconciliation
-    /// is not a local change to push.
+    /// (returns 0) on an empty set.
+    ///
+    /// NOT marked dirty — an independent decision that deliberately departs
+    /// from the setter-path rule for a `PushTrack::GitTracked` column (see
+    /// `super::store_sessions::PushTrack`): this write does not CREATE a local
+    /// change needing a push, it MIRRORS one already on git (the peer removed
+    /// its snapshot file — that vanishing is how these ids were selected). The
+    /// dirty flag also keys by bare session id while the push materializes
+    /// only SELF's rows, so flagging a peer-row write would at best trigger a
+    /// meaningless recompute of self's row for the same id.
     pub fn bulk_unfavorite_sessions(&self, device_id: &str, ids: &[String]) -> AppResult<usize> {
         if ids.is_empty() {
             // Nothing to write; skip opening a transaction entirely.
@@ -435,22 +447,31 @@ fn row_to_session_message(r: &rusqlite::Row<'_>) -> rusqlite::Result<SessionMess
     })
 }
 
-/// Flag each session in `sessions` dirty, within `tx` so the flag lands
-/// atomically with the `session_messages` writes that made them dirty (a separate
-/// transaction could leave a written message whose session is never flagged,
-/// silently dropping it from the next push — the same failure `mark_days_dirty`
-/// guards against for usage rows). `INSERT OR IGNORE` keeps it idempotent across
-/// collects.
+/// Flag ONE session dirty inside `tx` — the same-tx core of the whole
+/// dirty-session mechanism. The flag must land atomically with the write that
+/// made the session dirty (a separate transaction could leave a committed
+/// write whose session is never flagged, silently dropping it from the next
+/// push — the same failure `mark_days_dirty` guards against for usage rows).
+/// `INSERT OR IGNORE` keeps re-flagging idempotent. Setter-path callers go
+/// through `super::store_sessions::tx_apply_push_track`, which applies this
+/// only for `PushTrack::GitTracked` columns.
+pub(super) fn tx_mark_session_dirty(tx: &rusqlite::Transaction, session_id: &str) -> AppResult<()> {
+    tx.execute(
+        "INSERT OR IGNORE INTO dirty_sessions(session_id) VALUES (?1)",
+        params![session_id],
+    )?;
+    Ok(())
+}
+
+/// Flag each session in `sessions` dirty within `tx` — the batch form of
+/// [`tx_mark_session_dirty`] for the multi-row writers (transcript ingest,
+/// `delete_sessions`), so every flag still lands in the writer's transaction.
 pub(super) fn mark_sessions_dirty(
     tx: &rusqlite::Transaction,
     sessions: &std::collections::BTreeSet<String>,
 ) -> AppResult<()> {
-    if sessions.is_empty() {
-        return Ok(());
-    }
-    let mut stmt = tx.prepare("INSERT OR IGNORE INTO dirty_sessions(session_id) VALUES (?1)")?;
     for sid in sessions {
-        stmt.execute(params![sid])?;
+        tx_mark_session_dirty(tx, sid)?;
     }
     Ok(())
 }
@@ -993,9 +1014,10 @@ mod tests {
 
     /// The other policy half: `import_session_snapshot` (pull) uses
     /// `RefreshSystemAndFavorites`, so on conflict it overwrites the
-    /// favorites-track columns (a peer is authoritative for its own row's
-    /// favorited / synced_group_id) but leaves the device-local columns
-    /// (custom_title, local_group_id) untouched.
+    /// `PushTrack::GitTracked` columns (a peer is authoritative for its own
+    /// row's favorited / synced_group_id) but leaves the
+    /// `PushTrack::DeviceLocal` columns (custom_title, local_group_id)
+    /// untouched.
     #[test]
     fn import_session_snapshot_refreshes_favorites_but_not_device_local() {
         let store = mem();
