@@ -11,8 +11,6 @@ import {
   FILTER_DIMENSIONS,
   type FilterState,
 } from "@/app/store/slices/filterSlice"
-import { type FilterOption, facetOptions } from "@/lib/filter-options"
-import { projectBasename } from "@/lib/paths"
 import { totalTokensOf } from "@/lib/token-buckets"
 import type {
   DeviceUsageRow,
@@ -31,37 +29,6 @@ import type {
  *  differing dimension values can never silently share a cache entry. */
 export function filterId(f: FilterState): string {
   return FILTER_DIMENSIONS.map((k) => f[k]).join("|")
-}
-
-/**
- * Project-dropdown options from the distinct-projects candidates. Known
- * identities show their basename (the tree / table convention — full paths
- * live on hover there and stay out of the dropdown); the unknown sentinel
- * shows the labeled special option. `unknownOption` is the LIVE presence
- * probe (the option is offered only while the endpoint reports unknown usage
- * in the window), while `unknownValue` is the stable value (remembered after
- * first sight) used for LABELING — a selected sentinel that a window change
- * dropped from the candidates still merges back via facetOptions and must
- * still read as「未知项目」, not as its raw literal. A stale known project
- * merges back the same way and keeps its basename label.
- */
-export function projectOptions(
-  projects: readonly string[],
-  unknownOption: string | null,
-  unknownValue: string | null,
-  selected: string,
-  unknownLabel: string,
-): FilterOption[] {
-  const candidates = unknownOption
-    ? facetOptions([...projects, unknownOption], selected)
-    : facetOptions(projects, selected)
-  return candidates.map((v) => ({
-    value: v,
-    label:
-      unknownValue != null && v === unknownValue
-        ? unknownLabel
-        : projectBasename(v),
-  }))
 }
 
 /** A zero-valued trend point used to pad empty hour buckets. */

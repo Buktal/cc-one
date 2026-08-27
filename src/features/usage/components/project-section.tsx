@@ -99,7 +99,7 @@ export function ProjectSection({ filter }: { filter: FilterState }) {
             ))}
             {unknown ? (
               <DistRow
-                name={t("usage.control.unknownProject")}
+                name={t("filter.unknownProject")}
                 hatch
                 value={formatSegValue(
                   formatTokens(unknown.total_tokens),

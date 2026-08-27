@@ -10,7 +10,9 @@
 //  - LightweightCard expanded: compact (11px) 适配小窗。
 //
 // device_scope 在全局 filter, 故看板 / 日志 / lightweight 的设备筛选一并跟随。
-// 哨兵映射 / label 解析等筛选下拉规则收敛在共享 FilterSelect。
+// 哨兵映射 / label 解析等筛选下拉规则收敛在共享 FilterSelect。组件住
+// src/components（架构审查Ⅲ候选①）：三个域共享的维度选取面不属于任何一家
+// feature，设备身份面（选项来源）在 @/lib/device-labels。
 
 import { useMemo } from "react"
 import { useTranslation } from "react-i18next"
@@ -39,8 +41,8 @@ export function DeviceScopeControl({ compact = false }: { compact?: boolean }) {
 
   return (
     <FilterSelect
-      ariaLabel={t("usage.deviceScope.label")}
-      allLabel={t("usage.control.allDevice")}
+      ariaLabel={t("filter.device")}
+      allLabel={t("filter.allDevice")}
       options={options}
       value={active}
       onChange={(v) => dispatch(patchFilter({ device_scope: v }))}

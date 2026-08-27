@@ -13,12 +13,12 @@ import { useTranslation } from "react-i18next"
 import { useDistinctSourcesQuery } from "@/app/store/api"
 import { ALL_TIME_FILTER } from "@/app/store/slices/filterSlice"
 import { DateRangeChip as SharedDateRangeChip } from "@/components/date-range-chip"
+import { DeviceScopeControl } from "@/components/device-scope-control"
 import { FilterSelect } from "@/components/filter-select"
+import { ProjectSelect } from "@/components/project-select"
 import { useDateRangeFilter } from "@/hooks/use-date-range-filter"
 import { useFacetDimension } from "@/lib/facet-dimension"
 import { sourceLabel } from "../source-labels"
-import { DeviceScopeControl } from "./device-scope-control"
-import { ProjectSelect } from "./project-select"
 
 /** 日期范围 chip —— 把 Redux filterSlice 适配成受控共享组件。数据语义与
  *  sessions 工具栏版一致: 动态预设 (today/7d/30d) 只存 preset、不存具体日期

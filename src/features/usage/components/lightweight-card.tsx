@@ -49,6 +49,7 @@ import {
   patchFilter,
 } from "@/app/store/slices/filterSlice"
 import { setMode } from "@/app/store/slices/viewSlice"
+import { DeviceScopeControl } from "@/components/device-scope-control"
 import {
   Tooltip,
   TooltipContent,
@@ -57,7 +58,6 @@ import {
 import { deviceOptionLabel } from "@/lib/device-labels"
 import { formatTokens } from "@/lib/format"
 import { cn } from "@/lib/utils"
-import { DeviceScopeControl } from "./device-scope-control"
 import { TokenHero } from "./token-hero"
 
 /** Hover dwell before the tucked bar expands (hover-expand preference).
@@ -233,7 +233,7 @@ export function LightweightCard() {
         {drawerHover && drawerEnabled ? (
           <button
             type="button"
-            aria-label={t("usage.deviceScope.label")}
+            aria-label={t("filter.device")}
             aria-expanded={listOpen}
             onMouseDown={(e) => e.stopPropagation()}
             onClick={toggleList}

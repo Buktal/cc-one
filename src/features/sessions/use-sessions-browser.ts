@@ -37,7 +37,6 @@ import {
 import { useAppDispatch, useAppSelector } from "@/app/store/hooks"
 import { patchFilter } from "@/app/store/slices/filterSlice"
 import { setView } from "@/app/store/slices/viewSlice"
-import { useProjectCandidates } from "@/features/usage/use-project-candidates"
 import { useDateRangeFilter } from "@/hooks/use-date-range-filter"
 import { useDebouncedValue } from "@/hooks/use-debounced-value"
 import { usePagedBrowser } from "@/hooks/use-paged-browser"
@@ -45,6 +44,7 @@ import { useMutateWithToast } from "@/hooks/use-toast-mutation"
 import { useDeviceLabels, useDeviceOptions } from "@/lib/device-labels"
 import { DEFAULT_PAGE_SIZE } from "@/lib/pagination"
 import { usePersistedState } from "@/lib/persistence"
+import { useProjectCandidates } from "@/lib/project-candidates"
 import type {
   SessionGroup,
   SessionRow,

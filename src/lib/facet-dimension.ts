@@ -9,7 +9,7 @@
 //
 // 这样看板 / 日志 / 会话工作台三处的同一维度选项完全一致。项目维度不进此壳：
 // 它的候选端点带「未知项目」哨兵的双视图（live presence + 记忆值），装配收口
-// 在 features/usage 的 useProjectCandidates + derive.projectOptions，没有重复。
+// 在 lib/project-candidates 的 useProjectCandidates + projectOptions，没有重复。
 //
 // labelOf 只在 source 维度必填：来源文案两域有意不同（usage 短名 "Codex"、
 // sessions 全名 "Codex CLI"——session 行没有额外上下文消歧），不存在全局正
