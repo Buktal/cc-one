@@ -18,14 +18,10 @@
 import { MessagesSquare, Search, Star, Trash2, X } from "lucide-react"
 import { type ReactNode, useState } from "react"
 import { useTranslation } from "react-i18next"
-import { useDistinctSourcesQuery } from "@/app/store/api"
-import { ALL_TIME_FILTER } from "@/app/store/slices/filterSlice"
 import { ConfirmDialog } from "@/components/confirm-dialog"
-import { DateRangeChip } from "@/components/date-range-chip"
-import { DeviceScopeControl } from "@/components/device-scope-control"
+import { FilterBar } from "@/components/filter-bar"
 import { FilterSelect } from "@/components/filter-select"
 import { PaginationBar } from "@/components/pagination-bar"
-import { ProjectSelect } from "@/components/project-select"
 import { QueryState } from "@/components/query-state"
 import { RelativeTime } from "@/components/relative-time"
 import { Button } from "@/components/ui/button"
@@ -46,7 +42,6 @@ import {
   TooltipTrigger,
 } from "@/components/ui/tooltip"
 import { deviceLabelOf } from "@/lib/device-labels"
-import { useFacetDimension } from "@/lib/facet-dimension"
 import type { FilterOption } from "@/lib/filter-options"
 import {
   formatCost,
@@ -212,9 +207,11 @@ export function SessionsView() {
 
 // ------------------------------------------------------------- 工具条 ----
 
-/** 顶部工具条：筛选下拉全部居左（与看板 ControlBar 同序：时间 · 来源 · 模型
- *  · 项目 · 设备），搜索 + 批量操作居右；窄容器在时间后追加树容器下拉。
- *  统计入口不在此条——它是内容口径随选中对象走，放在卡片头/详情标题行的
+/** 顶部工具条：筛选名册（时间 · 来源 · 模型 · 项目 · 设备）收口在共享
+ *  FilterBar——清单 / 顺序 / 门控 / 日期适配的装配知识单源在
+ *  @/components/filter-bar，本域只注入三点差异：来源走全名映射、设备位仅
+ *  收藏轨、窄档树容器下拉（挂在时间 chip 之后）。搜索 + 批量操作居右；统计
+ *  入口不在此条——它是内容口径随选中对象走，放在卡片头/详情标题行的
  *  NarrowStatsTrigger 上。单行不换行——chips 内容自适应（FilterSelect 统一
  *  策略），一行放不下由工具条横向滚动兜底（scrollbar-none 隐轨道）。
  *
@@ -225,12 +222,6 @@ function WorkbenchToolbar({
   track,
   search,
   setSearch,
-  rangePreset,
-  fromDay,
-  toDay,
-  setRangePreset,
-  setFromDay,
-  setToDay,
   selectedProject,
   selectedGroupId,
   projectBuckets,
@@ -248,12 +239,6 @@ function WorkbenchToolbar({
   | "track"
   | "search"
   | "setSearch"
-  | "rangePreset"
-  | "fromDay"
-  | "toDay"
-  | "setRangePreset"
-  | "setFromDay"
-  | "setToDay"
   | "selectedProject"
   | "selectedGroupId"
   | "projectBuckets"
@@ -268,64 +253,31 @@ function WorkbenchToolbar({
   | "clearChecked"
 >) {
   const { t } = useTranslation()
-  // 来源 / 模型维度（架构审查候选⑦）：共享 useFacetDimension 直连全局
-  // filter——候选口径（窗口内 distinct + 已选值并回）与看板 / 日志对齐，
-  // 旧版静态 SOURCE_OPTIONS 常开的两派分叉就此表态收敛。来源 chip 与看板
-  // 同规：任意历史窗口采到过来源才显示；label 走本域全名映射。
-  const sourceFacet = useFacetDimension({
-    dimension: "source",
-    labelOf: sessionSourceLabel,
-  })
-  const modelFacet = useFacetDimension({ dimension: "model" })
-  const { data: anySources = [] } = useDistinctSourcesQuery(ALL_TIME_FILTER)
   return (
     <div className="scrollbar-none flex items-center gap-2 overflow-x-auto">
       <div className="flex shrink-0 items-center gap-2">
-        <DateRangeChip
-          preset={rangePreset}
-          fromDay={fromDay}
-          toDay={toDay}
-          onPreset={setRangePreset}
-          onFromDay={setFromDay}
-          onToDay={setToDay}
+        {/* 设备位的收藏轨门控在此表达（名册的门控规则本身在
+            lib/filter-bar-roster）；设备控件显隐策略（≤1 台不渲染）内聚在
+            DeviceScopeControl。 */}
+        <FilterBar
+          sourceLabelOf={sessionSourceLabel}
+          showDevice={track === "favorites"}
+          dateTrailingSlot={
+            /* 窄档（左树 <48rem 未上台）的容器下拉。 */
+            <div className="hidden @max-[48rem]/sessions:block">
+              <NarrowTreeSelect
+                track={track}
+                projectBuckets={projectBuckets}
+                trackGroups={trackGroups}
+                selectedProject={selectedProject}
+                selectedGroupId={selectedGroupId}
+                selectAll={selectAll}
+                selectProject={selectProject}
+                selectGroup={selectGroup}
+              />
+            </div>
+          }
         />
-        {/* 窄档（左树 <48rem 未上台）的容器下拉。 */}
-        <div className="hidden @max-[48rem]/sessions:block">
-          <NarrowTreeSelect
-            track={track}
-            projectBuckets={projectBuckets}
-            trackGroups={trackGroups}
-            selectedProject={selectedProject}
-            selectedGroupId={selectedGroupId}
-            selectAll={selectAll}
-            selectProject={selectProject}
-            selectGroup={selectGroup}
-          />
-        </div>
-        {anySources.length > 0 ? (
-          <FilterSelect
-            ariaLabel={t("sessions.filter.source")}
-            allLabel={t("sessions.filter.allSources")}
-            options={sourceFacet.options}
-            value={sourceFacet.value}
-            onChange={sourceFacet.onChange}
-          />
-        ) : null}
-        <FilterSelect
-          ariaLabel={t("sessions.filter.model")}
-          allLabel={t("sessions.filter.allModels")}
-          options={modelFacet.options}
-          value={modelFacet.value}
-          onChange={modelFacet.onChange}
-        />
-        {/* 项目维度：共享 filterSlice（与看板 / 日志一致），左树项目轨道的
-            选中也写同一份状态。候选取自 distinct-projects 端点，含「未知
-            项目」特殊选项。 */}
-        <ProjectSelect />
-        {/* 设备维度下拉（架构审查候选⑥）：复用看板/日志的共享控件——读写同是
-            全局 filter.device_scope，显隐策略（≤1 台不渲染）内聚在控件里；本轨
-            只管收藏宇宙的门控。 */}
-        {track === "favorites" ? <DeviceScopeControl /> : null}
       </div>
 
       {/* 右：批量操作 + 搜索。宽裕时右贴（ml-auto 在无剩余空间时自然失效，

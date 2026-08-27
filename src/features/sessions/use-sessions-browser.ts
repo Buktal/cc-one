@@ -37,7 +37,6 @@ import {
 import { useAppDispatch, useAppSelector } from "@/app/store/hooks"
 import { patchFilter } from "@/app/store/slices/filterSlice"
 import { setView } from "@/app/store/slices/viewSlice"
-import { useDateRangeFilter } from "@/hooks/use-date-range-filter"
 import { useDebouncedValue } from "@/hooks/use-debounced-value"
 import { usePagedBrowser } from "@/hooks/use-paged-browser"
 import { useMutateWithToast } from "@/hooks/use-toast-mutation"
@@ -153,11 +152,6 @@ export function useSessionsBrowser() {
   // the sessions-only dimensions (track / search / group selection) stay local
   // here.
   const filter = useAppSelector((s) => s.filter.filter)
-  // 时间范围筛选：与 usage 视图共用同一份 filterSlice 写语义（ADR-0008）——
-  // 动态预设只存 preset、不存具体日期；日历选日期转 custom。读写经
-  // useDateRangeFilter 单一归属（补丁形状在 filterSlice 的 presetPatch /
-  // dayPatch）。
-  const dateRange = useDateRangeFilter()
   // 项目维度与左树项目轨道统一（#102）：树的项目桶选中和工具栏的项目下拉
   // 是同一份状态——共享 filterSlice.project。selectedProject（视图契约不变）
   // 由筛选值映射回树的 identity 空间（哨兵 → "" 无启动目录桶）；哨兵值从候选
@@ -755,14 +749,10 @@ export function useSessionsBrowser() {
     container,
     selectAll,
     effectiveTrack,
-    // toolbar filters (time range)。设备维度读写在全局 filter（DeviceScopeControl
-    // 直连 filterSlice），不再经本出口；device_scope 的后端语义随 spec.filter 生效。
-    rangePreset: dateRange.preset,
-    fromDay: dateRange.fromDay,
-    toDay: dateRange.toDay,
-    setRangePreset: dateRange.onPreset,
-    setFromDay: dateRange.onFromDay,
-    setToDay: dateRange.onToDay,
+    // 工具条的五维筛选（时间/来源/模型/项目/设备）全部读写共享 filterSlice，
+    // 由视图层的共享 FilterBar 直接接线（架构审查Ⅳ候选⑫）——时间经
+    // useDateRangeFilter、设备显隐门控（收藏轨）在 FilterBar 的 showDevice，
+    // 均不再经本出口；时间窗的后端语义随 spec.filter 生效。
     // data
     isLoading: sessionsQuery.isLoading,
     isFetching: sessionsQuery.isFetching,

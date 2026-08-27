@@ -71,9 +71,9 @@ export const ALL_TIME_FILTER: FilterState = {
 
 /** 时间范围写的切片补丁（ADR-0008 的写侧，单一归属）：动态预设不存具体日期
  *  ——选预设即清空 from_day/to_day（cache key 一天内稳定，日期在 queryFn 实
- *  时派生）；日期编辑转 custom 并存字面值。DateRangeChip 的两处调用
- *  （usage 与 sessions 工具栏，经 useDateRangeFilter）都经这两个补丁写 slice，
- *  不再各写各的 dispatch 链。 */
+ *  时派生）；日期编辑转 custom 并存字面值。两个工具栏（usage 与 sessions）的
+ *  日期 chip——经共享 FilterBar 内的 useDateRangeFilter 适配——都经这两个补
+ *  丁写 slice，不再各写各的 dispatch 链。 */
 export function presetPatch(p: Preset): Partial<FilterState> {
   return { range_preset: p, from_day: "", to_day: "" }
 }

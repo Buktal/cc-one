@@ -1,10 +1,10 @@
 // DateRangeChip — 共享时间范围 popover: 一排预设按钮 (今天 / 7天 / 30天 /
 // 全部) + 日历弹层选范围. 纯展示: 调用方拥有值 (preset / fromDay / toDay) 与
-// 回调 (onPreset / onFromDay / onToDay), 所以这一份组件同时支撑 usage 的
-// ControlBar (值经 Redux filterSlice 读写) 与 sessions 工具栏 (经
-// useDateRangeFilter 同一份 slice 写语义). 预设按钮清单与 chip 标签回退 key
-// 也在本组件 (usage.control.* 命名空间, 两处工具栏的三语文案逐字相同——此前
-// sessions 与 usage 各抄一份预设表, 收进本组件单一归属).
+// 回调 (onPreset / onFromDay / onToDay)。唯一调用方是共享 FilterBar
+// (@/components/filter-bar, 值经 useDateRangeFilter 做 Redux filterSlice 接
+// 线) —— 看板 / 日志 / 会话工作台的日期 chip 由此同源. 预设按钮清单与 chip
+// 标签回退 key 也在本组件 (usage.control.* 命名空间, 两处工具栏的三语文案逐
+// 字相同——此前 sessions 与 usage 各抄一份预设表, 收进本组件单一归属).
 //
 // `onPreset` 只回传 preset 值本身; 由调用方负责同时落具体 day 边界
 // (presetPatch) —— 本组件不碰任何状态, 只上报点击.
