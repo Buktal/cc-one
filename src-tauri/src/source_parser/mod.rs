@@ -503,6 +503,23 @@ pub(super) fn normalize_cache_inclusive(input: u32, cache_read: u32) -> (u32, u3
     (fresh, clamped)
 }
 
+/// Build the FINAL token four-pack for a cache-inclusive source: the
+/// `(input, cache_read)` pair goes through [`normalize_cache_inclusive`] and
+/// lands straight in a [`TokenCounts`] with no write bucket
+/// (`cache_creation = 0`). The one home of the inclusive→fresh mapping —
+/// Codex / Gemini / Grok all emit through this constructor, so the emitted
+/// shape can never disagree with what the emit gate (`TokenCounts::is_zero`)
+/// judges.
+pub(super) fn fresh_token_counts(input: u32, cache_read: u32, output: u32) -> TokenCounts {
+    let (fresh_input, clamped_cache_read) = normalize_cache_inclusive(input, cache_read);
+    TokenCounts {
+        input: fresh_input,
+        output,
+        cache_creation: 0,
+        cache_read: clamped_cache_read,
+    }
+}
+
 /// Soft cap on any single content string (32 KiB). Oversized content is
 /// truncated; a per-session 5 MiB soft cap is warned-on only at the ingest
 /// layer, not enforced here. Shared across JSONL parsers so the rule cannot
@@ -613,6 +630,49 @@ mod tests {
         // Both zero ⇒ both zero.
         let (fresh, cached) = normalize_cache_inclusive(0, 0);
         assert_eq!((fresh, cached), (0, 0));
+    }
+
+    /// Pin of the shared inclusive→four-pack constructor the three
+    /// cache-inclusive parsers emit through. The boundary of the emit gate
+    /// lives here too: with a POSITIVE inclusive input, even an abnormal
+    /// `cached > input` pair clamps down to the input itself and the surviving
+    /// `cache_read` (and any output) keeps the row billable; an all-zero pack
+    /// — including cache claimed against a ZERO input with nothing else — is
+    /// what gets dropped.
+    #[test]
+    fn fresh_token_counts_maps_and_bounds_the_emit_gate() {
+        // Typical inclusive pair: input de-cached, buckets land as expected.
+        let t = fresh_token_counts(8522, 3138, 29);
+        assert_eq!(
+            (t.input, t.cache_read, t.output, t.cache_creation),
+            (5384, 3138, 29, 0)
+        );
+        // Cache fully covers input (an all-cache turn): still billable —
+        // cache_read survives.
+        let t = fresh_token_counts(5000, 5000, 0);
+        assert_eq!((t.input, t.cache_read, t.output), (0, 5000, 0));
+        assert!(!t.is_zero(), "well-formed cache-only row is billable");
+        // Abnormal cached > input, positive input: cached clamps DOWN TO the
+        // input, so the row carries exactly that much billable cache (plus
+        // whatever output) — never dropped on the clamp alone.
+        let t = fresh_token_counts(10, 80, 60);
+        assert_eq!((t.input, t.cache_read, t.output), (0, 10, 60));
+        assert!(!t.is_zero(), "output saves an abnormal cache-only row");
+        let t = fresh_token_counts(5, 9, 0);
+        assert_eq!((t.input, t.cache_read, t.output), (0, 5, 0));
+        assert!(
+            !t.is_zero(),
+            "clamped cache_read == input alone keeps the row alive"
+        );
+        // Cache claimed against a ZERO inclusive input, nothing else: no
+        // bucket survives ⇒ dropped by the gate.
+        let t = fresh_token_counts(0, 9, 0);
+        assert_eq!((t.input, t.cache_read, t.output), (0, 0, 0));
+        assert!(t.is_zero(), "cache against zero input ⇒ dropped");
+        assert!(
+            fresh_token_counts(0, 0, 0).is_zero(),
+            "all-zero source row ⇒ dropped"
+        );
     }
 
     // ===================== discovery skeleton invariants =====================

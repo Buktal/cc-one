@@ -476,8 +476,9 @@ impl SessionEvent {
             cache_creation: usage.cache_creation_input_tokens,
             cache_read: usage.cache_read_input_tokens,
         };
-        // Skip degenerate events with zero tokens (no real API usage recorded).
-        if tokens.total() == 0 {
+        // Shared emit gate: all four buckets zero ⇒ no real API usage recorded
+        // (e.g. a pure tool-result echo) — never emitted.
+        if tokens.is_zero() {
             return None;
         }
         let uuid = self.uuid?;

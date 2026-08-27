@@ -29,6 +29,16 @@ impl TokenCounts {
             .saturating_add(self.cache_read)
     }
 
+    /// "Nothing billable" — every bucket is zero. The single emit gate for the
+    /// source parsers (`claude` / `codex` / `gemini` / `grok`): a record
+    /// carrying no billable token in any bucket is never emitted. Cache reads
+    /// ARE billable, so a cache-read-only row survives this predicate; judged
+    /// on the FINAL four-pack (post normalization/clamping) — never on an
+    /// intermediate delta shape.
+    pub fn is_zero(self) -> bool {
+        self.total() == 0
+    }
+
     /// Cache-hit rate as a ratio in [0,1] for display (0 when nothing cacheable).
     /// Denominator = fresh input + cache creation + cache reads — the full
     /// "could have been cached" pool. Matches CC-Switch's cache_hit_rate.
@@ -452,4 +462,75 @@ pub struct PricingEntry {
     pub cache_creation_per_million: f64,
     /// True when seeded from LiteLLM upstream, false when user-defined/edited.
     pub is_builtin: bool,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Table-driven pin of the parsers' single emit gate
+    /// ([`TokenCounts::is_zero`]): a record is dropped iff ALL FOUR buckets are
+    /// zero — cache_read alone is billable and keeps the row alive, and any
+    /// single non-zero bucket does too.
+    #[test]
+    fn is_zero_is_true_exactly_when_all_four_buckets_are_zero() {
+        let cases: &[(&str, TokenCounts, bool)] = &[
+            ("all zero (default)", TokenCounts::default(), true),
+            (
+                "explicit zeros",
+                TokenCounts {
+                    input: 0,
+                    output: 0,
+                    cache_creation: 0,
+                    cache_read: 0,
+                },
+                true,
+            ),
+            (
+                "only input",
+                TokenCounts {
+                    input: 1,
+                    ..Default::default()
+                },
+                false,
+            ),
+            (
+                "only output",
+                TokenCounts {
+                    output: 1,
+                    ..Default::default()
+                },
+                false,
+            ),
+            (
+                "only cache_creation",
+                TokenCounts {
+                    cache_creation: 1,
+                    ..Default::default()
+                },
+                false,
+            ),
+            (
+                "only cache_read (billable — row survives)",
+                TokenCounts {
+                    cache_read: 5000,
+                    ..Default::default()
+                },
+                false,
+            ),
+            (
+                "every bucket set",
+                TokenCounts {
+                    input: 10,
+                    output: 20,
+                    cache_creation: 30,
+                    cache_read: 40,
+                },
+                false,
+            ),
+        ];
+        for (name, tokens, want) in cases {
+            assert_eq!(tokens.is_zero(), *want, "{name}");
+        }
+    }
 }

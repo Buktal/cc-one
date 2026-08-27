@@ -3,10 +3,10 @@
 use std::path::{Path, PathBuf};
 
 use crate::error::AppResult;
-use crate::model::{RawSession, SessionMessage, SessionMessageRole, TokenCounts};
+use crate::model::{RawSession, SessionMessage, SessionMessageRole};
 
 use super::{
-    collect_jsonl_incremental, discover_files, normalize_cache_inclusive, truncate, CollectResult,
+    collect_jsonl_incremental, discover_files, fresh_token_counts, truncate, CollectResult,
     DirectoryShape, FileParseOutcome, GateMode, RawUsage, ScanProgress, ScanProgressDelta,
     SourceParser, TITLE_MAX, TRIM_LIMIT,
 };
@@ -128,17 +128,13 @@ fn is_gemini_session_file(path: &Path) -> bool {
 }
 
 /// Parsed token fields from a Gemini `tokens` object (pre-thoughts-merge).
+/// Pure field extraction — no zero/billable judgment happens on this
+/// intermediate shape; that gate lives once on the final [`TokenCounts`].
 struct GeminiTokens {
     input: u32,
     output: u32,
     cached: u32,
     thoughts: u32,
-}
-
-impl GeminiTokens {
-    fn is_all_zero(&self) -> bool {
-        self.input == 0 && self.output == 0 && self.thoughts == 0 && self.cached == 0
-    }
 }
 
 fn parse_gemini_tokens(tokens: &serde_json::Value) -> GeminiTokens {
@@ -278,25 +274,23 @@ fn fold_file(file: &Path, text: &str) -> FileParseOutcome {
 }
 
 /// Extract a per-call [`RawUsage`] from a `type:"gemini"` message carrying a
-/// usable `tokens` object. Returns `None` for missing/non-object tokens,
-/// all-zero tokens, or a row that normalizes to nothing (cache-only whose
-/// `cached` exceeds its inclusive `input`). `session_id` is stamped onto the
-/// result so usage rows carry their session grouping key.
+/// usable `tokens` object. Returns `None` for missing/non-object tokens, or
+/// when the FINAL four-pack is all zero — a fully-zero `tokens` object, or one
+/// that claims cache reads against a ZERO inclusive input with no output or
+/// thoughts anywhere. A positive input keeps its clamped cache ride billable.
+/// `session_id` is stamped onto the result so usage rows carry their session
+/// grouping key.
 fn extract_usage(msg: &serde_json::Value, session_id: &str) -> Option<RawUsage> {
     let tokens_obj = msg.get("tokens")?;
     if !tokens_obj.is_object() {
         return None;
     }
-    let tokens = parse_gemini_tokens(tokens_obj);
-    if tokens.is_all_zero() {
-        return None;
-    }
+    let parsed = parse_gemini_tokens(tokens_obj);
     // Gemini's `input` is cache-inclusive (it already contains `cached`);
-    // normalize to fresh so RawUsage.input matches the fresh-input contract.
-    let (fresh_input, clamped_cache_read) = normalize_cache_inclusive(tokens.input, tokens.cached);
-    let output = tokens.output + tokens.thoughts;
-    // A row that normalizes to nothing carries no billable tokens — skip it.
-    if fresh_input == 0 && output == 0 && clamped_cache_read == 0 {
+    // thoughts are billed as output. Map to the FINAL four-pack first, then
+    // judge it once through the shared emit gate (`TokenCounts::is_zero`).
+    let tokens = fresh_token_counts(parsed.input, parsed.cached, parsed.output + parsed.thoughts);
+    if tokens.is_zero() {
         return None;
     }
     let message_id = msg.get("id").and_then(|v| v.as_str()).unwrap_or("unknown");
@@ -314,12 +308,7 @@ fn extract_usage(msg: &serde_json::Value, session_id: &str) -> Option<RawUsage> 
         model: model.to_string(),
         source: SOURCE_TAG.to_string(),
         session_id: session_id.to_string(),
-        tokens: TokenCounts {
-            input: fresh_input,
-            output,
-            cache_creation: 0,
-            cache_read: clamped_cache_read,
-        },
+        tokens,
         ..Default::default()
     })
 }
@@ -435,14 +424,6 @@ mod tests {
         let t = parse_gemini_tokens(&partial);
         assert_eq!(t.cached, 0);
         assert_eq!(t.thoughts, 0);
-        // all-zero ⇒ skipped by the parse loop.
-        let zero: serde_json::Value =
-            serde_json::json!({ "input": 0, "output": 0, "cached": 0, "thoughts": 0 });
-        assert!(parse_gemini_tokens(&zero).is_all_zero());
-        // cache-only ⇒ NOT all-zero ⇒ kept.
-        let cache_only: serde_json::Value =
-            serde_json::json!({ "input": 0, "output": 0, "cached": 5000, "thoughts": 0 });
-        assert!(!parse_gemini_tokens(&cache_only).is_all_zero());
     }
 
     #[test]
@@ -456,7 +437,8 @@ mod tests {
     /// normalized to fresh (input − cache_read, clamped) at parse — output folds
     /// in thoughts, cache_creation = 0. The fixture's `total` (8522 + 29 + 405
     /// = 8956) must round-trip to parsed.total() once input is de-cached.
-    /// Cache-only / all-zero / non-gemini messages are dropped.
+    /// All-zero messages are dropped; a genuine cache-only row (cached ≤ its
+    /// inclusive input) is billable and KEPT.
     #[test]
     fn gemini_parses_session_into_fresh_four_buckets() {
         let dir = tempfile::tempdir().unwrap();

@@ -29,10 +29,10 @@ use std::io::BufRead;
 use std::path::{Path, PathBuf};
 
 use crate::error::AppResult;
-use crate::model::{RawSession, SessionMessage, SessionMessageRole, TokenCounts};
+use crate::model::{RawSession, SessionMessage, SessionMessageRole};
 
 use super::{
-    collect_jsonl_incremental, discover_files, normalize_cache_inclusive, truncate, CollectResult,
+    collect_jsonl_incremental, discover_files, fresh_token_counts, truncate, CollectResult,
     DirectoryShape, FileParseOutcome, GateMode, RawUsage, ScanProgress, ScanProgressDelta,
     SourceParser, TITLE_MAX, TRIM_LIMIT,
 };
@@ -271,11 +271,14 @@ fn parse_grok_notification(
         let input = n("inputTokens");
         let output = n("outputTokens");
         let cached = n("cachedReadTokens");
-        // inputTokens is cache-inclusive; normalize to fresh. outputTokens
-        // already includes reasoningTokens — do not add them.
-        let (fresh_input, clamped_cache_read) = normalize_cache_inclusive(input, cached);
-        if fresh_input == 0 && output == 0 && clamped_cache_read == 0 {
-            continue; // nothing billable for this model this turn
+        // inputTokens is cache-inclusive — map to the FINAL four-pack (fresh
+        // input + clamped cache_read, no write bucket). outputTokens already
+        // includes reasoningTokens — do not add them.
+        let tokens = fresh_token_counts(input, cached, output);
+        // Shared emit gate on the final four-pack: nothing billable for this
+        // model this turn ⇒ no record (`TokenCounts::is_zero`).
+        if tokens.is_zero() {
+            continue;
         }
         events.push(RawUsage {
             uuid: format!("grok:turn:{session_id}:{turn_key}:{model}"),
@@ -283,12 +286,7 @@ fn parse_grok_notification(
             model,
             source: SOURCE_TAG.to_string(),
             session_id: session_id.to_string(),
-            tokens: TokenCounts {
-                input: fresh_input,
-                output,
-                cache_creation: 0,
-                cache_read: clamped_cache_read,
-            },
+            tokens,
             ..Default::default()
         });
     }
@@ -726,6 +724,34 @@ mod tests {
             2,
             "identical turns are two real usages, not a zero delta"
         );
+    }
+
+    /// The clamp-to-zero boundary of the emit gate, end to end: a turn whose
+    /// counters claim cache reads against a ZERO (cache-inclusive) input and
+    /// no output anywhere normalizes to an all-zero four-pack — nothing
+    /// billable ⇒ no record.
+    #[test]
+    fn grok_abnormal_cache_only_turn_emits_nothing() {
+        let dir = tempfile::tempdir().unwrap();
+        let lines = vec![
+            // Abnormal: cachedReadTokens (5000) exceeds the inclusive input (0).
+            grok_event_line(
+                1_700_000_000,
+                "p1",
+                &grok_model("grok-4.5-build", 0, 0, 5000),
+            ),
+            // A sane turn in the same file still parses.
+            grok_event_line(
+                1_700_000_060,
+                "p2",
+                &grok_model("grok-4.5-build", 100, 10, 0),
+            ),
+        ];
+        write_grok_session(dir.path(), "s-clamp", &lines);
+        let p = GrokSourceParser::with_dir(dir.path().to_path_buf());
+        let result = p.parse_full(&p.discover().unwrap()).unwrap();
+        assert_eq!(result.events.len(), 1, "only the sane turn is emitted");
+        assert_eq!(result.events[0].uuid, "grok:turn:s-clamp:p2:grok-4.5-build");
     }
 
     #[test]

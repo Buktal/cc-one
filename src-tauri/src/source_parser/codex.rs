@@ -19,10 +19,10 @@
 use std::path::{Path, PathBuf};
 
 use crate::error::AppResult;
-use crate::model::{RawSession, SessionMessage, SessionMessageRole, TokenCounts};
+use crate::model::{RawSession, SessionMessage, SessionMessageRole};
 
 use super::{
-    collect_jsonl_incremental, discover_files, is_jsonl_file, normalize_cache_inclusive, truncate,
+    collect_jsonl_incremental, discover_files, fresh_token_counts, is_jsonl_file, truncate,
     CollectResult, DirectoryShape, FileParseOutcome, RawUsage, ScanProgress, ScanProgressDelta,
     SourceParser, TITLE_MAX, TRIM_LIMIT,
 };
@@ -141,12 +141,6 @@ struct DeltaTokens {
     input: u32,
     cached_input: u32,
     output: u32,
-}
-
-impl DeltaTokens {
-    fn is_zero(&self) -> bool {
-        self.input == 0 && self.cached_input == 0 && self.output == 0
-    }
 }
 
 /// Per-file parse state advanced line by line.
@@ -394,7 +388,7 @@ fn fold_codex_file(file: &Path, text: &str, start_line: i64) -> FileParseOutcome
                 let Some(cumulative) = cumulative else {
                     continue;
                 };
-                let mut delta = if is_total {
+                let delta = if is_total {
                     let d = compute_delta(&state.prev_total, &cumulative);
                     state.prev_total = Some(cumulative);
                     d
@@ -405,12 +399,16 @@ fn fold_codex_file(file: &Path, text: &str, start_line: i64) -> FileParseOutcome
                         output: cumulative.output as u32,
                     }
                 };
-                // Clamp before the zero-gate below: an abnormal delta (input 0,
-                // cached > 0) must read as zero so it is skipped. The shared
-                // normalizer re-clamps (idempotently) when building the event.
-                delta.cached_input = delta.cached_input.min(delta.input);
-                if delta.is_zero() {
-                    continue; // task-boundary snapshot, no new usage
+                // Map the delta straight to the FINAL four-pack (Codex input
+                // is cache-inclusive; clamp + fresh-input normalization fold
+                // in there), then gate on the emitted shape — zero final total
+                // (a task-boundary snapshot; possibly with cache claims
+                // against a zero input increment) is never counted or emitted
+                // (`TokenCounts::is_zero`). A positive input always leaves
+                // billable buckets behind.
+                let tokens = fresh_token_counts(delta.input, delta.cached_input, delta.output);
+                if tokens.is_zero() {
+                    continue; // no billable token in this snapshot
                 }
                 // Every non-zero event occupies a stable sequence number — line
                 // numbers drift if the file is edited, this does not.
@@ -428,22 +426,13 @@ fn fold_codex_file(file: &Path, text: &str, start_line: i64) -> FileParseOutcome
                     .get("timestamp")
                     .and_then(|v| v.as_str())
                     .map(str::to_string);
-                // Codex input is cache-inclusive — normalize to fresh via the
-                // shared helper (clamp already applied above for the zero-gate).
-                let (fresh_input, clamped_cache_read) =
-                    normalize_cache_inclusive(delta.input, delta.cached_input);
                 let usage = RawUsage {
                     uuid: format!("codex:thread-v1:{thread_id}:{}", state.event_index),
                     timestamp: super::fallback_timestamp(timestamp.clone()),
                     model: state.current_model.clone(),
                     source: SOURCE_TAG.to_string(),
                     session_id: session_id_for_usage.clone(),
-                    tokens: TokenCounts {
-                        input: fresh_input,
-                        output: delta.output,
-                        cache_creation: 0,
-                        cache_read: clamped_cache_read,
-                    },
+                    tokens,
                     ..Default::default()
                 };
                 // Model resolution lags the token events (see `learn_model`),
@@ -1001,7 +990,8 @@ mod tests {
         assert_eq!(next.input, 36722 - 17934);
         assert_eq!(next.cached_input, 27904 - 9600);
         assert_eq!(next.output, 804 - 454);
-        // task boundary: identical cumulative ⇒ zero delta.
+        // task boundary: identical cumulative ⇒ zero delta ⇒ the final
+        // four-pack is all-zero ⇒ skipped by the shared emit gate.
         let zero = compute_delta(
             &Some(CumulativeTokens {
                 input: 58346,
@@ -1014,7 +1004,10 @@ mod tests {
                 output: 1045,
             },
         );
-        assert!(zero.is_zero());
+        assert!(
+            fresh_token_counts(zero.input, zero.cached_input, zero.output).is_zero(),
+            "boundary snapshot emits nothing"
+        );
         // abnormal: current < previous ⇒ saturates to zero.
         let sat = compute_delta(
             &Some(CumulativeTokens {
@@ -1028,7 +1021,10 @@ mod tests {
                 output: 20,
             },
         );
-        assert!(sat.is_zero());
+        assert!(
+            fresh_token_counts(sat.input, sat.cached_input, sat.output).is_zero(),
+            "saturated delta emits nothing"
+        );
     }
 
     #[test]
@@ -1049,8 +1045,12 @@ mod tests {
         assert_eq!(parse_cumulative_tokens(&alt).unwrap().cached_input, 500);
     }
 
+    /// An abnormal delta (cached grew by more than input) clamps at the final
+    /// four-pack via the shared `fresh_token_counts` — the same mapping the
+    /// emit gate reads, so what is tested here is exactly what production
+    /// judges.
     #[test]
-    fn codex_cached_clamped_to_input() {
+    fn codex_cached_clamped_to_input_via_final_token_counts() {
         let prev = Some(CumulativeTokens {
             input: 100,
             cached_input: 0,
@@ -1061,12 +1061,18 @@ mod tests {
             cached_input: 80,
             output: 60,
         };
-        let mut delta = compute_delta(&prev, &current);
-        // before clamp: input delta 10, cached delta 80 (abnormal, > input)
+        let delta = compute_delta(&prev, &current);
+        // raw delta: input 10, cached 80 (abnormal, > input)
         assert_eq!(delta.input, 10);
         assert_eq!(delta.cached_input, 80);
-        delta.cached_input = delta.cached_input.min(delta.input);
-        assert_eq!(delta.cached_input, 10);
+        let tokens = fresh_token_counts(delta.input, delta.cached_input, delta.output);
+        assert_eq!(tokens.cache_read, 10, "abnormal cache clamped to input");
+        assert_eq!(
+            tokens.input, 0,
+            "inclusive input exhausted by its own cache"
+        );
+        assert_eq!(tokens.output, 10);
+        assert!(!tokens.is_zero(), "output alone keeps the row alive");
     }
 
     #[test]
