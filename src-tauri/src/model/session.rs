@@ -91,7 +91,6 @@ impl SessionMessageRole {
     /// Inverse of [`Self::as_str`]. An unknown string defaults to `User` (the
     /// enum default) rather than failing — a malformed stored row should not
     /// crash a transcript read.
-    #[allow(dead_code)] // unused while transcript reads still come from the jsonl artifact (see Store::query_session_messages)
     pub fn parse_str(s: &str) -> Self {
         match s {
             "assistant" => SessionMessageRole::Assistant,

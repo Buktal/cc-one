@@ -89,11 +89,17 @@ impl super::Store {
             .map_err(AppError::from)
     }
 
-    /// Locally forget a device: drop its registry row and ALL its usage data
-    /// (usage_records, turn_durations). No Git effect — a peer still in the repo
-    /// reappears on the next pull, which re-imports its registry entry and data
-    /// artifacts. The caller MUST guard `is_self` (this device is never
-    /// forgettable). Returns the total rows removed.
+    /// Locally forget a device: drop its registry row and ALL its local data
+    /// footprint — usage_records, turn_durations, and its session footprint
+    /// (`sessions` rows, `session_messages`, and the dirty flags of sessions
+    /// no other device holds). No Git effect — a peer still in the repo
+    /// reappears on the next pull, which force-checks-out its still-published
+    /// files back into the worktree and fully re-imports them (registry entry,
+    /// per-day usage JSONL, favorite snapshots — pinned by
+    /// `forget_device_local_is_undone_by_a_pull_that_restores_the_snapshot`
+    /// in `sync::domains`'s no-git round-trip suite). The caller MUST guard
+    /// `is_self` (this device is never forgettable). Returns the total rows
+    /// removed.
     pub fn forget_device_local(&self, device_id: &str) -> AppResult<usize> {
         let mut conn = self.conn.lock().expect("db mutex poisoned");
         let tx = conn.transaction()?;
@@ -104,6 +110,26 @@ impl super::Store {
         )?;
         deleted += tx.execute(
             "DELETE FROM turn_durations WHERE device_id = ?1",
+            params![device_id],
+        )?;
+        deleted += tx.execute(
+            "DELETE FROM session_messages WHERE device_id = ?1",
+            params![device_id],
+        )?;
+        // `dirty_sessions` has no device column — resolve through `sessions`,
+        // so this MUST run before the sessions DELETE below (it reads the rows
+        // being deleted). Only ids NO OTHER device holds: session ids can
+        // collide across devices, and a shared id's dirty flag also guards the
+        // survivors' pending push — deleting it would silently drop a
+        // surviving device's un-pushed snapshot recompute.
+        deleted += tx.execute(
+            "DELETE FROM dirty_sessions WHERE session_id IN (\
+                SELECT id FROM sessions WHERE device_id = ?1 \
+                  AND id NOT IN (SELECT id FROM sessions WHERE device_id != ?1))",
+            params![device_id],
+        )?;
+        deleted += tx.execute(
+            "DELETE FROM sessions WHERE device_id = ?1",
             params![device_id],
         )?;
         deleted += tx.execute(
@@ -159,5 +185,135 @@ mod tests {
             })
             .unwrap();
         assert_eq!(kept, 1);
+    }
+
+    /// 遗忘一台设备清掉的足迹是「该设备本地的一切」（架构审查Ⅲ候选③）：
+    /// forget 后表驱动走全部读路径——usage、turn、会话列表（生产分页路
+    /// 径）、收藏、消息、dirty——均查不到该设备；幸存设备不受影响。共享
+    /// session id 的 dirty 旗标留给幸存设备（其待推送重算不因遗忘对端而
+    /// 丢——id 可跨设备碰撞）。
+    #[test]
+    fn forget_device_local_erases_the_footprint_on_every_read_path() {
+        let s = mem();
+        let peer = "aaaaaaaaaaaa";
+        let self_dev = "0123456789ab";
+        s.upsert_device(self_dev, "Self", true).unwrap();
+        s.upsert_device(peer, "Peer", false).unwrap();
+
+        // peer 的完整足迹：收藏会话 + 消息（dirty）+ usage + turn。
+        seed_session_project(&s, "p-sess", peer, "/proj/peer", "2026-08-10T10:00:00.000Z");
+        s.set_session_favorited(peer, "p-sess", true).unwrap();
+        s.ingest_session_messages_marking_dirty(
+            peer,
+            &[msg(
+                "m1",
+                "p-sess",
+                SessionMessageRole::User,
+                "2026-08-10T10:00:00Z",
+            )],
+        )
+        .unwrap();
+        let mut usage = rec("u1", "2026-07-13", "glm-5.2", peer, 100, 50, 1.0);
+        usage.session_id = "p-sess".into();
+        s.ingest(&[usage]).unwrap();
+        s.ingest_turn_durations(&[TurnDuration {
+            uuid: "t1".into(),
+            timestamp: "2026-07-13T10:00:00Z".into(),
+            day: "2026-07-13".into(),
+            session_id: "p-sess".into(),
+            device_id: peer.into(),
+            duration_ms: 90_000,
+        }])
+        .unwrap();
+        // 共享 session id：self 也采到同 id 会话且 dirty。
+        seed_session_project(
+            &s,
+            "shared",
+            self_dev,
+            "/proj/mine",
+            "2026-08-11T10:00:00.000Z",
+        );
+        s.ingest_session_messages_marking_dirty(
+            self_dev,
+            &[msg(
+                "m-s",
+                "shared",
+                SessionMessageRole::User,
+                "2026-08-11T10:00:00Z",
+            )],
+        )
+        .unwrap();
+        seed_session_project(&s, "shared", peer, "/proj/peer", "2026-08-12T10:00:00.000Z");
+        s.ingest_session_messages_marking_dirty(
+            peer,
+            &[msg(
+                "m-p",
+                "shared",
+                SessionMessageRole::User,
+                "2026-08-12T10:00:00Z",
+            )],
+        )
+        .unwrap();
+        let peer_scope = UsageFilter {
+            device_scope: Some(peer.into()),
+            ..UsageFilter::default()
+        };
+        assert_eq!(s.count_logs(&peer_scope).unwrap(), 1, "前提：peer 有用量");
+
+        s.forget_device_local(peer).unwrap();
+
+        // 表驱动：每条读路径对 peer 一无所见。
+        let session_filter = SessionFilter {
+            device_scope: Some(peer.into()),
+            ..Default::default()
+        };
+        let checks: [(&str, bool); 6] = [
+            (
+                "usage（count_logs）",
+                s.count_logs(&peer_scope).unwrap() == 0,
+            ),
+            (
+                "turn（query_stats.turn_count）",
+                s.query_stats(&peer_scope).unwrap().turn_count == 0,
+            ),
+            (
+                "会话列表（query_sessions_page）",
+                s.query_sessions_page(&SessionQuery {
+                    filter: Some(session_filter.clone()),
+                    limit: 50,
+                    offset: 0,
+                })
+                .unwrap()
+                .is_empty(),
+            ),
+            (
+                "收藏（favorited_session_ids）",
+                s.favorited_session_ids(peer).unwrap().is_empty(),
+            ),
+            (
+                "消息（query_session_messages）",
+                s.query_session_messages(peer, "p-sess").unwrap().is_empty(),
+            ),
+            (
+                "registry（list_device_ids）",
+                !s.list_device_ids().unwrap().iter().any(|i| i == peer),
+            ),
+        ];
+        for (path, invisible) in checks {
+            assert!(invisible, "forget 后读路径仍可见：{path}");
+        }
+        // dirty：peer 专属会话的旗标随行消失；共享 id 的旗标留给 self。
+        let dirty = s.dirty_sessions().unwrap();
+        assert!(!dirty.contains(&"p-sess".to_string()));
+        assert!(
+            dirty.contains(&"shared".to_string()),
+            "幸存设备的待推送重算不因遗忘对端而丢"
+        );
+        // 幸存设备足迹完好。
+        assert!(s.get_session("shared", self_dev).unwrap().is_some());
+        assert_eq!(
+            s.query_session_messages(self_dev, "shared").unwrap().len(),
+            1
+        );
     }
 }

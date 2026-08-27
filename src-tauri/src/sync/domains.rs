@@ -398,6 +398,119 @@ mod tests {
         );
     }
 
+    /// 遗忘 ≠ 数据丢失，但遗忘一个仍在仓库里的对端并不持久（架构审查Ⅲ候选③，
+    /// pull 回灌语义固化）：跨设备数据由 git 快照承载，本机删行不是数据丢失；
+    /// 对端的快照 / 用量 / 名字工件只要还在仓库里，下一次 pull 的导入半程就
+    /// 全量重放，把它的一切原样回灌。这里重放的正是 `flow::pull_and_import`
+    /// 的导入序列（usage / sessions / devices 三步 import）；git 只在检出层
+    /// 决定哪些文件进工作树（ff 强制检出会把远端仍有的文件带回来），与本重放
+    /// 正交。边界：回灌恢复的是快照承载的数据（系统字段 + favorited +
+    /// synced_group_id 来自对端），本机对该设备的私有用户数据
+    /// （custom_title / local_group_id / excluded）随行删除、不复活。遗忘真正
+    /// 落地 = 下一次 commit_all 把工作树删除提交并推上远端。
+    #[test]
+    fn forget_device_local_is_undone_by_a_pull_that_restores_the_snapshot() {
+        use crate::model::SessionSystemData;
+
+        let (_tmp, paths) = tmp_paths();
+        let self_id = "0123456789ab";
+        let peer = "aabbccddeeff";
+
+        // 对端采集 + 收藏一条会话，把用量工件、收藏快照、名字工件写进共享
+        // 仓库工作树（生产链路：ingest 标脏 → materialize 重算文件）。
+        let peer_store = mem();
+        crate::collect::ingest::ingest_sessions(
+            &peer_store,
+            peer,
+            &[SessionSystemData {
+                id: "sx".into(),
+                source: "claude_code".into(),
+                project_dir: "/proj/peer".into(),
+                title_orig: "Peer Title".into(),
+                started_at: "2026-08-01T00:00:00.000Z".into(),
+                last_active_at: "2026-08-02T00:00:00.000Z".into(),
+                agent_type: String::new(),
+                parent_session_id: String::new(),
+            }],
+            &[msg(
+                "u1",
+                "sx",
+                SessionMessageRole::User,
+                "2026-08-01T10:00:00Z",
+            )],
+        )
+        .unwrap();
+        peer_store.set_session_favorited(peer, "sx", true).unwrap();
+        let mut usage = rec("u-peer-1", "2026-07-13", "glm-5.2", peer, 100, 50, 1.0);
+        usage.session_id = "sx".into();
+        peer_store.ingest_marking_dirty(&[usage]).unwrap();
+        usage_materialize(&peer_store, &paths, peer).unwrap();
+        sessions_materialize(&peer_store, &paths, peer).unwrap();
+        crate::devices::ensure_own_device_artifact(&paths, peer, "Peer One").unwrap();
+
+        // 本机第一轮同步：peer 的会话行、消息、用量、注册表行全部落地。
+        let cfg = ConfigData {
+            device_id: self_id.into(),
+            ..Default::default()
+        };
+        let ours = mem();
+        usage_import(&ours, &paths).unwrap();
+        sessions_import(&ours, &paths, self_id).unwrap();
+        devices_import(&ours, &paths, &cfg).unwrap();
+        assert!(
+            ours.get_session("sx", peer).unwrap().is_some(),
+            "前提：首轮同步已拉到 peer 的会话"
+        );
+
+        // 用户遗忘该设备：全部本地足迹清空。
+        ours.forget_device_local(peer).unwrap();
+        assert!(ours.get_session("sx", peer).unwrap().is_none());
+        assert_eq!(
+            ours.query_stats(&crate::model::UsageFilter {
+                device_scope: Some(peer.into()),
+                ..Default::default()
+            })
+            .unwrap()
+            .request_count,
+            0,
+            "用量足迹清空"
+        );
+
+        // 下一次 pull：对端工件仍在仓库里，导入半程原样回灌一切。
+        assert!(
+            paths.session_snapshot_path(peer, "sx").exists(),
+            "前提：对端快照仍在仓库工作树"
+        );
+        usage_import(&ours, &paths).unwrap();
+        sessions_import(&ours, &paths, self_id).unwrap();
+        devices_import(&ours, &paths, &cfg).unwrap();
+
+        let row = ours
+            .query_sessions(None)
+            .unwrap()
+            .into_iter()
+            .find(|r| r.id == "sx")
+            .expect("下一次 pull 把对端收藏会话原样回灌");
+        assert_eq!(row.device_id, peer);
+        assert!(row.favorited, "favorited 来自快照 meta，不是本机残留");
+        assert_eq!(row.title, "Peer Title");
+        assert_eq!(ours.query_session_messages(peer, "sx").unwrap().len(), 1);
+        assert_eq!(
+            ours.query_stats(&crate::model::UsageFilter {
+                device_scope: Some(peer.into()),
+                ..Default::default()
+            })
+            .unwrap()
+            .request_count,
+            1,
+            "用量随之回灌"
+        );
+        assert!(
+            ours.list_device_ids().unwrap().iter().any(|i| i == peer),
+            "名字工件随之回到注册表"
+        );
+    }
+
     /// The providers domain round-trips without git: materialize writes the
     /// key-stripped file; import recovers the structure with the key absent
     /// (keys live only in the local DB).

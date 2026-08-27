@@ -215,7 +215,8 @@ pub fn refresh_device_registry(store: &Store, paths: &Paths, cfg: &ConfigData) -
 
 /// Purge local device rows Git no longer backs. Git is the source of truth for
 /// which devices exist, so a device with NO git presence is residue and is
-/// forgotten locally (row + usage). "Present" = this device ∪ devices
+/// forgotten locally (registry row + its full data footprint: usage, turns,
+/// session rows, transcript messages). "Present" = this device ∪ devices
 /// with a registry file (`config/devices_<id>.json`) ∪ devices with a data dir
 /// under `repo/data/<id>/`. The local repo filesystem is always available (even
 /// Standalone), so this runs on both the sync and collect paths — a stale
@@ -408,14 +409,23 @@ fn remove_device_artifact_file(paths: &Paths, device_id: &str) {
     }
 }
 
-/// Locally forget a peer device: drop its registry row + all its local usage
-/// data (records, turn durations), clear any local alias,
+/// Locally forget a peer device: drop its registry row + all its local data
+/// footprint (usage records, turn durations, session rows, transcript
+/// messages and their pending-dirty flags), clear any local alias,
 /// delete its Artifact dir and published name artifact, and apply
 /// [`LibraryForgetAction`] to its library subtree. The Store + alias removals
 /// are hard errors (a half-forgotten device would leave the registry
 /// inconsistent); the filesystem + library cleanups are best-effort (logged,
 /// not propagated — a peer still in the repo reappears on the next sync, so a
 /// leftover dir/file self-heals). Nothing is pushed to Git.
+///
+/// 回灌语义（git 同步固有，非缺陷）：对端数据由 git 快照承载，本机删行不是
+/// 数据丢失——但「遗忘一个仍活跃于仓库的对端」也不持久：其快照文件还在
+/// 远端，下一次 pull 的 fast-forward 强制检出会把它们带回工作树，
+/// `sessions_import` / `usage_import` 随之全量重建其会话行与用量（实际行为
+/// 由 `sync::domains` 测试块的
+/// `forget_device_local_is_undone_by_a_pull_that_restores_the_snapshot`
+/// 无 git 固化）。遗忘要落地，靠下一次 commit_all 把工作树删除提交推上远端。
 ///
 /// `peer_name` is the peer's captured alias/name, grabbed by the caller BEFORE
 /// this runs — the migrate target folder is named after it (`from-<name>`).
