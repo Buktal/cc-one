@@ -4,6 +4,27 @@ cc one 的所有显著变更记录于此。
 
 格式基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，并遵循[语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [2.0.3] - 2026-08-28
+
+### 新增
+
+- **安装产物主程序名固定为 CC One** —— tauri.conf.json 显式声明 `mainBinaryName`，打包出的主可执行文件由 cargo 产物名 `cc-one` 改名为与应用名一致的 `CC One`（Windows 下安装后即是 `CC One.exe`）。
+
+### 修复
+
+- **Gemini 片段预览不再空欢喜** —— 空值 env 键（如 `KEY=`）此前会被列为可共享片段的导入候选，提取却交付不了（校验拒空值）；「哪些键可共享」收敛为单一决策名册，预览候选与提取交付从同一份清单派生，Gemini 空值键不再出现在候选里。
+
+### 变更
+
+- **`imported` 计数口径改为按件** —— 同步对齐报告（启动日志与设置页 toast）的 imported 改为各域实际导入件数之和：usage 新增行、导入的对端会话快照数、供应商实际写入条目数、载入的设备注册行数（en/zh 文案随之 行→件，ja 原本即中性的「件」）。
+- **内部重构，行为不变** —— 14 项架构候选全部落地，新增 40 例测试钉住不变量，全部跑生产路径：
+  - **同步** —— 每设备 JSON 同步文档（容错读、字节稳定写、latest-wins 合并）收口 synced_doc 单源，providers / groups / devices 三域收编并以字节级 golden 测试钉死；同步域清单数据化，DOMAINS 静态表驱动 pull/push（加域 = 表加一行）。
+  - **供应商** —— 可共享键决策单源（预览候选与提取交付同册派生）；受控轴三态合并（携带→替换 / 缺失→撤除 / 清单外跳过）收敛为共享原语，Gemini「settings.json 顶层整体受控」的裁决显式化（合并行为逐字节不变）；provider 行 UPSERT 的时钟差异类型化为 ProviderUpsertPolicy（本地时钟 / 作者时间戳直通）。
+  - **数据层** —— 维度聚合的驱动投影、复合键谓词、桶解码三横切面收敛 aggregate_sql；usage_records 列清单/bind/decode 位形同居一处并加编译期长度自检；「哪些会话列随 git 推送」显式化为 PushTrack（收藏轨随推、设备本地字段永不入快照）。
+  - **采集解析** —— JSONL 逐行 fold 收敛为共享 walker（1 起始编号 / 空行 / skipped 记账单源），claude/codex 与 grok 两种游标语义显式化为双 policy。
+  - **前端** —— transcript 派生簇独立成模块；Token 桶展示名册（色序/键序）四处手抄收敛 BUCKET_DISPLAY 单源；五维筛选条（时间 · 来源 · 模型 · 项目 · 设备）共享 FilterBar、两页工具条改绑、浏览器 hook 六个日期键删除；页缘步进决策提纯为纯函数、改名 hook 迁居会话详情。
+  - **杂簇** —— 变更后 push 下沉 library 域入口（调用方不再可能「本地改了不推」）；track/column 魔法串枚举化（bindings 重新生成）；「写后必发 sessions_changed」收敛为两个组合子；forget_device 的 is_self 守卫下沉域入口。
+
 ## [2.0.2] - 2026-08-18
 
 ### 修复

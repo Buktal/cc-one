@@ -5,6 +5,27 @@ All notable changes to cc one are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.0.3] - 2026-08-28
+
+### Added
+
+- **The packaged binary is named "CC One"** — tauri.conf.json now declares `mainBinaryName` explicitly, so the bundled executable ships as `CC One`, matching the app name, instead of the cargo output name `cc-one` (`CC One.exe` on Windows).
+
+### Fixed
+
+- **Gemini snippet preview no longer over-promises** — an empty-value env key (e.g. `KEY=`) used to be listed as an importable snippet candidate even though extraction could never deliver it (the validator rejects empty values). "Which keys are shareable" now lives in a single decision roster that both the preview candidates and the extraction derive from, so Gemini's empty-value keys no longer appear as candidates.
+
+### Changed
+
+- **`imported` now counts items, not rows** — the sync align report (startup log and settings-page toast) sums what each domain actually imported: new usage rows, imported peer session snapshots, provider entries written, device registrations loaded (wording updated in en/zh; ja was already neutral).
+- **Internal refactors, behavior intact** — all fourteen architecture candidates landed, with 40 new tests pinning the invariants on production paths:
+  - **Sync** — the per-device JSON sync document (fault-tolerant read, byte-stable write, latest-wins merge) converges on a single `synced_doc` module, adopted by providers / groups / devices and pinned by byte-level golden tests; the sync domain list becomes data — a static DOMAINS table drives pull/push (adding a domain = adding a row).
+  - **Providers** — shareable-key decisions are single-sourced (preview candidates and extraction derive from the same roster); the three-state controlled merge (present → replace / absent → withdraw / unlisted → skip) becomes one shared primitive, and Gemini's "the whole settings.json top level is controlled" ruling is made explicit (merge behavior byte-identical); the provider-row UPSERT clock difference is typed as ProviderUpsertPolicy (local clock / author timestamp pass-through).
+  - **Database** — the three cross-cutting aspects of dimension aggregation (driver projection, composite-key predicates, bucket decoding) converge in aggregate_sql; usage_records' column list, bind and decode now live in one place with a compile-time length check; "which session columns ride git pushes" is explicit as PushTrack (the favorites track pushes, device-local fields never enter snapshots).
+  - **Source parsing** — per-line JSONL folding converges on one shared walker (1-based numbering / blank lines / skipped accounting single-sourced), with the two cursor semantics (claude/codex vs grok) explicit as two policies.
+  - **Frontend** — the transcript derive cluster moves to its own module; the token-bucket display roster (color order / key order) replaces four hand copies with a single BUCKET_DISPLAY; the five-dimension filter bar (time · source · model · project · device) becomes a shared FilterBar bound by both toolbars, dropping six date keys from the browser hook; page-edge stepping decisions become pure functions and the rename hook moves into session detail.
+  - **Misc** — post-change push sinks into the library domain entry (callers can no longer "change locally without pushing"); track/column magic strings become enums (bindings regenerated); "write then emit sessions_changed" is structurally fixed by two combinators; forget_device's is_self guard sinks into the domain entry.
+
 ## [2.0.2] - 2026-08-18
 
 ### Fixed
