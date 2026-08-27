@@ -8,6 +8,10 @@
 //!   device writes ONLY its own file; reading merges every device's file by id
 //!   (the device-registry pattern). Ids carry a device prefix
 //!   (`<deviceId>-<8hex>`) so they are globally unique without coordination.
+//!   The per-device-doc mechanism — tolerant read, byte-stable write,
+//!   latest-wins merge — lives in [`crate::synced_doc`]; this module declares
+//!   the wire doc ([`SyncedGroupsDoc`]) and the domain rules (merge key = id,
+//!   no skip-self: the file is the authoritative storage).
 //!
 //! Session CRUD (favorited / custom_title / group membership / list / transcript
 //! read) is layered over `db::Store` (sessions table) + `collect::ingest` (transcript
@@ -22,78 +26,74 @@ use std::path::PathBuf;
 use crate::config::{ConfigData, Paths};
 use crate::error::{AppError, AppResult};
 use crate::model::{SessionGroup, SyncedGroup};
+use crate::synced_doc;
 
 /// Per-device synced-groups file: `repo/data/<deviceId>/groups.json`.
 fn groups_json_path(paths: &Paths, device_id: &str) -> PathBuf {
     paths.device_data_dir(device_id).join("groups.json")
 }
 
-/// Wrapper so the file is a stable JSON object with one array (extensible
-/// without a wire break later). Missing file ⇒ empty doc.
+/// The groups wire doc: a stable JSON object with one `groups` array. The
+/// wrapper struct IS this domain's wire declaration (field names and order
+/// serialize into the file); the mechanism around it — tolerant read,
+/// byte-stable write, latest-wins merge — lives in [`crate::synced_doc`]. No
+/// schema `v` yet: one shape so far, and writing a constant `v` would gate
+/// nothing while rewriting every device's file. The version-gate primitive is
+/// ready there if a second shape ever ships.
 #[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
 struct SyncedGroupsDoc {
     #[serde(default)]
     groups: Vec<SyncedGroup>,
 }
 
-/// Read one device's synced-groups file. Missing/unreadable ⇒ empty.
+/// Read one device's synced-groups file. Missing/unreadable/unparseable ⇒
+/// empty — a corrupt peer file must never abort the merged read.
 fn read_device_synced_groups(paths: &Paths, device_id: &str) -> Vec<SyncedGroup> {
-    let path = groups_json_path(paths, device_id);
-    let Ok(text) = std::fs::read_to_string(&path) else {
-        return Vec::new();
-    };
-    serde_json::from_str::<SyncedGroupsDoc>(&text)
+    synced_doc::read_json_doc::<SyncedGroupsDoc>(&groups_json_path(paths, device_id))
         .unwrap_or_default()
         .groups
 }
 
 /// Every device's synced groups merged by id (latest `updated_at` wins; ties →
-/// first-seen). Iterates only valid device dirs so a stray folder never shows
-/// up as a groups source. This is the read-side of the per-device-write pattern
-/// (mirrors `devices::read_all_device_artifacts`).
+/// first-seen — [`synced_doc::merge_latest_wins`]; the key and the sort below
+/// are this domain's rules). Iterates only valid device dirs so a stray folder
+/// never shows up as a groups source. This is the read-side of the
+/// per-device-write pattern (mirrors `devices::read_all_device_artifacts`).
+/// NOT skipping self (unlike providers / session snapshots): groups.json IS
+/// the authoritative storage — there is no DB copy — so this device reads its
+/// own file back like a peer's.
 pub fn read_all_synced_groups(paths: &Paths) -> Vec<SyncedGroup> {
-    let mut by_id: std::collections::HashMap<String, SyncedGroup> =
-        std::collections::HashMap::new();
-    for name in crate::devices::iter_data_device_ids(paths).unwrap_or_default() {
-        for g in read_device_synced_groups(paths, &name) {
-            let existing = by_id.get(&g.id);
-            let take = existing
-                .map(|e| e.updated_at < g.updated_at)
-                .unwrap_or(true);
-            if take {
-                by_id.insert(g.id.clone(), g);
-            }
-        }
-    }
-    let mut out: Vec<SyncedGroup> = by_id.into_values().collect();
+    let ids = crate::devices::iter_data_device_ids(paths).unwrap_or_default();
+    let mut merged = synced_doc::merge_latest_wins(
+        synced_doc::read_all_devices(&ids, None, |dev| read_device_synced_groups(paths, dev)),
+        |g: &SyncedGroup| g.id.clone(),
+        |g: &SyncedGroup| g.updated_at.as_str(),
+    );
     // User-ordered by position (old files without the field default to MAX →
     // sort last); name breaks ties for determinism on missing positions.
-    out.sort_by(|a, b| {
+    merged.sort_by(|a, b| {
         a.position
             .cmp(&b.position)
             .then_with(|| a.name.cmp(&b.name))
             .then_with(|| a.id.cmp(&b.id))
     });
-    out
+    merged
 }
 
 /// Write THIS device's synced-groups file (the device only writes its own —
-/// never a peer's). Creates the parent dir.
+/// never a peer's). Byte-stable via [`synced_doc::write_stable`]; creates the
+/// parent dir.
 fn write_own_synced_groups(
     paths: &Paths,
     device_id: &str,
     groups: &[SyncedGroup],
 ) -> AppResult<()> {
-    let path = groups_json_path(paths, device_id);
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent)?;
-    }
-    let doc = SyncedGroupsDoc {
-        groups: groups.to_vec(),
-    };
-    let json = serde_json::to_string_pretty(&doc)?;
-    std::fs::write(&path, format!("{json}\n"))?;
-    Ok(())
+    synced_doc::write_stable(
+        &groups_json_path(paths, device_id),
+        &SyncedGroupsDoc {
+            groups: groups.to_vec(),
+        },
+    )
 }
 
 /// Generate a globally-unique synced-group id: `<deviceId>-<8hex>`. The device
@@ -484,5 +484,49 @@ mod tests {
             .map(|g| g.id)
             .collect();
         assert_eq!(ids, [fresh.id, "aabbccddeeff-11111111".to_string()]);
+    }
+
+    /// Golden wire bytes: the exact file `write_own_synced_groups` lands,
+    /// pinned line-for-line so the shared byte-stable write
+    /// ([`crate::synced_doc::stable_bytes`]) can never drift the groups wire
+    /// format (pretty JSON + exactly one trailing newline — an unchanged group
+    /// list must rewrite identical bytes so pushes stay git no-ops).
+    #[test]
+    fn write_own_synced_groups_lands_pinned_wire_bytes() {
+        let tmp = tempfile::tempdir().unwrap();
+        let paths = Paths::resolve(tmp.path());
+        write_own_synced_groups(
+            &paths,
+            "aabbccddeeff",
+            &[SyncedGroup {
+                id: "aabbccddeeff-11111111".into(),
+                name: "Work".into(),
+                device_id: "aabbccddeeff".into(),
+                updated_at: "2026-08-01T10:00:00.000Z".into(),
+                position: 3,
+            }],
+        )
+        .unwrap();
+
+        let text = std::fs::read_to_string(groups_json_path(&paths, "aabbccddeeff")).unwrap();
+        let expected = [
+            "{",
+            "  \"groups\": [",
+            "    {",
+            "      \"id\": \"aabbccddeeff-11111111\",",
+            "      \"name\": \"Work\",",
+            "      \"device_id\": \"aabbccddeeff\",",
+            "      \"updated_at\": \"2026-08-01T10:00:00.000Z\",",
+            "      \"position\": 3",
+            "    }",
+            "  ]",
+            "}",
+        ];
+        assert_eq!(
+            text.lines().collect::<Vec<&str>>(),
+            expected,
+            "groups wire bytes drifted"
+        );
+        assert!(text.ends_with("}\n"), "exactly one trailing newline");
     }
 }

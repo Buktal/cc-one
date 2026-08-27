@@ -5,6 +5,14 @@
 //! `(app, id)`, latest `updated_at` wins (ties → first seen). This is the
 //! structure half of provider sync.
 //!
+//! The per-device-doc MECHANISM — tolerant read, the schema-`v` gate, the
+//! byte-stable write and the latest-wins merge — lives in
+//! [`crate::synced_doc`]. This module declares this domain's wire doc
+//! ([`SyncedProvidersDoc`], whose field names and order serialize into the
+//! file) and its merge key `(app, id)` + display sort; reads skip self
+//! (`Some(self_id)` to [`crate::synced_doc::read_all_devices`]) because the
+//! store is local-authoritative for this device's own rows.
+//!
 //! **App dimension.** Every line carries `app` (`claude` / `codex` / `gemini`);
 //! the merge/dedup key is `(app, id)`, so the same vendor id in two app pools
 //! stays two entries. An old file without `app` fields reads every line as
@@ -44,6 +52,7 @@ use crate::config::Paths;
 use crate::db::Store;
 use crate::error::AppResult;
 use crate::model::Provider;
+use crate::synced_doc;
 
 /// The providers.json schema version this binary reads (sessions-snapshot
 /// style `v` gate). Files with a HIGHER `v` are skipped whole on read — this
@@ -60,9 +69,11 @@ use crate::model::Provider;
 pub const SYNCED_PROVIDERS_DOC_VERSION: u32 = 3;
 
 /// One device's provider-file wrapper: a stable JSON object with one
-/// `providers` array + schema version `v`. Files without `v` (pre-version
-/// format) read as 0 — old format, still attributable (lines default to
-/// claude). Missing file ⇒ empty doc.
+/// `providers` array + schema version `v`. This struct is the domain's WIRE
+/// declaration — field names and order serialize into the file. Files without
+/// `v` (pre-version format) read as 0 — old format, still attributable (lines
+/// default to claude). Missing file ⇒ empty doc (via
+/// [`synced_doc::read_json_doc`]).
 #[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
 struct SyncedProvidersDoc {
     /// Schema version; absent (old format) ⇒ 0, read as an old file.
@@ -92,66 +103,54 @@ pub fn write_own_providers(store: &Store, paths: &Paths, device_id: &str) -> App
     if providers.is_empty() && !path.exists() {
         return Ok(());
     }
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent)?;
-    }
-    let doc = SyncedProvidersDoc {
-        v: SYNCED_PROVIDERS_DOC_VERSION,
-        providers,
-    };
-    let json = serde_json::to_string_pretty(&doc)?;
-    std::fs::write(&path, format!("{json}\n"))?;
-    Ok(())
+    synced_doc::write_stable(
+        &path,
+        &SyncedProvidersDoc {
+            v: SYNCED_PROVIDERS_DOC_VERSION,
+            providers,
+        },
+    )
 }
 
 /// Read one device's provider file. Missing/unreadable/unparseable ⇒ empty —
 /// a corrupt peer file must never abort a pull. A file whose schema `v` is
 /// HIGHER than this binary's is skipped whole with a logged warning (the
-/// version gate): merging it by `(app, id)` would silently mis-attribute
-/// entries this binary does not understand.
+/// version gate, [`synced_doc::schema_ahead_of_build`]): merging it by
+/// `(app, id)` would silently mis-attribute entries this binary does not
+/// understand.
 fn read_device_providers(paths: &Paths, device_id: &str) -> Vec<Provider> {
-    let path = paths.providers_json_path(device_id);
-    let Ok(text) = std::fs::read_to_string(&path) else {
-        return Vec::new();
-    };
-    let doc = serde_json::from_str::<SyncedProvidersDoc>(&text).unwrap_or_default();
-    if doc.v > SYNCED_PROVIDERS_DOC_VERSION {
-        eprintln!(
-            "[cc-one] provider file for device {device_id} has schema v{} \
-             (this build reads ≤ v{SYNCED_PROVIDERS_DOC_VERSION}) — skipped; upgrade to see its providers",
-            doc.v
-        );
+    let doc: SyncedProvidersDoc =
+        synced_doc::read_json_doc(&paths.providers_json_path(device_id)).unwrap_or_default();
+    if synced_doc::schema_ahead_of_build(
+        doc.v,
+        SYNCED_PROVIDERS_DOC_VERSION,
+        &format!("provider file for device {device_id}"),
+    ) {
         return Vec::new();
     }
     doc.providers
 }
 
 /// Merge every device's providers by `(app, id)`: the newest `updated_at`
-/// wins, ties → first seen (the sessions rule). Pure — no IO — so the dedup
-/// rule is directly unit-testable. Output sorted by
-/// `(sort_index, name, id, app)` for a deterministic, list-friendly order.
+/// wins, ties → first seen (the sessions rule — the merge mechanism itself is
+/// [`synced_doc::merge_latest_wins`]; the key and the sort below are this
+/// domain's rules). Pure — no IO — so the dedup rule is directly
+/// unit-testable. Output sorted by `(sort_index, name, id, app)` for a
+/// deterministic, list-friendly order.
 pub fn merge_providers_latest_wins(providers: impl IntoIterator<Item = Provider>) -> Vec<Provider> {
-    let mut by_key: std::collections::BTreeMap<(String, String), Provider> =
-        std::collections::BTreeMap::new();
-    for p in providers {
-        let key = (p.app.as_str().to_string(), p.id.clone());
-        let take = by_key
-            .get(&key)
-            .map(|e| e.updated_at < p.updated_at)
-            .unwrap_or(true);
-        if take {
-            by_key.insert(key, p);
-        }
-    }
-    let mut out: Vec<Provider> = by_key.into_values().collect();
-    out.sort_by(|a, b| {
+    let mut merged = synced_doc::merge_latest_wins(
+        providers,
+        |p: &Provider| (p.app.as_str().to_string(), p.id.clone()),
+        |p: &Provider| p.updated_at.as_str(),
+    );
+    merged.sort_by(|a, b| {
         a.sort_index
             .cmp(&b.sort_index)
             .then_with(|| a.name.cmp(&b.name))
             .then_with(|| a.id.cmp(&b.id))
             .then_with(|| a.app.as_str().cmp(b.app.as_str()))
     });
-    out
+    merged
 }
 
 /// Read every PEER's provider file, merged by `(app, id)` (latest wins).
@@ -159,14 +158,12 @@ pub fn merge_providers_latest_wins(providers: impl IntoIterator<Item = Provider>
 /// module doc). Only valid device dirs are walked, so a stray folder never
 /// shows up as a providers source.
 pub fn read_all_peer_providers(paths: &Paths, self_device_id: &str) -> AppResult<Vec<Provider>> {
-    let mut all = Vec::new();
-    for dev in crate::devices::iter_data_device_ids(paths)? {
-        if dev == self_device_id {
-            continue;
-        }
-        all.extend(read_device_providers(paths, &dev));
-    }
-    Ok(merge_providers_latest_wins(all))
+    let peers = synced_doc::read_all_devices(
+        &crate::devices::iter_data_device_ids(paths)?,
+        Some(self_device_id),
+        |dev| read_device_providers(paths, dev),
+    );
+    Ok(merge_providers_latest_wins(peers))
 }
 
 /// Re-apply a local row's secret values onto a peer's key-stripped version:
@@ -435,6 +432,55 @@ mod tests {
             first, second,
             "unchanged store ⇒ identical bytes (no git churn)"
         );
+    }
+
+    /// Golden wire bytes: the exact file `write_own_providers` lands, pinned
+    /// line-for-line so the shared byte-stable write
+    /// ([`crate::synced_doc::stable_bytes`]) can never drift the providers
+    /// wire format (pretty JSON + exactly one trailing newline — an unchanged
+    /// store must rewrite identical bytes for `commit_and_push` to no-op).
+    #[test]
+    fn write_own_providers_lands_pinned_wire_bytes() {
+        let s = mem();
+        s.import_provider(&provider(
+            "aaaaaaaa",
+            "Kimi",
+            r#"{"env":{"ANTHROPIC_BASE_URL":"https://api.kimi.com"}}"#,
+            "2026-08-01T00:00:00.000Z",
+        ))
+        .unwrap();
+        let tmp = tempfile::tempdir().unwrap();
+        let paths = Paths::resolve(tmp.path());
+        write_own_providers(&s, &paths, "aabbccddeeff").unwrap();
+
+        let text = std::fs::read_to_string(paths.providers_json_path("aabbccddeeff")).unwrap();
+        let expected = [
+            "{",
+            "  \"v\": 3,",
+            "  \"providers\": [",
+            "    {",
+            "      \"id\": \"aaaaaaaa\",",
+            "      \"name\": \"Kimi\",",
+            "      \"websiteUrl\": \"https://example.com\",",
+            "      \"category\": \"custom\",",
+            "      \"app\": \"claude\",",
+            "      \"icon\": \"\",",
+            "      \"iconColor\": \"\",",
+            "      \"sortIndex\": 0,",
+            "      \"notes\": \"\",",
+            "      \"settingsConfig\": \"{\\\"env\\\":{\\\"ANTHROPIC_BASE_URL\\\":\\\"https://api.kimi.com\\\"}}\",",
+            "      \"meta\": \"{}\",",
+            "      \"updatedAt\": \"2026-08-01T00:00:00.000Z\"",
+            "    }",
+            "  ]",
+            "}",
+        ];
+        assert_eq!(
+            text.lines().collect::<Vec<&str>>(),
+            expected,
+            "providers wire bytes drifted"
+        );
+        assert!(text.ends_with("}\n"), "exactly one trailing newline");
     }
 
     #[test]

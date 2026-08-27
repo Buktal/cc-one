@@ -116,11 +116,14 @@ fn read_one_session_snapshot(path: &Path, device_id: &str) -> Option<ParsedSessi
         }
         match serde_json::from_str::<SessionSnapshotLine>(line) {
             Ok(SessionSnapshotLine::Session(m)) => {
-                if m.v > SESSION_SNAPSHOT_VERSION {
-                    eprintln!(
-                        "[cc-one] session snapshot {} is v{} (this build supports v{}); skipping — upgrade to read it",
-                        m.id, m.v, SESSION_SNAPSHOT_VERSION
-                    );
+                // Same read-side version gate as the single-doc sync domains —
+                // the shared primitive in `synced_doc`, fed this file's meta
+                // line instead of a whole-doc envelope.
+                if crate::synced_doc::schema_ahead_of_build(
+                    m.v,
+                    SESSION_SNAPSHOT_VERSION,
+                    &format!("session snapshot {}", m.id),
+                ) {
                     return None;
                 }
                 meta = Some(m);

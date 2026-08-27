@@ -30,6 +30,7 @@ mod proxy;
 mod sessions;
 mod source_parser;
 mod sync;
+mod synced_doc;
 mod time;
 mod window_geom;
 

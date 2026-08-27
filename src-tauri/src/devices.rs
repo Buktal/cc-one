@@ -26,6 +26,7 @@ use crate::db::Store;
 use crate::error::AppResult;
 use crate::library::LibraryForgetAction;
 use crate::model::{DeviceArtifact, DeviceInfo};
+use crate::synced_doc;
 
 // ---------------- Device-name artifact (one file per device) ----------------
 
@@ -59,26 +60,28 @@ pub fn ensure_own_device_artifact(
         display_name: display_name.to_string(),
         first_seen,
     };
-    let desired = serde_json::to_string_pretty(&artifact)?;
-    if existing.as_deref().map(str::trim_end) == Some(desired.as_str()) {
+    // Byte-stable via `synced_doc::stable_bytes` (pretty + trailing newline);
+    // the trim-end comparison is this domain's idempotent-publish rule — an
+    // already-current file is not rewritten, so syncs don't churn the worktree.
+    let desired = synced_doc::stable_bytes(&artifact)?;
+    if existing.as_deref().map(str::trim_end) == Some(desired.trim_end()) {
         return Ok(false);
     }
-    std::fs::write(&path, format!("{desired}\n"))?;
+    std::fs::write(&path, desired)?;
     Ok(true)
 }
 
 /// Parse one device-name artifact from `path`, requiring the id read off its
 /// filename to be a valid device id. Best-effort: a stray or broken file yields
-/// `None` and is skipped, so one bad entry never blocks the rest from loading.
-/// The new-flat and legacy layouts differ only in how that id is taken from the
-/// filename; this holds the shared validate-then-read-then-parse that both used
-/// to inline.
+/// `None` and is skipped, so one bad entry never blocks the rest from loading
+/// (the tolerant read is [`synced_doc::read_json_doc`]). The new-flat and
+/// legacy layouts differ only in how that id is taken from the filename; this
+/// holds the shared validate-then-read-then-parse that both used to inline.
 fn parse_device_artifact(path: &std::path::Path, id: &str) -> Option<DeviceArtifact> {
     if !crate::config::is_valid_device_id(id) {
         return None;
     }
-    let text = std::fs::read_to_string(path).ok()?;
-    serde_json::from_str::<DeviceArtifact>(&text).ok()
+    synced_doc::read_json_doc(path)
 }
 
 /// Read every device's identity artifact. Reads the new flat layout
@@ -635,6 +638,40 @@ mod tests {
             .legacy_devices_dir()
             .join("0123456789ab.json")
             .exists());
+    }
+
+    /// Golden wire bytes for the device-name artifact rewrite: pinned
+    /// line-for-line so the shared byte-stable serialization
+    /// ([`synced_doc::stable_bytes`]) can never drift this file's format
+    /// (pretty JSON + exactly one trailing newline). Seeded stale so the
+    /// rewrite (preserving `first_seen`) is deterministic.
+    #[test]
+    fn ensure_own_device_artifact_lands_pinned_wire_bytes() {
+        let tmp = tempfile::tempdir().unwrap();
+        let paths = Paths::resolve(tmp.path());
+        let file = paths.devices_file_path("0123456789ab");
+        std::fs::create_dir_all(file.parent().unwrap()).unwrap();
+        std::fs::write(
+            &file,
+            r#"{"device_id":"0123456789ab","display_name":"Old","first_seen":"2026-01-01T00:00:00.000Z"}"#,
+        )
+        .unwrap();
+        assert!(ensure_own_device_artifact(&paths, "0123456789ab", "Laptop").unwrap());
+
+        let text = std::fs::read_to_string(&file).unwrap();
+        let expected = [
+            "{",
+            "  \"device_id\": \"0123456789ab\",",
+            "  \"display_name\": \"Laptop\",",
+            "  \"first_seen\": \"2026-01-01T00:00:00.000Z\"",
+            "}",
+        ];
+        assert_eq!(
+            text.lines().collect::<Vec<&str>>(),
+            expected,
+            "device artifact wire bytes drifted"
+        );
+        assert!(text.ends_with("}\n"), "exactly one trailing newline");
     }
 
     #[test]
