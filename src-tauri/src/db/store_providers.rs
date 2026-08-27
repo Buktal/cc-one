@@ -1,10 +1,19 @@
 //! Provider (供应商) local-store CRUD. `save_provider` / `delete_provider` /
 //! `get_provider` / `reorder_providers` are the command-layer surface;
-//! `import_provider` is the pull-side sync import (author timestamp +
-//! local sort_index preserved — see its doc).
+//! `import_provider` is the pull-side sync import. Both writers land one row
+//! through the shared [`upsert_provider_row`] core (their only disagreement —
+//! whose clock stamps `updated_at` — is [`ProviderUpsertPolicy`]); every
+//! reader selects the one [`PROVIDER_COLS`] projection.
 
 use super::*;
 use crate::model::{App, Provider, ProviderCategory};
+
+/// The provider-table projection every reader SELECTs and every writer fills —
+/// one list, so adding a column is one edit here plus the positional decoder
+/// [`row_to_provider`], instead of N transcriptions that can silently drop the
+/// new column. Order IS the decoder contract: `id` first, `updated_at` last.
+const PROVIDER_COLS: &str = "id, name, website_url, category, app, icon, icon_color, \
+     sort_index, notes, settings_config, meta, updated_at";
 
 impl super::Store {
     /// All providers across every app pool, in `sort_index` order (name as the
@@ -14,11 +23,9 @@ impl super::Store {
     /// [`Store::list_providers_for`].
     pub fn list_providers(&self) -> AppResult<Vec<Provider>> {
         let conn = self.conn.lock().expect("db mutex poisoned");
-        let mut stmt = conn.prepare(
-            "SELECT id, name, website_url, category, app, icon, icon_color, sort_index, \
-             notes, settings_config, meta, updated_at FROM provider \
-             ORDER BY sort_index, name",
-        )?;
+        let mut stmt = conn.prepare(&format!(
+            "SELECT {PROVIDER_COLS} FROM provider ORDER BY sort_index, name"
+        ))?;
         let rows = stmt.query_map([], row_to_provider)?;
         rows.collect::<rusqlite::Result<Vec<_>>>()
             .map_err(AppError::from)
@@ -27,11 +34,10 @@ impl super::Store {
     /// One app pool's providers, in user order — the UI list per app tab.
     pub fn list_providers_for(&self, app: App) -> AppResult<Vec<Provider>> {
         let conn = self.conn.lock().expect("db mutex poisoned");
-        let mut stmt = conn.prepare(
-            "SELECT id, name, website_url, category, app, icon, icon_color, sort_index, \
-             notes, settings_config, meta, updated_at FROM provider \
-             WHERE app = ?1 ORDER BY sort_index, name",
-        )?;
+        let mut stmt = conn.prepare(&format!(
+            "SELECT {PROVIDER_COLS} FROM provider \
+             WHERE app = ?1 ORDER BY sort_index, name"
+        ))?;
         let rows = stmt.query_map(params![app.as_str()], row_to_provider)?;
         rows.collect::<rusqlite::Result<Vec<_>>>()
             .map_err(AppError::from)
@@ -43,80 +49,12 @@ impl super::Store {
     /// non-empty `id` edits the existing row and keeps its `sort_index`
     /// (saving must never move the user's order). Returns the persisted row —
     /// the caller gets the assigned id / position without a second read.
-    /// `updated_at` is refreshed on save only when the syncable structure
-    /// changed: a key-only edit (the one local-only field) must not advance
-    /// the freshness timestamp, or a key fill on device B would make B's row
-    /// look structurally newer than a peer's real edit and the next pull would
-    /// silently reverse the peer's change. The structural comparison is
-    /// `Provider::structure_equals` (key-stripped, pure) — the invariant lives
-    /// in code, not prose.
+    /// `updated_at` follows the local clock ([`ProviderUpsertPolicy::LocalClock`]):
+    /// refreshed only when the syncable structure changed.
     pub fn save_provider(&self, provider: Provider) -> AppResult<Provider> {
         let conn = self.conn.lock().expect("db mutex poisoned");
-        let app = provider.app.as_str();
-        let (id, sort_index, updated_at) = if provider.id.is_empty() {
-            let id = crate::model::generate_provider_id();
-            let sort_index: i64 = conn.query_row(
-                "SELECT COALESCE(MAX(sort_index), -1) + 1 FROM provider WHERE app = ?1",
-                params![app],
-                |r| r.get(0),
-            )?;
-            (id, sort_index, crate::time::now_iso())
-        } else {
-            // Editing: keep the row's CURRENT sort_index — the value on disk,
-            // never the caller's (saving must not move the user's order, and an
-            // outdated caller must not corrupt it). A missing row (deleted since
-            // the caller read it) falls back to appending at the end of its
-            // app pool, so the upsert "revives" it into a sane position instead
-            // of whatever the caller carried.
-            let existing: Option<Provider> = conn
-                .query_row(
-                    "SELECT id, name, website_url, category, app, icon, icon_color, \
-                     sort_index, notes, settings_config, meta, updated_at \
-                     FROM provider WHERE id = ?1",
-                    params![provider.id],
-                    row_to_provider,
-                )
-                .optional()?;
-            let sort_index = match &existing {
-                Some(e) => e.sort_index as i64,
-                None => conn.query_row(
-                    "SELECT COALESCE(MAX(sort_index), -1) + 1 FROM provider WHERE app = ?1",
-                    params![app],
-                    |r| r.get(0),
-                )?,
-            };
-            let updated_at = match &existing {
-                Some(e) if e.structure_equals(&provider) => e.updated_at.clone(),
-                _ => crate::time::now_iso(),
-            };
-            (provider.id.clone(), sort_index, updated_at)
-        };
-        conn.execute(
-            "INSERT INTO provider \
-             (id, name, website_url, category, app, icon, icon_color, sort_index, notes, \
-              settings_config, meta, updated_at) \
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12) \
-             ON CONFLICT(id) DO UPDATE SET \
-               name = excluded.name, website_url = excluded.website_url, \
-               category = excluded.category, app = excluded.app, icon = excluded.icon, \
-               icon_color = excluded.icon_color, notes = excluded.notes, \
-               settings_config = excluded.settings_config, meta = excluded.meta, \
-               updated_at = excluded.updated_at",
-            params![
-                id,
-                provider.name,
-                provider.website_url,
-                provider.category.as_str(),
-                app,
-                provider.icon,
-                provider.icon_color,
-                sort_index,
-                provider.notes,
-                provider.settings_config,
-                provider.meta,
-                updated_at
-            ],
-        )?;
+        let (id, sort_index, updated_at) =
+            upsert_provider_row(&conn, &provider, ProviderUpsertPolicy::LocalClock)?;
         Ok(Provider {
             id,
             sort_index: sort_index as u32,
@@ -128,57 +66,15 @@ impl super::Store {
     }
 
     /// Pull-side import of a peer's provider (synced): upsert preserving the
-    /// AUTHOR's `updated_at` — sync freshness is the author's, not this
-    /// device's import time — and the LOCAL row's `sort_index` (display order
-    /// stays a local preference; a peer's file never shuffles it). A missing
-    /// row appends at the end like `save_provider`. Never refreshes
-    /// `updated_at` (unlike `save_provider`): an import is not an edit. The
-    /// caller (`provider::sync`) owns the latest-wins decision and the
-    /// key-merge — this method only lands the row.
+    /// AUTHOR's `updated_at` ([`ProviderUpsertPolicy::AuthorClock`] — sync
+    /// freshness is the author's, not this device's import time; an import is
+    /// not an edit) and the LOCAL row's `sort_index` (display order stays a
+    /// local preference; a peer's file never shuffles it). The caller
+    /// (`provider::sync`) owns the latest-wins decision and the key-merge —
+    /// this method only lands the row.
     pub fn import_provider(&self, provider: &Provider) -> AppResult<()> {
         let conn = self.conn.lock().expect("db mutex poisoned");
-        let app = provider.app.as_str();
-        let sort_index: i64 = match conn
-            .query_row(
-                "SELECT sort_index FROM provider WHERE id = ?1",
-                params![provider.id],
-                |r| r.get(0),
-            )
-            .optional()?
-        {
-            Some(i) => i,
-            None => conn.query_row(
-                "SELECT COALESCE(MAX(sort_index), -1) + 1 FROM provider WHERE app = ?1",
-                params![app],
-                |r| r.get(0),
-            )?,
-        };
-        conn.execute(
-            "INSERT INTO provider \
-             (id, name, website_url, category, app, icon, icon_color, sort_index, notes, \
-              settings_config, meta, updated_at) \
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12) \
-             ON CONFLICT(id) DO UPDATE SET \
-               name = excluded.name, website_url = excluded.website_url, \
-               category = excluded.category, app = excluded.app, icon = excluded.icon, \
-               icon_color = excluded.icon_color, notes = excluded.notes, \
-               settings_config = excluded.settings_config, meta = excluded.meta, \
-               updated_at = excluded.updated_at",
-            params![
-                provider.id,
-                provider.name,
-                provider.website_url,
-                provider.category.as_str(),
-                app,
-                provider.icon,
-                provider.icon_color,
-                sort_index,
-                provider.notes,
-                provider.settings_config,
-                provider.meta,
-                provider.updated_at
-            ],
-        )?;
+        upsert_provider_row(&conn, provider, ProviderUpsertPolicy::AuthorClock)?;
         Ok(())
     }
 
@@ -197,11 +93,9 @@ impl super::Store {
     /// 使用」光卡用——避免拉全表再过滤。
     pub fn get_provider(&self, app: App, id: &str) -> AppResult<Option<Provider>> {
         let conn = self.conn.lock().expect("db mutex poisoned");
-        let mut stmt = conn.prepare(
-            "SELECT id, name, website_url, category, app, icon, icon_color, \
-             sort_index, notes, settings_config, meta, updated_at \
-             FROM provider WHERE id = ?1 AND app = ?2",
-        )?;
+        let mut stmt = conn.prepare(&format!(
+            "SELECT {PROVIDER_COLS} FROM provider WHERE id = ?1 AND app = ?2"
+        ))?;
         let row = stmt
             .query_row(params![id, app.as_str()], row_to_provider)
             .optional()?;
@@ -225,6 +119,138 @@ impl super::Store {
         tx.commit()?;
         Ok(())
     }
+}
+
+// ---- provider-table UPSERT core (shared by local save + sync import) ----
+//
+// `Store::save_provider` and `Store::import_provider` land one row of the SAME
+// provider table through an identical 12-column `INSERT … ON CONFLICT(id)`.
+// Unlike the sessions table (where the two writers refresh different conflict
+// columns), the conflict clause here is identical for both — the ONLY
+// disagreement is whose clock stamps `updated_at`, so that one difference
+// lives in a typed place (`ProviderUpsertPolicy`) instead of two INSERT
+// statements kept in sync only by comments.
+
+/// Whose clock stamps a provider row's `updated_at` — the single dimension
+/// where the two provider-table writers disagree. Column set, conflict
+/// refresh and display-order resolution are identical either way (shared by
+/// [`upsert_provider_row`]).
+enum ProviderUpsertPolicy {
+    /// Local save: this device owns the clock. A fresh row or a structural
+    /// edit stamps `now`; a key-only edit keeps the STORED timestamp — the
+    /// key locations are the one local-only field, so advancing freshness on
+    /// a key fill would make this device's row look structurally newer than
+    /// a peer's real edit, and the next pull's latest-wins would silently
+    /// reverse the peer's change. The structural comparison is
+    /// `Provider::structure_equals` (key-stripped, pure) — the invariant
+    /// lives in code, not prose.
+    LocalClock,
+    /// Pull-side import: the AUTHOR's timestamp rides through untouched —
+    /// sync freshness is the author's, not this device's import time. An
+    /// import is not an edit.
+    AuthorClock,
+}
+
+impl ProviderUpsertPolicy {
+    /// The `updated_at` this write lands: for `LocalClock` the stored one when
+    /// the edit compares structure-equal (existing row vs. incoming),
+    /// otherwise `now`; for `AuthorClock` simply the incoming row's value.
+    fn stamp_updated_at(&self, existing: Option<&Provider>, incoming: &Provider) -> String {
+        match self {
+            Self::LocalClock => match existing {
+                Some(e) if e.structure_equals(incoming) => e.updated_at.clone(),
+                _ => crate::time::now_iso(),
+            },
+            Self::AuthorClock => incoming.updated_at.clone(),
+        }
+    }
+}
+
+/// Append-at-end position within one app pool: after the pool's last row
+/// (`max(sort_index) + 1`, 0 when the pool is empty). Every fresh-insert path
+/// of [`upsert_provider_row`] lands here.
+fn append_sort_index(conn: &Connection, app: &str) -> AppResult<i64> {
+    conn.query_row(
+        "SELECT COALESCE(MAX(sort_index), -1) + 1 FROM provider WHERE app = ?1",
+        params![app],
+        |r| r.get(0),
+    )
+    .map_err(AppError::from)
+}
+
+/// Land one provider row — the shared core of [`Store::save_provider`]
+/// ([`ProviderUpsertPolicy::LocalClock`]) and [`Store::import_provider`]
+/// ([`ProviderUpsertPolicy::AuthorClock`]). The INSERT lists all 12 columns
+/// ([`PROVIDER_COLS`], the same list every reader selects); on conflict the
+/// existing row refreshes every synced column EXCEPT `id` (the conflict key)
+/// and `sort_index` — display order is device-local, and the INSERT carries
+/// the already-resolved position purely for the fresh-insert path, so the
+/// conflict path must not re-apply it.
+///
+/// Position (identical for both writers): an existing row keeps its
+/// `sort_index` — the value on disk, never the caller's (a write must not
+/// move the user's order, and an outdated caller must not corrupt it); a
+/// missing row appends at the END of its app pool, which also revives an id
+/// deleted since the caller read it into a sane slot instead of whatever the
+/// caller carried. Returns `(id, sort_index, updated_at)` as actually
+/// persisted — `save_provider`'s return value is built from these so the
+/// caller never sees a stale id / position / timestamp.
+fn upsert_provider_row(
+    conn: &Connection,
+    provider: &Provider,
+    policy: ProviderUpsertPolicy,
+) -> AppResult<(String, i64, String)> {
+    let app = provider.app.as_str();
+    // The row being replaced, if any — empty id means create (nothing to
+    // load, a fresh id is minted). Both the position and the freshness
+    // decision read this one snapshot; no second read per writer.
+    let existing = if provider.id.is_empty() {
+        None
+    } else {
+        conn.query_row(
+            &format!("SELECT {PROVIDER_COLS} FROM provider WHERE id = ?1"),
+            params![provider.id],
+            row_to_provider,
+        )
+        .optional()?
+    };
+    let id = if provider.id.is_empty() {
+        crate::model::generate_provider_id()
+    } else {
+        provider.id.clone()
+    };
+    let sort_index = match &existing {
+        Some(e) => e.sort_index as i64,
+        None => append_sort_index(conn, app)?,
+    };
+    let updated_at = policy.stamp_updated_at(existing.as_ref(), provider);
+    conn.execute(
+        &format!(
+            "INSERT INTO provider ({PROVIDER_COLS}) \
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12) \
+             ON CONFLICT(id) DO UPDATE SET \
+               name = excluded.name, website_url = excluded.website_url, \
+               category = excluded.category, app = excluded.app, icon = excluded.icon, \
+               icon_color = excluded.icon_color, notes = excluded.notes, \
+               settings_config = excluded.settings_config, meta = excluded.meta, \
+               updated_at = excluded.updated_at"
+        ),
+        params![
+            id,
+            provider.name,
+            provider.website_url,
+            provider.category.as_str(),
+            app,
+            provider.icon,
+            provider.icon_color,
+            sort_index,
+            provider.notes,
+            provider.settings_config,
+            provider.meta,
+            updated_at
+        ],
+    )?;
+    Ok((id, sort_index, updated_at))
 }
 
 fn row_to_provider(r: &rusqlite::Row) -> rusqlite::Result<Provider> {
