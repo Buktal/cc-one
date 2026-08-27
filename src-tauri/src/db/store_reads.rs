@@ -1,5 +1,7 @@
-//! Dashboard read paths (stats / trend / logs / models / distinct).
+//! Dashboard read paths (stats / trend / logs / models / distinct). 维度查询
+//! （project / session / device × 两种粒度）归 [`super::store_dimensions`]。
 
+use super::filter_sql::{build_where, Facet, FacetGates};
 use super::store_transcript::build_session_where;
 use super::*;
 
@@ -9,7 +11,7 @@ impl super::Store {
     /// Aggregate stats over a filter (BLUEPRINT 使用统计).
     pub fn query_stats(&self, filter: &UsageFilter) -> AppResult<UsageStats> {
         let conn = self.conn.lock().expect("db mutex poisoned");
-        let (clause, params_vec) = build_where(filter, true, true, true, "usage_records");
+        let (clause, params_vec) = build_where(filter, FacetGates::ALL, "usage_records");
         let sql = format!(
             "SELECT
                 COUNT(*),
@@ -49,7 +51,7 @@ impl super::Store {
         // column, and gating per-row through the session's usage would be a
         // different (unclaimed) semantic. The aggregate carries the histogram
         // (`turn_duration_buckets`, [u32; 4]) and the p95 alongside count/avg.
-        let (tclause, tparams) = build_where(filter, false, false, true, "turn_durations");
+        let (tclause, tparams) = build_where(filter, FacetGates::TURNS, "turn_durations");
         let tsql = format!(
             "SELECT COUNT(*), COALESCE(AVG(duration_ms),0),
                 COALESCE(SUM(CASE WHEN duration_ms < 10000 THEN 1 ELSE 0 END),0),
@@ -77,7 +79,7 @@ impl super::Store {
         // OFFSET) instead of materializing every duration.
         s.p95_turn_duration_ms = if turn_count > 0 {
             let idx = ((95 * turn_count + 99) / 100 - 1).max(0);
-            let (pclause, pparams) = build_where(filter, false, false, true, "turn_durations");
+            let (pclause, pparams) = build_where(filter, FacetGates::TURNS, "turn_durations");
             let psql = format!(
                 "SELECT duration_ms FROM turn_durations {pclause}
                  ORDER BY duration_ms LIMIT 1 OFFSET {idx}"
@@ -95,7 +97,7 @@ impl super::Store {
     /// Per-model breakdown over a filter.
     pub fn query_models(&self, filter: &UsageFilter) -> AppResult<Vec<ModelStatsRow>> {
         let conn = self.conn.lock().expect("db mutex poisoned");
-        let (clause, params_vec) = build_where(filter, true, true, true, "usage_records");
+        let (clause, params_vec) = build_where(filter, FacetGates::ALL, "usage_records");
         // 列序：model / COUNT / 四桶总和 / 共享 SUM 清单（input..cost）。
         // output 走清单但不解码——ModelStatsRow 不携带它；占位是为让桶口径
         // 只有一份拼写（新增桶时这里与其它读同步）。
@@ -141,7 +143,7 @@ impl super::Store {
         bucket: TrendBucket,
     ) -> AppResult<Vec<TrendPoint>> {
         let conn = self.conn.lock().expect("db mutex poisoned");
-        let (clause, params_vec) = build_where(filter, true, true, true, "usage_records");
+        let (clause, params_vec) = build_where(filter, FacetGates::ALL, "usage_records");
         // Hour buckets read the clock in the device's local zone so a UTC+8
         // "today" trends in hours the user recognizes; the day bucket stays on
         // the stored UTC `day` for cross-device determinism.
@@ -193,12 +195,12 @@ impl super::Store {
         // Facet semantics: the dropdown for one dimension ignores that
         // dimension's own filter (so any value stays pickable) but applies the
         // other facet + time + device — candidates reflect the selected window.
-        let (include_model, include_source) = match column {
-            "model" => (false, true),
-            _ => (true, false),
+        let own = match col {
+            "model" => Facet::Model,
+            _ => Facet::Source,
         };
         let (mut clause, params_vec) =
-            build_where(filter, include_model, include_source, true, "usage_records");
+            build_where(filter, FacetGates::dropping(own), "usage_records");
         // Always exclude empty values; splice onto the WHERE clause (or start one).
         if clause.is_empty() {
             clause = format!("WHERE {col} != ''");
@@ -255,7 +257,11 @@ impl super::Store {
         // Unknown presence: does any session-less usage row exist under the
         // same OTHER dimensions (time on usage timestamps — the unknown bucket
         // is a usage-side concept)?
-        let (mut uclause, uparams) = build_where(filter, true, true, false, "usage_records");
+        let (mut uclause, uparams) = build_where(
+            filter,
+            FacetGates::dropping(Facet::Project),
+            "usage_records",
+        );
         let unknown_cond = super::filter_sql::project_condition("usage_records", UNKNOWN_PROJECT).0;
         if uclause.is_empty() {
             uclause = format!("WHERE {unknown_cond}");
@@ -273,218 +279,13 @@ impl super::Store {
         })
     }
 
-    /// The project dimension at USAGE grain (#106 dashboard): `usage_records`
-    /// grouped by the owning session's `project_identity`, so the bucket sums
-    /// equal `query_stats`'s totals under the same filter EXACTLY (time bounds
-    /// run on usage timestamps — the hero's caliber; the sessions page's
-    /// `query_project_stats` instead selects sessions by `last_active_at`, a
-    /// sessions-grain caliber). Every usage row lands in exactly one bucket:
-    /// rows with a session row map by the identity rule (the one
-    /// `project_identity` UDF — same rule the filter applies), while
-    /// session-less rows AND rows whose session carries no launch dir both
-    /// fall to the synthetic [`UNKNOWN_PROJECT`] bucket — attribution missing
-    /// either way, which is what「未知项目」means to the user. Note the
-    /// project FILTER's sentinel stays the stricter NOT-EXISTS form, so
-    /// picking the unknown bucket narrows to its session-less share only.
-    pub fn query_project_usage(&self, filter: &UsageFilter) -> AppResult<Vec<ProjectUsageRow>> {
-        let conn = self.conn.lock().expect("db mutex poisoned");
-        let (clause, params_vec) = build_where(filter, true, true, true, "usage_records");
-        // The driving subquery keeps build_where's UNQUALIFIED column names
-        // valid (no join ambiguity); the LEFT JOIN lives outside it. The
-        // identity expression COALESCEs the NULL of a session-less row (the
-        // UDF takes TEXT, not NULL) and folds the empty identity in with the
-        // sentinel. `COUNT(DISTINCT a, b)` skips the NULL CASE arm, so only
-        // buckets with a real session row count sessions. The projection is
-        // the bare bucket columns (one list); the SUMs read them through the
-        // shared prefix-parameterized list.
-        let sql = format!(
-            "SELECT COALESCE(NULLIF(project_identity(COALESCE(s.project_dir, '')), ''), '{UNKNOWN_PROJECT}') AS pid,
-                    COUNT(*),
-                    COUNT(DISTINCT CASE WHEN s.id IS NOT NULL
-                         THEN sel.session_id || ':' || sel.device_id END),
-                    {sums},
-                    COALESCE({total},0) AS total_tokens,
-                    MAX(sel.timestamp)
-             FROM (
-                SELECT session_id, device_id, timestamp, {buckets}, total_cost_usd
-                FROM usage_records {clause}
-             ) sel
-             LEFT JOIN sessions s ON s.id = sel.session_id AND s.device_id = sel.device_id
-             GROUP BY pid
-             ORDER BY total_tokens DESC, pid",
-            sums = super::aggregate_sql::usage_sum_cols("sel."),
-            total = super::aggregate_sql::usage_total_sum("sel."),
-            buckets = super::aggregate_sql::usage_bucket_cols("")
-        );
-        let mut stmt = conn.prepare(&sql)?;
-        let rows = stmt.query_map(params_from_iter(params_vec.iter()), |r| {
-            let tokens = TokenCounts {
-                input: r.get::<_, i64>(3)? as u32,
-                output: r.get::<_, i64>(4)? as u32,
-                cache_creation: r.get::<_, i64>(5)? as u32,
-                cache_read: r.get::<_, i64>(6)? as u32,
-            };
-            let project: String = r.get(0)?;
-            Ok(ProjectUsageRow {
-                is_unknown: project == UNKNOWN_PROJECT,
-                project,
-                request_count: r.get::<_, i64>(1)? as u32,
-                session_count: r.get::<_, i64>(2)? as u32,
-                input_tokens: tokens.input,
-                output_tokens: tokens.output,
-                cache_creation_tokens: tokens.cache_creation,
-                cache_read_tokens: tokens.cache_read,
-                cache_hit_rate: tokens.cache_hit_rate(),
-                total_cost_usd: r.get(7)?,
-                total_tokens: r.get::<_, i64>(8)? as u32,
-                last_active_at: r.get(9)?,
-            })
-        })?;
-        rows.collect::<rusqlite::Result<Vec<_>>>()
-            .map_err(AppError::from)
-    }
-
-    /// The session dimension at usage grain (#106): `usage_records` grouped by
-    /// `(session_id, device_id)`, INNER-joined to the sessions table — only
-    /// sessions that EXIST in the store (本机采集 ∪ 拉回的远程收藏快照)
-    /// appear; session-less usage is the project dimension's unknown bucket,
-    /// not a phantom session here. `turn_count` merges a second GROUP BY over
-    /// `turn_durations` under the facets that apply to the turn grain
-    /// (time / device / project — model / source have no turn column, the
-    /// same caliber note as `query_stats`), so the turn distribution keeps ONE
-    /// caliber with the stats card instead of an approximation.
-    pub fn query_session_usage(&self, filter: &UsageFilter) -> AppResult<Vec<SessionUsageRow>> {
-        let conn = self.conn.lock().expect("db mutex poisoned");
-        let (clause, params_vec) = build_where(filter, true, true, true, "usage_records");
-        let sql = format!(
-            "SELECT sel.session_id, sel.device_id,
-                    COALESCE(NULLIF(COALESCE(NULLIF(s.custom_title,''), s.title_orig),''), sel.session_id) AS title,
-                    COALESCE(s.agent_type, ''),
-                    s.started_at,
-                    MAX(sel.timestamp), COUNT(*),
-                    {sums}
-             FROM (
-                SELECT session_id, device_id, timestamp, {buckets}, total_cost_usd
-                FROM usage_records {clause}
-             ) sel
-             JOIN sessions s ON s.id = sel.session_id AND s.device_id = sel.device_id
-             GROUP BY sel.session_id, sel.device_id
-             ORDER BY COALESCE({total},0) DESC, sel.session_id",
-            sums = super::aggregate_sql::usage_sum_cols("sel."),
-            buckets = super::aggregate_sql::usage_bucket_cols(""),
-            total = super::aggregate_sql::usage_total_sum("sel.")
-        );
-        let mut stmt = conn.prepare(&sql)?;
-        let rows = stmt.query_map(params_from_iter(params_vec.iter()), |r| {
-            Ok(SessionUsageRow {
-                session_id: r.get(0)?,
-                device_id: r.get(1)?,
-                title: r.get(2)?,
-                agent_type: r.get(3)?,
-                started_at: r.get(4)?,
-                last_active_at: r.get(5)?,
-                request_count: r.get::<_, i64>(6)? as u32,
-                input_tokens: r.get::<_, i64>(7)? as u32,
-                output_tokens: r.get::<_, i64>(8)? as u32,
-                cache_creation_tokens: r.get::<_, i64>(9)? as u32,
-                cache_read_tokens: r.get::<_, i64>(10)? as u32,
-                total_tokens: (r.get::<_, i64>(7)?
-                    + r.get::<_, i64>(8)?
-                    + r.get::<_, i64>(9)?
-                    + r.get::<_, i64>(10)?) as u32,
-                total_cost_usd: r.get(11)?,
-                turn_count: 0,
-            })
-        })?;
-        let mut out = rows
-            .collect::<rusqlite::Result<Vec<_>>>()
-            .map_err(AppError::from)?;
-
-        // Per-session turn counts, merged by the same composite key. A
-        // session may own turns but no usage in the window (or vice versa) —
-        // the merge only touches rows both sides know.
-        let (tclause, tparams) = build_where(filter, false, false, true, "turn_durations");
-        let tsql = format!(
-            "SELECT session_id, device_id, COUNT(*) FROM turn_durations {tclause}
-             GROUP BY session_id, device_id"
-        );
-        let mut tstmt = conn.prepare(&tsql)?;
-        let turns = tstmt.query_map(params_from_iter(tparams.iter()), |r| {
-            Ok((
-                r.get::<_, String>(0)?,
-                r.get::<_, String>(1)?,
-                r.get::<_, i64>(2)? as u32,
-            ))
-        })?;
-        let by_key: std::collections::HashMap<(String, String), u32> = turns
-            .collect::<rusqlite::Result<Vec<_>>>()
-            .map_err(AppError::from)?
-            .into_iter()
-            .map(|(sid, dev, n)| ((sid, dev), n))
-            .collect();
-        for row in &mut out {
-            if let Some(n) = by_key.get(&(row.session_id.clone(), row.device_id.clone())) {
-                row.turn_count = *n;
-            }
-        }
-        Ok(out)
-    }
-
-    /// The device dimension at USAGE grain (#107 dashboard): `usage_records`
-    /// grouped by `device_id`, following `query_models`' pattern — every
-    /// `UsageFilter` facet applies through the one WHERE builder (project
-    /// included), so the bucket sums equal `query_stats`'s totals under the
-    /// same filter EXACTLY. Only devices with usage in the window appear
-    /// (GROUP BY omits empty buckets — a silent peer is invisible by design,
-    /// the prototype's「未计入」). Device naming / "this machine" identity
-    /// live in the registry; the frontend joins `list_devices` for them.
-    pub fn query_device_usage(&self, filter: &UsageFilter) -> AppResult<Vec<DeviceUsageRow>> {
-        let conn = self.conn.lock().expect("db mutex poisoned");
-        let (clause, params_vec) = build_where(filter, true, true, true, "usage_records");
-        let sql = format!(
-            "SELECT device_id,
-                    COUNT(*),
-                    {sums},
-                    COALESCE({total},0) AS total_tokens,
-                    MAX(timestamp)
-             FROM usage_records {clause}
-             GROUP BY device_id
-             ORDER BY total_tokens DESC, device_id",
-            sums = super::aggregate_sql::usage_sum_cols(""),
-            total = super::aggregate_sql::usage_total_sum("")
-        );
-        let mut stmt = conn.prepare(&sql)?;
-        let rows = stmt.query_map(params_from_iter(params_vec.iter()), |r| {
-            let tokens = TokenCounts {
-                input: r.get::<_, i64>(2)? as u32,
-                output: r.get::<_, i64>(3)? as u32,
-                cache_creation: r.get::<_, i64>(4)? as u32,
-                cache_read: r.get::<_, i64>(5)? as u32,
-            };
-            Ok(DeviceUsageRow {
-                device_id: r.get(0)?,
-                request_count: r.get::<_, i64>(1)? as u32,
-                input_tokens: tokens.input,
-                output_tokens: tokens.output,
-                cache_creation_tokens: tokens.cache_creation,
-                cache_read_tokens: tokens.cache_read,
-                cache_hit_rate: tokens.cache_hit_rate(),
-                total_cost_usd: r.get(6)?,
-                total_tokens: r.get::<_, i64>(7)? as u32,
-                last_active_at: r.get(8)?,
-            })
-        })?;
-        rows.collect::<rusqlite::Result<Vec<_>>>()
-            .map_err(AppError::from)
-    }
-
     /// Request-log rows (BLUEPRINT 请求日志; columns). Selects the full
     /// per-call field set — the row-detail panel reads from these rows, so
     /// expanding a row costs no extra round-trip. `server_tool_use` is a JSON
     /// text column; unknown/corrupt payloads fall back to zeros.
     pub fn query_logs(&self, q: &LogsQuery) -> AppResult<Vec<UsageLogRow>> {
         let conn = self.conn.lock().expect("db mutex poisoned");
-        let (clause, params_vec) = build_where(&q.filter, true, true, true, "usage_records");
+        let (clause, params_vec) = build_where(&q.filter, FacetGates::ALL, "usage_records");
         let limit = super::page_limit(q.limit);
         let offset = q.offset as i64;
         let sql = format!(
@@ -536,68 +337,11 @@ impl super::Store {
     /// Total row count (for paging display).
     pub fn count_logs(&self, filter: &UsageFilter) -> AppResult<u32> {
         let conn = self.conn.lock().expect("db mutex poisoned");
-        let (clause, params_vec) = build_where(filter, true, true, true, "usage_records");
+        let (clause, params_vec) = build_where(filter, FacetGates::ALL, "usage_records");
         let sql = format!("SELECT COUNT(*) FROM usage_records {clause}");
         let n: i64 = conn.query_row(&sql, params_from_iter(params_vec.iter()), |r| r.get(0))?;
         Ok(n as u32)
     }
-}
-
-/// Build a `WHERE` clause + bound params for a `UsageFilter` (timestamp range,
-/// model, source, device scope, project) over `driving` — the table the query
-/// reads, which must carry the filter's columns (`timestamp`, `device_id`, and
-/// the `(session_id, device_id)` pair for the project facet). The range filters
-/// on `timestamp` (UTC), not `day` — see `UsageFilter` for why. `include_model`
-/// / `include_source` gate those two facets independently: the distinct-
-/// dropdown path queries one facet while ignoring its OWN filter (a picked
-/// value must never shrink its own candidate list) yet still narrows by the
-/// other facets + time + device. `include_project` gates the project facet
-/// (the facet-ignoring caller is the project dropdown itself).
-/// Returns `("WHERE ...", vec![...])` or `("", [])`.
-///
-/// 「非空才约束」样板与项目维度条件（含 UNKNOWN 哨兵）收口在
-/// [`super::filter_sql`]（架构审查候选④）；本函数只保留轴的门控与次序。
-fn build_where(
-    filter: &UsageFilter,
-    include_model: bool,
-    include_source: bool,
-    include_project: bool,
-    driving: &str,
-) -> (String, Vec<SqlValue>) {
-    use super::filter_sql::{project_condition, push_nonempty_eq, push_ts_range};
-    let mut conds: Vec<String> = Vec::new();
-    let mut params: Vec<SqlValue> = Vec::new();
-    push_ts_range(
-        &mut conds,
-        &mut params,
-        "timestamp",
-        &filter.from_ts,
-        &filter.to_ts,
-    );
-    if include_model {
-        push_nonempty_eq(&mut conds, &mut params, "model", &filter.model);
-    }
-    if include_source {
-        push_nonempty_eq(&mut conds, &mut params, "source", &filter.source);
-    }
-    push_nonempty_eq(&mut conds, &mut params, "device_id", &filter.device_scope);
-    if include_project {
-        if let Some(p) = &filter.project {
-            if !p.is_empty() {
-                let (cond, param) = project_condition(driving, p);
-                conds.push(cond);
-                if let Some(v) = param {
-                    params.push(v);
-                }
-            }
-        }
-    }
-    let clause = if conds.is_empty() {
-        String::new()
-    } else {
-        format!("WHERE {}", conds.join(" AND "))
-    };
-    (clause, params)
 }
 
 #[cfg(test)]
@@ -1120,191 +864,5 @@ mod tests {
             .unwrap();
         assert_eq!(trend[0].request_count, 2);
         assert_eq!(trend[1].request_count, 1);
-    }
-
-    /// Project buckets at usage grain (#106): sums equal the hero totals
-    /// exactly, sessions map by the identity rule, and the sentinel merges
-    /// session-less rows WITH rows whose session has no launch dir (both are
-    /// attribution-missing). The filter's own sentinel stays the stricter
-    /// NOT-EXISTS form.
-    #[test]
-    fn project_usage_buckets_match_stats_and_merge_unknown() {
-        let s = mem();
-        seed_session_project(&s, "s1", "d", "/proj/alpha", "2026-08-02T10:00:00.000Z");
-        // No launch dir: its usage is attribution-missing too.
-        seed_session_project(&s, "s2", "d", "", "2026-08-02T10:00:00.000Z");
-        let bound = |uuid: &str, sid: &str, input: u32| {
-            let mut r = rec(uuid, "2026-08-15", "glm-5.2", "d", input, 0, 1.0);
-            r.session_id = sid.into();
-            r
-        };
-        s.ingest(&[
-            bound("a", "s1", 100),
-            bound("b", "s2", 40),
-            rec("loose", "2026-08-15", "glm-5.2", "d", 10, 0, 1.0),
-        ])
-        .unwrap();
-
-        let rows = s.query_project_usage(&UsageFilter::default()).unwrap();
-        assert_eq!(rows.len(), 2);
-        assert_eq!(rows[0].project, "/proj/alpha");
-        assert!(!rows[0].is_unknown);
-        assert_eq!(rows[0].input_tokens, 100);
-        assert_eq!(rows[0].session_count, 1);
-        assert_eq!(rows[0].request_count, 1);
-        // The sentinel bucket: s2's empty-identity share + the session-less
-        // row — merged, 2 requests, but only ONE countable session (s2).
-        assert_eq!(rows[1].project, UNKNOWN_PROJECT);
-        assert!(rows[1].is_unknown);
-        assert_eq!(rows[1].input_tokens, 50);
-        assert_eq!(rows[1].request_count, 2);
-        assert_eq!(rows[1].session_count, 1);
-        // Bucket sums equal the stats totals exactly (the hero's caliber).
-        let stats = s.query_stats(&UsageFilter::default()).unwrap();
-        let sum: u32 = rows.iter().map(|r| r.input_tokens).sum();
-        assert_eq!(sum, stats.input_tokens);
-
-        // The filter's sentinel is stricter (NOT EXISTS): it narrows to the
-        // session-less share only — 10 tokens, not the merged 50.
-        let unknown = UsageFilter {
-            project: Some(UNKNOWN_PROJECT.into()),
-            ..Default::default()
-        };
-        let narrowed = s.query_project_usage(&unknown).unwrap();
-        assert_eq!(narrowed.len(), 1);
-        assert_eq!(narrowed[0].input_tokens, 10);
-        assert_eq!(narrowed[0].session_count, 0);
-    }
-
-    /// Session buckets at usage grain (#106): one row per store-known session
-    /// with usage, tokens-desc; session-less usage never appears (it belongs
-    /// to the project dimension's unknown bucket); per-session turn counts
-    /// merge under the turn grain's applicable facets.
-    #[test]
-    fn session_usage_buckets_and_turn_merge() {
-        let s = mem();
-        seed_session_project(&s, "s1", "d", "/proj/alpha", "2026-08-02T10:00:00.000Z");
-        seed_session_project(&s, "s2", "d", "/proj/beta", "2026-08-02T10:00:00.000Z");
-        let bound = |uuid: &str, sid: &str, input: u32| {
-            let mut r = rec(uuid, "2026-08-15", "glm-5.2", "d", input, 0, 1.0);
-            r.session_id = sid.into();
-            r
-        };
-        s.ingest(&[
-            bound("a", "s1", 100),
-            bound("b", "s1", 50),
-            bound("c", "s2", 70),
-            rec("loose", "2026-08-15", "glm-5.2", "d", 10, 0, 1.0),
-        ])
-        .unwrap();
-        let td = |uuid: &str, sid: &str, ms: u32| TurnDuration {
-            uuid: uuid.into(),
-            timestamp: "2026-08-15T10:00:00Z".into(),
-            day: "2026-08-15".into(),
-            session_id: sid.into(),
-            device_id: "d".into(),
-            duration_ms: ms,
-        };
-        s.ingest_turn_durations(&[
-            td("t1", "s1", 10_000),
-            td("t2", "s1", 20_000),
-            td("t3", "", 5_000),
-        ])
-        .unwrap();
-
-        let rows = s.query_session_usage(&UsageFilter::default()).unwrap();
-        // s1 (150 tokens) before s2 (70); the session-less row never appears.
-        assert_eq!(rows.len(), 2);
-        assert_eq!(rows[0].session_id, "s1");
-        assert_eq!(rows[0].input_tokens, 150);
-        assert_eq!(rows[0].request_count, 2);
-        assert_eq!(rows[0].turn_count, 2);
-        assert_eq!(rows[1].session_id, "s2");
-        assert_eq!(rows[1].input_tokens, 70);
-        assert_eq!(rows[1].turn_count, 0);
-        // Session rows carry the session's display fields.
-        assert_eq!(rows[0].title, "Title");
-        assert_eq!(rows[0].started_at, "2026-08-01T00:00:00.000Z");
-        assert_eq!(rows[0].last_active_at, "2026-08-15T10:00:00.000Z");
-
-        // Project facet narrows the buckets like every other usage read.
-        let alpha = UsageFilter {
-            project: Some("/proj/alpha".into()),
-            ..Default::default()
-        };
-        let narrowed = s.query_session_usage(&alpha).unwrap();
-        assert_eq!(narrowed.len(), 1);
-        assert_eq!(narrowed[0].session_id, "s1");
-    }
-
-    /// Device buckets at usage grain (#107): GROUP BY device_id over the one
-    /// WHERE builder — tokens-desc order, bucket sums equal the stats totals
-    /// (the hero's caliber), cache hit rate from the one TokenCounts rule, and
-    /// every facet narrows them (project through the session join, device
-    /// scope, time). Devices with no usage in the window never appear.
-    #[test]
-    fn device_usage_buckets_match_stats_and_follow_filters() {
-        let s = mem();
-        seed_session_project(&s, "s1", "d1", "/proj/alpha", "2026-08-02T10:00:00.000Z");
-        seed_session_project(&s, "s2", "d2", "/proj/beta", "2026-08-02T10:00:00.000Z");
-        let bound = |uuid: &str, sid: &str, dev: &str, day: &str, input: u32, cache_read: u32| {
-            let mut r = rec(uuid, day, "glm-5.2", dev, input, 0, 1.0);
-            r.session_id = sid.into();
-            r.tokens.cache_read = cache_read;
-            r
-        };
-        // d1: 100 fresh + 50 cached reads on 08-15; d2: 300 on 08-14 — d2
-        // outranks d1 by tokens; the cache hit rate exercises the shared
-        // TokenCounts rule (50 / 150 for d1).
-        s.ingest(&[
-            bound("a", "s1", "d1", "2026-08-15", 100, 50),
-            bound("b", "s2", "d2", "2026-08-14", 300, 0),
-        ])
-        .unwrap();
-
-        let rows = s.query_device_usage(&UsageFilter::default()).unwrap();
-        assert_eq!(rows.len(), 2);
-        assert_eq!(rows[0].device_id, "d2", "tokens-desc order");
-        assert_eq!(rows[0].total_tokens, 300);
-        assert_eq!(rows[0].request_count, 1);
-        assert_eq!(rows[0].last_active_at, "2026-08-14T10:00:00.000Z");
-        assert_eq!(rows[1].device_id, "d1");
-        assert_eq!(rows[1].total_tokens, 150);
-        assert!((rows[1].cache_hit_rate - (50.0 / 150.0)).abs() < 1e-9);
-        assert_eq!(rows[1].last_active_at, "2026-08-15T10:00:00.000Z");
-        // Bucket sums equal the stats totals exactly (the hero's caliber).
-        let stats = s.query_stats(&UsageFilter::default()).unwrap();
-        let sum: u32 = rows.iter().map(|r| r.total_tokens).sum();
-        assert_eq!(sum, stats.total_tokens);
-
-        // Project facet narrows through the session join (alpha = d1's rows).
-        let alpha = UsageFilter {
-            project: Some("/proj/alpha".into()),
-            ..Default::default()
-        };
-        let narrowed = s.query_device_usage(&alpha).unwrap();
-        assert_eq!(narrowed.len(), 1);
-        assert_eq!(narrowed[0].device_id, "d1");
-
-        // Device scope + time facets narrow the same way.
-        let by_device = UsageFilter {
-            device_scope: Some("d2".into()),
-            ..Default::default()
-        };
-        assert_eq!(
-            s.query_device_usage(&by_device)
-                .unwrap()
-                .iter()
-                .map(|r| r.device_id.as_str())
-                .collect::<Vec<_>>(),
-            vec!["d2"]
-        );
-        let later = UsageFilter {
-            from_ts: Some("2026-08-15T00:00:00.000Z".into()),
-            ..Default::default()
-        };
-        let rows = s.query_device_usage(&later).unwrap();
-        assert_eq!(rows.len(), 1, "d2 has no usage on/after 08-15");
-        assert_eq!(rows[0].device_id, "d1");
     }
 }

@@ -21,6 +21,7 @@ mod filter_sql;
 mod migrate;
 mod schema;
 mod store_devices;
+mod store_dimensions;
 mod store_dirty_days;
 mod store_groups;
 mod store_ingest;
