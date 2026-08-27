@@ -24,16 +24,16 @@
 //! （settingsConfig 文本 → `{env, config}`，含校验与清洗）、
 //! `serialize_env_file`（键值对 → `.env` 文本，按键排序字节稳定）、
 //! `gemini_selected_type`（env → 认证标记）、`merge_gemini_settings_json`
-//! （现有 settings.json 文本 + 目标 → 合并文本）。文件 IO（读/备份/原子写）
-//! 是薄壳：备份与原子写分别见本模块与 [`live::atomic_write_file`]。
+//! （现有 settings.json 文本 + 目标 → 合并文本）。文件 IO（读/备份/原子写/
+//! 双文件事务次序）是薄壳：`.env` 备份在本模块，其余收口在
+//! [`live::commit_two_files`]。
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 use crate::error::{AppError, AppResult};
 use crate::provider::live::{
-    atomic_write_file, parse_live_or_empty, parse_target_or_empty, read_live_settings,
-    strip_internal_keys,
+    parse_live_or_empty, parse_target_or_empty, read_live_settings, strip_internal_keys,
 };
 
 /// `settings.json` 里 `security.auth.selectedType` 的 API Key 标记对应的
@@ -227,10 +227,9 @@ pub fn backup_env_file(env_path: &Path) -> AppResult<()> {
 
 /// Gemini 写盘全流程（薄壳，按序调用，路径注入便于测试）：解析+清洗 → 读
 /// 两文件现状 → 受控合并（三步全部在任何写盘/备份之前完成——用户手改坏的
-/// settings.json 在这里失败，两文件同旧）→ 两文件内容无变化则整体无操作 →
-/// 备份并原子写 `.env`（整块替换）→ 备份并原子写 settings.json；settings
-/// 一步失败回滚 `.env`——任何失败路径不产生半截状态（与 codex 侧同一容错
-/// 语义，回滚原语共用 `live::rollback_side_file`）。
+/// settings.json 在这里失败，两文件同旧）→ 组副文件参数调事务原语（先 `.env`
+/// 后 settings.json / 配对无变化整体无操作 / 主败回滚 `.env` 的次序收口在
+/// [`live::commit_two_files`]，与 codex 侧同一容错语义）。
 pub fn write_gemini_live_at(
     env_path: &Path,
     settings_path: &Path,
@@ -245,38 +244,27 @@ pub fn write_gemini_live_at(
     let existing = read_live_settings(settings_path)?;
     let merged = merge_gemini_settings_json(&existing, &target)?;
     let env_text = serialize_env_file(&target.env);
-    // `.env` 的无变化判定要求「文件存在且内容不变」：文件缺失时即便目标为空
-    // 也要写出（建空 .env 本身是登录态版语义的一部分）；settings.json 用通用
-    // trim_end 比较（`.env` 的备份走 dotfile 专属路径 `backup_env_file`，不经
-    // `commit_live_file`）。
+    // 无变化判定：`.env` 要求「文件存在且内容不变」——文件缺失时即便目标为空
+    // 也要写出（建空 .env 本身是登录态版语义的一部分），缺失语义进 unchanged，
+    // 不另设参数；settings.json 用通用 trim_end 比较。
     let env_unchanged = existing_env
         .as_deref()
         .is_some_and(|old| crate::provider::live::content_unchanged(old, &env_text));
     let settings_unchanged = crate::provider::live::content_unchanged(&existing, &merged);
-    if env_unchanged && settings_unchanged {
-        return Ok(());
-    }
 
-    let env_committed = if env_unchanged {
-        false
-    } else {
-        backup_env_file(env_path)?;
-        atomic_write_file(env_path, &env_text)?;
-        true
+    // `.env` 备份走 dotfile 专属路径；载荷恒有（env 整块替换，登录态版写空）。
+    let side = crate::provider::live::SideWrite {
+        path: env_path,
+        content: &env_text,
+        unchanged: env_unchanged,
+        backup: Some(backup_env_file),
+        existing: existing_env.as_deref(),
+        context: "gemini settings.json write failed and .env rollback",
     };
-    if let Err(e) =
-        crate::provider::live::commit_live_file(settings_path, &merged, settings_unchanged)
-    {
-        if env_committed {
-            crate::provider::live::rollback_side_file(
-                env_path,
-                &existing_env,
-                "gemini settings.json write failed and .env rollback",
-            );
-        }
-        return Err(e);
-    }
-    Ok(())
+    crate::provider::live::commit_two_files(
+        (settings_path, &merged, settings_unchanged),
+        Some(side),
+    )
 }
 
 #[cfg(test)]

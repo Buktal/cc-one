@@ -236,7 +236,7 @@ pub(crate) fn content_unchanged(old: &str, new: &str) -> bool {
 /// 副文件回滚（主文件写失败时恢复先写的副文件，codex auth.json / gemini
 /// `.env` 共用）：写盘前存在 → 还原原文；原本不存在 → 删除。回滚自身失败只
 /// eprintln 不覆盖主错误——要报告的是主错误（主文件写失败）。
-pub(crate) fn rollback_side_file(path: &Path, existing: &Option<String>, context: &str) {
+pub(crate) fn rollback_side_file(path: &Path, existing: Option<&str>, context: &str) {
     let result = match existing {
         Some(text) => atomic_write_file(path, text),
         None => fs::remove_file(path).map_err(AppError::from),
@@ -244,6 +244,73 @@ pub(crate) fn rollback_side_file(path: &Path, existing: &Option<String>, context
     if let Err(e) = result {
         eprintln!("[cc-one] {context} also failed: {e}");
     }
+}
+
+/// 双文件写盘事务的副文件（先写方）载荷与策略。codex（auth.json）与 gemini
+/// （`.env`）两家「双文件写盘」的全部差异收在这一个参数里：
+/// - 是否备份：`backup: None` = 不备份（codex auth.json 是凭据/登录态）；Some =
+///   写副文件前先调该备份函数（gemini `.env` 是无扩展名点文件，走 dotfile
+///   专属的 [`crate::provider::live_gemini::backup_env_file`]，不用通用
+///   [`backup_path`] 推导）。
+/// - 缺失语义：不做独立参数——由各家的 `unchanged` 判定承载（gemini 要求
+///   「文件存在且内容不变」，缺失时即便目标为空也要建；codex 无 key 根本
+///   不进 [`SideWrite`]）。
+/// - 载荷是否条件存在：整个 [`SideWrite`] 为 `None` 即登录态版形态——不碰
+///   副文件，事务退化为主文件单文件提交。
+pub(crate) struct SideWrite<'a> {
+    pub path: &'a Path,
+    /// 副文件目标内容（受控合并产物）。
+    pub content: &'a str,
+    /// 内容无变化判定（按各家规则在调用方算好）；true → 不备份不写副。
+    pub unchanged: bool,
+    pub backup: Option<fn(&Path) -> AppResult<()>>,
+    /// 写盘前副文件的现状文本：回滚依据——Some 还原原文 / None 删除新建。
+    pub existing: Option<&'a str>,
+    /// 主文件写失败触发回滚时的日志上下文。
+    pub context: &'a str,
+}
+
+/// 双文件写盘事务（codex auth.json + config.toml / gemini `.env` +
+/// settings.json 共用的次序不变量，关键次序落在本函数、可测，不再散在各家
+/// 散文注释里）：配对无变化 → 整体无操作（不备份、不写盘、不碰 mtime）；
+/// 否则**先写副文件**（有备份策略则先备份再原子写；任何一步失败即返回，
+/// 主文件不碰），后提交主文件（[`commit_live_file`]：无变化跳过，否则备份 +
+/// 原子写）；主文件失败时**回滚已写的副文件**并返回主错误——任何失败路径都
+/// 不产生「副已换、主没换」的半截状态。
+///
+/// `main` 是 `(路径, 合并后内容, 内容无变化)` 三元组。per-app 差异全部在
+/// [`SideWrite`] 参数（见其文档），本函数对两家逐字节同一逻辑。
+pub(crate) fn commit_two_files(
+    main: (&Path, &str, bool),
+    side: Option<SideWrite<'_>>,
+) -> AppResult<()> {
+    let (main_path, main_content, main_unchanged) = main;
+    // 配对无变化判定 + 整体无操作：side 原本是 None 或未变化都视作「副无操作」。
+    let side = side.filter(|s| !s.unchanged);
+    if main_unchanged && side.is_none() {
+        return Ok(());
+    }
+
+    // 先写副：备份（若有策略）+ 原子写；失败在此返回，主文件未被触碰。
+    let side_written = match side {
+        Some(s) => {
+            if let Some(backup) = s.backup {
+                backup(s.path)?;
+            }
+            atomic_write_file(s.path, s.content)?;
+            Some(s)
+        }
+        None => None,
+    };
+
+    // 提交主文件；失败 → 回滚先写的副文件，返回主错误。
+    if let Err(e) = commit_live_file(main_path, main_content, main_unchanged) {
+        if let Some(s) = side_written {
+            rollback_side_file(s.path, s.existing, s.context);
+        }
+        return Err(e);
+    }
+    Ok(())
 }
 
 /// 拒绝写盘前的未物化模板变量：settingsConfig 里残留 `${VAR}` 占位符（保存时
@@ -764,5 +831,262 @@ mod tests {
         )
         .is_ok());
         assert!(validate_no_unfilled_template_vars("  ").is_ok());
+    }
+
+    // ---- 双文件写盘事务 commit_two_files ----
+
+    use crate::provider::live_gemini::backup_env_file as dotfile_backup;
+
+    const OLD_MAIN: &str = "old-main\n";
+    const NEW_MAIN: &str = "new-main\n";
+    const OLD_SIDE: &str = "old-side\n";
+
+    /// 事务里副文件这侧的计划：不进事务（载荷缺席 = 登录态形态）/ 内容未变 /
+    /// 要写新内容（带不带备份策略）。
+    enum SidePlan {
+        Skip,
+        Unchanged,
+        Changed { content: String, backup: bool },
+    }
+
+    fn side_plan_backup(plan: &SidePlan) -> Option<fn(&Path) -> AppResult<()>> {
+        match plan {
+            // 直接用 gemini 的生产备份函数（dotfile 语义），测试跑生产路径。
+            SidePlan::Changed { backup: true, .. } => Some(dotfile_backup),
+            _ => None,
+        }
+    }
+
+    /// 组合矩阵：配对无变化判定、只写该写的一侧、备份随写盘出现、缺失语义——
+    /// codex（auth+config）与 gemini（.env+settings）共用的全部次序不变量在此
+    /// 一次性守住，两家各自的现场测试成为这套矩阵的参数化回归。
+    #[test]
+    fn commit_two_files_pairwise_matrix() {
+        let cases: Vec<(&str, bool, SidePlan)> = vec![
+            (
+                "主副都无变化（副载荷缺席）→ 整体无操作",
+                false,
+                SidePlan::Skip,
+            ),
+            (
+                "主无变化 + 副内容未变 → 整体无操作",
+                false,
+                SidePlan::Unchanged,
+            ),
+            ("仅主变化 → 只写主 + 主 .bak，不碰副", true, SidePlan::Skip),
+            (
+                "主变化 + 副未变 → 只写主，副字节不动",
+                true,
+                SidePlan::Unchanged,
+            ),
+            (
+                "仅副变化 → 只写副 + 副 .bak，主不动",
+                false,
+                SidePlan::Changed {
+                    content: "new-side\n".into(),
+                    backup: true,
+                },
+            ),
+            (
+                "双侧变化 → 都写，两侧备份都在",
+                true,
+                SidePlan::Changed {
+                    content: "new-side\n".into(),
+                    backup: true,
+                },
+            ),
+            (
+                "双侧变化 + 副不备份（codex auth.json 形态）→ 都写且无副 .bak",
+                true,
+                SidePlan::Changed {
+                    content: "new-side\n".into(),
+                    backup: false,
+                },
+            ),
+        ];
+
+        for (desc, main_changed, plan) in cases {
+            let tmp = tempfile::tempdir().unwrap();
+            let main_path = tmp.path().join("settings.json");
+            let side_path = tmp.path().join("side.file");
+            let side_bak = tmp.path().join("side.file.bak");
+            fs::write(&main_path, OLD_MAIN).unwrap();
+            fs::write(&side_path, OLD_SIDE).unwrap();
+
+            let side_content: String = match &plan {
+                SidePlan::Changed { content, .. } => content.clone(),
+                _ => OLD_SIDE.to_string(),
+            };
+            let side_unchanged = !matches!(plan, SidePlan::Changed { .. });
+            let side = if matches!(plan, SidePlan::Skip) {
+                None
+            } else {
+                Some(SideWrite {
+                    path: &side_path,
+                    content: &side_content,
+                    unchanged: side_unchanged,
+                    backup: side_plan_backup(&plan),
+                    existing: Some(OLD_SIDE),
+                    context: "test",
+                })
+            };
+
+            commit_two_files((&main_path, NEW_MAIN, !main_changed), side).unwrap();
+
+            let side_written = matches!(plan, SidePlan::Changed { .. });
+            // 内容与备份足证是否走写路径（原子写必改内容）：无操作 = 主字节不变
+            // 且无任何 .bak。
+            if main_changed {
+                assert_eq!(fs::read_to_string(&main_path).unwrap(), NEW_MAIN, "{desc}");
+                assert_eq!(
+                    fs::read_to_string(main_path.with_extension("json.bak")).unwrap(),
+                    OLD_MAIN,
+                    "{desc}: 主 .bak 是写前快照"
+                );
+            } else {
+                assert_eq!(fs::read_to_string(&main_path).unwrap(), OLD_MAIN, "{desc}");
+                assert!(
+                    !main_path.with_extension("json.bak").exists(),
+                    "{desc}: 主未写不得备份"
+                );
+            }
+            if side_written {
+                assert_eq!(
+                    fs::read_to_string(&side_path).unwrap(),
+                    side_content,
+                    "{desc}"
+                );
+                let wants_bak = side_plan_backup(&plan).is_some();
+                assert_eq!(side_bak.exists(), wants_bak, "{desc}: 副 .bak 随备份策略");
+                if wants_bak {
+                    assert_eq!(fs::read_to_string(&side_bak).unwrap(), OLD_SIDE, "{desc}");
+                }
+            } else {
+                assert_eq!(
+                    fs::read_to_string(&side_path).unwrap(),
+                    OLD_SIDE,
+                    "{desc}: 副不应被写"
+                );
+                assert!(!side_bak.exists(), "{desc}");
+            }
+        }
+    }
+
+    /// 副写失败（目标位置占成目录 → 原子写必败）→ 报错且主文件不碰、不触发主
+    /// 备份（codex「auth 失败不得先写 config」的原语层版本）。
+    #[test]
+    fn commit_two_files_side_failure_leaves_main_untouched() {
+        let tmp = tempfile::tempdir().unwrap();
+        let main_path = tmp.path().join("settings.json");
+        let side_path = tmp.path().join("auth.json");
+        fs::write(&main_path, OLD_MAIN).unwrap();
+        fs::create_dir(&side_path).unwrap();
+
+        let r = commit_two_files(
+            (&main_path, NEW_MAIN, false),
+            Some(SideWrite {
+                path: &side_path,
+                content: "new-side\n",
+                unchanged: false,
+                backup: None,
+                existing: None,
+                context: "test",
+            }),
+        );
+        assert!(r.is_err(), "副写失败必须报错");
+        assert_eq!(
+            fs::read_to_string(&main_path).unwrap(),
+            OLD_MAIN,
+            "主文件不得先于副文件被写"
+        );
+        assert!(
+            !main_path.with_extension("json.bak").exists(),
+            "副失败不得触发主备份"
+        );
+    }
+
+    /// 主写失败（主 .bak 占成目录 → 备份一步败）→ 先写的副回滚到写盘前；
+    /// 副原本不存在（回滚删新建）与存在（回滚还原原文）两种形态都验，且与副
+    /// 是否带备份策略无关。
+    #[test]
+    fn commit_two_files_main_failure_rolls_back_side() {
+        for (desc, side_existed) in [
+            ("副原本存在 → 还原原文", true),
+            ("副原本不存在 → 删除新建", false),
+        ] {
+            for backup in [true, false] {
+                let tmp = tempfile::tempdir().unwrap();
+                let main_path = tmp.path().join("config.toml");
+                let side_path = tmp.path().join(".env");
+                fs::write(&main_path, "old = 1\n").unwrap();
+                if side_existed {
+                    fs::write(&side_path, OLD_SIDE).unwrap();
+                }
+                fs::create_dir(main_path.with_extension("toml.bak")).unwrap();
+
+                let r = commit_two_files(
+                    (&main_path, "new = 1\n", false),
+                    Some(SideWrite {
+                        path: &side_path,
+                        content: "NEW=1\n",
+                        unchanged: false,
+                        backup: if backup { Some(dotfile_backup) } else { None },
+                        existing: side_existed.then_some(OLD_SIDE),
+                        context: "test rollback",
+                    }),
+                );
+                assert!(r.is_err(), "{desc}");
+
+                if side_existed {
+                    assert_eq!(fs::read_to_string(&side_path).unwrap(), OLD_SIDE, "{desc}");
+                } else {
+                    assert!(!side_path.exists(), "{desc}");
+                }
+                assert_eq!(
+                    fs::read_to_string(&main_path).unwrap(),
+                    "old = 1\n",
+                    "{desc}: 主不留半截内容"
+                );
+            }
+        }
+    }
+
+    /// 缺失语义：副原本不存在 + 未变化=false → 照常创建（gemini 登录态建空
+    /// `.env` 形态）、无备份；主原本不存在 → 主创建且无主备份；副载荷缺席
+    /// （side=None，codex 登录态形态）→ 不碰副文件，事务退化为主文件单文件提交。
+    #[test]
+    fn commit_two_files_missing_file_semantics() {
+        let tmp = tempfile::tempdir().unwrap();
+        let main_path = tmp.path().join("settings.json");
+        let side_path = tmp.path().join(".env");
+        fs::write(&main_path, OLD_MAIN).unwrap();
+        commit_two_files(
+            (&main_path, NEW_MAIN, false),
+            Some(SideWrite {
+                path: &side_path,
+                content: "K=V",
+                unchanged: false,
+                backup: Some(dotfile_backup),
+                existing: None,
+                context: "test",
+            }),
+        )
+        .unwrap();
+        assert_eq!(fs::read_to_string(&side_path).unwrap(), "K=V");
+        assert!(
+            !tmp.path().join(".env.bak").exists(),
+            "副原本不存在 → 无备份"
+        );
+
+        let tmp2 = tempfile::tempdir().unwrap();
+        let main2 = tmp2.path().join("settings.json");
+        let side2 = tmp2.path().join("auth.json");
+        commit_two_files((&main2, "{}\n", false), None).unwrap();
+        assert_eq!(fs::read_to_string(&main2).unwrap(), "{}\n");
+        assert!(!side2.exists(), "载荷缺席不得创建副文件");
+        assert!(
+            !main2.with_extension("json.bak").exists(),
+            "主原本不存在 → 无备份"
+        );
     }
 }

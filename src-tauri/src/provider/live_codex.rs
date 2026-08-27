@@ -207,9 +207,9 @@ fn build_auth_payload(existing: Option<&str>, key: &str) -> AppResult<String> {
 }
 
 /// 切换写盘全流程（薄壳，按序调用）：解析快照 → TOML 受控合并 → 判定
-/// auth.json 是否要写 → 两文件都没变化则无操作 → 备份 config → 先原子写
-/// auth 后原子写 config（事务原语 `backup_file` / `atomic_write_file` /
-/// 无变化判定 / 回滚收口在 `live`，见 [`crate::provider::live::commit_live_file`]）。
+/// auth.json 是否要写 → 组副文件参数调事务原语（先 auth 后 config / 配对
+/// 无变化无操作 / 主败回滚 auth 的次序收口在
+/// [`crate::provider::live::commit_two_files`]）。
 pub fn switch_codex_live(
     config_path: &Path,
     auth_path: &Path,
@@ -238,41 +238,27 @@ pub fn switch_codex_live(
         None => None,
     };
 
-    // 内容都没变化 → 无操作（不备份、不写盘、不碰 mtime）。auth 是凭据文件、
-    // 本应用自己序列化，用精确比较；config 走 trim_end（容忍 toml_edit 重写
-    // 对结尾换行的归一化）。
+    // 无变化判定：auth 是凭据文件、本应用自己序列化，用精确比较；config 走
+    // trim_end（容忍 toml_edit 重写对结尾换行的归一化，见 content_unchanged）。
     let config_unchanged = crate::provider::live::content_unchanged(&live, &merged);
     let auth_unchanged = match (&auth_payload, &existing_auth) {
         (Some(payload), Some(existing)) => payload == existing,
         (Some(_), None) => false,
         (None, _) => true,
     };
-    if config_unchanged && auth_unchanged {
-        return Ok(());
-    }
 
-    // 原子写两文件：先 auth 后 config，config 一步失败回滚 auth。每个文件
-    // 自身是临时文件 + 改名，进程中断只留临时文件、不产生半截 config.toml /
-    // auth.json。
-    let auth_written = match (&auth_payload, auth_unchanged) {
-        (Some(payload), false) => {
-            crate::provider::live::atomic_write_file(auth_path, payload)?;
-            true
-        }
-        _ => false,
-    };
-    if let Err(e) = crate::provider::live::commit_live_file(config_path, &merged, config_unchanged)
-    {
-        if auth_written {
-            crate::provider::live::rollback_side_file(
-                auth_path,
-                &existing_auth,
-                "codex config write failed and auth.json rollback",
-            );
-        }
-        return Err(e);
-    }
-    Ok(())
+    // auth.json 不备份（凭据/登录态）；登录态版载荷缺席 → 事务不碰该文件。
+    let side = auth_payload
+        .as_deref()
+        .map(|payload| crate::provider::live::SideWrite {
+            path: auth_path,
+            content: payload,
+            unchanged: auth_unchanged,
+            backup: None,
+            existing: existing_auth.as_deref(),
+            context: "codex config write failed and auth.json rollback",
+        });
+    crate::provider::live::commit_two_files((config_path, &merged, config_unchanged), side)
 }
 
 #[cfg(test)]
