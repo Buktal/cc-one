@@ -18,6 +18,7 @@ import { projectBasename } from "@/lib/paths"
 import { ALL_FILTER } from "@/lib/source-tags"
 import { type TokenBuckets, totalTokensOf } from "@/lib/token-buckets"
 import type {
+  GroupTrack,
   SessionFilter,
   SessionGroup,
   SessionRow,
@@ -36,8 +37,10 @@ export type SessionTab = "local" | "favorites"
  * (device-private, never enters git); the Favorites tab groups by
  * `synced_group_id` (per-device groups.json, git-synced). A session may sit in
  * different groups across the two tracks — two independent organizations.
+ * Re-exported from the generated bindings (the backend `GroupTrack` enum's TS
+ * type) so the union has one definition, not a hand-copied twin.
  */
-export type GroupTrack = "local" | "synced"
+export type { GroupTrack }
 
 /**
  * Sidebar selection sentinels. `ALL_GROUPS` renders every session in the tab;

@@ -3,7 +3,7 @@
 use tauri::State;
 
 use super::AppState;
-use crate::error::{AppError, AppResult};
+use crate::error::AppResult;
 use crate::model::DeviceInfo;
 
 /// Rename *this* device (display name only — not a uniqueness key).
@@ -30,7 +30,9 @@ pub fn set_device_display_name(
 /// (`repo/library/<id>/`): migrated into this device's library or deleted.
 /// Nothing is pushed to Git — a peer still in the repo reappears on the next
 /// sync (registry + data artifacts are re-imported). This device (`is_self`) is
-/// not forgettable; rename it instead.
+/// not forgettable; rename it instead — the guard lives at the domain entry
+/// ([`crate::devices::forget_device`]), alongside the alias capture that names
+/// the migrate folder.
 #[tauri::command]
 #[specta::specta]
 pub fn forget_device(
@@ -38,28 +40,12 @@ pub fn forget_device(
     device_id: String,
     library_action: crate::library::LibraryForgetAction,
 ) -> AppResult<()> {
-    let cfg = state.config.get();
-    if crate::devices::is_self(&cfg, &device_id) {
-        return Err(AppError::Config(
-            "this device cannot be removed (rename it instead)".into(),
-        ));
-    }
-    // Capture the peer's alias BEFORE the registry row + alias map are dropped —
-    // the migrate target folder is named after it (`from-<name>`). The full
-    // five-step cleanup (DB row, alias, data dir, name file, library subtree)
-    // is owned by `devices::forget_device`.
-    let peer_name = cfg
-        .device_names
-        .get(&device_id)
-        .cloned()
-        .unwrap_or_default();
     crate::devices::forget_device(
         &state.store,
         &state.config,
         &state.config.paths(),
         &device_id,
         library_action,
-        &peer_name,
     )
 }
 

@@ -991,7 +991,7 @@ mod tests {
             .collect();
         assert_eq!(ids, ["s-agent", "s-main"], "worktree matches the parent");
 
-        let counts = s.count_sessions(Some(&f), "local").unwrap();
+        let counts = s.count_sessions(Some(&f), GroupTrack::Local).unwrap();
         assert_eq!(counts.total, 2);
 
         let buckets = s.query_project_stats(Some(&f)).unwrap();
@@ -1016,7 +1016,12 @@ mod tests {
             })
             .unwrap()
             .is_empty());
-        assert_eq!(s.count_sessions(Some(&none), "local").unwrap().total, 0);
+        assert_eq!(
+            s.count_sessions(Some(&none), GroupTrack::Local)
+                .unwrap()
+                .total,
+            0
+        );
         assert!(s.query_project_stats(Some(&none)).unwrap().is_empty());
     }
 
@@ -1048,7 +1053,10 @@ mod tests {
 
         // The paged list, the sidebar counts, and the project aggregate all
         // share the same clause — the aggregate narrows to the "" bucket.
-        assert_eq!(s.count_sessions(Some(&f), "local").unwrap().total, 1);
+        assert_eq!(
+            s.count_sessions(Some(&f), GroupTrack::Local).unwrap().total,
+            1
+        );
         let buckets = s.query_project_stats(Some(&f)).unwrap();
         assert_eq!(buckets.len(), 1);
         assert_eq!(buckets[0].project_dir, "");

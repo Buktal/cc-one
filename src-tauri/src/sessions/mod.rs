@@ -1,22 +1,26 @@
-//! Session management — the domain logic behind the sessions Tauri commands
-//! (the command layer itself lives in `commands`).
+//! Synced-groups persistence — the domain behind the group half of the
+//! sessions Tauri commands (the command layer itself lives in `commands`).
 //!
-//! Two group tracks:
-//! - **Local** (`local_groups` SQLite table): device-private, CRUD immediate,
-//!   never in git. Owned by `db::Store`.
-//! - **Synced** (`data/<deviceId>/groups.json`): cross-device via git. Each
-//!   device writes ONLY its own file; reading merges every device's file by id
-//!   (the device-registry pattern). Ids carry a device prefix
-//!   (`<deviceId>-<8hex>`) so they are globally unique without coordination.
-//!   The per-device-doc mechanism — tolerant read, byte-stable write,
-//!   latest-wins merge — lives in [`crate::synced_doc`]; this module declares
-//!   the wire doc ([`SyncedGroupsDoc`]) and the domain rules (merge key = id,
-//!   no skip-self: the file is the authoritative storage).
+//! This module's body is the Synced track's storage:
+//! `data/<deviceId>/groups.json` — the four `*_owned` mutations (each ending
+//! in a best-effort commit + push), the merged cross-device read, and the
+//! unified `SessionGroup` DTO assembly. Each device writes ONLY its own file;
+//! reading merges every device's file by id (the device-registry pattern). Ids
+//! carry a device prefix (`<deviceId>-<8hex>`) so they are globally unique
+//! without coordination. The per-device-doc mechanism — tolerant read,
+//! byte-stable write, latest-wins merge — lives in [`crate::synced_doc`];
+//! this module declares the wire doc ([`SyncedGroupsDoc`]) and the domain
+//! rules (merge key = id, no skip-self: the file is the authoritative
+//! storage).
 //!
-//! Session CRUD (favorited / custom_title / group membership / list / transcript
-//! read) is layered over `db::Store` (sessions table) + `collect::ingest` (transcript
-//! I/O). The `commands` module's write commands call the `*_owned` operations
-//! here and emit `"sessions_changed"` so the frontend refreshes its queries.
+//! NOT here: session/user-data CRUD (favorited / custom_title / group
+//! membership / list / transcript read) — that lives on `db::Store` (sessions
+//! table) + `collect::ingest` (transcript I/O); the Local track's groups too
+//! (the `local_groups` SQLite table, device-private, never in git) are plain
+//! `db::Store` methods. This module contributes only the local-group id
+//! generator. The `commands` module calls these `*_owned` operations (and the
+//! Store's) and emits `"sessions_changed"` so the frontend refreshes its
+//! queries.
 
 pub mod session_snapshot;
 pub mod snapshot_policy;
@@ -27,6 +31,11 @@ use crate::config::{ConfigData, Paths};
 use crate::error::{AppError, AppResult};
 use crate::model::{SessionGroup, SyncedGroup};
 use crate::synced_doc;
+
+/// The git commit message for every synced-groups change — one domain
+/// constant, so the log reads "cc-one: groups sync" no matter which entry
+/// pushed.
+const GROUPS_SYNC_MSG: &str = "cc-one: groups sync";
 
 /// Per-device synced-groups file: `repo/data/<deviceId>/groups.json`.
 fn groups_json_path(paths: &Paths, device_id: &str) -> PathBuf {
@@ -149,7 +158,7 @@ pub fn create_synced_group_owned(
     };
     groups.push(group.clone());
     write_own_synced_groups(paths, &cfg.device_id, &groups)?;
-    crate::sync::commit_and_push_best_effort(paths, cfg, "cc-one: groups sync");
+    crate::sync::commit_and_push_best_effort(paths, cfg, GROUPS_SYNC_MSG);
     Ok(group)
 }
 
@@ -172,7 +181,7 @@ pub fn rename_synced_group_owned(
     g.name = name.to_string();
     g.updated_at = crate::time::now_iso();
     write_own_synced_groups(paths, &cfg.device_id, &groups)?;
-    crate::sync::commit_and_push_best_effort(paths, cfg, "cc-one: groups sync");
+    crate::sync::commit_and_push_best_effort(paths, cfg, GROUPS_SYNC_MSG);
     Ok(())
 }
 
@@ -208,7 +217,7 @@ pub fn reorder_synced_groups_owned(
         return Ok(());
     }
     write_own_synced_groups(paths, &cfg.device_id, &groups)?;
-    crate::sync::commit_and_push_best_effort(paths, cfg, "cc-one: groups sync");
+    crate::sync::commit_and_push_best_effort(paths, cfg, GROUPS_SYNC_MSG);
     Ok(())
 }
 
@@ -223,7 +232,7 @@ pub fn delete_synced_group_owned(paths: &Paths, cfg: &ConfigData, id: &str) -> A
         )));
     }
     write_own_synced_groups(paths, &cfg.device_id, &groups)?;
-    crate::sync::commit_and_push_best_effort(paths, cfg, "cc-one: groups sync");
+    crate::sync::commit_and_push_best_effort(paths, cfg, GROUPS_SYNC_MSG);
     Ok(())
 }
 

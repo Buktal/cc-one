@@ -3,16 +3,56 @@
 use tauri::{Emitter, State};
 
 use super::AppState;
+use crate::config::{ConfigData, ConfigStore, Paths};
 use crate::error::{AppError, AppResult};
 use crate::model::{
-    LocalGroup, ProjectStatsRow, SessionFilter, SessionGroup, SessionGroupCounts, SessionKey,
-    SessionMessage, SessionQuery, SessionRow, SessionStatsRow, SyncedGroup,
+    GroupTrack, LocalGroup, ProjectStatsRow, SessionFilter, SessionGroup, SessionGroupCounts,
+    SessionKey, SessionMessage, SessionQuery, SessionRow, SessionStatsRow, SyncedGroup,
 };
 use crate::sessions;
 
 /// Emit `sessions_changed` so the frontend's session queries invalidate.
 fn emit_sessions_changed(app_handle: &tauri::AppHandle) {
     let _ = app_handle.emit("sessions_changed", ());
+}
+
+/// Run one Store write, then emit `sessions_changed`. The emit is part of the
+/// write's contract — a write without it strands the frontend's session cache
+/// stale, and nothing else would catch the omission — so the pairing lives in
+/// this one function instead of being re-typed at every command.
+fn write_and_emit<T>(
+    store: &crate::db::Store,
+    app_handle: &tauri::AppHandle,
+    write: impl FnOnce(&crate::db::Store) -> AppResult<T>,
+) -> AppResult<T> {
+    let out = write(store)?;
+    emit_sessions_changed(app_handle);
+    Ok(out)
+}
+
+/// Run one synced-groups domain write on the blocking pool, then emit
+/// `sessions_changed` — the same pairing contract as [`write_and_emit`], on
+/// the git-touching track whose writes must stay off the async runtime's
+/// threads. Every synced-group command is this one shape (domain `*_owned`
+/// call → emit on success), pinned here so a new write cannot skip the emit.
+async fn synced_group_write_and_emit<T>(
+    app_handle: tauri::AppHandle,
+    config: std::sync::Arc<ConfigStore>,
+    label: &str,
+    write: impl FnOnce(&Paths, &ConfigData) -> AppResult<T> + Send + 'static,
+) -> AppResult<T>
+where
+    T: Send + 'static,
+{
+    let out = tauri::async_runtime::spawn_blocking(move || -> AppResult<T> {
+        let cfg = config.get();
+        let paths = config.paths();
+        write(&paths, &cfg)
+    })
+    .await
+    .map_err(|e| AppError::Internal(format!("{label} task failed: {e}")))??;
+    emit_sessions_changed(&app_handle);
+    Ok(out)
 }
 
 #[tauri::command]
@@ -33,9 +73,9 @@ pub fn query_sessions_cmd(
 pub fn count_sessions_cmd(
     state: State<'_, AppState>,
     filter: Option<SessionFilter>,
-    track: String,
+    track: GroupTrack,
 ) -> AppResult<SessionGroupCounts> {
-    state.store.count_sessions(filter.as_ref(), &track)
+    state.store.count_sessions(filter.as_ref(), track)
 }
 
 /// The project dimension: sessions rolled up by project identity with their
@@ -105,11 +145,9 @@ pub fn set_session_favorited_cmd(
     device_id: String,
     favorited: bool,
 ) -> AppResult<()> {
-    state
-        .store
-        .set_session_favorited(&device_id, &id, favorited)?;
-    emit_sessions_changed(&app_handle);
-    Ok(())
+    write_and_emit(&state.store, &app_handle, |store| {
+        store.set_session_favorited(&device_id, &id, favorited)
+    })
 }
 
 #[tauri::command]
@@ -121,11 +159,9 @@ pub fn set_session_custom_title_cmd(
     device_id: String,
     title: Option<String>,
 ) -> AppResult<()> {
-    state
-        .store
-        .set_session_custom_title(&device_id, &id, title.as_deref())?;
-    emit_sessions_changed(&app_handle);
-    Ok(())
+    write_and_emit(&state.store, &app_handle, |store| {
+        store.set_session_custom_title(&device_id, &id, title.as_deref())
+    })
 }
 
 #[tauri::command]
@@ -137,11 +173,9 @@ pub fn set_session_local_group_cmd(
     device_id: String,
     group_id: Option<String>,
 ) -> AppResult<()> {
-    state
-        .store
-        .set_session_local_group(&device_id, &id, group_id.as_deref())?;
-    emit_sessions_changed(&app_handle);
-    Ok(())
+    write_and_emit(&state.store, &app_handle, |store| {
+        store.set_session_local_group(&device_id, &id, group_id.as_deref())
+    })
 }
 
 #[tauri::command]
@@ -153,11 +187,9 @@ pub fn set_session_synced_group_cmd(
     device_id: String,
     group_id: Option<String>,
 ) -> AppResult<()> {
-    state
-        .store
-        .set_session_synced_group(&device_id, &id, group_id.as_deref())?;
-    emit_sessions_changed(&app_handle);
-    Ok(())
+    write_and_emit(&state.store, &app_handle, |store| {
+        store.set_session_synced_group(&device_id, &id, group_id.as_deref())
+    })
 }
 
 /// Batch soft-delete the given sessions (`Store::delete_sessions`): sets the
@@ -172,9 +204,9 @@ pub fn delete_sessions_cmd(
     app_handle: tauri::AppHandle,
     keys: Vec<SessionKey>,
 ) -> AppResult<u32> {
-    let n = state.store.delete_sessions(&keys)?;
-    emit_sessions_changed(&app_handle);
-    Ok(n as u32)
+    write_and_emit(&state.store, &app_handle, |store| {
+        store.delete_sessions(&keys).map(|n| n as u32)
+    })
 }
 
 // ---- local groups ----
@@ -192,13 +224,11 @@ pub fn create_local_group_cmd(
     app_handle: tauri::AppHandle,
     name: String,
 ) -> AppResult<LocalGroup> {
-    let id = sessions::generate_local_group_id();
-    let created_at = crate::time::now_iso();
-    let group = state
-        .store
-        .create_local_group(&id, name.trim(), &created_at)?;
-    emit_sessions_changed(&app_handle);
-    Ok(group)
+    write_and_emit(&state.store, &app_handle, |store| {
+        let id = sessions::generate_local_group_id();
+        let created_at = crate::time::now_iso();
+        store.create_local_group(&id, name.trim(), &created_at)
+    })
 }
 
 #[tauri::command]
@@ -209,9 +239,9 @@ pub fn rename_local_group_cmd(
     id: String,
     name: String,
 ) -> AppResult<()> {
-    state.store.rename_local_group(&id, name.trim())?;
-    emit_sessions_changed(&app_handle);
-    Ok(())
+    write_and_emit(&state.store, &app_handle, |store| {
+        store.rename_local_group(&id, name.trim())
+    })
 }
 
 #[tauri::command]
@@ -221,9 +251,9 @@ pub fn delete_local_group_cmd(
     app_handle: tauri::AppHandle,
     id: String,
 ) -> AppResult<()> {
-    state.store.delete_local_group(&id)?;
-    emit_sessions_changed(&app_handle);
-    Ok(())
+    write_and_emit(&state.store, &app_handle, |store| {
+        store.delete_local_group(&id)
+    })
 }
 
 #[tauri::command]
@@ -233,9 +263,9 @@ pub fn reorder_local_groups_cmd(
     app_handle: tauri::AppHandle,
     ordered_ids: Vec<String>,
 ) -> AppResult<()> {
-    state.store.reorder_local_groups(&ordered_ids)?;
-    emit_sessions_changed(&app_handle);
-    Ok(())
+    write_and_emit(&state.store, &app_handle, |store| {
+        store.reorder_local_groups(&ordered_ids)
+    })
 }
 
 // ---- synced groups ----
@@ -253,16 +283,13 @@ pub async fn create_synced_group_cmd(
     app_handle: tauri::AppHandle,
     name: String,
 ) -> AppResult<SyncedGroup> {
-    let config = state.config.clone();
-    let group = tauri::async_runtime::spawn_blocking(move || -> AppResult<SyncedGroup> {
-        let cfg = config.get();
-        let paths = config.paths();
-        sessions::create_synced_group_owned(&paths, &cfg, &name)
-    })
+    synced_group_write_and_emit(
+        app_handle,
+        state.config.clone(),
+        "create_synced_group",
+        move |paths, cfg| sessions::create_synced_group_owned(paths, cfg, &name),
+    )
     .await
-    .map_err(|e| AppError::Internal(format!("create_synced_group task failed: {e}")))??;
-    emit_sessions_changed(&app_handle);
-    Ok(group)
 }
 
 #[tauri::command]
@@ -273,16 +300,13 @@ pub async fn rename_synced_group_cmd(
     id: String,
     name: String,
 ) -> AppResult<()> {
-    let config = state.config.clone();
-    tauri::async_runtime::spawn_blocking(move || -> AppResult<()> {
-        let cfg = config.get();
-        let paths = config.paths();
-        sessions::rename_synced_group_owned(&paths, &cfg, &id, &name)
-    })
+    synced_group_write_and_emit(
+        app_handle,
+        state.config.clone(),
+        "rename_synced_group",
+        move |paths, cfg| sessions::rename_synced_group_owned(paths, cfg, &id, &name),
+    )
     .await
-    .map_err(|e| AppError::Internal(format!("rename_synced_group task failed: {e}")))??;
-    emit_sessions_changed(&app_handle);
-    Ok(())
 }
 
 #[tauri::command]
@@ -292,16 +316,13 @@ pub async fn delete_synced_group_cmd(
     app_handle: tauri::AppHandle,
     id: String,
 ) -> AppResult<()> {
-    let config = state.config.clone();
-    tauri::async_runtime::spawn_blocking(move || -> AppResult<()> {
-        let cfg = config.get();
-        let paths = config.paths();
-        sessions::delete_synced_group_owned(&paths, &cfg, &id)
-    })
+    synced_group_write_and_emit(
+        app_handle,
+        state.config.clone(),
+        "delete_synced_group",
+        move |paths, cfg| sessions::delete_synced_group_owned(paths, cfg, &id),
+    )
     .await
-    .map_err(|e| AppError::Internal(format!("delete_synced_group task failed: {e}")))??;
-    emit_sessions_changed(&app_handle);
-    Ok(())
 }
 
 #[tauri::command]
@@ -311,16 +332,13 @@ pub async fn reorder_synced_groups_cmd(
     app_handle: tauri::AppHandle,
     ordered_ids: Vec<String>,
 ) -> AppResult<()> {
-    let config = state.config.clone();
-    tauri::async_runtime::spawn_blocking(move || -> AppResult<()> {
-        let cfg = config.get();
-        let paths = config.paths();
-        sessions::reorder_synced_groups_owned(&paths, &cfg, &ordered_ids)
-    })
+    synced_group_write_and_emit(
+        app_handle,
+        state.config.clone(),
+        "reorder_synced_group",
+        move |paths, cfg| sessions::reorder_synced_groups_owned(paths, cfg, &ordered_ids),
+    )
     .await
-    .map_err(|e| AppError::Internal(format!("reorder_synced_group task failed: {e}")))??;
-    emit_sessions_changed(&app_handle);
-    Ok(())
 }
 
 /// Unified groups list (local + synced) for one-shot UI fetch.

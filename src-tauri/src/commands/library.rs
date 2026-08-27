@@ -33,9 +33,9 @@ pub async fn upload_to_library(
     tauri::async_runtime::spawn_blocking(move || -> AppResult<()> {
         let cfg = config.get();
         let paths = config.paths();
-        library::upload(&paths, &cfg, &items, &subpath)?;
-        library::commit_push_library(&paths, &cfg);
-        Ok(())
+        // The domain entry commits + pushes itself — the command stays a thin
+        // typed shell over it.
+        library::upload(&paths, &cfg, &items, &subpath)
     })
     .await
     .map_err(|e| AppError::Internal(format!("library upload task failed: {e}")))?
@@ -64,9 +64,7 @@ pub async fn delete_from_library(state: State<'_, AppState>, rel_path: String) -
     tauri::async_runtime::spawn_blocking(move || -> AppResult<()> {
         let cfg = config.get();
         let paths = config.paths();
-        library::delete_entry(&paths, &rel_path)?;
-        library::commit_push_library(&paths, &cfg);
-        Ok(())
+        library::delete_entry(&paths, &cfg, &rel_path)
     })
     .await
     .map_err(|e| AppError::Internal(format!("library delete task failed: {e}")))?
@@ -83,9 +81,7 @@ pub async fn rename_in_library(
     tauri::async_runtime::spawn_blocking(move || -> AppResult<()> {
         let cfg = config.get();
         let paths = config.paths();
-        library::rename_entry(&paths, &rel_path, &new_name)?;
-        library::commit_push_library(&paths, &cfg);
-        Ok(())
+        library::rename_entry(&paths, &cfg, &rel_path, &new_name)
     })
     .await
     .map_err(|e| AppError::Internal(format!("library rename task failed: {e}")))?

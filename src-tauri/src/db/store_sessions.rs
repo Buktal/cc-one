@@ -813,7 +813,7 @@ mod tests {
             .unwrap();
         assert!(past.is_empty());
 
-        let counts = s.count_sessions(None, "local").unwrap();
+        let counts = s.count_sessions(None, GroupTrack::Local).unwrap();
         assert_eq!(counts.total, 5, "count total matches the paged set");
         let all = s.query_sessions(None).unwrap();
         assert_eq!(all.len(), 5, "unpaged read still returns everything");
@@ -996,7 +996,7 @@ mod tests {
             .collect();
         assert_eq!(ids, ["keep"], "list drops the deleted session");
         assert_eq!(
-            s.count_sessions(None, "local").unwrap().total,
+            s.count_sessions(None, GroupTrack::Local).unwrap().total,
             1,
             "counts drop it too"
         );
@@ -1179,7 +1179,7 @@ mod tests {
         s.set_session_local_group("dev", "c", Some("lg2")).unwrap();
         s.set_session_synced_group("dev", "a", Some("sg1")).unwrap();
 
-        let local = s.count_sessions(None, "local").unwrap();
+        let local = s.count_sessions(None, GroupTrack::Local).unwrap();
         assert_eq!(local.total, 4, "total ignores the track");
         let buckets: std::collections::BTreeMap<String, u32> = local
             .groups
@@ -1190,7 +1190,7 @@ mod tests {
         assert_eq!(buckets["lg2"], 1, "one session in lg2");
         assert_eq!(buckets[""], 1, "the ungrouped bucket is the empty id");
 
-        let synced = s.count_sessions(None, "synced").unwrap();
+        let synced = s.count_sessions(None, GroupTrack::Synced).unwrap();
         let synced_buckets: std::collections::BTreeMap<String, u32> = synced
             .groups
             .iter()
@@ -1204,11 +1204,10 @@ mod tests {
             source: Some("codex_cli".into()),
             ..Default::default()
         };
-        let empty = s.count_sessions(Some(&src_filter), "local").unwrap();
+        let empty = s
+            .count_sessions(Some(&src_filter), GroupTrack::Local)
+            .unwrap();
         assert_eq!(empty.total, 0);
         assert!(empty.groups.is_empty());
-
-        // Unknown track is a hard error, not a silent wrong-column read.
-        assert!(s.count_sessions(None, "bogus").is_err());
     }
 }

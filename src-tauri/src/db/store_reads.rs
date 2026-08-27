@@ -5,6 +5,29 @@ use super::filter_sql::{build_where, Facet, FacetGates};
 use super::store_transcript::build_session_where;
 use super::*;
 
+/// The usage columns whose distinct values a filter-dropdown can list — the
+/// whole whitelist, carried by the type so a wrong column is unrepresentable
+/// instead of a runtime-rejected string. `Project` is deliberately absent:
+/// project candidates come from the sessions-side registry
+/// ([`Store::query_distinct_projects`]), not from a `usage_records` column.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DistinctColumn {
+    Source,
+    Model,
+}
+
+impl DistinctColumn {
+    /// The SQL column the variant reads, plus the filter facet whose OWN
+    /// constraint the candidate list must drop (the dropdown-facet rule —
+    /// see the `Facet` semantics in `super::filter_sql`).
+    fn parts(self) -> (&'static str, Facet) {
+        match self {
+            DistinctColumn::Source => ("source", Facet::Source),
+            DistinctColumn::Model => ("model", Facet::Model),
+        }
+    }
+}
+
 impl super::Store {
     // ---------------- Reads (dashboard) ----------------
 
@@ -184,21 +207,18 @@ impl super::Store {
     /// dimension the user picked (time / device / the other facet) — never by
     /// this column itself, so picking "glm" doesn't shrink the model list to
     /// only "glm". Empty values are always excluded (legacy / unknown rows).
-    pub fn query_distinct(&self, column: &str, filter: &UsageFilter) -> AppResult<Vec<String>> {
+    pub fn query_distinct(
+        &self,
+        column: DistinctColumn,
+        filter: &UsageFilter,
+    ) -> AppResult<Vec<String>> {
         let conn = self.conn.lock().expect("db mutex poisoned");
-        // column is a fixed whitelist below, not user input — safe to interpolate.
-        let col = match column {
-            "source" => "source",
-            "model" => "model",
-            _ => return Err(AppError::Db("bad distinct column".into())),
-        };
+        // The column is a fixed literal per variant (`DistinctColumn::parts`)
+        // — safe to interpolate.
+        let (col, own) = column.parts();
         // Facet semantics: the dropdown for one dimension ignores that
         // dimension's own filter (so any value stays pickable) but applies the
         // other facet + time + device — candidates reflect the selected window.
-        let own = match col {
-            "model" => Facet::Model,
-            _ => Facet::Source,
-        };
         let (mut clause, params_vec) =
             build_where(filter, FacetGates::dropping(own), "usage_records");
         // Always exclude empty values; splice onto the WHERE clause (or start one).
@@ -487,14 +507,17 @@ mod tests {
             to_ts: Some("2026-07-14T23:59:59.999Z".into()),
             ..Default::default()
         };
-        assert_eq!(s.query_distinct("model", &day_b).unwrap(), vec!["gpt-4o"]);
+        assert_eq!(
+            s.query_distinct(DistinctColumn::Model, &day_b).unwrap(),
+            vec!["gpt-4o"]
+        );
 
         // The model facet ignores its OWN filter: with model=glm picked over
         // the full range, BOTH models stay listed — a picked value never
         // shrinks its own dropdown, so the other one is always still pickable.
         let mut all_with_model = s
             .query_distinct(
-                "model",
+                DistinctColumn::Model,
                 &UsageFilter {
                     model: Some("glm-5.2".into()),
                     ..Default::default()
@@ -523,13 +546,16 @@ mod tests {
             source: Some("gemini_cli".into()),
             ..Default::default()
         };
-        assert_eq!(s.query_distinct("model", &by_src).unwrap(), vec!["glm-5.2"]);
+        assert_eq!(
+            s.query_distinct(DistinctColumn::Model, &by_src).unwrap(),
+            vec!["glm-5.2"]
+        );
 
         // Source dropdown ignores its OWN filter: source=gemini_cli picked, yet
         // both sources remain pickable (symmetric to the model facet above).
         let mut srcs = s
             .query_distinct(
-                "source",
+                DistinctColumn::Source,
                 &UsageFilter {
                     source: Some("gemini_cli".into()),
                     ..Default::default()

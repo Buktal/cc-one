@@ -35,7 +35,9 @@ export const commands = {
 	 *  (`repo/library/<id>/`): migrated into this device's library or deleted.
 	 *  Nothing is pushed to Git — a peer still in the repo reappears on the next
 	 *  sync (registry + data artifacts are re-imported). This device (`is_self`) is
-	 *  not forgettable; rename it instead.
+	 *  not forgettable; rename it instead — the guard lives at the domain entry
+	 *  ([`crate::devices::forget_device`]), alongside the alias capture that names
+	 *  the migrate folder.
 	 */
 	forgetDevice: (deviceId: string, libraryAction: LibraryForgetAction) => typedError<null, AppError>(__TAURI_INVOKE("forget_device", { deviceId, libraryAction })),
 	/**
@@ -234,7 +236,7 @@ export const commands = {
 	 *  inconsistent (it would only search the loaded page).
 	 */
 	search: string | null,
-} | null, track: string) => typedError<SessionGroupCounts, AppError>(__TAURI_INVOKE("count_sessions_cmd", { filter, track })),
+} | null, track: GroupTrack) => typedError<SessionGroupCounts, AppError>(__TAURI_INVOKE("count_sessions_cmd", { filter, track })),
 	/**
 	 *  The project dimension: sessions rolled up by project identity with their
 	 *  usage aggregates (session count / requests / token four-buckets / cache-hit
@@ -577,7 +579,12 @@ export const commands = {
 export type AlignReport = {
 	/**  Local collect outcome (zeroed if collect itself failed — see `errors`). */
 	collected: IngestReport,
-	/**  Rows imported from peer devices this round (Synced only). */
+	/**
+	 *  Items imported from peer devices this round, summed across every sync
+	 *  domain (usage rows / session snapshots / provider entries / registry
+	 *  rows — the per-domain grains are documented on the sync domain table's
+	 *  `import` contract) (Synced only).
+	 */
 	imported: number,
 	/**  True iff a local change was committed and pushed (Synced only). */
 	pushed: boolean,
@@ -732,6 +739,17 @@ export type DeviceUsageRow = {
 	/**  `MAX(usage timestamp)` in the bucket — recency for display. */
 	last_active_at: string,
 };
+
+/**
+ *  The two session grouping tracks — which group column a read (sidebar
+ *  counts) or write (group CRUD) addresses. `Local` groups live in
+ *  device-private SQLite (`local_group_id`); `Synced` groups ride the
+ *  per-device `groups.json` via git (`synced_group_id`). An enum, not a
+ *  string: the column behind each track is a fixed map inside the store, and
+ *  a mistyped track name should be unrepresentable across the boundary — not
+ *  a runtime-rejected magic string.
+ */
+export type GroupTrack = "local" | "synced";
 
 /**  Summary of one ingest run. */
 export type IngestReport = {

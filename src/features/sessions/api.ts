@@ -7,6 +7,7 @@
 import { run, vaultApi } from "@/app/store/api-core"
 import { storeRead } from "@/app/store/tags"
 import type {
+  GroupTrack,
   LocalGroup,
   ProjectStatsRow,
   SessionGroup,
@@ -84,10 +85,12 @@ export const {
     }),
     /** Sidebar + paginator counts for one grouping track: total (All row +
      *  page count) and per-bucket counts (group rows). Paging-independent —
-     *  same scope as the page query, no limit/offset. */
+     *  same scope as the page query, no limit/offset. The track is the
+     *  backend enum's generated type — a mistyped name cannot cross the
+     *  boundary. */
     sessionCounts: b.query<
       SessionGroupCounts,
-      { spec: SessionScopeSpec; track: string }
+      { spec: SessionScopeSpec; track: GroupTrack }
     >({
       queryFn: async ({ spec, track }) =>
         run(commands.countSessionsCmd(buildSessionFilter(spec), track)),

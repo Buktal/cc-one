@@ -183,7 +183,9 @@ fn join_rel(device_id: &str, subpath: &str, name: &str) -> String {
 
 /// Copy each pending item into this device's library subtree at `subpath`,
 /// overwriting same-name same-kind entries. Rejects same-name different-kind.
-/// The caller commits + pushes after a successful batch.
+/// On success commits + pushes the batch (best-effort, Synced only) — the
+/// push is part of the change entry, so a caller cannot upload without
+/// publishing it.
 pub fn upload(
     paths: &crate::config::Paths,
     cfg: &ConfigData,
@@ -243,6 +245,7 @@ pub fn upload(
             std::fs::copy(src, &dst)?;
         }
     }
+    commit_push_library(paths, cfg);
     Ok(())
 }
 
@@ -295,8 +298,14 @@ pub fn export_entry(
     Ok(())
 }
 
-/// Delete a library entry (file or dir). The caller commits + pushes.
-pub fn delete_entry(paths: &crate::config::Paths, rel_path: &str) -> AppResult<()> {
+/// Delete a library entry (file or dir), then commit + push the deletion
+/// (best-effort, Synced only) — the push is part of the change entry, so a
+/// caller cannot delete without publishing the deletion.
+pub fn delete_entry(
+    paths: &crate::config::Paths,
+    cfg: &ConfigData,
+    rel_path: &str,
+) -> AppResult<()> {
     let target = resolve_rel(paths, rel_path)?;
     if target.is_dir() {
         std::fs::remove_dir_all(&target)?;
@@ -307,11 +316,19 @@ pub fn delete_entry(paths: &crate::config::Paths, rel_path: &str) -> AppResult<(
     if let Some(parent) = target.parent() {
         let _ = ensure_gitkeep(parent);
     }
+    commit_push_library(paths, cfg);
     Ok(())
 }
 
-/// Rename a library entry in place. The caller commits + pushes.
-pub fn rename_entry(paths: &crate::config::Paths, rel_path: &str, new_name: &str) -> AppResult<()> {
+/// Rename a library entry in place, then commit + push the rename
+/// (best-effort, Synced only) — the push is part of the change entry, so a
+/// caller cannot rename without publishing it.
+pub fn rename_entry(
+    paths: &crate::config::Paths,
+    cfg: &ConfigData,
+    rel_path: &str,
+    new_name: &str,
+) -> AppResult<()> {
     let target = resolve_rel(paths, rel_path)?;
     let name = new_name.trim();
     if name.is_empty() || name.contains('/') || name.contains('\\') {
@@ -322,6 +339,7 @@ pub fn rename_entry(paths: &crate::config::Paths, rel_path: &str, new_name: &str
         return Err(AppError::Config(format!("{name} already exists")));
     }
     std::fs::rename(&target, &dst)?;
+    commit_push_library(paths, cfg);
     Ok(())
 }
 
@@ -443,12 +461,18 @@ pub(crate) fn count_subtree(dir: &Path) -> DeviceLibrarySummary {
 // commit + push (best-effort, Synced only)
 // ---------------------------------------------------------------------------
 
+/// The git commit message for every library change — one domain constant, so
+/// the log reads "cc-one: library sync" no matter which entry pushed.
+const COMMIT_MSG: &str = "cc-one: library sync";
+
 /// Stage + commit + push any library change (best-effort, Synced only).
 /// Standalone is a no-op — the files already sit in the worktree, nothing to
 /// push. Delegates to sync's commit+push core; push failures are logged there,
 /// not propagated — the next collect/sync round carries the change up.
+/// Called by the change entries themselves ([`upload`] / [`delete_entry`] /
+/// [`rename_entry`]) — not by their callers.
 pub(crate) fn commit_push_library(paths: &crate::config::Paths, cfg: &ConfigData) {
-    crate::sync::commit_and_push_best_effort(paths, cfg, "cc-one: library sync");
+    crate::sync::commit_and_push_best_effort(paths, cfg, COMMIT_MSG);
 }
 
 /// Text-preview cap: files larger than this are not read into the webview

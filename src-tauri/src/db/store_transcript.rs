@@ -380,20 +380,20 @@ impl super::Store {
     /// Sidebar + paginator counts for one grouping track under a filter: the
     /// total session count (drives the paginator and the sidebar's "All" row)
     /// plus per-bucket counts (the group rows). The track selects the group
-    /// column (`local` → `local_group_id`, `synced` → `synced_group_id`);
-    /// every distinct column value becomes a bucket, including the empty
-    /// string (ungrouped) and stale ids whose group was deleted — the client
-    /// resolves those against its known group list. Paging-independent: it
-    /// describes the whole filtered set.
+    /// column ([`GroupTrack::Local`] → `local_group_id`,
+    /// [`GroupTrack::Synced`] → `synced_group_id`); every distinct column
+    /// value becomes a bucket, including the empty string (ungrouped) and
+    /// stale ids whose group was deleted — the client resolves those against
+    /// its known group list. Paging-independent: it describes the whole
+    /// filtered set.
     pub fn count_sessions(
         &self,
         filter: Option<&SessionFilter>,
-        track: &str,
+        track: GroupTrack,
     ) -> AppResult<SessionGroupCounts> {
         let col = match track {
-            "local" => "local_group_id",
-            "synced" => "synced_group_id",
-            other => return Err(AppError::Internal(format!("unknown group track: {other}"))),
+            GroupTrack::Local => "local_group_id",
+            GroupTrack::Synced => "synced_group_id",
         };
         let conn = self.conn.lock().expect("db mutex poisoned");
         let (clause, params_vec) = build_session_where(filter);
@@ -935,7 +935,7 @@ mod tests {
                     search: Some("tokamak".into()),
                     ..Default::default()
                 }),
-                "local",
+                GroupTrack::Local,
             )
             .unwrap();
         assert_eq!(counts.total, 1, "counts see the body hit too");

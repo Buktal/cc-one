@@ -3,6 +3,7 @@
 use tauri::State;
 
 use super::AppState;
+use crate::db::DistinctColumn;
 use crate::error::AppResult;
 use crate::model::{
     DeviceUsageRow, LogsQuery, ModelStatsRow, ProjectCandidates, ProjectUsageRow, SessionUsageRow,
@@ -55,7 +56,7 @@ pub fn query_distinct_sources(
     state: State<'_, AppState>,
     filter: UsageFilter,
 ) -> AppResult<Vec<String>> {
-    state.store.query_distinct("source", &filter)
+    state.store.query_distinct(DistinctColumn::Source, &filter)
 }
 
 #[tauri::command]
@@ -64,7 +65,7 @@ pub fn query_distinct_models(
     state: State<'_, AppState>,
     filter: UsageFilter,
 ) -> AppResult<Vec<String>> {
-    state.store.query_distinct("model", &filter)
+    state.store.query_distinct(DistinctColumn::Model, &filter)
 }
 
 /// Distinct project candidates for the project dropdown (facet semantics —

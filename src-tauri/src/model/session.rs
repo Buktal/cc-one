@@ -359,6 +359,20 @@ pub struct SessionQuery {
     pub offset: u32,
 }
 
+/// The two session grouping tracks — which group column a read (sidebar
+/// counts) or write (group CRUD) addresses. `Local` groups live in
+/// device-private SQLite (`local_group_id`); `Synced` groups ride the
+/// per-device `groups.json` via git (`synced_group_id`). An enum, not a
+/// string: the column behind each track is a fixed map inside the store, and
+/// a mistyped track name should be unrepresentable across the boundary — not
+/// a runtime-rejected magic string.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize, specta::Type)]
+#[serde(rename_all = "snake_case")]
+pub enum GroupTrack {
+    Local,
+    Synced,
+}
+
 /// One sidebar group bucket's session count under the current filter — the
 /// `group_id` is the track's group column value (empty string = ungrouped; a
 /// stale id whose group was deleted counts toward ungrouped, resolved

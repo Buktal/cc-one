@@ -23,7 +23,7 @@ use std::collections::HashSet;
 
 use crate::config::{ConfigData, ConfigStore, Paths};
 use crate::db::Store;
-use crate::error::AppResult;
+use crate::error::{AppError, AppResult};
 use crate::library::LibraryForgetAction;
 use crate::model::{DeviceArtifact, DeviceInfo};
 use crate::synced_doc;
@@ -166,9 +166,9 @@ pub fn iter_data_device_ids(paths: &Paths) -> AppResult<Vec<String>> {
 /// data dir under `repo/data/<id>/`. The local repo filesystem is always
 /// available (even Standalone), so the caller can run this on both the sync
 /// and collect paths. Self is always present.
-fn present_device_ids(paths: &Paths, cfg: &ConfigData) -> HashSet<String> {
+fn present_device_ids(paths: &Paths, self_device_id: &str) -> HashSet<String> {
     let mut present: HashSet<String> = HashSet::new();
-    present.insert(cfg.device_id.clone());
+    present.insert(self_device_id.to_string());
     for a in read_all_device_artifacts(paths) {
         present.insert(a.device_id.clone());
     }
@@ -184,7 +184,9 @@ fn present_device_ids(paths: &Paths, cfg: &ConfigData) -> HashSet<String> {
 /// private `present_device_ids` (self ∪ name artifacts ∪ `repo/data/<id>/`
 /// dirs); ordered here because subtree walks are displayed, self first.
 pub fn known_device_ids(paths: &Paths, cfg: &ConfigData) -> Vec<String> {
-    let mut ids: Vec<String> = present_device_ids(paths, cfg).into_iter().collect();
+    let mut ids: Vec<String> = present_device_ids(paths, &cfg.device_id)
+        .into_iter()
+        .collect();
     ids.sort_by_key(|id| (id != &cfg.device_id, id.clone()));
     ids
 }
@@ -213,7 +215,7 @@ pub fn known_device_ids(paths: &Paths, cfg: &ConfigData) -> Vec<String> {
 pub fn refresh_device_registry(store: &Store, paths: &Paths, cfg: &ConfigData) -> AppResult<()> {
     touch_self(store, cfg)?;
     store.discover_devices_from_usage()?;
-    reconcile_devices(store, paths, cfg)
+    reconcile_devices(store, paths, &cfg.device_id)
 }
 
 /// Purge local device rows Git no longer backs. Git is the source of truth for
@@ -224,16 +226,16 @@ pub fn refresh_device_registry(store: &Store, paths: &Paths, cfg: &ConfigData) -
 /// under `repo/data/<id>/`. The local repo filesystem is always available (even
 /// Standalone), so this runs on both the sync and collect paths — a stale
 /// device is cleaned on the next collect (~30 s via the background scheduler),
-/// not only on a pull. `is_self` is always kept. A failure on one id is logged,
-/// not fatal.
-pub fn reconcile_devices(store: &Store, paths: &Paths, cfg: &ConfigData) -> AppResult<()> {
+/// not only on a pull. `self_device_id` is always kept. A failure on one id is
+/// logged, not fatal.
+pub fn reconcile_devices(store: &Store, paths: &Paths, self_device_id: &str) -> AppResult<()> {
     // Build the set of devices Git still backs.
-    let present = present_device_ids(paths, cfg);
+    let present = present_device_ids(paths, self_device_id);
 
     // Purge dirty rows: local-only devices Git no longer backs. Self is always
     // kept (it's in `present`). A failure on one id is logged, not fatal.
     for id in store.list_device_ids()? {
-        if id == cfg.device_id || present.contains(&id) {
+        if id == self_device_id || present.contains(&id) {
             continue;
         }
         match store.forget_device_local(&id) {
@@ -247,20 +249,30 @@ pub fn reconcile_devices(store: &Store, paths: &Paths, cfg: &ConfigData) -> AppR
 /// Reload the (just-pulled) cloud device registry into the Store, then
 /// reconcile dirty devices. Each registry file upsert is best-effort so one bad
 /// row can't abort the rest. Aliases stay local and are layered on at
-/// `list_devices`. Used by the usage-sync pull path; reconcile itself also
-/// runs on the collect path.
+/// `list_devices`. Used by the sync pull path as the devices domain's import
+/// (the `sync::domains::DOMAINS` table points here); reconcile itself also
+/// runs on the collect path. Takes only `self_device_id` — this half of the
+/// registry never needs the rest of the config.
+///
+/// Returns the number of registry rows loaded from the pulled name artifacts
+/// (the devices domain's `imported` count; a re-pull recounts unchanged rows —
+/// the upsert dedupes, the count reports volume, not novelty).
 pub(crate) fn reload_devices_into_store(
     store: &Store,
     paths: &Paths,
-    cfg: &ConfigData,
-) -> AppResult<()> {
-    for a in read_all_device_artifacts(paths) {
-        let is_self = is_self(cfg, &a.device_id);
+    self_device_id: &str,
+) -> AppResult<u32> {
+    let artifacts = read_all_device_artifacts(paths);
+    let loaded = artifacts.len() as u32;
+    for a in artifacts {
+        // The `is_self` rule (self id comparison, re-derived per call site).
+        let is_self = a.device_id == self_device_id;
         if let Err(e) = store.upsert_device(&a.device_id, &a.display_name, is_self) {
             eprintln!("[cc-one] device reload skipped {}: {e}", a.device_id);
         }
     }
-    reconcile_devices(store, paths, cfg)
+    reconcile_devices(store, paths, self_device_id)?;
+    Ok(loaded)
 }
 
 // ---------------- Naming layer ----------------
@@ -430,19 +442,32 @@ fn remove_device_artifact_file(paths: &Paths, device_id: &str) {
 /// `forget_device_local_is_undone_by_a_pull_that_restores_the_snapshot`
 /// 无 git 固化）。遗忘要落地，靠下一次 commit_all 把工作树删除提交推上远端。
 ///
-/// `peer_name` is the peer's captured alias/name, grabbed by the caller BEFORE
-/// this runs — the migrate target folder is named after it (`from-<name>`).
-/// The caller MUST guard `is_self` (this device is never forgettable); the
-/// command layer enforces it, mirroring `db::Store::forget_device_local`'s own
-/// caller-guard contract.
+/// The peer's migrate-target folder is named after its LOCAL alias, captured
+/// here BEFORE the alias map is dropped (`from-<name>`; an empty alias falls
+/// back to the device id, per `library`'s folder-name rule) — so callers hand
+/// over only `(device_id, library_action)` and cannot forget to snapshot the
+/// name first. Self is NOT forgettable: the `is_self` guard lives HERE, at
+/// the registry lifecycle entry (this device is renamed, never forgotten), so
+/// no caller can bypass it. `db::Store::forget_device_local` keeps its own
+/// caller-guard contract because the Store has no config access to check
+/// with; this layer does.
 pub fn forget_device(
     store: &Store,
     config: &ConfigStore,
     paths: &Paths,
     device_id: &str,
     library_action: LibraryForgetAction,
-    peer_name: &str,
 ) -> AppResult<()> {
+    let cfg = config.get();
+    // A hard error BEFORE anything is dropped — forgetting self would erase
+    // this device's own footprint.
+    if is_self(&cfg, device_id) {
+        return Err(AppError::Config(
+            "this device cannot be removed (rename it instead)".into(),
+        ));
+    }
+    // Capture the peer's alias before the alias map is dropped (see doc).
+    let peer_name = cfg.device_names.get(device_id).cloned().unwrap_or_default();
     // Hard errors: registry row + alias map. Abort the whole forget if either
     // fails — a half-forgotten device would leave the registry inconsistent.
     store.forget_device_local(device_id)?;
@@ -460,7 +485,7 @@ pub fn forget_device(
         &config.get(),
         device_id,
         library_action,
-        peer_name,
+        &peer_name,
     ) {
         eprintln!(
             "[cc-one] forget_device: library {:?} failed: {e}",
@@ -492,11 +517,6 @@ mod tests {
         let data_peer = "bbbbbbbbbbbb"; // backed by a repo/data/<id>/ dir
         let ghost = "cccccccccccc"; // local-only: no git presence
 
-        let cfg = crate::config::ConfigData {
-            device_id: self_id.into(),
-            ..Default::default()
-        };
-
         // Seed all four into the local registry.
         for id in [self_id, live_peer, data_peer, ghost] {
             store.upsert_device(id, "name", id == self_id).unwrap();
@@ -508,7 +528,7 @@ mod tests {
         std::fs::create_dir_all(paths.device_data_dir(data_peer)).unwrap();
         // ghost: intentionally nothing in git.
 
-        reload_devices_into_store(&store, &paths, &cfg).unwrap();
+        reload_devices_into_store(&store, &paths, self_id).unwrap();
 
         let ids = store.list_device_ids().unwrap();
         assert!(ids.iter().any(|i| i == self_id), "self always kept");
@@ -884,7 +904,6 @@ mod tests {
             &paths,
             peer,
             crate::library::LibraryForgetAction::Delete,
-            "Old Peer",
         )
         .unwrap();
 
@@ -902,5 +921,45 @@ mod tests {
             "name artifact removed"
         );
         assert!(!peer_lib.exists(), "library subtree deleted");
+        // The captured alias (removed from the map by the forget) named the
+        // migrate folder on Migrate; under Delete it is simply dropped.
+    }
+
+    /// The `is_self` guard lives at the domain entry: forgetting THIS device
+    /// is a hard error taken BEFORE any drop, so a caller cannot erase this
+    /// device's own footprint.
+    #[test]
+    fn forget_device_rejects_self() {
+        let tmp = tempfile::tempdir().unwrap();
+        let paths = Paths::resolve(tmp.path());
+        std::fs::create_dir_all(&paths.repo_config).unwrap();
+        let store = crate::db::Store::open(std::path::Path::new(":memory:")).unwrap();
+
+        let self_id = "0123456789ab";
+        let config = config_store_at(
+            tmp.path(),
+            ConfigData {
+                device_id: self_id.into(),
+                ..Default::default()
+            },
+        );
+        store.upsert_device(self_id, "self", true).unwrap();
+
+        let err = forget_device(
+            &store,
+            &config,
+            &paths,
+            self_id,
+            crate::library::LibraryForgetAction::Delete,
+        );
+        assert!(err.is_err(), "this device is never forgettable");
+        assert!(
+            store
+                .list_device_ids()
+                .unwrap()
+                .iter()
+                .any(|i| i == self_id),
+            "the guard fires before anything is dropped"
+        );
     }
 }
