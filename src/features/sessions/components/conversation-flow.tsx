@@ -57,7 +57,7 @@ import {
   ownsFlowRow,
   toolSummary,
 } from "../conversation"
-import { firstLine } from "../derive"
+import { firstLine } from "../transcript"
 import { MarkdownContent, ToolContent } from "./markdown-content"
 
 export interface ConversationFlowProps {
@@ -68,7 +68,7 @@ export interface ConversationFlowProps {
   virtuosoRef: RefObject<VirtuosoHandle | null>
   onRangeChanged: (range: { startIndex: number }) => void
   /** Row open-state predicate (uuid × role → open), shared with the bulk
-   *  collapse toggle — see derive.ts isRowOpen for the xor rule. */
+   *  collapse toggle — see transcript.ts isRowOpen for the xor rule. */
   isOpen: (uuid: string, role: string) => boolean
   onToggle: (uuid: string) => void
   flashUuid: string | null
@@ -228,7 +228,7 @@ function FlowRow({
           textOpen={isOpen(m.uuid, m.role)}
           // 工具列表的开合复用同一张 collapsed 集合的 xor 语义：助手 uuid 以
           // "tool" 角色读取 = 默认收起、命中即开（与单工具行同一默认，见
-          // derive.roleDefaultsCollapsed）——虚拟化卸载后状态仍在父级。
+          // transcript.roleDefaultsCollapsed）——虚拟化卸载后状态仍在父级。
           toolsOpen={isOpen(m.uuid, "tool")}
           onToolsListToggle={() => onToggle(m.uuid)}
           flash={flash}
@@ -361,8 +361,8 @@ function AssistantRow({
 }
 
 /** One attached tool call — the `Write · path` title row with the arguments
- *  behind a click. Collapsed by default (the xor rule in derive.ts: tool rows
- *  default collapsed); the expanded body pretty-prints the JSON input. */
+ *  behind a click. Collapsed by default (the xor rule in transcript.ts: tool
+ *  rows default collapsed); the expanded body pretty-prints the JSON input. */
 function ToolBlock({
   tool,
   open,

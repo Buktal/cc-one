@@ -57,6 +57,8 @@ import type {
   SessionMessage,
   SessionRow,
 } from "@/types/generated/bindings"
+import { highlight } from "../highlight"
+import { sessionSourceLabel } from "../source-labels"
 import {
   collapseAllMessages,
   expandAllMessages,
@@ -64,9 +66,7 @@ import {
   isAllCollapsed,
   isRowOpen,
   transcriptMatches,
-} from "../derive"
-import { highlight } from "../highlight"
-import { sessionSourceLabel } from "../source-labels"
+} from "../transcript"
 import { initialTurnNav, reduceTurnNav, turnAnchors } from "../turn-nav"
 import { initialTurnSearch, reduceTurnSearch } from "../turn-search"
 import { useSessionTitleRename } from "../use-sessions-browser"
@@ -158,13 +158,13 @@ export function SessionDetail(props: SessionDetailProps) {
     })
   }, [])
   // Row open-state is "in the set" xor "defaults to collapsed" — the same xor
-  // rule the bulk toggle's end states come from (derive.ts, tested), so both
-  // sides share the one predicate.
+  // rule the bulk toggle's end states come from (transcript.ts, tested), so
+  // both sides share the one predicate.
   const isOpen = useCallback(
     (uuid: string, role: string) => isRowOpen(uuid, role, collapsed),
     [collapsed],
   )
-  // Bulk collapse / expand — the end-state sets come from derive (the
+  // Bulk collapse / expand — the end-state sets come from transcript (the
   // membership-is-opposite-of-default rule lives there, tested). The toggle
   // flips between the two ends, so its label follows the current state.
   const allCollapsed = isAllCollapsed(transcript, collapsed)

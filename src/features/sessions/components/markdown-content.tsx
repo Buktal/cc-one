@@ -17,7 +17,7 @@ import ReactMarkdown from "react-markdown"
 import rehypeHighlight from "rehype-highlight"
 import remarkBreaks from "remark-breaks"
 import remarkGfm from "remark-gfm"
-import { tryFormatJson } from "../derive"
+import { tryFormatJson } from "../transcript"
 
 /** A rendered message body. Memoized — the transcript is virtualized, so
  *  rows unmount and remount while scrolling; identical text must not re-parse. */

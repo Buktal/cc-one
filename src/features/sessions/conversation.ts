@@ -18,7 +18,7 @@
 
 import type { SessionMessage } from "@/types/generated/bindings"
 
-import { firstLine } from "./derive"
+import { firstLine } from "./transcript"
 import { turnAnchors } from "./turn-nav"
 
 /** One rendered block inside a turn: either a text row (user-adjacent system /
