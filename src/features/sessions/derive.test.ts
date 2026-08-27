@@ -30,6 +30,7 @@ import {
   nestSubagents,
   nextFavValue,
   parseTreeSelectValue,
+  planNeighborStep,
   projectFilterOfIdentity,
   projectNodes,
   reorderGroupIds,
@@ -37,6 +38,7 @@ import {
   type SessionScopeSpec,
   sessionSpecId,
   sessionTabFilter,
+  settleNeighborStep,
   type TreeSelectAction,
   tokensHitRate,
   treeSelectValue,
@@ -406,6 +408,129 @@ describe("neighborNav", () => {
     expect(neighborNav(rows(5), null, 0, 20, 5)).toEqual({
       canPrev: false,
       canNext: false,
+    })
+  })
+})
+
+// ---------------------------------- neighbor stepping (架构审查Ⅳ候选⑬) ----
+// The page-edge walk the detail sheet's prev/next runs: plan the step, flip
+// the page, settle the pending step when the new page's data lands. The three
+// invariants — open only after the new page's data lands, drop the pending
+// step when the user switches rows mid-load, clamp at the list ends — are
+// pinned here on the exact functions the hook calls.
+
+describe("planNeighborStep", () => {
+  const page = (n: number, start = 0): SessionRow[] =>
+    Array.from({ length: n }, (_, i) => row({ id: `s${start + i}` }))
+  const key = (id: string) => favKey({ device_id: "dev-self", id })
+
+  it("an adjacent row on the visible page opens directly", () => {
+    const rows = page(5)
+    expect(planNeighborStep(rows, key("s2"), 1, 0, 20, 5)).toEqual({
+      kind: "in-page",
+      target: rows[3],
+    })
+    expect(planNeighborStep(rows, key("s2"), -1, 0, 20, 5)).toEqual({
+      kind: "in-page",
+      target: rows[1],
+    })
+  })
+
+  it("a page edge with a page beyond plans the flip and registers the pending step", () => {
+    // Last row of page 1 (20 per page, 45 total): next flips to page 2, and
+    // the pending step remembers the row it left from (the hijack guard).
+    expect(planNeighborStep(page(20), key("s19"), 1, 0, 20, 45)).toEqual({
+      kind: "page-edge",
+      pending: { delta: 1, fromKey: key("s19") },
+    })
+    // First row of page 2: prev flips back to page 1 the same way.
+    expect(planNeighborStep(page(20, 20), key("s20"), -1, 20, 20, 45)).toEqual({
+      kind: "page-edge",
+      pending: { delta: -1, fromKey: key("s20") },
+    })
+  })
+
+  it("the ends clamp the plan (nowhere to step)", () => {
+    const rows = page(5)
+    // Last row of the last page: no next.
+    expect(planNeighborStep(rows, key("s4"), 1, 0, 20, 5)).toEqual({
+      kind: "stalled",
+    })
+    // First row of the first page: no prev.
+    expect(planNeighborStep(rows, key("s0"), -1, 0, 20, 5)).toEqual({
+      kind: "stalled",
+    })
+  })
+
+  it("never plans past a boundary neighborNav disables (same source)", () => {
+    const rows = page(5)
+    for (const [k, offset, total] of [
+      [key("s0"), 0, 5],
+      [key("s4"), 0, 5],
+      [key("s2"), 0, 5],
+      [key("s0"), 20, 45],
+      [key("s4"), 20, 45],
+    ] as const) {
+      const nav = neighborNav(rows, k, offset, 20, total)
+      const fwd = planNeighborStep(rows, k, 1, offset, 20, total)
+      const back = planNeighborStep(rows, k, -1, offset, 20, total)
+      if (fwd.kind !== "stalled") expect(nav.canNext).toBe(true)
+      if (back.kind !== "stalled") expect(nav.canPrev).toBe(true)
+    }
+  })
+
+  it("a preview off the visible page (filter changed mid-session) stalls", () => {
+    const rows = page(5)
+    expect(planNeighborStep(rows, key("s99"), 1, 0, 20, 5)).toEqual({
+      kind: "stalled",
+    })
+    expect(planNeighborStep(rows, null, -1, 0, 20, 5)).toEqual({
+      kind: "stalled",
+    })
+  })
+})
+
+describe("settleNeighborStep", () => {
+  const page = (n: number, start = 0): SessionRow[] =>
+    Array.from({ length: n }, (_, i) => row({ id: `s${start + i}` }))
+  const key = (id: string) => favKey({ device_id: "dev-self", id })
+
+  it("opens only once the new page's data landed — next takes the first row, prev the last", () => {
+    const page2 = page(20, 20)
+    expect(
+      settleNeighborStep({ delta: 1, fromKey: key("s19") }, key("s19"), page2),
+    ).toEqual({ kind: "open", target: page2[0] })
+    const page1 = page(20)
+    expect(
+      settleNeighborStep({ delta: -1, fromKey: key("s20") }, key("s20"), page1),
+    ).toEqual({ kind: "open", target: page1[page1.length - 1] })
+  })
+
+  it("the flipped-to page still loading waits (pending stays registered)", () => {
+    expect(
+      settleNeighborStep({ delta: 1, fromKey: key("s19") }, key("s19"), []),
+    ).toEqual({ kind: "wait" })
+  })
+
+  it("a mid-load row switch drops the pending step instead of hijacking the selection", () => {
+    const page2 = page(20, 20)
+    // The user clicked another row while the page loaded — fromKey no longer
+    // matches, the step is discarded.
+    expect(
+      settleNeighborStep({ delta: 1, fromKey: key("s19") }, key("s25"), page2),
+    ).toEqual({ kind: "drop" })
+    // ...or the sheet was closed altogether.
+    expect(
+      settleNeighborStep({ delta: 1, fromKey: key("s19") }, null, page2),
+    ).toEqual({ kind: "drop" })
+  })
+
+  it("a full page-edge walk: plan on page 1, settle opens page 2's first row", () => {
+    const plan = planNeighborStep(page(20), key("s19"), 1, 0, 20, 45)
+    if (plan.kind !== "page-edge") throw new Error("expected a page-edge plan")
+    expect(settleNeighborStep(plan.pending, key("s19"), page(20, 20))).toEqual({
+      kind: "open",
+      target: row({ id: "s20" }),
     })
   })
 })

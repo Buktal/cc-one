@@ -29,7 +29,6 @@ import {
   useSessionCountsQuery,
   useSessionStatsQuery,
   useSessionTranscriptQuery,
-  useSetSessionCustomTitleMutation,
   useSetSessionFavoritedMutation,
   useSetSessionLocalGroupMutation,
   useSetSessionSyncedGroupMutation,
@@ -63,10 +62,13 @@ import {
   neighborNav,
   nestSubagents,
   nextFavValue,
+  type PendingNeighborStep,
+  planNeighborStep,
   projectFilterOfIdentity,
   projectNodes,
   resolveContainer,
   type SessionScopeSpec,
+  settleNeighborStep,
   type TreeTrack,
   trackUniverseTab,
   withFavOverride,
@@ -82,52 +84,6 @@ const TRACK_KEY = "cc-one:sessions-track"
 /** Persisted page-size key — the center list's per-page density (三栏定稿：
  *  每页 20/50/100) survives restarts. */
 const PAGE_SIZE_KEY = "cc-one:sessions-page-size"
-
-/** Title-rename 状态的单一归属（架构扫描候选⑨c）：详情头部的就地
- *  管理「编辑中 / 草稿 / 提交」，不再经 useSessionsBrowser → SessionDetail
- *  → SessionHeader 逐层传递六个 props。rename mutation 与 toast 策略在此
- *  自己拿（RTK hooks 全局缓存 + useMutateWithToast 每次挂载独立，无共享态）。 */
-export function useSessionTitleRename(session: SessionRow | null) {
-  const [editTitle, setEditTitle] = useState(false)
-  const [titleDraft, setTitleDraft] = useState("")
-  const [customTitleMut] = useSetSessionCustomTitleMutation()
-  const runWithToast = useMutateWithToast()
-
-  function startEditTitle(): void {
-    if (!session) return
-    setEditTitle(true)
-    setTitleDraft(session.title)
-  }
-  function cancelEditTitle(): void {
-    setEditTitle(false)
-  }
-  async function commitEditTitle(): Promise<void> {
-    if (!session) return
-    const name = titleDraft.trim()
-    // Empty draft = revert to the original title (clears the custom override).
-    if (!name || name === session.title) {
-      setEditTitle(false)
-      return
-    }
-    const ok = await runWithToast(
-      customTitleMut,
-      { id: session.id, deviceId: session.device_id, title: name },
-      {
-        success: { key: "sessions.toast.renamed" },
-        failed: { key: "sessions.toast.failed" },
-      },
-    )
-    if (ok) setEditTitle(false)
-  }
-  return {
-    editTitle,
-    titleDraft,
-    setTitleDraft,
-    startEditTitle,
-    cancelEditTitle,
-    commitEditTitle,
-  }
-}
 
 export function useSessionsBrowser() {
   const { t } = useTranslation()
@@ -452,13 +408,13 @@ export function useSessionsBrowser() {
   useSessionJumpConsumer(setPreview)
 
   // ---- detail sheet: prev / next session navigation ----
-  // Walks the currently visible page (±1 row). At a page edge the step pages
-  // into the adjacent page and opens its target row (next → first row of the
-  // next page, prev → last row of the previous page) once the new page's data
-  // lands — see the pendingNeighbor effect below.
-  const pendingNeighbor = useRef<{ delta: 1 | -1; fromKey: string } | null>(
-    null,
-  )
+  // Walks the currently visible page (±1 row); at a page edge it pages into
+  // the adjacent page and opens its target row once the new page's data
+  // lands. The decisions live in ./derive (planNeighborStep /
+  // settleNeighborStep — the stepping invariants are unit-tested there); this
+  // hook only registers the pending step, shifts pages, and consumes the
+  // settlement when the list data changes.
+  const pendingNeighbor = useRef<PendingNeighborStep | null>(null)
   const neighbor = useMemo(
     () =>
       neighborNav(
@@ -472,36 +428,36 @@ export function useSessionsBrowser() {
   )
 
   function openNeighbor(delta: 1 | -1): void {
-    if (!preview) return
-    const idx = visibleSessions.findIndex((s) => favKey(s) === favKey(preview))
-    if (idx === -1) return // preview left the visible page (filter changed)
-    const target = visibleSessions[idx + delta]
-    if (target) {
-      setPreview(target)
-      return
+    const step = planNeighborStep(
+      visibleSessions,
+      previewKey ? favKey(previewKey) : null,
+      delta,
+      browser.offset,
+      pageSize,
+      viewCounts.total,
+    )
+    if (step.kind === "in-page") {
+      setPreview(step.target)
+    } else if (step.kind === "page-edge") {
+      pendingNeighbor.current = step.pending
+      browser.shiftPages(delta)
     }
-    // Page edge with a page beyond it: flip the page, open the target row
-    // when the new data arrives. Bounded by neighborNav's canPrev/canNext, so
-    // the button is disabled when there is nowhere to go.
-    pendingNeighbor.current = { delta, fromKey: favKey(preview) }
-    browser.shiftPages(delta)
   }
 
-  // Consume the pending page-edge step when the new page's data lands. Guarded
-  // by fromKey: if the user switched to another row while the page loaded, the
-  // pending step is dropped instead of hijacking their selection.
+  // Consume the pending page-edge step when the new page's data lands (the
+  // open / drop / wait rules live in settleNeighborStep).
   // biome-ignore lint/correctness/useExhaustiveDependencies: intentional — setPreview is stable (reads refs only); adding it would re-run the effect every render
   useEffect(() => {
     const p = pendingNeighbor.current
     if (!p) return
-    if (!previewKey || favKey(previewKey) !== p.fromKey) return
-    const target =
-      p.delta === 1
-        ? visibleSessions[0]
-        : visibleSessions[visibleSessions.length - 1]
-    if (!target) return // new page still loading — wait for the next change
+    const settled = settleNeighborStep(
+      p,
+      previewKey ? favKey(previewKey) : null,
+      visibleSessions,
+    )
+    if (settled.kind === "wait") return
     pendingNeighbor.current = null
-    setPreview(target)
+    if (settled.kind === "open") setPreview(settled.target)
   }, [visibleSessions, previewKey])
 
   // 设备标签面（架构审查候选⑥）：标签与选项表来自共享 lib/device-labels，本域

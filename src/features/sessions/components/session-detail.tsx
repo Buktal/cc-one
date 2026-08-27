@@ -8,15 +8,16 @@
 // 一行（默认展开）；AI 卡整体不可折叠——卡内工具列表默认收起（徽标右侧箭
 // 头总开关），单工具再各自展开。Esc / ← 返回容器态（onClose）。
 //
-// Pure rendering — all state + queries live in useSessionsBrowser. The only
-// local state here is transient UI interaction that does not belong in the
-// hook: the per-message collapse map (lifted out of the rows because the
-// virtualized list unmounts off-screen rows and would lose per-row state) and
-// the turn-nav bookkeeping (useTurnNav). The timeline is virtualized
-// (react-virtuoso): only the rows near the viewport are in the DOM, so a
-// multi-thousand-message session stays fast no matter how long it grows.
-// Virtuoso measures each row's height dynamically, so collapsing a bubble
-// re-lays the list without any manual bookkeeping.
+// Rendering + the detail-local state machines. The list / scope / paging /
+// mutation wiring lives in useSessionsBrowser; this file owns what only the
+// detail sheet needs: the title-rename editor state (useSessionTitleRename —
+// its only consumer is SessionHeader), the per-message collapse map (lifted
+// out of the rows because the virtualized list unmounts off-screen rows and
+// would lose per-row state) and the turn-nav bookkeeping (useTurnNav). The
+// timeline is virtualized (react-virtuoso): only the rows near the viewport
+// are in the DOM, so a multi-thousand-message session stays fast no matter
+// how long it grows. Virtuoso measures each row's height dynamically, so
+// collapsing a bubble re-lays the list without any manual bookkeeping.
 
 import {
   ArrowLeft,
@@ -40,6 +41,7 @@ import {
 } from "react"
 import { useTranslation } from "react-i18next"
 import type { VirtuosoHandle } from "react-virtuoso"
+import { useSetSessionCustomTitleMutation } from "@/app/store/api"
 import { FilterSelect } from "@/components/filter-select"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
@@ -50,6 +52,7 @@ import {
   TooltipContent,
   TooltipTrigger,
 } from "@/components/ui/tooltip"
+import { useMutateWithToast } from "@/hooks/use-toast-mutation"
 import { formatTime } from "@/lib/format"
 import { cn } from "@/lib/utils"
 import type {
@@ -69,7 +72,6 @@ import {
 } from "../transcript"
 import { initialTurnNav, reduceTurnNav, turnAnchors } from "../turn-nav"
 import { initialTurnSearch, reduceTurnSearch } from "../turn-search"
-import { useSessionTitleRename } from "../use-sessions-browser"
 import { ConversationFlow } from "./conversation-flow"
 
 /** How far below the transcript's top a jumped-to user turn lands. */
@@ -227,6 +229,52 @@ export function SessionDetail(props: SessionDetailProps) {
       />
     </div>
   )
+}
+
+/** Title-rename 的就地状态机（架构审查Ⅳ候选⑬：从 use-sessions-browser 迁
+ *  居唯一消费者同侧——此前 detail 关注点从浏览器宿主出口逃逸，本文件反向
+ *  import 浏览器 hook）。管理「编辑中 / 草稿 / 提交」三态；rename mutation
+ *  与 toast 策略在此自己拿（RTK hooks 全局缓存 + useMutateWithToast 每次挂
+ *  载独立，无共享态）。空草稿或与现标题相同 = 放弃编辑，不落任何写入。 */
+function useSessionTitleRename(session: SessionRow) {
+  const [editTitle, setEditTitle] = useState(false)
+  const [titleDraft, setTitleDraft] = useState("")
+  const [customTitleMut] = useSetSessionCustomTitleMutation()
+  const runWithToast = useMutateWithToast()
+
+  function startEditTitle(): void {
+    if (!session) return
+    setEditTitle(true)
+    setTitleDraft(session.title)
+  }
+  function cancelEditTitle(): void {
+    setEditTitle(false)
+  }
+  async function commitEditTitle(): Promise<void> {
+    if (!session) return
+    const name = titleDraft.trim()
+    if (!name || name === session.title) {
+      setEditTitle(false)
+      return
+    }
+    const ok = await runWithToast(
+      customTitleMut,
+      { id: session.id, deviceId: session.device_id, title: name },
+      {
+        success: { key: "sessions.toast.renamed" },
+        failed: { key: "sessions.toast.failed" },
+      },
+    )
+    if (ok) setEditTitle(false)
+  }
+  return {
+    editTitle,
+    titleDraft,
+    setTitleDraft,
+    startEditTitle,
+    cancelEditTitle,
+    commitEditTitle,
+  }
 }
 
 /**

@@ -1,12 +1,13 @@
 // Pure derivations for the sessions browser — the LIST surface only: the
 // tab/track → backend filter assembly and its cache key, the container-
 // selection union (which bucket the workbench is looking at), the workbench's
-// stats aggregates, and the favorites' optimistic-override math. Extracted
-// from the hook so each rule is testable in isolation (architecture.md:
-// "关键不变量用代码表达") — the hook wires these to React state + RTK Query,
-// these own the math. The transcript detail view has its own modules
-// (./transcript, turn-nav.ts, turn-search.ts, conversation.ts) and does not
-// read from here.
+// stats aggregates, the favorites' optimistic-override math, and the detail
+// sheet's prev/next neighbor stepping (canPrev/canNext plus the page-edge
+// step plan and its settlement). Extracted from the hook so each rule is
+// testable in isolation (architecture.md: "关键不变量用代码表达") — the hook
+// wires these to React state + RTK Query, these own the math. The transcript
+// detail view has its own modules (./transcript, turn-nav.ts, turn-search.ts,
+// conversation.ts) and does not read from here.
 
 import {
   FILTER_DIMENSIONS,
@@ -293,6 +294,90 @@ export function neighborNav(
     canPrev: idx > 0 || offset > 0,
     canNext: idx < rows.length - 1 || offset + pageSize < totalCount,
   }
+}
+
+/**
+ * A registered page-edge step: the direction, plus the favKey of the row the
+ * user was on when the step was requested. That key is the hijack guard —
+ * settleNeighborStep only opens the target while the user still sits on the
+ * row the step left from.
+ */
+export interface PendingNeighborStep {
+  delta: 1 | -1
+  fromKey: string
+}
+
+/** What an "open neighbor" click (detail sheet prev/next) must do —
+ *  planNeighborStep's single decision surface. */
+export type NeighborStepPlan =
+  | { kind: "in-page"; target: SessionRow }
+  | { kind: "page-edge"; pending: PendingNeighborStep }
+  | { kind: "stalled" }
+
+/**
+ * Decide what a neighbor step must do. The three stepping invariants, one per
+ * branch:
+ *
+ * 1. An adjacent row on the visible page opens directly (`in-page`).
+ * 2. A page edge with another page beyond it plans a page flip (`page-edge`):
+ *    the target row (next page's first / previous page's last) does not exist
+ *    until the new page's data lands, so the caller registers `pending` and
+ *    shifts pages; settleNeighborStep opens the target on arrival.
+ * 3. Nowhere to go → `stalled`. The boundary rule stays neighborNav's single
+ *    source (the buttons disable from its canPrev/canNext); planning consults
+ *    the same flags, so a step is never planned past the ends even if a
+ *    caller bypasses the disabled state.
+ *
+ * A preview key that is not on the visible page (filter changed mid-session)
+ * also stalls — stepping only walks the currently visible list.
+ */
+export function planNeighborStep(
+  rows: readonly SessionRow[],
+  previewKey: string | null,
+  delta: 1 | -1,
+  offset: number,
+  pageSize: number,
+  totalCount: number,
+): NeighborStepPlan {
+  const nav = neighborNav(rows, previewKey, offset, pageSize, totalCount)
+  if (!previewKey || !(delta === 1 ? nav.canNext : nav.canPrev)) {
+    return { kind: "stalled" }
+  }
+  const idx = rows.findIndex((s) => favKey(s) === previewKey)
+  const target = rows[idx + delta]
+  if (target) return { kind: "in-page", target }
+  return { kind: "page-edge", pending: { delta, fromKey: previewKey } }
+}
+
+/** How a pending page-edge step resolves once new list data lands —
+ *  settleNeighborStep's single decision surface. */
+export type NeighborStepSettlement =
+  | { kind: "open"; target: SessionRow }
+  | { kind: "drop" }
+  | { kind: "wait" }
+
+/**
+ * Resolve a pending page-edge step against the freshly landed page data — the
+ * "open only after the new page's data arrives" half of the stepping
+ * invariants:
+ *
+ * - The user still sits on the row the step left from (`previewKey ===
+ *   pending.fromKey`) and the new page carries rows → `open` its edge row
+ *   (next → first row, prev → last row). The caller consumes the pending step.
+ * - The user switched to another row while the page loaded (`previewKey` null
+ *   or different) → `drop`: the pending step must not hijack their selection.
+ * - The flipped-to page has not landed yet (matching key, no rows) → `wait`:
+ *   keep the pending step registered for the next data change.
+ */
+export function settleNeighborStep(
+  pending: PendingNeighborStep,
+  previewKey: string | null,
+  rows: readonly SessionRow[],
+): NeighborStepSettlement {
+  if (!previewKey || previewKey !== pending.fromKey) return { kind: "drop" }
+  const target = pending.delta === 1 ? rows[0] : rows[rows.length - 1]
+  if (!target) return { kind: "wait" }
+  return { kind: "open", target }
 }
 
 // --------------------------------------------------------------- favorites --
