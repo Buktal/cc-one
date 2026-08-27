@@ -1,6 +1,5 @@
 //! Usage-record / turn-duration ingest + incremental scan cursors.
 
-use super::schema;
 use super::store_dirty_days::mark_days_dirty;
 use super::*;
 
@@ -67,10 +66,12 @@ impl super::Store {
         let mut conn = self.conn.lock().expect("db mutex poisoned");
         let tx = conn.transaction()?;
 
-        // Column list and placeholder count derive from the schema constant, so
-        // a column added to `schema::USAGE_RECORDS_COLNAMES` cannot silently
-        // leave this INSERT stale (single source of truth).
-        let cols = schema::USAGE_RECORDS_COLNAMES;
+        // Column list, placeholder count and the row binds all come from the
+        // row wire-protocol home `usage_records_io`: a column added to its
+        // `USAGE_RECORDS_COLNAMES` updates this INSERT's projection
+        // automatically, and `bind`'s fixed-size return (length derived from
+        // that same list) turns a missing bind value into a compile error.
+        let cols = usage_records_io::USAGE_RECORDS_COLNAMES;
         let placeholders = (1..=cols.split(',').count())
             .map(|i| format!("?{i}"))
             .collect::<Vec<_>>()
@@ -101,29 +102,7 @@ impl super::Store {
             let landed: Option<String> = tx
                 .query_row(
                     &insert_sql,
-                    params![
-                        r.uuid,
-                        r.timestamp,
-                        r.day,
-                        r.model,
-                        r.pricing_model,
-                        r.source,
-                        r.session_id,
-                        r.device_id,
-                        r.tokens.input as i64,
-                        r.tokens.output as i64,
-                        r.tokens.cache_creation as i64,
-                        r.tokens.cache_read as i64,
-                        serde_json::to_string(&r.server_tool_use).unwrap_or_else(|_| "{}".into()),
-                        r.stop_reason,
-                        r.service_tier,
-                        r.iterations as i64,
-                        r.cost.input_usd.to_string(),
-                        r.cost.output_usd.to_string(),
-                        r.cost.cache_read_usd.to_string(),
-                        r.cost.cache_creation_usd.to_string(),
-                        r.cost.total_usd.to_string(),
-                    ],
+                    params_from_iter(usage_records_io::bind(r)),
                     |row| row.get::<_, String>(0),
                 )
                 .optional()?;
@@ -534,14 +513,17 @@ mod tests {
         assert_eq!(s.ingest(std::slice::from_ref(&a)).unwrap().len(), 0);
     }
 
-    /// The three hand-written column positions (the INSERT, the per-day SELECT,
-    /// and `row_to_usage_record`'s positional reads) must stay aligned with the
-    /// schema constant — a column added there but missed in one spot silently
-    /// misaligns the positional reads (single source of truth). This round-trips
-    /// a full sentinel row through the PRODUCTION paths (`ingest_marking_dirty`
-    /// → `usage_for_day_device`), so every field is compared non-trivially:
-    /// any drift (missing column, swapped order, off-by-one index) breaks the
-    /// equality instead of being papered over by defaults.
+    /// Column alignment is no longer this test's job: the column list, the
+    /// INSERT binds and the row decode co-live in `usage_records_io`
+    /// (`USAGE_RECORDS_COLNAMES` + `bind` + `decode`), and `bind`'s fixed-size
+    /// return makes a count mismatch a compile error while the struct-literal
+    /// exhaustiveness of `decode` pins field coverage. What still needs a
+    /// runtime guard is the wire formats' SEMANTICS across the real production
+    /// paths — this round-trips a full sentinel row through
+    /// `ingest_marking_dirty` → `usage_for_day_device` so every field is
+    /// compared non-trivially: any encode/decode asymmetry (Decimal⇄TEXT,
+    /// `server_tool_use` JSON, u32⇄i64 casts, swap) breaks the equality instead
+    /// of being papered over by defaults.
     #[test]
     fn usage_row_roundtrips_through_production_paths() {
         let s = mem();

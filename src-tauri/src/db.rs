@@ -30,6 +30,7 @@ mod store_providers;
 mod store_reads;
 mod store_sessions;
 mod store_transcript;
+mod usage_records_io;
 
 #[cfg(test)]
 pub(crate) mod testutil;

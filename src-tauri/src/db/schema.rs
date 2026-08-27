@@ -3,22 +3,26 @@
 //! Every table's column DDL lives here as a Rust constant. [`schema_tables_sql`]
 //! assembles the `CREATE TABLE IF NOT EXISTS ...` batch that [`Store::open`]
 //! runs on every open, and the per-table column-name lists feed
-//! `migrate_to_composite_pk`'s rebuild. **Adding (or dropping) a column is a
-//! single edit here** — there is no parallel `.sql` file to keep in sync
-//! (`db_schema.sql` was retired when this module became the source of truth;
-//! the human-readable documentation lives in these doc comments).
+//! `migrate_to_composite_pk`'s rebuild. **Adding (or dropping) a column starts
+//! with a single edit here** (the DDL) — there is no parallel `.sql` file to
+//! keep in sync (`db_schema.sql` was retired when this module became the source
+//! of truth; the human-readable documentation lives in these doc comments).
+//! Exception: `usage_records`' column *list* (the row wire protocol) lives with
+//! its bind/decode in [`super::usage_records_io`] — position is row-I/O
+//! knowledge, not table shape — and that module's compile-time arity check plus
+//! the `rebuild_constants_in_sync` test below tie it back to the DDL here.
 //!
 //! [`Store::open`]: super::Store::open
 
 // ---- Tables that migrate_to_composite_pk rebuilds (uuid → uuid + device_id) ----
 //
-// Each of these exposes two constants:
-//   * `<T>_COLS_DDL`    — column definitions incl. `PRIMARY KEY (...)`, used as
-//                        `rebuild_table_pk`'s `new_ddl`.
-//   * `<T>_COLNAMES`    — comma-separated column list, used as `rebuild_table_pk`'s
-//                        `columns` (the `INSERT...SELECT` projection).
-// The [`rebuild_constants_in_sync`] test pins the two together so a column added
-// to one cannot silently miss the other.
+// Each of these exposes a `<T>_COLS_DDL` constant — column definitions incl.
+// `PRIMARY KEY (...)`, used as `rebuild_table_pk`'s `new_ddl`. The matching
+// `<T>_COLNAMES` (the `INSERT...SELECT` projection) lives next to the DDL for
+// `turn_durations`; for `usage_records` it lives in
+// [`super::usage_records_io`] with the row bind/decode that share its order.
+// The [`rebuild_constants_in_sync`] test pins DDL and column list together so a
+// column added to one cannot silently miss the other.
 
 /// `usage_records` — per-request usage detail (per API request).
 ///
@@ -28,7 +32,9 @@
 /// never collapsed into one row. `timestamp` is ISO8601 UTC; `day` is the
 /// yyyy-mm-dd UTC bucket; `pricing_model` is the rebill lookup key;
 /// `server_tool_use` is JSON `{web_search, web_fetch}`; the cost columns are
-/// `rust_decimal::Decimal` stored as TEXT.
+/// `rust_decimal::Decimal` stored as TEXT. The comma-separated column list
+/// (the row wire protocol, shared by INSERT / SELECT / row bind / row decode)
+/// lives in [`super::usage_records_io`].
 pub(super) const USAGE_RECORDS_COLS_DDL: &str = "\
     uuid TEXT NOT NULL, \
     timestamp TEXT NOT NULL, \
@@ -52,13 +58,6 @@ pub(super) const USAGE_RECORDS_COLS_DDL: &str = "\
     cache_creation_cost_usd TEXT NOT NULL, \
     total_cost_usd TEXT NOT NULL, \
     PRIMARY KEY (uuid, device_id)";
-
-pub(super) const USAGE_RECORDS_COLNAMES: &str = "\
-    uuid, timestamp, day, model, pricing_model, source, session_id, device_id, \
-    input_tokens, output_tokens, cache_creation_tokens, cache_read_tokens, \
-    server_tool_use, stop_reason, service_tier, iterations, \
-    input_cost_usd, output_cost_usd, cache_read_cost_usd, \
-    cache_creation_cost_usd, total_cost_usd";
 
 pub(super) const USAGE_RECORDS_INDEXES: &str = "\
     CREATE INDEX IF NOT EXISTS idx_usage_day ON usage_records(day); \
@@ -294,6 +293,10 @@ fn create_table(name: &str, cols_ddl: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    // `usage_records`' column list lives in its wire-protocol home (a sibling
+    // of this module under `db`), not here — the sync check below still ties it
+    // to this module's DDL.
+    use crate::db::usage_records_io::USAGE_RECORDS_COLNAMES;
 
     /// Column names declared in a `<T>_COLS_DDL` (excluding the `PRIMARY KEY`
     /// clause) — used to cross-check against `<T>_COLNAMES`. Splits on the first

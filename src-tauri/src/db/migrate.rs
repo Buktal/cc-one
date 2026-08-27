@@ -7,8 +7,10 @@
 //! databases are created on the final schema by [`schema_tables_sql`] and short-circuit
 //! every probe here.
 //!
-//! The rebuild path reuses the DDL constants in [`schema`], so adding a column
-//! is still a single edit there — migration carries no parallel literal.
+//! The rebuild path reuses the DDL constants in [`schema`] (plus
+//! `usage_records`' wire-protocol column list from
+//! [`super::usage_records_io`]), so adding a column is still a single edit in
+//! its home — migration carries no parallel literal.
 //!
 //! [`Store::open`]: super::Store::open
 //! [`schema_tables_sql`]: super::schema::schema_tables_sql
@@ -19,6 +21,7 @@ use rusqlite::Connection;
 use crate::error::AppResult;
 
 use super::schema;
+use super::usage_records_io;
 
 /// Upgrade a pre-existing `usage_records` table with columns added after the
 /// initial schema (scorched-rebuild: `stop_reason` / `service_tier` /
@@ -212,7 +215,7 @@ fn migrate_to_composite_pk(conn: &Connection) -> AppResult<()> {
             conn,
             "usage_records",
             schema::USAGE_RECORDS_COLS_DDL,
-            schema::USAGE_RECORDS_COLNAMES,
+            usage_records_io::USAGE_RECORDS_COLNAMES,
         )?;
         conn.execute_batch(schema::USAGE_RECORDS_INDEXES)?;
     }

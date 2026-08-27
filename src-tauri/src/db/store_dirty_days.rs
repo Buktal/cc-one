@@ -6,7 +6,6 @@
 //! combined dirty-flag clear ([`Store::clear_dirty_flags_if_unchanged`]) that
 //! the push flow uses to drop days AND sessions in one transaction.
 
-use super::schema;
 use super::*;
 
 /// Recompute-time row counts for one day — exactly what the push materialized
@@ -115,15 +114,16 @@ impl super::Store {
     /// day is settled.
     pub fn usage_for_day_device(&self, day: &str, device_id: &str) -> AppResult<Vec<UsageRecord>> {
         let conn = self.conn.lock().expect("db mutex poisoned");
-        // Column list derives from the schema constant (same single source of
-        // truth as `ingest_impl`'s INSERT) — column order is the field order
-        // `row_to_usage_record` reads positionally.
+        // Column list and row decode both come from the row wire-protocol home
+        // `usage_records_io` (same single source as `ingest_impl`'s INSERT) —
+        // the SELECT projects exactly the shape `decode` reads positionally,
+        // so the two sides cannot drift apart.
         let select_sql = format!(
             "SELECT {} FROM usage_records WHERE day = ? AND device_id = ? ORDER BY uuid",
-            schema::USAGE_RECORDS_COLNAMES
+            usage_records_io::USAGE_RECORDS_COLNAMES
         );
         let mut stmt = conn.prepare(&select_sql)?;
-        let rows = stmt.query_map(params![day, device_id], row_to_usage_record)?;
+        let rows = stmt.query_map(params![day, device_id], usage_records_io::decode)?;
         rows.collect::<rusqlite::Result<Vec<_>>>()
             .map_err(AppError::from)
     }
@@ -150,44 +150,6 @@ impl super::Store {
         rows.collect::<rusqlite::Result<Vec<_>>>()
             .map_err(AppError::from)
     }
-}
-
-/// Reconstruct a full [`UsageRecord`] (with nested token / cost structs) from a
-/// `usage_records` row — the inverse of `Store::ingest_impl`'s insert. Used by
-/// the push path's per-day recompute to serialize the day's full content.
-fn row_to_usage_record(r: &rusqlite::Row<'_>) -> rusqlite::Result<UsageRecord> {
-    use std::str::FromStr;
-    let dec =
-        |s: String| rust_decimal::Decimal::from_str(&s).unwrap_or(rust_decimal::Decimal::ZERO);
-    let total = dec(r.get::<_, String>(20)?);
-    Ok(UsageRecord {
-        uuid: r.get(0)?,
-        timestamp: r.get(1)?,
-        day: r.get(2)?,
-        model: r.get(3)?,
-        pricing_model: r.get(4)?,
-        source: r.get(5)?,
-        session_id: r.get(6)?,
-        device_id: r.get(7)?,
-        tokens: TokenCounts {
-            input: r.get::<_, i64>(8)? as u32,
-            output: r.get::<_, i64>(9)? as u32,
-            cache_creation: r.get::<_, i64>(10)? as u32,
-            cache_read: r.get::<_, i64>(11)? as u32,
-        },
-        server_tool_use: serde_json::from_str(&r.get::<_, String>(12)?)
-            .unwrap_or(crate::model::ServerToolUse::default()),
-        stop_reason: r.get(13)?,
-        service_tier: r.get(14)?,
-        iterations: r.get::<_, i64>(15)? as u32,
-        cost: crate::model::CostBreakdown {
-            input_usd: dec(r.get::<_, String>(16)?),
-            output_usd: dec(r.get::<_, String>(17)?),
-            cache_read_usd: dec(r.get::<_, String>(18)?),
-            cache_creation_usd: dec(r.get::<_, String>(19)?),
-            total_usd: total,
-        },
-    })
 }
 
 /// Flag each day in `days` as dirty, within `tx` so the flag lands atomically
