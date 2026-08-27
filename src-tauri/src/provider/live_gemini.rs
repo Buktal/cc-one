@@ -39,6 +39,10 @@ use crate::provider::live::{
 /// `settings.json` 里 `security.auth.selectedType` 的 API Key 标记对应的
 /// env 键：env 含它 → API Key 版；不含 → 登录态版。
 pub const GEMINI_API_KEY_ENV: &str = "GEMINI_API_KEY";
+/// `.env` 的端点键 `GOOGLE_GEMINI_BASE_URL`。端点决定凭据发往何处——归供应
+/// 商接管，永不进共享片段（提取排除、片段校验拒绝、导入候选同判都引用本
+/// 常量；改键名只改这里，调用方不许裸写字面量）。
+pub const GOOGLE_GEMINI_BASE_URL_ENV: &str = "GOOGLE_GEMINI_BASE_URL";
 /// `selectedType` 取值：API Key 版（env 含 `GEMINI_API_KEY`）。
 pub const SELECTED_TYPE_API_KEY: &str = "gemini-api-key";
 /// `selectedType` 取值：登录态版（env 无 `GEMINI_API_KEY`，保留 Google 登录）。

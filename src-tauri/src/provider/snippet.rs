@@ -33,6 +33,7 @@
 
 use crate::error::{AppError, AppResult};
 use crate::provider::live::{parse_object, CONTROLLED_FIELDS};
+use crate::provider::live_gemini::GOOGLE_GEMINI_BASE_URL_ENV;
 
 /// TOML 片段整理（「整理」按钮）：用 taplo（保留注释的规范 formatter，VS Code
 /// Even Better TOML 同引擎）把压缩文本展开成多行。**保留注释与键序**——默认
@@ -160,17 +161,17 @@ fn reject_sensitive_keys(obj: &serde_json::Value, app: &str) -> AppResult<()> {
 }
 
 /// gemini 片段额外校验：env 值必须是非空字符串；另拒端点键
-/// `GOOGLE_GEMINI_BASE_URL`（`GEMINI_API_KEY` 已被凭据模式 `_API_KEY` 覆盖）。
-/// 端点键决定凭据发往何处，共享会把认证引到错误端点。
+/// [`GOOGLE_GEMINI_BASE_URL_ENV`]（`GEMINI_API_KEY` 已被凭据模式 `_API_KEY`
+/// 覆盖）。端点键决定凭据发往何处，共享会把认证引到错误端点。
 fn validate_gemini_extras(obj: &serde_json::Value) -> AppResult<()> {
     let Some(env) = obj.get("env").and_then(|v| v.as_object()) else {
         return Ok(()); // 无 env 子对象 = 无可校验的值
     };
     for (key, value) in env {
-        if key == "GOOGLE_GEMINI_BASE_URL" {
-            return Err(AppError::Config(
-                "gemini 通用片段不得包含端点键 GOOGLE_GEMINI_BASE_URL（端点键归供应商）".into(),
-            ));
+        if key == GOOGLE_GEMINI_BASE_URL_ENV {
+            return Err(AppError::Config(format!(
+                "gemini 通用片段不得包含端点键 {GOOGLE_GEMINI_BASE_URL_ENV}（端点键归供应商）"
+            )));
         }
         let s = value.as_str().ok_or_else(|| {
             AppError::Config(format!("gemini 通用片段 env.{key} 的值必须是字符串"))

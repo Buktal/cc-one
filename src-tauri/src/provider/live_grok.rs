@@ -31,14 +31,18 @@ use toml_edit::{DocumentMut, Item, Table};
 use crate::error::{AppError, AppResult};
 
 /// profile 块表名：`[model.<profile>]`。注意与 [`MODELS_TABLE`]（default 指针
-/// 表）是两个不同的顶层表，别混淆。
-const MODEL_TABLE: &str = "model";
-/// default 指针表名：`[models]` 的 `default = "<profile>"`。
-const MODELS_TABLE: &str = "models";
+/// 表）是两个不同的顶层表，别混淆。`pub(crate)`：写盘（本模块）与导入反向
+/// 解析（`import_live` 读 cc-one profile、判可共享键）共用——改表名只改这里，
+/// 不许在调用方裸写字面量。
+pub(crate) const MODEL_TABLE: &str = "model";
+/// default 指针表名：`[models]` 的 `default = "<profile>"`。可见性理由同
+/// [`MODEL_TABLE`]（导入反向解析判「可共享键」时排除本表）。
+pub(crate) const MODELS_TABLE: &str = "models";
 /// cc one 固定持有的 canonical profile 名（`cc-one` 是合法 TOML bare key）。
 /// 用固定名而非供应商名，避免改名 / 重命名脆弱性；用户自己的 profile 用别的
-/// 名字，互不冲突。
-const CC_ONE_PROFILE: &str = "cc-one";
+/// 名字，互不冲突。可见性理由同 [`MODEL_TABLE`]（导入反向解析按它定位
+/// cc-one profile）。
+pub(crate) const CC_ONE_PROFILE: &str = "cc-one";
 
 /// `~/.grok` 目录（跨平台统一走 home）。
 pub fn grok_config_dir() -> AppResult<PathBuf> {
