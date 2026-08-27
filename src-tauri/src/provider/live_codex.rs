@@ -122,7 +122,9 @@ pub fn parse_codex_settings(settings_config: &str) -> AppResult<CodexSnapshot> {
 /// TOML 受控合并纯函数（最高价值测试接缝）：目标（供应商快照）里出现的
 /// [`CODEX_CONTROLLED_FIELDS`] 键整块替换进 live，快照缺失的受控键从 live
 /// 撤除；其余键从 live 原样保留（`toml_edit` 重写保留注释与格式）。不碰
-/// 文件系统。
+/// 文件系统。三态循环走共享原语 [`crate::provider::live::
+/// merge_controlled_fields_toml`]——codex 的清单即受控区（替换域 = 撤除域 =
+/// 清单），原语循环即全部合并逻辑。
 ///
 /// 边界：live / target 为空串或纯空白 → 视为空文档（live 空 = 没有现存
 /// 配置可保留；target 空 = 无受控内容）；live 或 target 是非空非法 TOML
@@ -131,19 +133,11 @@ pub fn parse_codex_settings(settings_config: &str) -> AppResult<CodexSnapshot> {
 pub fn merge_codex_config(live: &str, target: &str) -> AppResult<String> {
     let mut doc = crate::provider::live::parse_toml_or_empty(live, "live config.toml")?;
     let target_doc = crate::provider::live::parse_toml_or_empty(target, "provider config.toml")?;
-    for key in CODEX_CONTROLLED_FIELDS {
-        match target_doc.get(key) {
-            Some(item) => {
-                doc.as_table_mut().insert(key, item.clone());
-            }
-            None => {
-                // 目标缺失 → 从 live 撤除（ADR-0010 受控轴：新供应商赢，否则
-                // 旧供应商的身份键残留、切换静默失效——第三方 → 官方登录态版
-                // 必须清掉旧 base_url / token）。
-                doc.as_table_mut().remove(key);
-            }
-        }
-    }
+    crate::provider::live::merge_controlled_fields_toml(
+        doc.as_table_mut(),
+        target_doc.as_table(),
+        CODEX_CONTROLLED_FIELDS,
+    );
     Ok(doc.to_string())
 }
 

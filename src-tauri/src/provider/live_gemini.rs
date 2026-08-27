@@ -4,12 +4,14 @@
 //! - **env 整块替换**：`.env` 是受控单位——切换供应商时整块重写（含空 env
 //!   = 登录态版），与 claude 的 env 整块替换同一语义；写前备份 `.env.bak`
 //!   （单份覆盖），原子写（临时文件 + 改名）。
-//! - **settings.json 受控合并**：只写受控字段——供应商 `config` 对象里声明
-//!   的顶层字段，以及 `security.auth.selectedType` 认证标记（env 含
-//!   `GEMINI_API_KEY` → `"gemini-api-key"`，否则 → `"oauth"`，两分支即
-//!   API Key 版 / 登录态版）。顶层身份键（见 [`GEMINI_CONTROLLED_FIELDS`]）
-//!   按「新供应商赢：携带 → 替换，缺失 → 撤除」合并（防旧供应商残留）；
-//!   `mcpServers` 等其余字段从现有文件原样保留，绝不整文件覆盖。
+//! - **settings.json 受控合并**：受控区 = settings.json **顶层整体**——供应商
+//!   `config` 声明的顶层字段声明即接管、整体替换进现有文件（含 `mcpServers`：
+//!   import 捕获的完整顶层快照切换即原样恢复），未声明的顶层字段从现有文件
+//!   原地保留，绝不整文件覆盖；外加 `security.auth.selectedType` 认证标记
+//!   （env 含 `GEMINI_API_KEY` → `"gemini-api-key"`，否则 → `"oauth"`，两分支
+//!   即 API Key 版 / 登录态版）。顶层身份键（见 [`GEMINI_IDENTITY_FIELDS`]）
+//!   在目标未声明时撤除（防旧供应商残留）——与 codex「清单即受控区」不同，
+//!   撤除清单只是受控区里的身份子集。
 //! - **登录态版**（env 无 `GEMINI_API_KEY`）：env 写成空 + `selectedType:
 //!   "oauth"`，不破坏用户既有 Google 登录态。
 //! - 清洗：写盘前剥掉 settingsConfig 顶层内部 meta 字段（沿用
@@ -48,12 +50,17 @@ pub const SELECTED_TYPE_API_KEY: &str = "gemini-api-key";
 /// `selectedType` 取值：登录态版（env 无 `GEMINI_API_KEY`，保留 Google 登录）。
 pub const SELECTED_TYPE_OAUTH: &str = "oauth";
 
-/// Gemini settings.json 顶层受控身份键（与 codex 的 `CODEX_CONTROLLED_FIELDS`
-/// 同一语义）：供应商 `config` 携带 → 替换；缺失 → 从 live 撤除（受控轴
-/// 「新供应商赢」——旧供应商的 `model` 残留会让切换静默失效）。env 侧的模型
-/// 选择（`GEMINI_MODEL`）随 `.env` 整块替换，不受此清单管；`mcpServers` 等
-/// 用户手动键是非受控字段，永不被清单撤除。
-pub const GEMINI_CONTROLLED_FIELDS: &[&str] = &["model"];
+/// Gemini settings.json 顶层**身份键撤除清单**：目标 `config` 不携带 → 从
+/// live 撤除（受控轴「新供应商赢」——旧供应商的 `model` 残留会让切换静默
+/// 失效）。env 侧的模型选择（`GEMINI_MODEL`）随 `.env` 整块替换，不受此清单
+/// 管。
+///
+/// 这**不是** gemini 的受控区边界：gemini 受控区 = settings.json 顶层整体
+/// （供应商 `config` 声明的一切顶层键声明即接管、整体替换，未声明的原地
+/// 保留）。与 codex 的 `CODEX_CONTROLLED_FIELDS`（清单即受控区，清单外目标
+/// 键被忽略）不同，本清单只承担撤除域——身份键在目标未声明时必须撤；
+/// `mcpServers` 等其余顶层键永不被清单撤除（目标声明时替换、未声明时保留）。
+pub const GEMINI_IDENTITY_FIELDS: &[&str] = &["model"];
 
 /// Gemini 配置目录：`~/.gemini`。
 pub fn gemini_dir() -> AppResult<PathBuf> {
@@ -72,9 +79,9 @@ pub fn gemini_settings_path() -> AppResult<PathBuf> {
     Ok(gemini_dir()?.join("settings.json"))
 }
 
-/// 解析后的 Gemini 目标配置：`env`（整块写 `.env`）与 `config`（写
-/// settings.json 的受控字段；缺失或 `null` → `None`，表示不合并任何字段、
-/// 现有文件原样保留）。
+/// 解析后的 Gemini 目标配置：`env`（整块写 `.env`）与 `config`（settings.json
+/// 顶层受控区的声明——声明的顶层键整体替换；缺失或 `null` → `None`，即无
+/// 声明替换、未声明字段原地保留，身份键撤除清单仍生效）。
 #[derive(Debug, Clone, PartialEq)]
 pub struct GeminiSettings {
     pub env: HashMap<String, String>,
@@ -160,31 +167,34 @@ pub fn gemini_selected_type(env: &HashMap<String, String>) -> &'static str {
 /// 语义：
 /// - 现有文本为空串/纯空白 → 视为 `{}`（文件缺失时由 `{}` 新建）；非空但
 ///   非法 JSON 或非对象 → `Err`（解析不了就没法保留用户手动配置，宁可失败）。
-/// - 目标 `config` 的顶层字段合并进结果（供应商显式配置优先）。
-/// - 顶层身份键（[`GEMINI_CONTROLLED_FIELDS`]）按「新供应商赢」：config 携带
-///   → 替换；config 缺失或不含该键 → 从现有文件撤除（防旧供应商残留）。
+/// - 目标 `config` 声明的顶层字段整体替换进结果——受控区 = 顶层整体，声明即
+///   接管（含 `mcpServers`）；未声明的顶层字段从现有文件保留。
+/// - 顶层身份键（[`GEMINI_IDENTITY_FIELDS`]）目标未声明 → 从现有文件撤除
+///   （「新供应商赢」，防旧供应商残留）；走共享三态原语。
 /// - `security.auth.selectedType` 恒按 env 推导写受控标记（两分支见
 ///   [`gemini_selected_type`]）。现有 `security` / `auth` 若存在但非对象 →
 ///   `Err`（标记写不进去，宁可失败）。
-/// - 其余字段（`mcpServers` 等）一律从现有文件原样保留，绝不整文件覆盖。
 pub fn merge_gemini_settings_json(existing: &str, target: &GeminiSettings) -> AppResult<String> {
     let mut merged = parse_live_or_empty(existing)?;
     let merged_obj = merged
         .as_object_mut()
         .expect("parse_live_or_empty yields object");
 
+    // 受控区 = settings.json 顶层整体：目标声明的一切顶层键声明即接管、整体
+    // 替换（import 捕获的完整顶层快照经 git 同步到 peer 后，切换即原样恢复）。
     if let Some(config) = &target.config {
         for (key, value) in config {
             merged_obj.insert(key.clone(), value.clone());
         }
     }
-    // 顶层身份键撤除：config 不携带即撤（ADR-0010 受控轴「新供应商赢」）。
-    for key in GEMINI_CONTROLLED_FIELDS {
-        let carried = target.config.as_ref().is_some_and(|c| c.contains_key(*key));
-        if !carried {
-            merged_obj.remove(*key);
-        }
-    }
+    // 身份键撤除走共享三态原语：目标不携带即撤（config 缺失 = 空目标 = 全撤，
+    // 防旧供应商残留）；清单外的键不受影响（未声明的非受控字段原地保留）。
+    let empty_config = serde_json::Map::new();
+    crate::provider::live::merge_controlled_fields_json(
+        merged_obj,
+        target.config.as_ref().unwrap_or(&empty_config),
+        GEMINI_IDENTITY_FIELDS,
+    );
 
     let security = merged_obj
         .entry("security")

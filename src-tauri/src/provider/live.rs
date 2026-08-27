@@ -410,6 +410,50 @@ pub(crate) fn fill_missing_table(target: &mut Table, source: &Table) {
     }
 }
 
+/// 受控轴三态合并原语（机制唯一归属，codex / gemini 两载体共用）：`controlled`
+/// 清单内的键按「目标携带 → 整体替换进 live；目标缺失 → 从 live 撤除」合并，
+/// 清单外的键此循环一概不碰——「跳过」即非清单键原地保留。受控轴「新供应商
+/// 赢」的落点：缺失不撤的话旧供应商的身份键残留、切换静默失效（ADR-0010）。
+///
+/// 两家的受控区形状不同：codex 清单即受控区（替换域 = 撤除域 = 清单，循环即
+/// 全部合并逻辑）；gemini 受控区 = settings.json 顶层整体（供应商声明的一切
+/// 替换，「声明即接管」，由 gemini 侧先整体替换），本原语只承担其撤除域——
+/// 身份键清单（[`crate::provider::live_gemini::GEMINI_IDENTITY_FIELDS`]）。
+///
+/// 载体差异（toml_edit 的 `Table` 键级编辑保留注释与格式 vs `serde_json::Map`）
+/// 用双形态收纳：三态语义只有本契约一份，两个载体各一段机械循环，任何一边改
+/// 动语义必须同步另一边（两边的现场测试互为回归）。
+pub(crate) fn merge_controlled_fields_toml(live: &mut Table, target: &Table, controlled: &[&str]) {
+    for &key in controlled {
+        match target.get(key) {
+            Some(item) => {
+                live.insert(key, item.clone());
+            }
+            None => {
+                live.remove(key);
+            }
+        }
+    }
+}
+
+/// JSON 载体的 [`merge_controlled_fields_toml`]（三态契约见彼处）。
+pub(crate) fn merge_controlled_fields_json(
+    live: &mut serde_json::Map<String, serde_json::Value>,
+    target: &serde_json::Map<String, serde_json::Value>,
+    controlled: &[&str],
+) {
+    for &key in controlled {
+        match target.get(key) {
+            Some(value) => {
+                live.insert(key.to_string(), value.clone());
+            }
+            None => {
+                live.remove(key);
+            }
+        }
+    }
+}
+
 /// 从已剥内部 meta 键的 settingsConfig 对象提取 `config` TOML 字符串（codex /
 /// grok 共用，两家的 settingsConfig 形状在此字段上同构）：缺失 → 空串（登录
 /// 态版 / 无受控内容）；非字符串 → `Err`（坏配置不能进用户 config.toml）。
@@ -1087,6 +1131,70 @@ mod tests {
         assert!(
             !main2.with_extension("json.bak").exists(),
             "主原本不存在 → 无备份"
+        );
+    }
+
+    // ---- 受控轴三态合并原语（codex / gemini 共用，双载体同契约）----
+
+    /// TOML 载体：清单内携带 → 替换、缺失 → 撤除；清单外（含目标声明了的
+    /// 非受控键）一概不碰——「跳过」由循环边界保证。
+    #[test]
+    fn controlled_fields_toml_replaces_withdraws_and_skips() {
+        let mut live: DocumentMut =
+            "model = \"old\"\napproval_policy   =   \"on\"\n[mcp_servers.fs]\ncommand = \"npx\"\n"
+                .parse()
+                .unwrap();
+        let target: DocumentMut = "model = \"new\"\n\n[mcp_servers.fs]\ncommand = \"python\"\n"
+            .parse()
+            .unwrap();
+        merge_controlled_fields_toml(
+            live.as_table_mut(),
+            target.as_table(),
+            &["model", "model_provider"],
+        );
+        let out = live.to_string();
+        assert!(out.contains("model = \"new\""), "携带 → 替换: {out}");
+        assert!(
+            !out.contains("model_provider"),
+            "缺失 → 撤除，不残留旧值: {out}"
+        );
+        assert!(
+            out.contains("approval_policy   =   \"on\""),
+            "清单外跳过（格式逐字节保留）: {out}"
+        );
+        assert!(
+            out.contains("command = \"npx\""),
+            "目标声明的清单外键被忽略，live 原样: {out}"
+        );
+    }
+
+    /// JSON 载体：与 TOML 载体同一三态契约（携带 → 替换 / 缺失 → 撤除 /
+    /// 清单外跳过）。
+    #[test]
+    fn controlled_fields_json_replaces_withdraws_and_skips() {
+        let mut live = serde_json::json!({
+            "model": "old",
+            "selectedTheme": "auto",
+            "mcpServers": {"fs": {"command": "npx"}}
+        });
+        let target =
+            serde_json::json!({ "model": "new", "mcpServers": {"fs": {"command": "python"}} });
+        merge_controlled_fields_json(
+            live.as_object_mut().unwrap(),
+            target.as_object().unwrap(),
+            &["model", "model_provider"],
+        );
+        assert_eq!(live["model"], serde_json::json!("new"), "携带 → 替换");
+        assert!(live.get("model_provider").is_none(), "缺失 → 撤除");
+        assert_eq!(
+            live["selectedTheme"],
+            serde_json::json!("auto"),
+            "清单外跳过"
+        );
+        assert_eq!(
+            live["mcpServers"]["fs"]["command"],
+            serde_json::json!("npx"),
+            "目标声明的清单外键被忽略，live 原样"
         );
     }
 }
