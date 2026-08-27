@@ -43,10 +43,8 @@ import {
   resolveContainer,
   roleDefaultsCollapsed,
   type SessionScopeSpec,
-  sessionSpan,
   sessionSpecId,
   sessionTabFilter,
-  spanLabelKey,
   type TreeSelectAction,
   tokensHitRate,
   transcriptMatches,
@@ -359,70 +357,8 @@ describe("applyGroupOrder", () => {
 })
 
 // --------------------------------------------------------------- detail -----
-
-describe("sessionSpan", () => {
-  const cases: Array<{
-    name: string
-    ms: number | null | undefined
-    want: unknown
-  }> = [
-    {
-      name: "under a minute rounds down to 0 minutes",
-      ms: 59_999,
-      want: { days: 0, hours: 0, minutes: 0 },
-    },
-    {
-      name: "a few minutes",
-      ms: 5 * 60_000 + 30_000,
-      want: { days: 0, hours: 0, minutes: 5 },
-    },
-    {
-      name: "hours and minutes",
-      ms: 2 * 3_600_000 + 5 * 60_000,
-      want: { days: 0, hours: 2, minutes: 5 },
-    },
-    {
-      name: "days and hours",
-      ms: 3 * 86_400_000 + 7 * 3_600_000,
-      want: { days: 3, hours: 7, minutes: 0 },
-    },
-    { name: "null is null (no duration)", ms: null, want: null },
-    { name: "zero is null", ms: 0, want: null },
-    { name: "negative is null (times crossed)", ms: -1000, want: null },
-    { name: "NaN is null", ms: NaN, want: null },
-  ]
-  for (const c of cases) {
-    it(c.name, () => {
-      expect(sessionSpan(c.ms)).toEqual(c.want)
-    })
-  }
-})
-
-describe("spanLabelKey", () => {
-  it("days win → days+hours label", () => {
-    expect(spanLabelKey({ days: 3, hours: 7, minutes: 0 })).toEqual({
-      key: "sessions.span.daysHours",
-      vars: { d: 3, h: 7 },
-    })
-  })
-  it("hours + minutes → hoursMinutes; hours only → hours", () => {
-    expect(spanLabelKey({ days: 0, hours: 2, minutes: 5 })).toEqual({
-      key: "sessions.span.hoursMinutes",
-      vars: { h: 2, m: 5 },
-    })
-    expect(spanLabelKey({ days: 0, hours: 2, minutes: 0 })).toEqual({
-      key: "sessions.span.hours",
-      vars: { h: 2 },
-    })
-  })
-  it("minutes only → minutes label; null → null (caller renders the dash)", () => {
-    expect(spanLabelKey({ days: 0, hours: 0, minutes: 5 })).toEqual({
-      key: "sessions.span.minutes",
-      vars: { m: 5 },
-    })
-    expect(spanLabelKey(null)).toBeNull()
-  })
-})
+// 时长三件套（spanParts / spanLabelKey / spanMsOf）的用例随实现迁
+// lib/format.test.ts（架构审查Ⅲ候选⑩）。
 
 describe("modelsUsed", () => {
   const msg = (overrides: Partial<SessionMessage>): SessionMessage => ({

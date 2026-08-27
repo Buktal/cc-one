@@ -17,7 +17,6 @@ import {
 } from "@/app/store/api"
 import type { FilterState } from "@/app/store/slices/filterSlice"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
-import { sessionSpan, spanLabelKey } from "@/features/sessions/derive"
 import {
   deviceSectionStats,
   projectRanking,
@@ -33,6 +32,8 @@ import {
   formatPct,
   formatRatio,
   formatTokens,
+  spanLabelKey,
+  spanParts,
 } from "@/lib/format"
 import { cn } from "@/lib/utils"
 
@@ -69,7 +70,7 @@ export function KpiBand({ filter }: { filter: FilterState }) {
   const perTurn =
     s.turn_count > 0 ? formatRatio(s.request_count / s.turn_count) : "—"
   const longest = sessions.longestSpanMs
-    ? spanLabelKey(sessionSpan(sessions.longestSpanMs))
+    ? spanLabelKey(spanParts(sessions.longestSpanMs))
     : null
 
   const main: Cell[] = [

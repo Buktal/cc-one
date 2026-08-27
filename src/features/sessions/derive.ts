@@ -4,13 +4,12 @@
 // isolation (architecture.md: "关键不变量用代码表达") — the hook wires these to
 // React state + RTK Query, these own the math.
 
-import dayjs from "dayjs"
-
 import {
   FILTER_DIMENSIONS,
   type FilterState,
 } from "@/app/store/slices/filterSlice"
 import { dayRangeToTs, effectiveDays } from "@/lib/date-range"
+import { spanMsOf } from "@/lib/format"
 import { projectBasename } from "@/lib/paths"
 import { ALL_FILTER } from "@/lib/source-tags"
 import { type TokenBuckets, totalTokensOf } from "@/lib/token-buckets"
@@ -264,59 +263,8 @@ export function identityOfProjectFilter(
 }
 
 // -------------------------------------------------------------- detail -----
-
-/**
- * A session's elapsed span (`last_active_at − started_at`), split into the
- * units the detail header displays. `null` when the times are absent /
- * unparseable / the span is not positive — the header then shows a dash
- * instead of a bogus negative duration.
- */
-export interface SessionSpan {
-  days: number
-  hours: number
-  minutes: number
-}
-
-export function sessionSpan(ms: number | null | undefined): SessionSpan | null {
-  const v = Number(ms ?? 0)
-  if (!Number.isFinite(v) || v <= 0) return null
-  const totalMinutes = Math.floor(v / 60_000)
-  return {
-    days: Math.floor(totalMinutes / (24 * 60)),
-    hours: Math.floor((totalMinutes % (24 * 60)) / 60),
-    minutes: totalMinutes % 60,
-  }
-}
-
-/** 会话时长的展示文案选择（架构扫描候选⑨c 顺带）：把「有天数 → 天+小时；
- *  有小时 → 小时+分钟（有分钟时）/ 纯小时；否则纯分钟；无时长 → null」的
- *  四层嵌套三元收成可测纯函数——只选键与插值变量，文案翻译仍由调用方
- *  `t()` 完成。null = 无可用时长，调用方渲染占位符（—）。 */
-export function spanLabelKey(span: SessionSpan | null): {
-  key:
-    | "sessions.span.daysHours"
-    | "sessions.span.hoursMinutes"
-    | "sessions.span.hours"
-    | "sessions.span.minutes"
-  vars: Record<string, number>
-} | null {
-  if (!span) return null
-  if (span.days > 0) {
-    return {
-      key: "sessions.span.daysHours",
-      vars: { d: span.days, h: span.hours },
-    }
-  }
-  if (span.hours > 0) {
-    return span.minutes > 0
-      ? {
-          key: "sessions.span.hoursMinutes",
-          vars: { h: span.hours, m: span.minutes },
-        }
-      : { key: "sessions.span.hours", vars: { h: span.hours } }
-  }
-  return { key: "sessions.span.minutes", vars: { m: span.minutes } }
-}
+// 时长三件套（spanParts / spanLabelKey / spanMsOf）已下放 lib/format（架构
+// 审查Ⅲ候选⑩）——与「会话」无关的通用时长格式化，usage KPI 等面共用。
 
 /**
  * Distinct model names used in a transcript, in first-use order (assistant
@@ -644,16 +592,6 @@ export function tokensHitRate(t: StatsTokens): number | null {
   return pool > 0 ? t.cache_read / pool : null
 }
 
-/** A session's span in ms (last_active − started); null when absent or not
- *  positive — the duration buckets skip those instead of counting garbage. */
-export function statsSpanMs(
-  s: Pick<SessionStatsRow, "started_at" | "last_active_at">,
-): number | null {
-  if (!s.started_at || !s.last_active_at) return null
-  const ms = dayjs(s.last_active_at).diff(s.started_at)
-  return Number.isFinite(ms) && ms > 0 ? ms : null
-}
-
 /** One per-model share of an aggregate — tokens are the model's four-bucket
  *  sum, `sessions` how many rows used it (the card's sub-line). */
 export interface ModelShare {
@@ -716,7 +654,7 @@ export function aggregateStats(
       slot.sessions += 1
       byModel.set(m.model, slot)
     }
-    const span = statsSpanMs(r)
+    const span = spanMsOf(r)
     if (span !== null) {
       sawSpan = true
       totalSpanMs += span

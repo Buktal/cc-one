@@ -399,10 +399,6 @@
   "sessions.toast.renamed": "Renamed",
   "sessions.toast.unfavorited": "Unfavorited",
   "sessions.untitled": "Untitled session",
-  "sessions.span.daysHours": "{{d}}d {{h}}h",
-  "sessions.span.hours": "{{h}}h",
-  "sessions.span.hoursMinutes": "{{h}}h {{m}}m",
-  "sessions.span.minutes": "{{m}}m",
   "settings.general.closeAsk": "Ask every time",
   "settings.general.closeBehavior": "On window close",
   "settings.general.closeBehaviorHint": "After choosing Minimize or Quit, tick “Don't ask again” in the close dialog to remember it.",
@@ -731,5 +727,9 @@
   "filter.allProject": "All projects",
   "filter.device": "Device",
   "filter.project": "Project",
-  "filter.unknownProject": "Unknown project"
+  "filter.unknownProject": "Unknown project",
+  "span.daysHours": "{{d}}d {{h}}h",
+  "span.hours": "{{h}}h",
+  "span.hoursMinutes": "{{h}}h {{m}}m",
+  "span.minutes": "{{m}}m"
 }

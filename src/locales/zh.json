@@ -399,10 +399,6 @@
   "sessions.toast.renamed": "已重命名",
   "sessions.toast.unfavorited": "已取消收藏",
   "sessions.untitled": "未命名会话",
-  "sessions.span.daysHours": "{{d}} 天 {{h}} 小时",
-  "sessions.span.hours": "{{h}} 小时",
-  "sessions.span.hoursMinutes": "{{h}} 小时 {{m}} 分",
-  "sessions.span.minutes": "{{m}} 分钟",
   "settings.general.closeAsk": "每次询问",
   "settings.general.closeBehavior": "关闭窗口时",
   "settings.general.closeBehaviorHint": "选「最小化」或「退出」后，可在关闭确认框里勾选「不再提示」记住选择。",
@@ -729,5 +725,9 @@
   "filter.allProject": "全部项目",
   "filter.device": "设备",
   "filter.project": "项目",
-  "filter.unknownProject": "未知项目"
+  "filter.unknownProject": "未知项目",
+  "span.daysHours": "{{d}} 天 {{h}} 小时",
+  "span.hours": "{{h}} 小时",
+  "span.hoursMinutes": "{{h}} 小时 {{m}} 分",
+  "span.minutes": "{{m}} 分钟"
 }

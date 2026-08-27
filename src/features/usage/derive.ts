@@ -11,6 +11,7 @@ import {
   FILTER_DIMENSIONS,
   type FilterState,
 } from "@/app/store/slices/filterSlice"
+import { spanMsOf } from "@/lib/format"
 import { totalTokensOf } from "@/lib/token-buckets"
 import type {
   DeviceUsageRow,
@@ -371,8 +372,10 @@ export function sessionSectionStats(
   for (const r of rows) {
     if (r.agent_type) subagents += 1
     turns += Number(r.turn_count)
-    const span = dayjs(r.last_active_at).diff(r.started_at)
-    if (Number.isFinite(span) && span > 0) {
+    // 有效时长谓词用共享版（spanMsOf，含空串判空）——此前这里手抄一份无
+    // 判空副本，靠 dayjs("") 的 NaN diff 碰巧等价（架构审查Ⅲ候选⑩收敛）。
+    const span = spanMsOf(r)
+    if (span !== null) {
       if (longest === null || span > longest) longest = span
     }
     turnBuckets[

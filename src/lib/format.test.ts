@@ -16,6 +16,9 @@ import {
   formatSegValue,
   formatSize,
   formatTokens,
+  spanLabelKey,
+  spanMsOf,
+  spanParts,
 } from "@/lib/format"
 
 describe("formatTokens", () => {
@@ -173,6 +176,103 @@ describe("formatDuration", () => {
   it(">= 1 minute → mSS format, zero-padded seconds", () => {
     expect(formatDuration(65_000)).toBe("1m05s")
     expect(formatDuration(3_602_000)).toBe("60m02s")
+  })
+})
+
+describe("spanParts (时长拆分)", () => {
+  const cases: Array<{
+    name: string
+    ms: number | null | undefined
+    want: unknown
+  }> = [
+    {
+      name: "under a minute rounds down to 0 minutes",
+      ms: 59_999,
+      want: { days: 0, hours: 0, minutes: 0 },
+    },
+    {
+      name: "a few minutes",
+      ms: 5 * 60_000 + 30_000,
+      want: { days: 0, hours: 0, minutes: 5 },
+    },
+    {
+      name: "hours and minutes",
+      ms: 2 * 3_600_000 + 5 * 60_000,
+      want: { days: 0, hours: 2, minutes: 5 },
+    },
+    {
+      name: "days and hours",
+      ms: 3 * 86_400_000 + 7 * 3_600_000,
+      want: { days: 3, hours: 7, minutes: 0 },
+    },
+    { name: "null is null (no duration)", ms: null, want: null },
+    { name: "zero is null", ms: 0, want: null },
+    { name: "negative is null (times crossed)", ms: -1000, want: null },
+    { name: "NaN is null", ms: NaN, want: null },
+  ]
+  for (const c of cases) {
+    it(c.name, () => {
+      expect(spanParts(c.ms)).toEqual(c.want)
+    })
+  }
+})
+
+describe("spanLabelKey (时长文案键选择)", () => {
+  it("days win → days+hours label", () => {
+    expect(spanLabelKey({ days: 3, hours: 7, minutes: 0 })).toEqual({
+      key: "span.daysHours",
+      vars: { d: 3, h: 7 },
+    })
+  })
+  it("hours + minutes → hoursMinutes; hours only → hours", () => {
+    expect(spanLabelKey({ days: 0, hours: 2, minutes: 5 })).toEqual({
+      key: "span.hoursMinutes",
+      vars: { h: 2, m: 5 },
+    })
+    expect(spanLabelKey({ days: 0, hours: 2, minutes: 0 })).toEqual({
+      key: "span.hours",
+      vars: { h: 2 },
+    })
+  })
+  it("minutes only → minutes label; null → null (caller renders the dash)", () => {
+    expect(spanLabelKey({ days: 0, hours: 0, minutes: 5 })).toEqual({
+      key: "span.minutes",
+      vars: { m: 5 },
+    })
+    expect(spanLabelKey(null)).toBeNull()
+  })
+})
+
+describe("spanMsOf (有效时长谓词)", () => {
+  it("last_active − started 的毫秒差", () => {
+    expect(
+      spanMsOf({
+        started_at: "2026-08-01T10:00:00Z",
+        last_active_at: "2026-08-01T11:30:00Z",
+      }),
+    ).toBe(90 * 60_000)
+  })
+  it("空串（时间缺采）→ null——判空是谓词的一部分，不靠 NaN 碰巧", () => {
+    expect(
+      spanMsOf({ started_at: "", last_active_at: "2026-08-01T11:30:00Z" }),
+    ).toBeNull()
+    expect(
+      spanMsOf({ started_at: "2026-08-01T10:00:00Z", last_active_at: "" }),
+    ).toBeNull()
+  })
+  it("不可解析 / 时间交叉 → null（时长桶跳过，不数垃圾）", () => {
+    expect(
+      spanMsOf({
+        started_at: "not-a-time",
+        last_active_at: "2026-08-01T11:30:00Z",
+      }),
+    ).toBeNull()
+    expect(
+      spanMsOf({
+        started_at: "2026-08-01T11:30:00Z",
+        last_active_at: "2026-08-01T10:00:00Z",
+      }),
+    ).toBeNull()
   })
 })
 

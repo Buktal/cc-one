@@ -98,6 +98,69 @@ export function formatDuration(ms: number | null | undefined): string {
   return `${m}m${sec.toString().padStart(2, "0")}s`
 }
 
+// ------------------------------------------------------- session span trio ----
+// 时长三件套（架构审查Ⅲ候选⑩）：ms → 有效性谓词 → 天/时/分拆分 → i18n 键。
+// 与「会话」无关——任何「起止时间对 → 展示时长」的面（会话详情 / 会话统计
+// 右栏 / usage KPI 最长会话）共用同一套口径，此前住 features/sessions 被
+// usage 跨 feature 借（kpi-band），usage/derive 还手抄过一份无判空的副本。
+
+/** 天/时/分的时长拆分（spanParts 的返回形状）。 */
+export interface SpanParts {
+  days: number
+  hours: number
+  minutes: number
+}
+
+/** 时长 ms → 天/时/分。null 当 ms 缺失 / 非有限 / 非正——调用方渲染占位符
+ *  （—）而不是一个负的伪时长。 */
+export function spanParts(ms: number | null | undefined): SpanParts | null {
+  const v = Number(ms ?? 0)
+  if (!Number.isFinite(v) || v <= 0) return null
+  const totalMinutes = Math.floor(v / 60_000)
+  return {
+    days: Math.floor(totalMinutes / (24 * 60)),
+    hours: Math.floor((totalMinutes % (24 * 60)) / 60),
+    minutes: totalMinutes % 60,
+  }
+}
+
+/** 时长的展示文案选择：有天数 → 天+小时；有小时 → 小时+分钟（有分钟时）/
+ *  纯小时；否则纯分钟；无时长 → null。只选键与插值变量，文案翻译仍由调用
+ *  方 `t()` 完成。null = 无可用时长，调用方渲染占位符（—）。 */
+export function spanLabelKey(span: SpanParts | null): {
+  key: "span.daysHours" | "span.hoursMinutes" | "span.hours" | "span.minutes"
+  vars: Record<string, number>
+} | null {
+  if (!span) return null
+  if (span.days > 0) {
+    return {
+      key: "span.daysHours",
+      vars: { d: span.days, h: span.hours },
+    }
+  }
+  if (span.hours > 0) {
+    return span.minutes > 0
+      ? {
+          key: "span.hoursMinutes",
+          vars: { h: span.hours, m: span.minutes },
+        }
+      : { key: "span.hours", vars: { h: span.hours } }
+  }
+  return { key: "span.minutes", vars: { m: span.minutes } }
+}
+
+/** 「有效时长」谓词 + 换算：起止时间对 → 时长 ms。空串（时间缺采）/ 不可
+ *  解析 / 非正一律 null——时长桶与累计时长跳过这些行，不数垃圾。这是带
+ *  判空的权威版（usage 侧曾手抄一份无判空副本，靠 NaN 碰巧等价）。 */
+export function spanMsOf(row: {
+  started_at: string
+  last_active_at: string
+}): number | null {
+  if (!row.started_at || !row.last_active_at) return null
+  const ms = dayjs(row.last_active_at).diff(row.started_at)
+  return Number.isFinite(ms) && ms > 0 ? ms : null
+}
+
 /** Bytes → `1.2 KB` / `3.4 MB` / `5.67 GB`. Em-dash when absent / non-finite. */
 export function formatSize(bytes: number | null | undefined): string {
   const v = Number(bytes ?? 0)

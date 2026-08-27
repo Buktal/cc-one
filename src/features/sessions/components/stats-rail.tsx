@@ -46,6 +46,8 @@ import {
   formatPct,
   formatSegValue,
   formatTokens,
+  spanLabelKey,
+  spanParts,
 } from "@/lib/format"
 import { sumBuckets, tokenBuckets } from "@/lib/token-buckets"
 import { cn } from "@/lib/utils"
@@ -59,8 +61,6 @@ import {
   type ModelShare,
   projectBasename,
   type StatsAggregate,
-  sessionSpan,
-  spanLabelKey,
 } from "../derive"
 import { turnAnchors } from "../turn-nav"
 
@@ -295,7 +295,7 @@ function SessionCards({
   )
   // 会话时长：started_at 缺失时用首条消息时间兜底（与详情口径一致）。
   const started = s.started_at || transcript[0]?.ts || null
-  const span = sessionSpan(
+  const span = spanParts(
     started && s.last_active_at
       ? dayjs(s.last_active_at).diff(dayjs(started))
       : null,
@@ -339,7 +339,7 @@ function AggregateCards({
   projectIdentity: { dir: string; subagents: number } | null
 }) {
   const { t } = useTranslation()
-  const totalSpanKey = spanLabelKey(sessionSpan(aggregate.totalSpanMs))
+  const totalSpanKey = spanLabelKey(spanParts(aggregate.totalSpanMs))
   const totalSpanLabel = totalSpanKey
     ? t(totalSpanKey.key, totalSpanKey.vars)
     : "—"
