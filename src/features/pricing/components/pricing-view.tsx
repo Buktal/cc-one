@@ -47,7 +47,7 @@ import {
 } from "@/components/ui/tooltip"
 import type { PricingSortKey } from "@/features/pricing/derive"
 import { usePricingTable } from "@/features/pricing/use-pricing-table"
-import { useConfirmDelete } from "@/hooks/use-confirm-delete"
+import { useConfirmAction } from "@/hooks/use-confirm-action"
 import { useMutateWithToast } from "@/hooks/use-toast-mutation"
 import { formatCostAmount } from "@/lib/format"
 import { PAGE_SIZES } from "@/lib/pagination"
@@ -82,9 +82,9 @@ export function PricingView() {
 
   const [editing, setEditing] = useState<PricingEntry | null>(null)
   const [dialogOpen, setDialogOpen] = useState(false)
-  // 删除确认（busy / 关闭时序收敛在 useConfirmDelete，holdOpen：成功才关框）。
-  const confirmDelete = useConfirmDelete<PricingEntry>({
-    onDelete: (entry) => remove(entry.model_key),
+  // 删除确认（busy / 关闭时序收敛在 useConfirmAction，holdOpen：成功才关框）。
+  const confirmDelete = useConfirmAction<PricingEntry>({
+    onAction: (entry) => remove(entry.model_key),
   })
 
   function openNew() {
@@ -329,9 +329,7 @@ export function PricingView() {
                                   <Button
                                     variant="ghost"
                                     size="icon-sm"
-                                    onClick={() =>
-                                      confirmDelete.requestDelete(e)
-                                    }
+                                    onClick={() => confirmDelete.request(e)}
                                     aria-label={t("common.delete")}
                                   />
                                 }
@@ -377,19 +375,19 @@ export function PricingView() {
       />
 
       <ConfirmDialog
-        open={confirmDelete.deleting !== null}
+        open={confirmDelete.pending !== null}
         onOpenChange={(o) => {
           if (!o) confirmDelete.cancel()
         }}
         title={t("confirm.deleteTitle", {
-          name: confirmDelete.deleting?.model_key ?? "",
+          name: confirmDelete.pending?.model_key ?? "",
         })}
         description={t("pricing.confirm.deleteDesc", {
-          name: confirmDelete.deleting?.model_key ?? "",
+          name: confirmDelete.pending?.model_key ?? "",
         })}
         confirmLabel={t("common.delete")}
         busy={confirmDelete.busy}
-        onConfirm={() => void confirmDelete.onConfirmDelete()}
+        onConfirm={() => void confirmDelete.confirm()}
       />
     </div>
   )

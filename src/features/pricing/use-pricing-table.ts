@@ -75,7 +75,7 @@ export function usePricingTable() {
    *  offset is clamped back into the now-shorter list — deleting the last row
    *  of the last page would otherwise leave `paged` empty with the header
    *  hanging bare. Busy 不在此管理——确认框的 busy / 关闭时序收敛在
-   *  useConfirmDelete（见 pricing-view）。 */
+   *  useConfirmAction（见 pricing-view）。 */
   async function remove(key: string): Promise<boolean> {
     const ok = await runWithToast(removeMut, key, {
       success: { key: "pricing.toast.deleted", vars: { name: key } },

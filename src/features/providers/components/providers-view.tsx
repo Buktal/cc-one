@@ -40,14 +40,6 @@ import { QueryState } from "@/components/query-state"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from "@/components/ui/dialog"
 import { Input } from "@/components/ui/input"
 import {
   Tooltip,
@@ -63,7 +55,7 @@ import {
   providerModel,
 } from "@/features/providers/derive"
 import { useProvidersBrowser } from "@/features/providers/use-providers-browser"
-import { useConfirmDelete } from "@/hooks/use-confirm-delete"
+import { useConfirmAction } from "@/hooks/use-confirm-action"
 import { useMutateWithToast } from "@/hooks/use-toast-mutation"
 import { usePersistedState } from "@/lib/persistence"
 import { cn } from "@/lib/utils"
@@ -112,8 +104,8 @@ export function ProvidersView() {
 
   const [sheetOpen, setSheetOpen] = useState(false)
   const [editing, setEditing] = useState<Provider | null>(null)
-  // 删除确认（busy / 关闭时序收敛在 useConfirmDelete，holdOpen：成功才关框）。
-  const confirmDelete = useConfirmDelete<Provider>({ onDelete })
+  // 删除确认（busy / 关闭时序收敛在 useConfirmAction，holdOpen：成功才关框）。
+  const confirmDelete = useConfirmAction<Provider>({ onAction: onDelete })
   const [transfer, setTransfer] = useState<TransferKind | null>(null)
   const [ccswitchOpen, setCcswitchOpen] = useState(false)
   // 「从本机配置文件导入」预览弹窗（全部应用，ADR-0012）。
@@ -123,14 +115,24 @@ export function ProvidersView() {
   const [importSourceOpen, setImportSourceOpen] = useState(false)
   const [query, setQuery] = useState("")
   // 切换确认对话框：切到缺必填项（端点/key/模板变量）的供应商前先问一句，
-  // 用户确认后照切不误（「我已经知道它缺东西，就是要切」）。
-  /** 缺必填项时挂起的写盘动作：确认后执行。kind 区分单激活「切换」与附加
-   *  模式「加入 live」（opencode——附加模式同样可能缺 key/端点，加入后不可用，
-   *  确认框两者共用）。 */
-  const [confirmPending, setConfirmPending] = useState<{
+  // 用户确认后照切不误（「我已经知道它缺东西，就是要切」）。缺必填挂起的
+  // 写盘动作与删除流共用 useConfirmAction 的时序状态机（架构审查Ⅲ候选⑪：
+  // 此前是收敛后回潮的第四份手写确认状态机）；kind 区分单激活「切换」与附
+  // 加模式「加入 live」（opencode——附加模式同样可能缺 key/端点，加入后不可
+  // 用，确认框两者共用）。closeFirst：确认即关框、写盘后台执行（结果由
+  // toast 报告）。
+  const confirmWrite = useConfirmAction<{
     provider: Provider
     kind: "switch" | "addToLive"
-  } | null>(null)
+  }>({
+    holdOpen: false,
+    onAction: async (target) => {
+      if (target.kind === "switch") await doSwitch(target.provider)
+      else await doAddToLive(target.provider)
+      // closeFirst 模式不读返回值（框已在确认时关掉，结果走 toast）。
+      return true
+    },
+  })
   // opencode 解释条：切走再切回 opencode 时重新弹出（selectApp 里重置）。
   const [bannerDismissed, setBannerDismissed] = useState(false)
 
@@ -198,13 +200,16 @@ export function ProvidersView() {
   /** 切换入口：缺必填项 → 先弹确认；齐全 → 直接切。 */
   function onSwitch(p: Provider) {
     const missing = providerMissingRequired(p)
-    if (missing.length > 0) setConfirmPending({ provider: p, kind: "switch" })
-    else void doSwitch(p)
+    if (missing.length > 0) {
+      confirmWrite.request({ provider: p, kind: "switch" })
+      return
+    }
+    void doSwitch(p)
   }
 
   function confirmMissing(): string[] {
-    return confirmPending
-      ? providerMissingRequired(confirmPending.provider)
+    return confirmWrite.pending
+      ? providerMissingRequired(confirmWrite.pending.provider)
       : []
   }
 
@@ -235,7 +240,7 @@ export function ProvidersView() {
   function onAddToLive(p: Provider) {
     const missing = providerMissingRequired(p)
     if (missing.length > 0) {
-      setConfirmPending({ provider: p, kind: "addToLive" })
+      confirmWrite.request({ provider: p, kind: "addToLive" })
       return
     }
     void doAddToLive(p)
@@ -413,7 +418,7 @@ export function ProvidersView() {
                       liveManaged={providerLiveManaged(p)}
                       onEdit={() => openEdit(p)}
                       onDuplicate={() => openDuplicate(p)}
-                      onDelete={() => confirmDelete.requestDelete(p)}
+                      onDelete={() => confirmDelete.request(p)}
                       onSwitch={() => onSwitch(p)}
                       onAddToLive={() => void onAddToLive(p)}
                       onRemoveFromLive={() => void onRemoveFromLive(p)}
@@ -442,40 +447,24 @@ export function ProvidersView() {
         onSaved={() => setSheetOpen(false)}
         onResetEditing={() => setEditing(null)}
       />
-      <Dialog
-        open={confirmPending !== null}
-        onOpenChange={(open) => !open && setConfirmPending(null)}
-      >
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle>{t("providers.switchConfirm.title")}</DialogTitle>
-            <DialogDescription>
-              {t("providers.switchConfirm.description", {
-                name: confirmPending?.provider.name ?? "",
-                missing: confirmMissing()
-                  .map((m) => t(`providers.switchConfirm.missing.${m}`))
-                  .join(", "),
-              })}
-            </DialogDescription>
-          </DialogHeader>
-          <DialogFooter>
-            <Button variant="outline" onClick={() => setConfirmPending(null)}>
-              {t("common.cancel")}
-            </Button>
-            <Button
-              onClick={() => {
-                const pending = confirmPending
-                setConfirmPending(null)
-                if (!pending) return
-                if (pending.kind === "switch") void doSwitch(pending.provider)
-                else void doAddToLive(pending.provider)
-              }}
-            >
-              {t("providers.switchConfirm.switch")}
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
+      {/* 缺必填切换确认：非删除动作走 ConfirmDialog 的非破坏形态（quiet 按钮，
+          无 Trash2 图标——切供应商不是危险操作，只是提醒缺配置）。 */}
+      <ConfirmDialog
+        open={confirmWrite.pending !== null}
+        onOpenChange={(open) => {
+          if (!open) confirmWrite.cancel()
+        }}
+        title={t("providers.switchConfirm.title")}
+        description={t("providers.switchConfirm.description", {
+          name: confirmWrite.pending?.provider.name ?? "",
+          missing: confirmMissing()
+            .map((m) => t(`providers.switchConfirm.missing.${m}`))
+            .join(", "),
+        })}
+        confirmLabel={t("providers.switchConfirm.switch")}
+        destructive={false}
+        onConfirm={() => void confirmWrite.confirm()}
+      />
       <ProviderTransferDialog
         kind={transfer}
         transferring={transferring}
@@ -502,19 +491,19 @@ export function ProvidersView() {
       />
 
       <ConfirmDialog
-        open={confirmDelete.deleting !== null}
+        open={confirmDelete.pending !== null}
         onOpenChange={(open) => {
           if (!open) confirmDelete.cancel()
         }}
         title={t("confirm.deleteTitle", {
-          name: confirmDelete.deleting?.name ?? "",
+          name: confirmDelete.pending?.name ?? "",
         })}
         description={t("providers.confirm.deleteDesc", {
-          name: confirmDelete.deleting?.name ?? "",
+          name: confirmDelete.pending?.name ?? "",
         })}
         confirmLabel={t("common.delete")}
         busy={confirmDelete.busy}
-        onConfirm={() => void confirmDelete.onConfirmDelete()}
+        onConfirm={() => void confirmDelete.confirm()}
       />
     </div>
   )

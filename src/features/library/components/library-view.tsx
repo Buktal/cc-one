@@ -44,7 +44,7 @@ import {
   TooltipContent,
   TooltipTrigger,
 } from "@/components/ui/tooltip"
-import { useConfirmDelete } from "@/hooks/use-confirm-delete"
+import { useConfirmAction } from "@/hooks/use-confirm-action"
 import { deviceOptionLabel } from "@/lib/device-labels"
 import { formatSize } from "@/lib/format"
 import { PAGE_SIZES } from "@/lib/pagination"
@@ -96,11 +96,11 @@ export function LibraryView() {
     setPreview,
   } = useLibraryBrowser()
 
-  // 删除确认（busy / 关闭时序收敛在 useConfirmDelete）。先关再删：行内已有
+  // 删除确认（busy / 关闭时序收敛在 useConfirmAction）。先关再删：行内已有
   // busyRelPath spinner，closeFirst 模式确认后立刻关框、由行级 busy 接管。
-  const confirmDelete = useConfirmDelete<LibraryEntry>({
+  const confirmDelete = useConfirmAction<LibraryEntry>({
     holdOpen: false,
-    onDelete: async (entry) => {
+    onAction: async (entry) => {
       await deleteEntry(entry)
       return true
     },
@@ -464,7 +464,7 @@ export function LibraryView() {
                                       disabled={busy}
                                       onClick={(ev) => {
                                         ev.stopPropagation()
-                                        confirmDelete.requestDelete(e)
+                                        confirmDelete.request(e)
                                       }}
                                     />
                                   }
@@ -542,18 +542,18 @@ export function LibraryView() {
       ) : null}
 
       <ConfirmDialog
-        open={confirmDelete.deleting !== null}
+        open={confirmDelete.pending !== null}
         onOpenChange={(open) => {
           if (!open) confirmDelete.cancel()
         }}
         title={t("confirm.deleteTitle", {
-          name: confirmDelete.deleting?.name ?? "",
+          name: confirmDelete.pending?.name ?? "",
         })}
         description={t("library.confirm.deleteDesc", {
-          name: confirmDelete.deleting?.name ?? "",
+          name: confirmDelete.pending?.name ?? "",
         })}
         confirmLabel={t("common.delete")}
-        onConfirm={() => void confirmDelete.onConfirmDelete()}
+        onConfirm={() => void confirmDelete.confirm()}
       />
     </div>
   )

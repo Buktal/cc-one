@@ -1,15 +1,16 @@
 // deleteFlowReducer — the confirm-dialog timing state machine. The hook
-// (useConfirmDelete) routes every state change through this pure function, so
-// these tests are the production path: the "busy reset on both paths" /
-// "close only on success" invariants used to live in three nearly-identical
-// comments (providers / pricing / library) and are now a contract here.
+// (useConfirmAction, 原 useConfirmDelete) routes every state change through
+// this pure function, so these tests are the production path: the "busy reset
+// on both paths" / "close only on success" invariants used to live in three
+// nearly-identical comments (providers / pricing / library) and are now a
+// contract here.
 
 import { describe, expect, it } from "vitest"
 
 import {
   type DeleteFlowState,
   deleteFlowReducer,
-} from "@/hooks/use-confirm-delete"
+} from "@/hooks/use-confirm-action"
 
 const idle = <T>(): DeleteFlowState<T> => ({ target: null, busy: false })
 
