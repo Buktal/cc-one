@@ -15,14 +15,14 @@
 
 ## The problem
 
-Every time you work with an AI CLI — **Claude Code, Codex, Gemini CLI, Grok CLI, OpenCode** — it writes a session log to disk. Tokens in, tokens out, cache hits and misses, money spent: it all sits in plain text on your machine, unread. cc one reads those logs and turns them into a clear picture: **what you spent, what you got, and where your tokens went.**
+Every time you work with an AI CLI — **Claude Code, Codex, Gemini CLI, Grok CLI, OpenCode** — it writes a session log to disk. Input tokens, output tokens, cache hits and misses, spend: it all remains on your machine as plain text, unread. cc one reads those logs and turns them into a clear picture: **what you spent, what you received, and where your tokens went.**
 
 And when you switch between AI CLIs — or switch providers behind them — cc one manages that too, writing the exact config file each CLI reads.
 
-Two stances shape the whole product:
+Two principles govern the design:
 
-- **Local-first.** The full dashboard works with zero network. The logs are already on your disk — that's all it needs.
-- **Read-only toward your logs.** cc one only ever *reads* session logs. It never modifies them and never touches the tools' behavior — they keep running exactly as before. The one exception: switching a provider writes the config your CLI reads, and it's always your explicit action, backed up before the write.
+- **Local-first.** The full dashboard works with zero network. The logs are already on your disk; nothing else is required.
+- **Read-only toward your logs.** cc one only ever *reads* session logs. It never modifies them and never touches the tools' behavior — they keep running exactly as before. The sole exception is provider switching, which writes the config your CLI reads; it is always an explicit action on your part, with a backup taken before the write.
 
 Multi-device sync is a purely **opt-in** layer on top — never a precondition.
 
@@ -39,11 +39,11 @@ Multi-device sync is a purely **opt-in** layer on top — never a precondition.
 ### Providers
 
 - **All five AI CLIs, one config hub** — Claude Code, Codex, Gemini CLI, Grok CLI, and OpenCode each get their own provider list: name, category, endpoint, and auth. Switching a provider writes the *real* config file that CLI reads — Codex's `config.toml` + `auth.json`, Gemini CLI's `settings.json` + env, Grok's `config.toml`, OpenCode's `opencode.json` — merging only controlled fields and backing up the previous file first.
-- **59 built-in presets across five pools** — each CLI has its own pool: Claude Code 18 (official + AWS Bedrock, eleven domestic vendors, four popular aggregators), Codex 17, OpenCode 12, Gemini CLI 6, Grok CLI 6. Pick one, drop in your key, switch.
+- **59 built-in presets across five pools** — each CLI has its own pool: Claude Code 18 (official + AWS Bedrock, eleven domestic vendors, four popular aggregators), Codex 17, OpenCode 12, Gemini CLI 6, Grok CLI 6. Select a preset, enter your API key, and switch.
 - **Raw settings editor** — every provider carries its full settings snapshot. A built-in JSON editor shows the whole thing, formats on demand, and flags parse errors instead of silently discarding them.
 - **Model role mapping** — five roles (Sonnet / Opus / Fable / Haiku / Subagent), each with its own model and a 1M-context toggle. One click fetches the vendor's model list; "apply to all" spreads one model across every role.
-- **Import from anywhere** — bring providers in from a CC-Switch export, your local config files, or a CC One backup — three sources treated as equals, with an opencode.json import previewing its changes before landing. Export your whole list as JSON anytime.
-- **Provider structure syncs, keys don't** — the provider list rides your sync repo per device, byte-stable; API keys are stripped from anything that leaves your machine.
+- **Import from multiple sources** — import providers from a CC-Switch export, your local config files, or a CC One backup — three sources treated as equals, with an opencode.json import previewing its changes before landing. Export your whole list as JSON anytime.
+- **Provider structure syncs, keys don't** — the provider list syncs through your sync repo on a per-device basis, byte-stable; API keys are stripped from anything that leaves your machine.
 
 ### Dashboard
 
@@ -58,11 +58,11 @@ Multi-device sync is a purely **opt-in** layer on top — never a precondition.
 ### Sessions
 
 - **A browsable history of every conversation** — every session your AI CLIs ran, grouped under its project directory, with full-text search across titles and paths. Filter by time range, source, model, and device.
-- **Full transcripts, instantly** — every session's conversation is stored in the local database at collect time, so any session — favorited or not — opens its complete transcript without re-reading a log file that may still be mid-write.
+- **Full transcripts, instantly** — every session's conversation is stored in the local database at collect time, so any session — favorited or not — opens its complete transcript without re-reading a log file that may still be being written.
 - **Transcripts render as markdown** — code blocks and JSON are syntax-highlighted and themed; Claude Code subagent runs appear as their own sessions with an agent-type badge.
 - **Search and jump inside a session** — find text across the transcript with hit-highlighting, then jump straight to the message via the numbered turn panel beside it.
 - **Two tabs, two ways to organize** — a **Local** tab for everything collected on this machine, sorted into private groups that never leave it; a **Favorites** tab for the sessions you starred across all devices, sorted into synced groups, each entry marked with its source device.
-- **Favorites sync across devices** — star a session once and its transcript travels through your sync repo to every other device; unstar it and it disappears everywhere. Only favorited sessions ever leave your machine.
+- **Favorites sync across devices** — mark a session as a favorite once, and its transcript is delivered through your sync repo to every other device; remove the favorite and it is removed everywhere. Only favorited sessions ever leave your machine.
 - **Per-session economics** — each session shows its request count, token breakdown, and cost, computed live from the usage records — never double-stored.
 
 ### Sync (optional)
@@ -71,30 +71,30 @@ Multi-device sync is a purely **opt-in** layer on top — never a precondition.
 - **Your own repo, plain-text artifacts** — usage is projected into human-readable, per-device, per-day JSONL (`data/<device>/usage-YYYY-MM-DD.jsonl`) in a repo you control. No third-party server in the middle.
 - **Device-isolated, conflict-free** — each device writes its own `data/<device>/` subtree, so concurrent pushes never collide. If a device loses a push race, the next sync rebases its local commits onto the remote tip and self-heals.
 - **Deterministic artifacts** — collection writes the local store only; a push regenerates each changed day's artifact byte-for-byte from the store, so two devices can never disagree on a file's content.
-- **System-proxy aware** — push/fetch follows the OS proxy (Clash/Mihomo, corporate gateways), so Synced mode just works behind one.
+- **System-proxy aware** — push/fetch follows the OS proxy (Clash/Mihomo, corporate gateways), so Synced mode operates correctly behind one.
 - **Device-scoped views** — filter the dashboard, the glance card, and the tucked bar to a single device; forget a peer locally, and stale peers auto-clear.
 
 ### Library
 
 - **Drag-to-relay upload** — drop a file or directory onto the window to push it through your sync repo into that device's subtree; nested directories work at every depth.
 - **In-app preview** — images fit-to-width with ctrl+wheel zoom; text and JSON render themed and pretty-printed; everything else loads in a sandboxed iframe.
-- **Manual export** — save an entry to a path you choose; cc one never learns the target path and never writes into an AI tool's config dir.
-- **Safe overwrites** — same-name same-kind overwrites (git history is the safety net); same-name different-kind is rejected.
+- **Manual export** — save an entry to a path you choose; cc one never records the target path and never writes into an AI tool's config dir.
+- **Safe overwrites** — same-name same-kind overwrites (git history serves as the recovery mechanism); same-name different-kind is rejected.
 - **Per-device, zero conflict** — each device holds its own subtree; forgetting a peer offers to migrate its files into yours (`from-<peer>/`) or delete them.
 
 ### Cost & pricing
 
-- **Editable per-model pricing** — override seed prices; cc one uses your numbers.
+- **Editable per-model pricing** — override seed prices; cc one calculates with your figures.
 - **Pull from LiteLLM** — fetch the latest model cost map with one click.
 - **Rebill** — backfill records that had no price when collected, without re-costing existing history.
 - **Portable pricing book** — import and export your pricing table as JSON.
 
 ### Experience
 
-- **Lightweight glance mode** — tuck a mini-bar to the screen edge that always shows today's total, or expand it into a floating card mirroring the dashboard. Full ⇄ expanded ⇄ tucked, each shape remembering its own placement.
+- **Lightweight glance mode** — tuck a mini-bar to the screen edge that always shows today's total, or expand it into a floating card mirroring the dashboard. Full ⇄ expanded ⇄ tucked, each shape retains its own placement.
 - **Multi-skin theming** — five accent and chart palettes (Neutral, Sage, Azure, Crimson, Mauve) recolor the whole app without touching content; dark mode gets a three-tier surface ladder so pages, modals, and inputs read at the right depth.
-- **Tray-resident background collection** — an incremental scanner keeps the dashboard fresh (5s–60s intervals), no window needed.
-- **Auto-update & three languages** — signed updates straight from GitHub Releases; UI in English, 简体中文, or 日本語.
+- **Tray-resident background collection** — an incremental scanner keeps the dashboard up to date (5s–60s intervals), no window needed.
+- **Auto-update & three languages** — signed updates delivered directly from GitHub Releases; UI in English, 简体中文, or 日本語.
 
 ## What stays local, what syncs
 
@@ -131,7 +131,7 @@ A [Tauri 2](https://tauri.app/) app: a Rust backend handles collection, the loca
 
 ## Quick start
 
-Grab the installer for your OS from the **[Releases](https://github.com/Buktal/cc-one/releases)** page.
+Download the installer for your OS from the **[Releases](https://github.com/Buktal/cc-one/releases)** page.
 
 | OS | Installer |
 | --- | --- |
@@ -139,7 +139,7 @@ Grab the installer for your OS from the **[Releases](https://github.com/Buktal/c
 | **macOS** | `.dmg` (Apple Silicon, arm64) |
 | **Linux** | `.deb`, `.AppImage` (`.rpm` where available) |
 
-**First run:** launch cc one — it scans your local AI CLI session logs and the dashboard fills in. No account, no sign-in, no network. To see usage across machines, enable sync in **Settings** and point cc one at a GitHub repo you control.
+**First run:** launch cc one — it scans your local AI CLI session logs and the dashboard populates automatically. No account, no sign-in, no network. To see usage across machines, enable sync in **Settings** and point cc one at a GitHub repo you control.
 
 > **macOS note:** builds are currently unsigned. On first launch, right-click the app → **Open**, or strip the quarantine attribute:
 > ```bash
@@ -163,7 +163,7 @@ yarn test        # run the test suite
 
 ## FAQ
 
-**Why "cc one"?** — "cc" places it in the Claude Code ecosystem (next to cc-switch and cc-connect), and "one" is the hub where every AI CLI's usage, config, sync, and future agent bridges converge into a single tool you own. In Chinese it's 归一 — everything returns to one hub. It was previously called VaultOne.
+**Why "cc one"?** — "cc" places it in the Claude Code ecosystem (next to cc-switch and cc-connect), and "one" is the hub where every AI CLI's usage, config, sync, and future agent bridges converge into a single tool you own. In Chinese, the name corresponds to 归一 (guī yī) — everything converges into one hub. It was previously called VaultOne.
 
 **Does cc one send my data anywhere?** No. Everything is read from local logs and stored locally. The only way data leaves your machine is if you opt into sync — and then it goes to a GitHub repo *you* own, as plain text.
 
@@ -173,7 +173,7 @@ yarn test        # run the test suite
 
 **Which AI CLIs are supported?** Claude Code, Codex, Gemini CLI, Grok CLI, and OpenCode — each parsed from its native log format (JSONL, JSON, or SQLite), with token semantics normalized into one model.
 
-**Why a GitHub repo for sync?** Because you already have one, it's free, and it keeps your data in your hands — plain-text artifacts in a repo you control, no third-party service. Device isolation plus self-healing rebases keep concurrent multi-device sync conflict-free.
+**Why a GitHub repo for sync?** Most users already have one; it is free, and it keeps your data under your control — plain-text artifacts in a repo you control, no third-party service. Device isolation plus self-healing rebases keep concurrent multi-device sync conflict-free.
 
 ## Contributing
 
