@@ -49,7 +49,12 @@ import {
   spanLabelKey,
   spanParts,
 } from "@/lib/format"
-import { sumBuckets, tokenBuckets } from "@/lib/token-buckets"
+import {
+  BUCKET_COLOR,
+  BUCKET_DISPLAY,
+  sumBuckets,
+  tokenBuckets,
+} from "@/lib/token-buckets"
 import { cn } from "@/lib/utils"
 import type {
   SessionMessage,
@@ -63,14 +68,6 @@ import {
   type StatsAggregate,
 } from "../derive"
 import { turnAnchors } from "../turn-nav"
-
-/** 四桶条形的分段色 —— 与 usage 域图表同一组 B 级语义 token。 */
-const BUCKET_COLORS = {
-  input: "var(--chart-input)",
-  output: "var(--chart-output)",
-  cache_creation: "var(--chart-cache-create)",
-  cache_read: "var(--chart-cache-read)",
-} as const
 
 /** 口径 tag 的文案键——按项目/按会话/按分组（原口径 tab 的文字留作 tag）。 */
 const TAG_KEYS = {
@@ -454,28 +451,14 @@ function UsageBody({
 }) {
   const { t } = useTranslation()
   const total = sumBuckets(tokens)
-  const segments = [
-    {
-      label: t("sessions.stats.bucket.input"),
-      value: tokens.input,
-      color: BUCKET_COLORS.input,
-    },
-    {
-      label: t("sessions.stats.bucket.output"),
-      value: tokens.output,
-      color: BUCKET_COLORS.output,
-    },
-    {
-      label: t("sessions.stats.bucket.cacheCreation"),
-      value: tokens.cache_creation,
-      color: BUCKET_COLORS.cache_creation,
-    },
-    {
-      label: t("sessions.stats.bucket.cacheRead"),
-      value: tokens.cache_read,
-      color: BUCKET_COLORS.cache_read,
-    },
-  ]
+  // 展示名册 BUCKET_DISPLAY（lib/token-buckets）的 sessions 域投影：色/序与
+  // usage 域图表同一契约，文案走本域键（前缀在此拼接，名册只持共用尾段）。
+  const segments = BUCKET_DISPLAY.map((b) => ({
+    bucket: b.bucket,
+    label: t(`sessions.stats.bucket.${b.suffix}`),
+    value: tokens[b.bucket],
+    color: b.cssVar,
+  }))
   return (
     <div className={className}>
       <p className="text-muted-foreground text-[10px] tabular-nums">
@@ -485,7 +468,7 @@ function UsageBody({
         {total > 0
           ? segments.map((seg) => (
               <span
-                key={seg.label}
+                key={seg.bucket}
                 // DSL 段 tooltip：标签 数量 · 占比。
                 title={formatMetricSeg(
                   seg.label,
@@ -503,7 +486,7 @@ function UsageBody({
       </div>
       <div className="mt-2 flex flex-col gap-1 text-[11px]">
         {segments.map((seg) => (
-          <div key={seg.label} className="flex items-center gap-1.5">
+          <div key={seg.bucket} className="flex items-center gap-1.5">
             <span
               className="size-2 shrink-0 rounded-[2px]"
               style={{ background: seg.color }}
@@ -526,7 +509,7 @@ function UsageBody({
           </div>
           <div
             className="text-[15px] font-semibold tabular-nums"
-            style={{ color: BUCKET_COLORS.cache_read }}
+            style={{ color: BUCKET_COLOR.cache_read }}
           >
             {formatPct(hitRate)}
           </div>

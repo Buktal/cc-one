@@ -37,40 +37,25 @@ import { zeroFillTrend } from "@/features/usage/derive"
 import { tickIntervalFor } from "@/lib/chart"
 import { dayRangeToTs, effectiveDays, sameDayWindow } from "@/lib/date-range"
 import { formatCost, formatDay, formatTokens } from "@/lib/format"
+import { BUCKET_DISPLAY, type BucketStatKey } from "@/lib/token-buckets"
 import { cn } from "@/lib/utils"
 
 import type { TrendBucket, TrendPoint } from "@/types/generated/bindings"
 
 type Bucket = {
-  key: keyof TrendPoint
+  key: BucketStatKey
   name: string
   color: string
 }
 
-// Order matches the KPI strip / token hero: input → output → cache creation →
-// cache read. Each line keeps its hue family across skins.
-const BUCKETS: Bucket[] = [
-  {
-    key: "input_tokens",
-    name: "usage.tokens.input",
-    color: "var(--chart-input)",
-  },
-  {
-    key: "output_tokens",
-    name: "usage.tokens.output",
-    color: "var(--chart-output)",
-  },
-  {
-    key: "cache_creation_tokens",
-    name: "usage.tokens.cacheCreation",
-    color: "var(--chart-cache-create)",
-  },
-  {
-    key: "cache_read_tokens",
-    name: "usage.tokens.cacheRead",
-    color: "var(--chart-cache-read)",
-  },
-]
+// 展示名册 BUCKET_DISPLAY（lib/token-buckets）的 usage 域投影。序即名册序
+// （= KPI 带 / token hero / 会话统计条形的同一展示序契约），每条线跨皮肤
+// 保持自己的色系；色/文案键不再手抄。
+const BUCKETS: Bucket[] = BUCKET_DISPLAY.map((b) => ({
+  key: `${b.bucket}_tokens`,
+  name: `usage.tokens.${b.suffix}`,
+  color: b.cssVar,
+}))
 
 /** Hour bucket key `YYYY-MM-DDTHH` → `HH:00` for the axis / tooltip. */
 function formatHour(key: string): string {
@@ -122,28 +107,17 @@ export function UsageTrendChart({ filter }: { filter: FilterState }) {
   // ChartConfig keys MUST equal the dataKeys (input_tokens …) so the shadcn
   // legend helper resolves label + color from payload.dataKey. stroke / dot
   // use the bucket's own color directly (var(--chart-*)), not the
-  // ChartStyle-injected --color-<key> — keeps the source of truth in BUCKETS.
+  // ChartStyle-injected --color-<key>. 整表由展示名册 reduce 生成——色/文案键
+  // 唯一出处是 lib/token-buckets 的 BUCKET_DISPLAY，这里不再重抄。
   // X 轴刻度间隔按点数自适应（~7 个刻度）：preserveStartEnd 在 24 小时点上
   // 只保首尾两个、中间刻度全被丢，长窗口与短窗口都看不清节奏。
   const tickInterval = tickIntervalFor(data.length)
-  const chartConfig = {
-    input_tokens: {
-      label: t("usage.tokens.input"),
-      color: "var(--chart-input)",
-    },
-    output_tokens: {
-      label: t("usage.tokens.output"),
-      color: "var(--chart-output)",
-    },
-    cache_creation_tokens: {
-      label: t("usage.tokens.cacheCreation"),
-      color: "var(--chart-cache-create)",
-    },
-    cache_read_tokens: {
-      label: t("usage.tokens.cacheRead"),
-      color: "var(--chart-cache-read)",
-    },
-  } satisfies ChartConfig
+  const chartConfig: ChartConfig = Object.fromEntries(
+    BUCKET_DISPLAY.map((b): [string, ChartConfig[string]] => [
+      `${b.bucket}_tokens`,
+      { label: t(`usage.tokens.${b.suffix}`), color: b.cssVar },
+    ]),
+  )
 
   return (
     <Card interactive>

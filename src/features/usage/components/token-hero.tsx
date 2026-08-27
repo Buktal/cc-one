@@ -20,29 +20,15 @@ import {
   formatSegValue,
   formatTokens,
 } from "@/lib/format"
+import { BUCKET_DISPLAY, type BucketStatKey } from "@/lib/token-buckets"
 
-const SEGMENTS = [
-  {
-    key: "input_tokens",
-    label: "usage.tokens.input",
-    color: "var(--chart-input)",
-  },
-  {
-    key: "output_tokens",
-    label: "usage.tokens.output",
-    color: "var(--chart-output)",
-  },
-  {
-    key: "cache_creation_tokens",
-    label: "usage.tokens.cacheCreation",
-    color: "var(--chart-cache-create)",
-  },
-  {
-    key: "cache_read_tokens",
-    label: "usage.tokens.cacheRead",
-    color: "var(--chart-cache-read)",
-  },
-] as const
+// 展示名册 BUCKET_DISPLAY（lib/token-buckets）的 usage 域投影：堆叠条与图例
+// 共用同一序，色/文案键不再手抄（序即名册序，与趋势图/会话统计同契约）。
+const SEGMENTS = BUCKET_DISPLAY.map((b) => ({
+  key: `${b.bucket}_tokens` as BucketStatKey,
+  label: `usage.tokens.${b.suffix}`,
+  color: b.cssVar,
+}))
 
 export function TokenHero({ filter }: { filter: FilterState }) {
   const { t } = useTranslation()
