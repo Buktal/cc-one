@@ -31,6 +31,7 @@ use std::path::{Path, PathBuf};
 use crate::error::AppResult;
 use crate::model::{RawSession, SessionMessage, SessionMessageRole};
 
+use super::line_fold::{for_accepted_lines, LineFoldPolicy};
 use super::{
     collect_jsonl_incremental, discover_files, fresh_token_counts, truncate, CollectResult,
     DirectoryShape, FileParseOutcome, GateMode, RawUsage, ScanProgress, ScanProgressDelta,
@@ -185,26 +186,25 @@ fn session_id_of(file: &Path) -> String {
 fn parse_grok_updates(file: &Path, text: &str, start_line: i64) -> FileParseOutcome {
     let session_id = session_id_of(file);
     let mut events = Vec::new();
-    let mut skipped = 0u32;
-    for (idx, raw) in text.lines().enumerate() {
-        let line_no = idx as i64 + 1; // 1-based
-        if line_no <= start_line {
-            continue;
-        }
-        let line = raw.trim();
-        if line.is_empty() {
-            continue;
-        }
-        let Ok(record) = serde_json::from_str::<serde_json::Value>(line) else {
-            skipped += 1; // malformed JSON — a genuine parse failure
-            continue;
-        };
-        // Non-qualifying lines (other notifications / mid-turn snapshots) are
-        // normal noise, silently filtered — not counted as skipped.
-        if let Some(ev) = parse_grok_notification(&record, &session_id, line_no) {
-            events.extend(ev);
-        }
-    }
+    // The per-line skeleton (numbering / cursor gate / trim / blank-skip /
+    // serde / skipped window) is the shared walker's — grok folds GateFirst:
+    // its line files carry no full-file state to rebuild (session meta lives
+    // in the sibling summary.json), so pre-cursor lines are never parsed and
+    // a past-cursor parse failure counts unconditionally. Every line is a
+    // candidate — grok has no pre-serde gate.
+    let skipped = for_accepted_lines(
+        text,
+        start_line,
+        LineFoldPolicy::GateFirst,
+        |_| true,
+        |line_no, record: serde_json::Value| {
+            // Non-qualifying lines (other notifications / mid-turn snapshots)
+            // are normal noise, silently filtered — not counted as skipped.
+            if let Some(ev) = parse_grok_notification(&record, &session_id, line_no) {
+                events.extend(ev);
+            }
+        },
+    );
     FileParseOutcome {
         events,
         corrections: Vec::new(),
@@ -434,64 +434,58 @@ fn parse_grok_chat_history(file: &Path, text: &str, start_line: i64) -> FilePars
         .map(|d| d.join("summary.json").exists())
         .unwrap_or(false);
     let mut messages = Vec::new();
-    let mut skipped = 0u32;
-    for (idx, raw) in text.lines().enumerate() {
-        let line_no = idx as i64 + 1; // 1-based, matching the cursor
-        if line_no <= start_line {
-            continue;
-        }
-        let line = raw.trim();
-        if line.is_empty() {
-            continue;
-        }
-        let Ok(record) = serde_json::from_str::<serde_json::Value>(line) else {
-            skipped += 1; // malformed JSON line — a genuine parse failure
-            continue;
-        };
-        let kind = record.get("type").and_then(|t| t.as_str()).unwrap_or("");
-        // reasoning (and any unknown type) is skipped as noise, not a failure.
-        let role = match kind {
-            "user" => SessionMessageRole::User,
-            "assistant" => SessionMessageRole::Assistant,
-            "tool" => SessionMessageRole::Tool,
-            "system" => SessionMessageRole::System,
-            _ => continue,
-        };
-        let content = record
-            .get("content")
-            .map(extract_grok_content)
-            .unwrap_or_default();
-        let content = truncate(content.trim(), TRIM_LIMIT);
-        if content.is_empty() {
-            continue;
-        }
-        // Transcript ts stays verbatim-or-empty — deliberately NOT backfilled.
-        // The store orders messages by `(ts, uuid)`, so fabricating a
-        // collection-time stamp would shove undated lines to the end of the
-        // conversation; an empty value is the honest signal. See the
-        // applicability boundary on `fallback_timestamp` (usage/turn rows
-        // only).
-        let ts = parse_grok_timestamp(record.get("timestamp").or_else(|| record.get("ts")))
-            .unwrap_or_default();
-        let name = if matches!(role, SessionMessageRole::Tool) {
-            record
-                .get("name")
-                .or_else(|| record.get("tool_name"))
-                .and_then(|n| n.as_str())
-                .map(str::to_string)
-        } else {
-            None
-        };
-        messages.push(SessionMessage {
-            uuid: format!("grok:msg:{session_id}:line{line_no}"),
-            session_id: session_id.clone(),
-            role,
-            ts,
-            model: None,
-            name,
-            content,
-        });
-    }
+    // Same walker fold as `parse_grok_updates` — GateFirst (see there).
+    let skipped = for_accepted_lines(
+        text,
+        start_line,
+        LineFoldPolicy::GateFirst,
+        |_| true,
+        |line_no, record: serde_json::Value| {
+            let kind = record.get("type").and_then(|t| t.as_str()).unwrap_or("");
+            // reasoning (and any unknown type) is skipped as noise, not a failure.
+            let role = match kind {
+                "user" => SessionMessageRole::User,
+                "assistant" => SessionMessageRole::Assistant,
+                "tool" => SessionMessageRole::Tool,
+                "system" => SessionMessageRole::System,
+                _ => return,
+            };
+            let content = record
+                .get("content")
+                .map(extract_grok_content)
+                .unwrap_or_default();
+            let content = truncate(content.trim(), TRIM_LIMIT);
+            if content.is_empty() {
+                return;
+            }
+            // Transcript ts stays verbatim-or-empty — deliberately NOT backfilled.
+            // The store orders messages by `(ts, uuid)`, so fabricating a
+            // collection-time stamp would shove undated lines to the end of the
+            // conversation; an empty value is the honest signal. See the
+            // applicability boundary on `fallback_timestamp` (usage/turn rows
+            // only).
+            let ts = parse_grok_timestamp(record.get("timestamp").or_else(|| record.get("ts")))
+                .unwrap_or_default();
+            let name = if matches!(role, SessionMessageRole::Tool) {
+                record
+                    .get("name")
+                    .or_else(|| record.get("tool_name"))
+                    .and_then(|n| n.as_str())
+                    .map(str::to_string)
+            } else {
+                None
+            };
+            messages.push(SessionMessage {
+                uuid: format!("grok:msg:{session_id}:line{line_no}"),
+                session_id: session_id.clone(),
+                role,
+                ts,
+                model: None,
+                name,
+                content,
+            });
+        },
+    );
     // Degraded session: only when summary.json is missing. Keeps the directory
     // visible as a session (id = dir name) with empty meta per the spec; the
     // ingest layer attaches the transcript + usage rows by session_id.

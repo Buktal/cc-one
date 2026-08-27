@@ -5,6 +5,7 @@ use std::path::{Path, PathBuf};
 use crate::error::AppResult;
 use crate::model::{ServerToolUse, SessionMessage, SessionMessageRole, TokenCounts};
 
+use super::line_fold::{for_accepted_lines, LineFoldPolicy};
 use super::{
     collect_jsonl_incremental, discover_files, is_jsonl_file, truncate, CollectResult,
     DirectoryShape, RawTurnDuration, RawUsage, ScanProgress, ScanProgressDelta, SessionExtras,
@@ -108,7 +109,6 @@ impl ClaudeCodeSourceParser {
             std::collections::HashMap::new();
         let mut turn_durations = Vec::new();
         let mut messages: Vec<SessionMessage> = Vec::new();
-        let mut skipped = 0u32;
 
         // Session meta accumulates through the shared [`super::SessionMetaAcc`]
         // skeleton — tracked over the FULL file, not just the cursor tail (system
@@ -126,92 +126,88 @@ impl ClaudeCodeSourceParser {
         let mut summary = String::new();
         let mut custom_title: Option<String> = None;
 
-        for (idx, raw) in text.lines().enumerate() {
-            let line_no = idx as i64 + 1; // 1-based, matching the cursor
-            let line = raw.trim();
-            if line.is_empty() {
-                continue;
-            }
-            let ev = match serde_json::from_str::<SessionEvent>(line) {
-                Ok(ev) => ev,
-                Err(_) => {
-                    // Only count a malformed line as skipped when it is past the
-                    // cursor (the incremental tail); already-counted lines are
-                    // not re-counted on a re-collect.
-                    if line_no > start_line {
-                        skipped += 1;
+        // The per-line skeleton (numbering / trim / blank-skip / serde / the
+        // skipped window) is the shared walker's — claude folds
+        // ObserveAllCountPastCursor: meta is refreshable and must be fed from
+        // the FULL file, so pre-cursor lines are yielded too and the emission
+        // gate below compares line_no against the cursor; a malformed line
+        // counts only past the cursor (already-counted head lines are not
+        // recounted on a re-collect). Every line is a candidate — claude has
+        // no pre-serde gate.
+        let skipped = for_accepted_lines(
+            text,
+            start_line,
+            LineFoldPolicy::ObserveAllCountPastCursor,
+            |_| true,
+            |line_no, ev: SessionEvent| {
+                // ---- session meta (full file, every pass) — every parseable line
+                // feeds the accumulator; project_dir deliberately takes cwd from ANY
+                // event (cwd rides on user/assistant/system events alike, and
+                // subagent or short sessions carry no cwd-bearing system event at
+                // all); the accumulator picks the FIRST non-empty one (#83: the
+                // launch directory, not the cwd mode).
+                meta.observe_ts(ev.timestamp.as_deref());
+                meta.observe_cwd(ev.cwd.as_deref());
+                // summary / custom_title: latest non-empty wins (see locals above).
+                if let Some(s) = &ev.summary {
+                    let s = s.trim();
+                    if !s.is_empty() {
+                        summary = s.to_string();
                     }
-                    continue;
                 }
-            };
-
-            // ---- session meta (full file, every pass) — every parseable line
-            // feeds the accumulator; project_dir deliberately takes cwd from ANY
-            // event (cwd rides on user/assistant/system events alike, and
-            // subagent or short sessions carry no cwd-bearing system event at
-            // all); the accumulator picks the FIRST non-empty one (#83: the
-            // launch directory, not the cwd mode).
-            meta.observe_ts(ev.timestamp.as_deref());
-            meta.observe_cwd(ev.cwd.as_deref());
-            // summary / custom_title: latest non-empty wins (see locals above).
-            if let Some(s) = &ev.summary {
-                let s = s.trim();
-                if !s.is_empty() {
-                    summary = s.to_string();
+                if let Some(ct) = &ev.custom_title {
+                    let ct = ct.trim();
+                    if !ct.is_empty() {
+                        custom_title = Some(ct.to_string());
+                    }
                 }
-            }
-            if let Some(ct) = &ev.custom_title {
-                let ct = ct.trim();
-                if !ct.is_empty() {
-                    custom_title = Some(ct.to_string());
-                }
-            }
-            if let Some(m) = &ev.message {
-                if m.role.as_deref() == Some("user") {
-                    if let Some(t) = first_text_of(m) {
-                        // Skip Claude Code command/caveat noise so the
-                        // title is the first real prompt, not `/clear`.
-                        let t = t.trim();
-                        if !t.is_empty()
-                            && !t.contains("<local-command-caveat>")
-                            && !t.starts_with("<command-name>")
-                        {
-                            meta.offer_user_title(t);
+                if let Some(m) = &ev.message {
+                    if m.role.as_deref() == Some("user") {
+                        if let Some(t) = first_text_of(m) {
+                            // Skip Claude Code command/caveat noise so the
+                            // title is the first real prompt, not `/clear`.
+                            let t = t.trim();
+                            if !t.is_empty()
+                                && !t.contains("<local-command-caveat>")
+                                && !t.starts_with("<command-name>")
+                            {
+                                meta.offer_user_title(t);
+                            }
                         }
                     }
                 }
-            }
 
-            // ---- incremental (only lines past the cursor) ----
-            if line_no <= start_line {
-                continue;
-            }
-
-            // Transcript messages (trimmed: text + tool_use name; thinking and
-            // images dropped; long tool_result/text truncated at TRIM_LIMIT).
-            if let Some(m) = &ev.message {
-                let ts = ev.timestamp.as_deref().unwrap_or("");
-                messages.extend(extract_messages(m, &ev.uuid, &session_id, ts));
-            }
-
-            // Per-call usage + per-turn durations (existing message-id dedup).
-            let mid = ev.message.as_ref().and_then(|m| m.id.clone());
-            match ev.classify(&session_id) {
-                Parsed::Usage(u) => {
-                    let key = mid.unwrap_or_else(|| u.uuid.clone());
-                    events_by_mid
-                        .entry(key)
-                        .and_modify(|e| {
-                            if should_replace(e, &u) {
-                                *e = u.clone();
-                            }
-                        })
-                        .or_insert(u);
+                // ---- incremental (only lines past the cursor) ----
+                if line_no <= start_line {
+                    return;
                 }
-                Parsed::TurnDuration(td) => turn_durations.push(td),
-                Parsed::Skip => {}
-            }
-        }
+
+                // Transcript messages (trimmed: text + tool_use name; thinking and
+                // images dropped; long tool_result/text truncated at TRIM_LIMIT).
+                if let Some(m) = &ev.message {
+                    let ts = ev.timestamp.as_deref().unwrap_or("");
+                    messages.extend(extract_messages(m, &ev.uuid, &session_id, ts));
+                }
+
+                // Per-call usage + per-turn durations (existing message-id dedup).
+                let mid = ev.message.as_ref().and_then(|m| m.id.clone());
+                match ev.classify(&session_id) {
+                    Parsed::Usage(u) => {
+                        let key = mid.unwrap_or_else(|| u.uuid.clone());
+                        events_by_mid
+                            .entry(key)
+                            .and_modify(|e| {
+                                if should_replace(e, &u) {
+                                    *e = u.clone();
+                                }
+                            })
+                            .or_insert(u);
+                    }
+                    Parsed::TurnDuration(td) => turn_durations.push(td),
+                    Parsed::Skip => {}
+                }
+            },
+        );
 
         // Session assembly is `finish`'s job (title chain + truncation +
         // saw_any_event → Option<RawSession>); only the per-source differences

@@ -21,6 +21,7 @@ use std::path::{Path, PathBuf};
 use crate::error::AppResult;
 use crate::model::{SessionMessage, SessionMessageRole};
 
+use super::line_fold::{for_accepted_lines, LineFoldPolicy};
 use super::{
     collect_jsonl_incremental, discover_files, fresh_token_counts, is_jsonl_file, truncate,
     CollectResult, DirectoryShape, FileParseOutcome, RawUsage, ScanProgress, ScanProgressDelta,
@@ -214,6 +215,25 @@ fn prescan_codex_text(text: &str) -> (Option<CodexSessionIdentity>, Option<i64>)
     (identity, boundary)
 }
 
+/// Codex's cheap pre-serde candidate gate (the walker's `is_candidate`
+/// predicate): a rollout line is a candidate only when it carries one of the
+/// four consumed event markers, and an `event_msg` line only when it is a
+/// `token_count` (the only usage-bearing subtype). Performance design, not
+/// semantics — non-candidates are dropped BEFORE any parse attempt and are
+/// never counted as `lines_skipped` (see the [`CollectResult::lines_skipped`]
+/// declaration), and the gate also pins the session-meta observation window
+/// (see [`super::SessionMetaAcc`]).
+fn is_codex_candidate_line(line: &str) -> bool {
+    let is_event_msg = line.contains("\"event_msg\"");
+    if is_event_msg {
+        // event_msg: only token_count carries usage; other subtypes are noise.
+        return line.contains("\"token_count\"");
+    }
+    line.contains("\"session_meta\"")
+        || line.contains("\"turn_context\"")
+        || line.contains("\"response_item\"")
+}
+
 /// Fold one Codex JSONL file's text into a per-file parse outcome. Mirrors
 /// claude's `fold_file`: three streams from a single forward pass —
 ///   - per-call usages (cumulative → delta; only lines past `start_line`);
@@ -267,7 +287,6 @@ fn fold_codex_file(file: &Path, text: &str, start_line: i64) -> FileParseOutcome
     let mut events = Vec::new();
     let mut corrections = Vec::new();
     let mut messages = Vec::new();
-    let mut skipped = 0u32;
 
     // Session meta accumulates through the shared [`super::SessionMetaAcc`]
     // skeleton, tracked over the FULL file (refreshable system data). Only
@@ -276,202 +295,191 @@ fn fold_codex_file(file: &Path, text: &str, start_line: i64) -> FileParseOutcome
     // `lines_skipped` counting rule).
     let mut meta = SessionMetaAcc::default();
 
-    for (idx, raw) in text.lines().enumerate() {
-        let line_no = idx as i64 + 1; // 1-based, matching the cursor
-        let line = raw.trim();
-        if line.is_empty() {
-            continue;
-        }
-        // Cheap substring gate before serde.
-        let is_session_meta = line.contains("\"session_meta\"");
-        let is_turn_context = line.contains("\"turn_context\"");
-        let is_event_msg = line.contains("\"event_msg\"");
-        let is_response_item = line.contains("\"response_item\"");
-        if !is_session_meta && !is_turn_context && !is_event_msg && !is_response_item {
-            continue;
-        }
-        // event_msg: only token_count carries usage; other subtypes are noise.
-        if is_event_msg && !line.contains("\"token_count\"") {
-            continue;
-        }
-
-        let Ok(value) = serde_json::from_str::<serde_json::Value>(line) else {
-            // Malformed CANDIDATE line (it passed the marker gate above) — the
-            // same skip rule as claude's fold: count only lines PAST the
-            // cursor (the incremental tail); already-counted lines are not
-            // recounted on a re-collect. Lines failing the marker gate were
-            // never candidates, so they stay uncounted noise.
-            if line_no > start_line {
-                skipped += 1;
-            }
-            continue;
-        };
-
-        // ---- session meta (full file, every pass) ----
-        // Every ACCEPTED line feeds the accumulator, ahead of routing: a `type`
-        // field routes but doesn't affect system data (aligned with claude).
-        let ts_raw = value.get("timestamp").and_then(|v| v.as_str());
-        meta.observe_ts(ts_raw);
-        // Title candidate: first real user message (injection-noise-filtered),
-        // from response_item payloads only. Skipped for sub-agents — they emit
-        // no session anyway.
-        if is_response_item && !is_subagent {
-            if let Some(payload) = value.get("payload") {
-                if payload.get("type").and_then(|t| t.as_str()) == Some("message")
-                    && payload.get("role").and_then(|r| r.as_str()) == Some("user")
-                {
-                    if let Some(content) = payload.get("content") {
-                        let text = extract_codex_message_text(content);
-                        if let Some(candidate) = title_candidate_from_user_message(&text) {
-                            meta.offer_user_title(&candidate);
+    // The per-line skeleton (numbering / trim / blank-skip / marker gate /
+    // serde / the skipped window) is the shared walker's — codex folds
+    // ObserveAllCountPastCursor: the cumulative baseline + session meta must
+    // be rebuilt from the FULL file, so pre-cursor lines are yielded too and
+    // the routing below compares line_no against the cursor; a malformed
+    // CANDIDATE line counts only past the cursor (already-counted head lines
+    // are not recounted on a re-collect; gate-rejected lines are uncounted
+    // noise — see [`is_codex_candidate_line`]).
+    let skipped = for_accepted_lines(
+        text,
+        start_line,
+        LineFoldPolicy::ObserveAllCountPastCursor,
+        is_codex_candidate_line,
+        |line_no, value: serde_json::Value| {
+            // ---- session meta (full file, every pass) ----
+            // Every ACCEPTED line feeds the accumulator, ahead of routing: a `type`
+            // field routes but doesn't affect system data (aligned with claude).
+            let ts_raw = value.get("timestamp").and_then(|v| v.as_str());
+            meta.observe_ts(ts_raw);
+            // Title candidate: first real user message (injection-noise-filtered),
+            // from response_item payloads only. Skipped for sub-agents — they emit
+            // no session anyway. Keyed on the PARSED type — for a line that
+            // passed the marker gate and parsed, `type == "response_item"` is
+            // the exact form of the substring the gate matched (the two
+            // windows coincide by log format, the same premise
+            // [`super::SessionMetaAcc`] documents).
+            if value.get("type").and_then(|t| t.as_str()) == Some("response_item") && !is_subagent {
+                if let Some(payload) = value.get("payload") {
+                    if payload.get("type").and_then(|t| t.as_str()) == Some("message")
+                        && payload.get("role").and_then(|r| r.as_str()) == Some("user")
+                    {
+                        if let Some(content) = payload.get("content") {
+                            let text = extract_codex_message_text(content);
+                            if let Some(candidate) = title_candidate_from_user_message(&text) {
+                                meta.offer_user_title(&candidate);
+                            }
                         }
                     }
                 }
             }
-        }
 
-        let Some(event_type) = value.get("type").and_then(|t| t.as_str()) else {
-            continue;
-        };
-        let ts = ts_raw.unwrap_or("");
+            let Some(event_type) = value.get("type").and_then(|t| t.as_str()) else {
+                return;
+            };
+            let ts = ts_raw.unwrap_or("");
 
-        match event_type {
-            "session_meta" => {
-                if let Some(payload) = value.get("payload") {
-                    if state.thread_id.is_none() {
-                        state.thread_id =
-                            parse_codex_session_identity(payload).map(|i| i.thread_id);
+            match event_type {
+                "session_meta" => {
+                    if let Some(payload) = value.get("payload") {
+                        if state.thread_id.is_none() {
+                            state.thread_id =
+                                parse_codex_session_identity(payload).map(|i| i.thread_id);
+                        }
+                        // The launch cwd rides on session_meta (its only carrier in
+                        // Codex logs); the accumulator keeps the first non-empty one.
+                        meta.observe_cwd(payload.get("cwd").and_then(|v| v.as_str()));
                     }
-                    // The launch cwd rides on session_meta (its only carrier in
-                    // Codex logs); the accumulator keeps the first non-empty one.
-                    meta.observe_cwd(payload.get("cwd").and_then(|v| v.as_str()));
                 }
-            }
-            "turn_context" => {
-                if let Some(payload) = value.get("payload") {
-                    if let Some(model) = payload
+                "turn_context" => {
+                    if let Some(payload) = value.get("payload") {
+                        if let Some(model) = payload
+                            .get("model")
+                            .or_else(|| payload.get("info").and_then(|i| i.get("model")))
+                            .and_then(|v| v.as_str())
+                        {
+                            learn_model(model, &mut state, &mut events, &mut corrections);
+                        }
+                    }
+                }
+                "event_msg" => {
+                    let Some(payload) = value.get("payload") else {
+                        return;
+                    };
+                    if payload.get("type").and_then(|t| t.as_str()) != Some("token_count") {
+                        return;
+                    }
+                    let info = match payload.get("info") {
+                        Some(i) if !i.is_null() => i,
+                        _ => return, // first event often has null info
+                    };
+                    if let Some(model) = info
                         .get("model")
-                        .or_else(|| payload.get("info").and_then(|i| i.get("model")))
+                        .or_else(|| info.get("model_name"))
+                        .or_else(|| payload.get("model"))
                         .and_then(|v| v.as_str())
                     {
                         learn_model(model, &mut state, &mut events, &mut corrections);
                     }
-                }
-            }
-            "event_msg" => {
-                let Some(payload) = value.get("payload") else {
-                    continue;
-                };
-                if payload.get("type").and_then(|t| t.as_str()) != Some("token_count") {
-                    continue;
-                }
-                let info = match payload.get("info") {
-                    Some(i) if !i.is_null() => i,
-                    _ => continue, // first event often has null info
-                };
-                if let Some(model) = info
-                    .get("model")
-                    .or_else(|| info.get("model_name"))
-                    .or_else(|| payload.get("model"))
-                    .and_then(|v| v.as_str())
-                {
-                    learn_model(model, &mut state, &mut events, &mut corrections);
-                }
-                // Prefer cumulative total_token_usage; fall back to last_token_usage
-                // (already a per-call delta).
-                let (cumulative, is_total) = if let Some(total) = info.get("total_token_usage") {
-                    (parse_cumulative_tokens(total), true)
-                } else if let Some(last) = info.get("last_token_usage") {
-                    (parse_cumulative_tokens(last), false)
-                } else {
-                    continue;
-                };
-                let Some(cumulative) = cumulative else {
-                    continue;
-                };
-                let delta = if is_total {
-                    let d = compute_delta(&state.prev_total, &cumulative);
-                    state.prev_total = Some(cumulative);
-                    d
-                } else {
-                    DeltaTokens {
-                        input: cumulative.input as u32,
-                        cached_input: cumulative.cached_input as u32,
-                        output: cumulative.output as u32,
+                    // Prefer cumulative total_token_usage; fall back to last_token_usage
+                    // (already a per-call delta).
+                    let (cumulative, is_total) = if let Some(total) = info.get("total_token_usage")
+                    {
+                        (parse_cumulative_tokens(total), true)
+                    } else if let Some(last) = info.get("last_token_usage") {
+                        (parse_cumulative_tokens(last), false)
+                    } else {
+                        return;
+                    };
+                    let Some(cumulative) = cumulative else {
+                        return;
+                    };
+                    let delta = if is_total {
+                        let d = compute_delta(&state.prev_total, &cumulative);
+                        state.prev_total = Some(cumulative);
+                        d
+                    } else {
+                        DeltaTokens {
+                            input: cumulative.input as u32,
+                            cached_input: cumulative.cached_input as u32,
+                            output: cumulative.output as u32,
+                        }
+                    };
+                    // Map the delta straight to the FINAL four-pack (Codex input
+                    // is cache-inclusive; clamp + fresh-input normalization fold
+                    // in there), then gate on the emitted shape — zero final total
+                    // (a task-boundary snapshot; possibly with cache claims
+                    // against a zero input increment) is never counted or emitted
+                    // (`TokenCounts::is_zero`). A positive input always leaves
+                    // billable buckets behind.
+                    let tokens = fresh_token_counts(delta.input, delta.cached_input, delta.output);
+                    if tokens.is_zero() {
+                        return; // no billable token in this snapshot
                     }
-                };
-                // Map the delta straight to the FINAL four-pack (Codex input
-                // is cache-inclusive; clamp + fresh-input normalization fold
-                // in there), then gate on the emitted shape — zero final total
-                // (a task-boundary snapshot; possibly with cache claims
-                // against a zero input increment) is never counted or emitted
-                // (`TokenCounts::is_zero`). A positive input always leaves
-                // billable buckets behind.
-                let tokens = fresh_token_counts(delta.input, delta.cached_input, delta.output);
-                if tokens.is_zero() {
-                    continue; // no billable token in this snapshot
-                }
-                // Every non-zero event occupies a stable sequence number — line
-                // numbers drift if the file is edited, this does not.
-                state.event_index += 1;
+                    // Every non-zero event occupies a stable sequence number — line
+                    // numbers drift if the file is edited, this does not.
+                    state.event_index += 1;
 
-                // History replay only re-establishes the baseline — never
-                // emitted, and never counted as `lines_skipped`: these lines
-                // parse fine, so suppressing them is a filter, not a parse
-                // failure (see the [`CollectResult::lines_skipped`]
-                // declaration).
-                if is_history_snapshot_event(boundary, line_no) {
-                    continue;
-                }
-                let thread_id = state.thread_id.as_deref().unwrap_or("unknown");
-                let timestamp = value
-                    .get("timestamp")
-                    .and_then(|v| v.as_str())
-                    .map(str::to_string);
-                let usage = RawUsage {
-                    uuid: format!("codex:thread-v1:{thread_id}:{}", state.event_index),
-                    timestamp: super::fallback_timestamp(timestamp.clone()),
-                    model: state.current_model.clone(),
-                    source: SOURCE_TAG.to_string(),
-                    session_id: session_id_for_usage.clone(),
-                    tokens,
-                    ..Default::default()
-                };
-                // Model resolution lags the token events (see `learn_model`),
-                // so route each built event accordingly:
-                //   - already-synced lines (≤ cursor) rebuild state but are not
-                //     re-emitted — unless their model was "unknown", in which
-                //     case they become CORRECTION CANDIDATES for the pass that
-                //     first sees the model (`learn_model` flushes them into the
-                //     `corrections` output channel, not `events` — the store
-                //     rewrites only rows that still read model='unknown');
-                //   - lines past the cursor emit now when the model is known,
-                //     and are deferred otherwise (flushed by `learn_model`, or
-                //     with the "unknown" fallback at EOF).
-                if line_no <= start_line {
-                    if state.current_model == "unknown" {
-                        state.stale_unknown.push(usage);
+                    // History replay only re-establishes the baseline — never
+                    // emitted, and never counted as `lines_skipped`: these lines
+                    // parse fine, so suppressing them is a filter, not a parse
+                    // failure (see the [`CollectResult::lines_skipped`]
+                    // declaration).
+                    if is_history_snapshot_event(boundary, line_no) {
+                        return;
                     }
-                    continue;
+                    let thread_id = state.thread_id.as_deref().unwrap_or("unknown");
+                    let timestamp = value
+                        .get("timestamp")
+                        .and_then(|v| v.as_str())
+                        .map(str::to_string);
+                    let usage = RawUsage {
+                        uuid: format!("codex:thread-v1:{thread_id}:{}", state.event_index),
+                        timestamp: super::fallback_timestamp(timestamp.clone()),
+                        model: state.current_model.clone(),
+                        source: SOURCE_TAG.to_string(),
+                        session_id: session_id_for_usage.clone(),
+                        tokens,
+                        ..Default::default()
+                    };
+                    // Model resolution lags the token events (see `learn_model`),
+                    // so route each built event accordingly:
+                    //   - already-synced lines (≤ cursor) rebuild state but are not
+                    //     re-emitted — unless their model was "unknown", in which
+                    //     case they become CORRECTION CANDIDATES for the pass that
+                    //     first sees the model (`learn_model` flushes them into the
+                    //     `corrections` output channel, not `events` — the store
+                    //     rewrites only rows that still read model='unknown');
+                    //   - lines past the cursor emit now when the model is known,
+                    //     and are deferred otherwise (flushed by `learn_model`, or
+                    //     with the "unknown" fallback at EOF).
+                    if line_no <= start_line {
+                        if state.current_model == "unknown" {
+                            state.stale_unknown.push(usage);
+                        }
+                        return;
+                    }
+                    if state.current_model == "unknown" {
+                        state.pending_unknown.push(usage);
+                    } else {
+                        events.push(usage);
+                    }
                 }
-                if state.current_model == "unknown" {
-                    state.pending_unknown.push(usage);
-                } else {
-                    events.push(usage);
+                // Transcript messages — only past the cursor, only for top-level
+                // sessions (sub-agent transcripts are dropped). The guard collapses
+                // the cursor/sub-agent gate into the arm so already-synced and
+                // sub-agent response_items fall straight through to `_`.
+                "response_item" if line_no > start_line && !is_subagent => {
+                    if let Some(payload) = value.get("payload") {
+                        messages.extend(extract_codex_messages(payload, &session_id, ts, line_no));
+                    }
                 }
+                _ => {}
             }
-            // Transcript messages — only past the cursor, only for top-level
-            // sessions (sub-agent transcripts are dropped). The guard collapses
-            // the cursor/sub-agent gate into the arm so already-synced and
-            // sub-agent response_items fall straight through to `_`.
-            "response_item" if line_no > start_line && !is_subagent => {
-                if let Some(payload) = value.get("payload") {
-                    messages.extend(extract_codex_messages(payload, &session_id, ts, line_no));
-                }
-            }
-            _ => {}
-        }
-    }
+        },
+    );
 
     // The file carried no model context this pass — this-pass deferred events
     // fall back to "unknown" (unchanged from pre-fix behavior; the pass that

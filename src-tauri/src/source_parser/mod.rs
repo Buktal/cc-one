@@ -5,7 +5,10 @@
 //! funnels through one shared directory-walk skeleton ([`DirectoryShape`] +
 //! [`discover_files`]) and each file's incremental gate is declared
 //! ([`GateMode`] via [`SourceParser::gate_mode`]) — parsers never inline
-//! their own walkers or pretend a line cursor they don't honor. A parser
+//! their own walkers or pretend a line cursor they don't honor. Inside a
+//! file, the per-line fold skeleton (numbering / trim / blank-skip / serde /
+//! skipped accounting) funnels through the shared [`line_fold`] walker, so
+//! the once-per-tail `lines_skipped` invariant has a single implementation. A parser
 //! discovers Source files and parses them into two raw streams:
 //!   - per-call [`RawUsage`] (one per `assistant` event = one API request), and
 //!   - per-turn [`RawTurnDuration`] (from `system/turn_duration` events).
@@ -23,6 +26,7 @@ mod claude;
 mod codex;
 mod gemini;
 mod grok;
+mod line_fold;
 mod opencode;
 
 /// A single parsed per-call usage event (parser output, pre-cost / pre-device).
