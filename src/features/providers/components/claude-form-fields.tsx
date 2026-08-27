@@ -11,6 +11,7 @@ import { RefreshCw, Wand2 } from "lucide-react"
 import { Fragment, useMemo } from "react"
 import { useTranslation } from "react-i18next"
 import { toast } from "sonner"
+import { Field } from "@/components/form-field"
 import { SectionHeader } from "@/components/section-header"
 import { Button } from "@/components/ui/button"
 import { Checkbox } from "@/components/ui/checkbox"
@@ -23,10 +24,7 @@ import {
   SelectValue,
 } from "@/components/ui/select"
 import { Switch } from "@/components/ui/switch"
-import {
-  BasicSection,
-  Field,
-} from "@/features/providers/components/form-fields"
+import { BasicSection } from "@/features/providers/components/form-fields"
 import { ModelPickSelect } from "@/features/providers/components/model-pick-select"
 import type { AuthField, ModelRoleId } from "@/features/providers/derive"
 import {

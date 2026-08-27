@@ -14,6 +14,7 @@
 import { Plus, RefreshCw, Trash2 } from "lucide-react"
 import { useEffect, useRef, useState } from "react"
 import { useTranslation } from "react-i18next"
+import { Field } from "@/components/form-field"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
@@ -24,7 +25,6 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select"
-import { Field } from "@/features/providers/components/form-fields"
 import { ModelPickSelect } from "@/features/providers/components/model-pick-select"
 import {
   openCodeApiKey,

@@ -26,6 +26,9 @@ import {
   useFetchModelsMutation,
   useSaveProviderMutation,
 } from "@/app/store/api"
+// 草稿种子 / 保存收敛端口（codecs/draft）与应用能力事实表（app-profiles）：
+// 按 app 分派/查表，骨架不内联任何 app 特殊分支。
+import { Field } from "@/components/form-field"
 import { JsonEditor } from "@/components/json-editor"
 import { SectionHeader } from "@/components/section-header"
 import { Badge } from "@/components/ui/badge"
@@ -40,15 +43,10 @@ import {
   SheetTitle,
 } from "@/components/ui/sheet"
 import { Textarea } from "@/components/ui/textarea"
-// 草稿种子 / 保存收敛端口（codecs/draft）与应用能力事实表（app-profiles）：
-// 按 app 分派/查表，骨架不内联任何 app 特殊分支。
 import { APP_PROFILES } from "@/features/providers/app-profiles"
 import { finalizeDraft, seedDraftText } from "@/features/providers/codecs/draft"
 import { ClaudeFormFields } from "@/features/providers/components/claude-form-fields"
-import {
-  BasicSection,
-  Field,
-} from "@/features/providers/components/form-fields"
+import { BasicSection } from "@/features/providers/components/form-fields"
 import { ModelPickSelect } from "@/features/providers/components/model-pick-select"
 import { OpenCodeFormFields } from "@/features/providers/components/opencode-form-fields"
 import { PresetPicker } from "@/features/providers/components/preset-picker"

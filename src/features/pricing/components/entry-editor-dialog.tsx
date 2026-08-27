@@ -16,6 +16,7 @@ import { useEffect, useRef, useState } from "react"
 import { useTranslation } from "react-i18next"
 import { toast } from "sonner"
 import { useSavePricingMutation } from "@/app/store/api"
+import { Field } from "@/components/form-field"
 import { SectionHeader } from "@/components/section-header"
 import { Button } from "@/components/ui/button"
 import {
@@ -221,22 +222,9 @@ export function EntryEditorDialog({
   )
 }
 
-function Field({
-  label,
-  children,
-}: {
-  label: string
-  children: React.ReactNode
-}) {
-  return (
-    <div className="flex flex-col gap-1.5">
-      <Label className="text-muted-foreground text-xs">{label}</Label>
-      {children}
-    </div>
-  )
-}
-
-/** 单个价格单元格：$ 前缀 + 等宽 tabular 数字 + 0 价时的「免费」pill。 */
+/** 单个价格单元格：$ 前缀 + 等宽 tabular 数字 + 0 价时的「免费」pill。
+ *  （Field 原子已下放 @/components/form-field，本地抄本删除——架构审查
+ *  Ⅲ候选⑫。） */
 function PriceField({
   label,
   value,
