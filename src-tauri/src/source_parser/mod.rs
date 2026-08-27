@@ -35,7 +35,8 @@ mod opencode;
 pub struct RawUsage {
     /// Globally-unique id from the Source log — the dedup key.
     pub uuid: String,
-    /// ISO8601 UTC timestamp from the Source log.
+    /// ISO8601 UTC timestamp from the Source log; an absent/broken source
+    /// timestamp is backfilled to collection time (`fallback_timestamp`, #71).
     pub timestamp: String,
     /// Billed / mapped model string, e.g. `glm-5.2`.
     pub model: String,
@@ -98,7 +99,26 @@ pub struct CollectResult {
     pub messages: Vec<SessionMessage>,
     /// Files scanned.
     pub files_scanned: u32,
-    /// Lines that failed to parse (skipped, not fatal).
+    /// Entries the scan dropped without producing a row. NOT one uniform
+    /// meaning across sources — the per-source declaration:
+    ///   - Line-cursor JSONL sources (`claude_code`, `codex_cli`, `grok_cli`):
+    ///     malformed JSON lines PAST the incremental cursor — before-cursor
+    ///     lines were counted by the pass that first saw them, so a re-collect
+    ///     must not recount them.
+    ///   - Whole-file source (`gemini_cli` — one JSON object per file): exactly
+    ///     1 when a file's entire text fails to parse (its unit is the file,
+    ///     there are no lines).
+    ///   - SQLite source (`opencode`): 1 when the db cannot be opened or one
+    ///     of its whole-db queries fails (open / session list / session rows),
+    ///     plus +1 per failed per-session usage or transcript query.
+    ///   - Shared JSONL driver (all file-backed sources): +1 per discovered
+    ///     file whose stat or read failed outright.
+    ///
+    /// Not counted anywhere: noise filtered AFTER a successful parse — unknown
+    /// event types, zero-billable emit gates, codex history-replay suppression,
+    /// grok's degraded half-written summary (re-read next pass) — nor codex's
+    /// cheap marker substring gate, which discards non-candidate lines BEFORE
+    /// any parse attempt.
     pub lines_skipped: u32,
     /// Session ids SEEN this pass, derived from the DISCOVERED FILES — not
     /// from the parsed `sessions` (the mtime gate skips unchanged files, so the
@@ -223,6 +243,8 @@ pub(super) struct FileParseOutcome {
     pub(super) sessions: Vec<RawSession>,
     /// Transcript messages parsed this pass (only lines past the cursor).
     pub(super) messages: Vec<SessionMessage>,
+    /// Skipped entries this file contributed — the per-source meaning is the
+    /// [`CollectResult::lines_skipped`] declaration.
     pub(super) skipped: u32,
 }
 
@@ -570,6 +592,15 @@ pub(super) fn read_source_lossy(file: &Path) -> Option<String> {
 /// 缺时间戳的回填策略（单一归属，#71）：原始记录没带时间戳 → 用采集时刻。
 /// 已知偏差：回填的记录被分桶到采集当天而非真实发生日——策略集中在此，
 /// 「回填日 vs 未知」的正确呈现可单独讨论后在这一处替换。
+///
+/// 适用边界（协议语义）：本策略只管要按天入账的行——[`RawUsage`] /
+/// [`RawTurnDuration`] 的 timestamp，五个 parser 的用量/turn 发射全部经此
+/// （含 grok 无/坏时间戳的 turn_completed：以回填时刻入账，不整条丢弃）。
+/// 会话原文 [`SessionMessage`] 的 ts **不走**回填：ts 是 store 的 `(ts, uuid)`
+/// 排序键，把「无时间」伪造成采集时刻会把消息整段排到对话末尾，宁缺勿假。
+/// 按 source 落地：文本 JSONL 源（claude / codex / gemini / grok）原样携带、
+/// 缺失即空串；opencode 的 SQLite 列是非空整型毫秒、不存在缺失形态，直接走
+/// `epoch_millis_to_iso`（其历法远界外的兜底是该函数自身的排序安全策略）。
 pub(super) fn fallback_timestamp(ts: Option<String>) -> String {
     ts.unwrap_or_else(crate::time::now_iso)
 }

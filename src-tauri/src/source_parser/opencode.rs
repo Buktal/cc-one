@@ -90,6 +90,9 @@ impl SourceParser for OpenCodeSourceParser {
             return Ok((result, delta));
         }
 
+        // The db is the unit here (SQLite, no line shapes): any failure to open
+        // or query counts as ONE skipped entry per CollectResult — see the
+        // `lines_skipped` declaration in `super`.
         let conn = match open_opencode_readonly(db_path) {
             Ok(c) => c,
             Err(_) => {

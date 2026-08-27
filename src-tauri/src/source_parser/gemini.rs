@@ -160,6 +160,9 @@ fn parse_gemini_tokens(tokens: &serde_json::Value) -> GeminiTokens {
 /// (not append), so there is no line cursor — the shared driver's mtime gate
 /// triggers a full re-parse, and the ledger dedups already-seen message ids.
 fn fold_file(file: &Path, text: &str) -> FileParseOutcome {
+    // The file IS the unit here (one JSON object, not append-only JSONL): a
+    // failed whole-file parse counts as exactly ONE skipped entry — see the
+    // `lines_skipped` declaration in `super`.
     let Ok(value) = serde_json::from_str::<serde_json::Value>(text) else {
         return FileParseOutcome {
             events: Vec::new(),

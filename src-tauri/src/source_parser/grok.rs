@@ -235,7 +235,13 @@ fn parse_grok_notification(
         return None;
     }
     let usage = update.get("usage").filter(|u| u.is_object())?;
-    let timestamp = parse_grok_timestamp(record.get("timestamp"))?;
+    // Absent/broken notification timestamps backfill to collection time
+    // (`fallback_timestamp`, #71) instead of dropping the whole notification:
+    // a missing timestamp says nothing about billability, and the old `?`
+    // silently discarded EVERY model's billing rows of such a turn.
+    // Backfilled turns land in the collection day — the strategy's documented
+    // bias, identical to what claude/codex/gemini already do.
+    let timestamp = super::fallback_timestamp(parse_grok_timestamp(record.get("timestamp")));
 
     let prompt_id = update
         .get("prompt_id")
@@ -459,6 +465,12 @@ fn parse_grok_chat_history(file: &Path, text: &str, start_line: i64) -> FilePars
         if content.is_empty() {
             continue;
         }
+        // Transcript ts stays verbatim-or-empty — deliberately NOT backfilled.
+        // The store orders messages by `(ts, uuid)`, so fabricating a
+        // collection-time stamp would shove undated lines to the end of the
+        // conversation; an empty value is the honest signal. See the
+        // applicability boundary on `fallback_timestamp` (usage/turn rows
+        // only).
         let ts = parse_grok_timestamp(record.get("timestamp").or_else(|| record.get("ts")))
             .unwrap_or_default();
         let name = if matches!(role, SessionMessageRole::Tool) {
@@ -667,6 +679,34 @@ mod tests {
         assert_eq!(ev.tokens.cache_read, 0);
         assert_eq!(ev.tokens.cache_creation, 0);
         assert_eq!(ev.timestamp, "2023-11-14T22:13:20.000Z");
+    }
+
+    /// A `turn_completed` notification whose timestamp is absent OR
+    /// unparseable is billed under a backfilled collection-time timestamp
+    /// (#71) instead of being dropped: a missing timestamp says nothing about
+    /// billability, and dropping here used to silently discard every model
+    /// row of the turn.
+    #[test]
+    fn grok_turn_without_timestamp_backfills_instead_of_dropping() {
+        let dir = tempfile::tempdir().unwrap();
+        let lines = vec![
+            // No timestamp field at all.
+            r#"{"method":"_x.ai/session/update","params":{"update":{"sessionUpdate":"turn_completed","prompt_id":"p1","usage":{"modelUsage":{"grok-4.5-build":{"inputTokens":100,"outputTokens":10,"cachedReadTokens":0}}}}}}"#.to_string(),
+            // Timestamp present but neither epoch nor RFC3339 → unparseable.
+            r#"{"timestamp":"not-a-time","method":"_x.ai/session/update","params":{"update":{"sessionUpdate":"turn_completed","prompt_id":"p2","usage":{"modelUsage":{"grok-4.5-build":{"inputTokens":50,"outputTokens":5,"cachedReadTokens":0}}}}}}"#.to_string(),
+        ];
+        write_grok_session(dir.path(), "s-ts", &lines);
+        let p = GrokSourceParser::with_dir(dir.path().to_path_buf());
+        let result = p.parse_full(&p.discover().unwrap()).unwrap();
+        assert_eq!(result.events.len(), 2, "billed with backfill, not dropped");
+        for ev in &result.events {
+            chrono::DateTime::parse_from_rfc3339(&ev.timestamp).unwrap_or_else(|e| {
+                panic!(
+                    "backfilled timestamp must be valid RFC3339: {}: {e}",
+                    ev.timestamp
+                )
+            });
+        }
     }
 
     /// Each turn_completed is an independent per-turn total — never diffed.

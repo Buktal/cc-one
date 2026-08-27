@@ -295,6 +295,14 @@ fn fold_codex_file(file: &Path, text: &str, start_line: i64) -> FileParseOutcome
         }
 
         let Ok(value) = serde_json::from_str::<serde_json::Value>(line) else {
+            // Malformed CANDIDATE line (it passed the marker gate above) — the
+            // same skip rule as claude's fold: count only lines PAST the
+            // cursor (the incremental tail); already-counted lines are not
+            // recounted on a re-collect. Lines failing the marker gate were
+            // never candidates, so they stay uncounted noise.
+            if line_no > start_line {
+                skipped += 1;
+            }
             continue;
         };
         let Some(event_type) = value.get("type").and_then(|t| t.as_str()) else {
@@ -414,11 +422,12 @@ fn fold_codex_file(file: &Path, text: &str, start_line: i64) -> FileParseOutcome
                 // numbers drift if the file is edited, this does not.
                 state.event_index += 1;
 
-                // History replay only re-establishes the baseline — never emit.
+                // History replay only re-establishes the baseline — never
+                // emitted, and never counted as `lines_skipped`: these lines
+                // parse fine, so suppressing them is a filter, not a parse
+                // failure (see the [`CollectResult::lines_skipped`]
+                // declaration).
                 if is_history_snapshot_event(boundary, line_no) {
-                    if line_no > start_line {
-                        skipped += 1;
-                    }
                     continue;
                 }
                 let thread_id = state.thread_id.as_deref().unwrap_or("unknown");
@@ -1132,8 +1141,9 @@ mod tests {
             1,
             "only the post-boundary event is emitted"
         );
-        // 2 replay snapshots counted as skipped.
-        assert_eq!(result.lines_skipped, 2);
+        // 2 replay snapshots suppressed — a filter, not a parse failure, so
+        // nothing counts as skipped (see the `lines_skipped` declaration).
+        assert_eq!(result.lines_skipped, 0);
         let ev = &result.events[0];
         assert_eq!(ev.uuid, "codex:thread-v1:child:3");
         assert_eq!(ev.model, "gpt-5.6-sol");
