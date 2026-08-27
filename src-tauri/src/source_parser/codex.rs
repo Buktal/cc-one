@@ -19,12 +19,12 @@
 use std::path::{Path, PathBuf};
 
 use crate::error::AppResult;
-use crate::model::{RawSession, SessionMessage, SessionMessageRole};
+use crate::model::{SessionMessage, SessionMessageRole};
 
 use super::{
     collect_jsonl_incremental, discover_files, fresh_token_counts, is_jsonl_file, truncate,
     CollectResult, DirectoryShape, FileParseOutcome, RawUsage, ScanProgress, ScanProgressDelta,
-    SourceParser, TITLE_MAX, TRIM_LIMIT,
+    SessionExtras, SessionMetaAcc, SourceParser, TRIM_LIMIT,
 };
 
 /// Stable source tag — becomes `RawUsage.source` / `RawSession.source` and the
@@ -218,7 +218,8 @@ fn prescan_codex_text(text: &str) -> (Option<CodexSessionIdentity>, Option<i64>)
 /// claude's `fold_file`: three streams from a single forward pass —
 ///   - per-call usages (cumulative → delta; only lines past `start_line`);
 ///   - one [`RawSession`] covering the WHOLE file (system data is refreshable,
-///     so every pass re-reads first/last ts, cwd, and the title sources);
+///     so every pass re-reads first/last ts, cwd, and the title sources),
+///     accumulated through [`super::SessionMetaAcc`];
 ///   - transcript [`SessionMessage`]s (only lines past `start_line` — incremental,
 ///     so a re-collect appends only new lines).
 ///
@@ -268,12 +269,12 @@ fn fold_codex_file(file: &Path, text: &str, start_line: i64) -> FileParseOutcome
     let mut messages = Vec::new();
     let mut skipped = 0u32;
 
-    // Session meta — tracked over the FULL file (refreshable system data).
-    let mut started_at = String::new();
-    let mut last_active_at = String::new();
-    let mut project_dir = String::new();
-    let mut first_user_text: Option<String> = None;
-    let mut saw_any_event = false;
+    // Session meta accumulates through the shared [`super::SessionMetaAcc`]
+    // skeleton, tracked over the FULL file (refreshable system data). Only
+    // marker-gated lines are fed — see that type's doc for why this observation
+    // window stays per-source (the gate is a perf design and pins the
+    // `lines_skipped` counting rule).
+    let mut meta = SessionMetaAcc::default();
 
     for (idx, raw) in text.lines().enumerate() {
         let line_no = idx as i64 + 1; // 1-based, matching the cursor
@@ -305,25 +306,16 @@ fn fold_codex_file(file: &Path, text: &str, start_line: i64) -> FileParseOutcome
             }
             continue;
         };
-        let Some(event_type) = value.get("type").and_then(|t| t.as_str()) else {
-            continue;
-        };
 
         // ---- session meta (full file, every pass) ----
-        let ts = value
-            .get("timestamp")
-            .and_then(|v| v.as_str())
-            .unwrap_or("");
-        if !saw_any_event {
-            started_at = ts.to_string();
-            saw_any_event = true;
-        }
-        if !ts.is_empty() {
-            last_active_at = ts.to_string();
-        }
-        // Title candidate: first real user message (injection-noise-filtered).
-        // Skipped for sub-agents — they emit no session anyway.
-        if first_user_text.is_none() && is_response_item && !is_subagent {
+        // Every ACCEPTED line feeds the accumulator, ahead of routing: a `type`
+        // field routes but doesn't affect system data (aligned with claude).
+        let ts_raw = value.get("timestamp").and_then(|v| v.as_str());
+        meta.observe_ts(ts_raw);
+        // Title candidate: first real user message (injection-noise-filtered),
+        // from response_item payloads only. Skipped for sub-agents — they emit
+        // no session anyway.
+        if is_response_item && !is_subagent {
             if let Some(payload) = value.get("payload") {
                 if payload.get("type").and_then(|t| t.as_str()) == Some("message")
                     && payload.get("role").and_then(|r| r.as_str()) == Some("user")
@@ -331,12 +323,17 @@ fn fold_codex_file(file: &Path, text: &str, start_line: i64) -> FileParseOutcome
                     if let Some(content) = payload.get("content") {
                         let text = extract_codex_message_text(content);
                         if let Some(candidate) = title_candidate_from_user_message(&text) {
-                            first_user_text = Some(candidate);
+                            meta.offer_user_title(&candidate);
                         }
                     }
                 }
             }
         }
+
+        let Some(event_type) = value.get("type").and_then(|t| t.as_str()) else {
+            continue;
+        };
+        let ts = ts_raw.unwrap_or("");
 
         match event_type {
             "session_meta" => {
@@ -345,13 +342,9 @@ fn fold_codex_file(file: &Path, text: &str, start_line: i64) -> FileParseOutcome
                         state.thread_id =
                             parse_codex_session_identity(payload).map(|i| i.thread_id);
                     }
-                    if project_dir.is_empty() {
-                        if let Some(cwd) = payload.get("cwd").and_then(|v| v.as_str()) {
-                            if !cwd.is_empty() {
-                                project_dir = cwd.to_string();
-                            }
-                        }
-                    }
+                    // The launch cwd rides on session_meta (its only carrier in
+                    // Codex logs); the accumulator keeps the first non-empty one.
+                    meta.observe_cwd(payload.get("cwd").and_then(|v| v.as_str()));
                 }
             }
             "turn_context" => {
@@ -488,32 +481,19 @@ fn fold_codex_file(file: &Path, text: &str, start_line: i64) -> FileParseOutcome
     // on the pass that sees the model (or a later one).
     events.extend(std::mem::take(&mut state.pending_unknown));
 
-    let sessions = if !is_subagent && saw_any_event {
-        // Title priority: first real user message (noise-filtered) → cwd basename.
-        // TODO: state_5.sqlite `threads.title` is a richer title source (CC-Switch
-        // loads it via `load_thread_titles_from_db`), but locating/reading the
-        // Codex state DB needs its own discovery path; until that lands, the
-        // first real prompt is the best-effort title (cwd basename fallback).
-        let title_orig = first_user_text
-            .as_deref()
-            .filter(|s| !s.is_empty())
-            .or_else(|| {
-                Path::new(&project_dir)
-                    .file_name()
-                    .and_then(|n| n.to_str())
-                    .filter(|s| !s.is_empty())
-            });
-        let title_orig = truncate(title_orig.unwrap_or(""), TITLE_MAX);
-        vec![RawSession {
-            id: session_id,
-            source: SOURCE_TAG.to_string(),
-            project_dir,
-            title_orig,
-            started_at,
-            last_active_at,
-            agent_type: String::new(),
-            parent_session_id: String::new(),
-        }]
+    // Session assembly is `finish`'s job (title chain + truncation +
+    // saw_any_event → Option<RawSession>); sub-agent logs carry no top-level
+    // session, so they finish into nothing.
+    // Title priority (the default chain): first real user message
+    // (noise-filtered) → cwd basename.
+    // TODO: state_5.sqlite `threads.title` is a richer title source (CC-Switch
+    // loads it via `load_thread_titles_from_db`), but locating/reading the
+    // Codex state DB needs its own discovery path; until that lands, the
+    // first real prompt is the best-effort title (cwd basename fallback).
+    let sessions = if !is_subagent {
+        meta.finish(SOURCE_TAG, session_id, SessionExtras::default())
+            .into_iter()
+            .collect()
     } else {
         Vec::new()
     };

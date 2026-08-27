@@ -563,6 +563,147 @@ pub(super) fn truncate(s: &str, limit: usize) -> String {
     format!("{head}…")
 }
 
+/// Claude / Codex 共享的 session 元数据累积器（架构审查Ⅲ候选⑦）。fold 循环的
+/// 另一半骨架——「session 元数据全文件重读（refreshable）、事件/消息只发游标
+/// 之后」——此前在两个 parser 里各手写一份（每份约 60 行平行实现），只能靠人眼
+/// 保持同构；本类型把这套步骤单源化：started_at 首置 / last_active_at 推进 /
+/// 首个非空 cwd → project_dir / 首条真实用户消息作标题（噪声过滤留在调用方）/
+/// saw_any_event 判定 / 标题链回落与截断 / RawSession 构造。新 JSONL 源接入只
+/// 声明喂入点与噪声过滤即可。
+///
+/// 跨 parser 不变量由此类型的使用方式表达：
+///   - 三个 observe_* 必须对**每一条已接受行**调用，且都写在增量游标门之前——
+///     系统数据 refreshable，重采只看见尾部追加行时，首事件时间/启动目录/首条
+///     提示不能丢（claude/codex 的 incremental meta 覆盖全文件回归测试守此）；
+///   - [`SessionMetaAcc::finish`] 在整个 fold 循环结束后调用一次（游标门之外），
+///     收口 saw_any_event 语义并产出至多一个 [`RawSession`]；
+///   - 游标门之后的全部发射路径不经过本类型。
+///
+/// 观察窗（哪些行算「已接受」）是 per-source 决策，刻意保留分叉，非遗漏：
+///   - claude 对任何 serde 成功的行观察；
+///   - codex 只对过 marker substring 门（`session_meta` / `turn_context` /
+///     `event_msg`+`token_count` / `response_item`）的行观察——那道门是性能
+///     设计（非候选行在 serde 前丢弃），并与 [`CollectResult::lines_skipped`]
+///     「只计过门后的畸形行」口径绑定；放宽窗口会改动 skipped 计数语义，不属于
+///     结构收敛。两窗同解的前提由日志格式保证：codex rollout 恒以 `session_meta`
+///     起头、业务行全部落在四类之内。
+///   - 已归一的分叉：codex 原先「过门且 serde 成功但缺 type 字段」的退化行不
+///     观察元数据——现在 serde 成功即观察（type 只影响路由、不影响系统数据），
+///     与 claude 的内层次序一致。
+#[derive(Debug, Default)]
+pub(super) struct SessionMetaAcc {
+    /// 首个已接受行的原始时间戳（缺失/空串照原样冻结）；之后不再回填。
+    started_at: String,
+    /// 最后一次见到的非空时间戳（append-only 日志下的「最新所见」，非字典序最大）。
+    last_active_at: String,
+    /// 首个 trim 后非空的 cwd = 会话启动目录（CONTEXT「项目」词条：取会话启动时
+    /// 的工作目录，拒绝众数钉偏 #83）。`None` = 尚未见到可用值。
+    project_dir: Option<String>,
+    /// 第一条通过调用方噪声过滤的真实用户消息（首胜；claude 的改名刷新走
+    /// [`SessionExtras::extra_title_levels`] 层，与本层无关）。
+    user_title: Option<String>,
+    /// 是否见过至少一行可解析事件——决定文件是否产出 session 行。
+    saw_any_event: bool,
+}
+
+/// [`SessionMetaAcc::finish`] 的逐源差异面——主链之外的一切在此注入；
+/// `Default` 即 codex / claude 主会话形态（空 extra 层、无固定标题、无代理标签）。
+#[derive(Debug, Default)]
+pub(super) struct SessionExtras<'a> {
+    /// 标题链最高优先级层：依次取第一个非空值。claude 传
+    /// `[custom_title, summary]`——两者都是「文件内最新者胜」（summary 会随
+    /// /compact 重写、改名必须刷新标题），最新者胜的累积留在 claude 侧完成，
+    /// 这里只收最终值。
+    pub(super) extra_title_levels: &'a [&'a str],
+    /// 固定标题（claude 子代理取 `.meta.json` 任务描述），置位时跳过整条链直接
+    /// 截断——`None` 才走标准链，`Some("")` 是调用方裁决出的「强制无题」。
+    pub(super) title_override: Option<&'a str>,
+    pub(super) agent_type: &'a str,
+    pub(super) parent_session_id: &'a str,
+}
+
+impl SessionMetaAcc {
+    /// Feed one accepted line's raw timestamp. The FIRST call freezes
+    /// `started_at` exactly as given — an absent/empty stamp stays "" (a file
+    /// with events but no timestamps still produces a session row); every later
+    /// non-empty stamp advances `last_active_at`. Also the single place where
+    /// `saw_any_event` turns true.
+    pub(super) fn observe_ts(&mut self, ts: Option<&str>) {
+        let ts = ts.unwrap_or_default();
+        if !self.saw_any_event {
+            self.started_at = ts.to_string();
+            self.saw_any_event = true;
+        }
+        if !ts.is_empty() {
+            self.last_active_at = ts.to_string();
+        }
+    }
+
+    /// 首个 trim 后非空的 cwd 成为 project_dir（存 trim 后的值）；其后一切——
+    /// 包括 drift 进子目录的 cwd——不再覆盖。`None` / 空白串跳过。
+    pub(super) fn observe_cwd(&mut self, cwd: Option<&str>) {
+        if self.project_dir.is_some() {
+            return;
+        }
+        if let Some(cwd) = cwd.map(str::trim).filter(|c| !c.is_empty()) {
+            self.project_dir = Some(cwd.to_string());
+        }
+    }
+
+    /// 标题候选择优：只有第一条非空白候选生效（first-win）。调用方负责逐源噪声
+    /// 过滤（claude 的命令回显 / codex 的注入前导与 IDE 包裹），这里守住
+    /// 「空白不算真提示」这条底线。
+    pub(super) fn offer_user_title(&mut self, candidate: &str) {
+        let candidate = candidate.trim();
+        if self.user_title.is_none() && !candidate.is_empty() {
+            self.user_title = Some(candidate.to_string());
+        }
+    }
+
+    /// 全链收口：从未观察到任何事件 → `None`（该文件的 sessions 流为空）；
+    /// 否则构造 [`RawSession`]——标题链为 extra 层 → 用户标题 → project 目录名
+    /// 兜底 → 空串，统一 [`truncate`]([`TITLE_MAX`])；`title_override` 置位时
+    /// （claude 子代理）跳过链条只截断固定标题。
+    pub(super) fn finish(
+        self,
+        source: &str,
+        session_id: String,
+        x: SessionExtras<'_>,
+    ) -> Option<RawSession> {
+        if !self.saw_any_event {
+            return None;
+        }
+        let title_orig = match x.title_override {
+            Some(t) => truncate(t, TITLE_MAX),
+            None => {
+                let title = x
+                    .extra_title_levels
+                    .iter()
+                    .copied()
+                    .find(|s| !s.is_empty())
+                    .or_else(|| self.user_title.as_deref().filter(|s| !s.is_empty()))
+                    .or_else(|| {
+                        Path::new(self.project_dir.as_deref().unwrap_or(""))
+                            .file_name()
+                            .and_then(|n| n.to_str())
+                            .filter(|n| !n.is_empty())
+                    });
+                truncate(title.unwrap_or(""), TITLE_MAX)
+            }
+        };
+        Some(RawSession {
+            id: session_id,
+            source: source.to_string(),
+            project_dir: self.project_dir.unwrap_or_default(),
+            title_orig,
+            started_at: self.started_at,
+            last_active_at: self.last_active_at,
+            agent_type: x.agent_type.to_string(),
+            parent_session_id: x.parent_session_id.to_string(),
+        })
+    }
+}
+
 /// File mtime in nanos since UNIX_EPOCH, for the incremental mtime gate. Clamped
 /// to `i64::MAX` (the SQLite column is INTEGER). Returns 0 if mtime is
 /// unavailable — then the gate never skips (safe, just re-parses).
@@ -704,6 +845,180 @@ mod tests {
             fresh_token_counts(0, 0, 0).is_zero(),
             "all-zero source row ⇒ dropped"
         );
+    }
+
+    // ===================== SessionMetaAcc =====================
+
+    #[test]
+    fn session_meta_acc_finishes_to_nothing_until_an_event_is_observed() {
+        let fresh = SessionMetaAcc::default();
+        assert!(
+            fresh
+                .finish("claude_code", "s".into(), SessionExtras::default())
+                .is_none(),
+            "a file with no accepted event yields no session"
+        );
+        let mut observed = SessionMetaAcc::default();
+        observed.observe_ts(None);
+        assert!(
+            observed
+                .finish("claude_code", "s".into(), SessionExtras::default())
+                .is_some(),
+            "one observed line is enough"
+        );
+    }
+
+    /// Time boundaries: the first observed line freezes started_at exactly as
+    /// seen (absent → "", not backfilled by later stamps); last_active_at
+    /// follows every later NON-empty stamp — latest seen, NOT lexical max
+    /// (append-only logs arrive in order; an out-of-order earlier stamp must
+    /// still overwrite, which is what both parsers always did).
+    #[test]
+    fn session_meta_acc_freezes_started_at_and_advances_last_active() {
+        let mut acc = SessionMetaAcc::default();
+        // First line without a timestamp: started_at freezes "" but the
+        // session row still exists.
+        acc.observe_ts(None);
+        acc.observe_ts(Some("2026-08-01T10:00:00Z"));
+        acc.observe_ts(Some(""));
+        acc.observe_ts(Some("2026-08-02T09:00:00Z"));
+        let s = acc
+            .finish("claude_code", "sid".into(), SessionExtras::default())
+            .unwrap();
+        assert_eq!(s.started_at, "");
+        assert_eq!(s.last_active_at, "2026-08-02T09:00:00Z");
+        assert_eq!(s.id, "sid");
+        assert_eq!(s.source, "claude_code");
+        assert_eq!(s.agent_type, "");
+        assert_eq!(s.parent_session_id, "");
+
+        // A normal first line starts AND anchors last_active in one call.
+        let mut acc = SessionMetaAcc::default();
+        acc.observe_ts(Some("2026-08-01T10:00:00Z"));
+        let s = acc
+            .finish("codex_cli", "sid".into(), SessionExtras::default())
+            .unwrap();
+        assert_eq!(s.started_at, "2026-08-01T10:00:00Z");
+        assert_eq!(s.last_active_at, "2026-08-01T10:00:00Z");
+    }
+
+    /// project_dir = first TRIMMED non-empty cwd; nothing after it overwrites;
+    /// no usable cwd anywhere degrades to "" (and hence no basename fallback).
+    #[test]
+    fn session_meta_acc_project_dir_is_first_non_blank_trimmed_cwd() {
+        let mut acc = SessionMetaAcc::default();
+        acc.observe_ts(Some("2026-08-01T10:00:00Z"));
+        acc.observe_cwd(None);
+        acc.observe_cwd(Some("   "));
+        acc.observe_cwd(Some(" /home/me/proj "));
+        // Later cwds — even more of them, deeper — never replace the launch dir.
+        acc.observe_cwd(Some("/home/me/proj/sub"));
+        let s = acc
+            .finish("claude_code", "id".into(), SessionExtras::default())
+            .unwrap();
+        assert_eq!(s.project_dir, "/home/me/proj");
+
+        let mut acc = SessionMetaAcc::default();
+        acc.observe_ts(Some("2026-08-01T10:00:00Z"));
+        let s = acc
+            .finish("claude_code", "id".into(), SessionExtras::default())
+            .unwrap();
+        assert_eq!(s.project_dir, "");
+        assert_eq!(s.title_orig, "", "no cwd ⇒ no basename ⇒ empty title");
+    }
+
+    /// Title chain precedence: extra levels beat the first-win user title,
+    /// which beats the project-dir basename. Blank offers are rejected (the
+    /// callers pre-filter noise), and a won offer is final.
+    #[test]
+    fn session_meta_acc_title_chain_extras_then_user_then_basename() {
+        let mut acc = SessionMetaAcc::default();
+        acc.observe_ts(Some("2026-08-01T10:00:00Z"));
+        acc.observe_cwd(Some("/home/me/O_cc one"));
+        acc.offer_user_title("   ");
+        acc.offer_user_title("First real prompt");
+        acc.offer_user_title("Second prompt");
+        // An empty extra level is skipped; the non-empty one wins everything.
+        let s = acc
+            .finish(
+                "claude_code",
+                "id".into(),
+                SessionExtras {
+                    extra_title_levels: &["", "Renamed"],
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        assert_eq!(s.title_orig, "Renamed");
+
+        // Without extras the first-win user title leads.
+        let mut acc = SessionMetaAcc::default();
+        acc.observe_ts(Some("2026-08-01T10:00:00Z"));
+        acc.observe_cwd(Some("/home/me/O_cc one"));
+        acc.offer_user_title("First real prompt");
+        let s = acc
+            .finish("codex_cli", "id".into(), SessionExtras::default())
+            .unwrap();
+        assert_eq!(s.title_orig, "First real prompt");
+
+        // No title source at all → basename of the launch dir.
+        let mut acc = SessionMetaAcc::default();
+        acc.observe_ts(Some("2026-08-01T10:00:00Z"));
+        acc.observe_cwd(Some("/home/me/O_cc one"));
+        let s = acc
+            .finish("codex_cli", "id".into(), SessionExtras::default())
+            .unwrap();
+        assert_eq!(s.title_orig, "O_cc one");
+    }
+
+    /// The chain result AND a fixed title are truncated identically at
+    /// TITLE_MAX with the shared ellipsis rule.
+    #[test]
+    fn session_meta_acc_truncates_chain_and_override_titles() {
+        let long = "x".repeat(200);
+        let mut acc = SessionMetaAcc::default();
+        acc.observe_ts(Some("2026-08-01T10:00:00Z"));
+        acc.offer_user_title(&long);
+        let s = acc
+            .finish("codex_cli", "id".into(), SessionExtras::default())
+            .unwrap();
+        assert!(s.title_orig.ends_with('…'));
+        assert!(s.title_orig.chars().count() <= TITLE_MAX);
+
+        // A title_override is truncated too; agent_type/parent ride along.
+        let mut acc = SessionMetaAcc::default();
+        acc.observe_ts(Some("2026-08-01T10:00:00Z"));
+        acc.offer_user_title("ignored while overridden");
+        let s = acc
+            .finish(
+                "claude_code",
+                "agent-x".into(),
+                SessionExtras {
+                    title_override: Some(&long),
+                    agent_type: "Explore",
+                    parent_session_id: "p1",
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        assert!(s.title_orig.chars().count() <= TITLE_MAX);
+        assert_eq!(s.agent_type, "Explore");
+        assert_eq!(s.parent_session_id, "p1");
+
+        // An override within bounds passes through untouched.
+        let mut acc = SessionMetaAcc::default();
+        acc.observe_ts(Some("2026-08-01T10:00:00Z"));
+        let s = acc
+            .finish(
+                "claude_code",
+                "agent-y".into(),
+                SessionExtras {
+                    title_override: Some("核实 cc-switch 供应商"),
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        assert_eq!(s.title_orig, "核实 cc-switch 供应商");
     }
 
     // ===================== discovery skeleton invariants =====================

@@ -3,12 +3,12 @@
 use std::path::{Path, PathBuf};
 
 use crate::error::AppResult;
-use crate::model::{RawSession, ServerToolUse, SessionMessage, SessionMessageRole, TokenCounts};
+use crate::model::{ServerToolUse, SessionMessage, SessionMessageRole, TokenCounts};
 
 use super::{
     collect_jsonl_incremental, discover_files, is_jsonl_file, truncate, CollectResult,
-    DirectoryShape, RawTurnDuration, RawUsage, ScanProgress, ScanProgressDelta, SourceParser,
-    TITLE_MAX, TRIM_LIMIT,
+    DirectoryShape, RawTurnDuration, RawUsage, ScanProgress, ScanProgressDelta, SessionExtras,
+    SessionMetaAcc, SourceParser, TRIM_LIMIT,
 };
 
 /// Stable source tag — becomes `RawUsage.source` / `RawSession.source` and the
@@ -53,7 +53,9 @@ impl ClaudeCodeSourceParser {
     ///     system data is refreshable, so every pass re-reads first/last ts,
     ///     the first-seen cwd (project_dir), and the title sources
     ///     (custom-title > summary > first user message > project dir
-    ///     basename), latest-seen at each title level;
+    ///     basename), latest-seen at each title level; accumulated through
+    ///     [`super::SessionMetaAcc`] (the shared skeleton — see its contract
+    ///     for the full-file-vs-cursor invariant);
     ///   - transcript messages (lines past `start_line` only — incremental, so a
     ///     re-collect appends only new lines to `sessions/<id>.jsonl`).
     ///
@@ -108,26 +110,21 @@ impl ClaudeCodeSourceParser {
         let mut messages: Vec<SessionMessage> = Vec::new();
         let mut skipped = 0u32;
 
-        // Session meta (tracked over the FULL file, not just the cursor tail —
-        // system data is refreshable, and started_at/cwd/title would be lost if
-        // we only saw the appended lines on a re-collect).
-        let mut started_at = String::new();
-        let mut last_active_at = String::new();
-        // project_dir = the FIRST non-empty cwd in the file (= the session's
-        // launch directory — Claude Code itself buckets session files under
-        // `~/.claude/projects/<encoded-launch-dir>`). Deliberately not the
-        // cwd mode: working inside a subdirectory for most of a session would
-        // pin the mode to that subdir even though the session was launched at
-        // the repo root (observed in real logs, issue #83). Deliberately not
-        // restricted to `system` events either — cwd rides on
-        // user/assistant/system events alike, and subagent or short sessions
-        // carry no cwd-bearing system event at all; first-seen-anywhere is
-        // the launch directory in every observed shape.
-        let mut first_cwd: Option<String> = None;
+        // Session meta accumulates through the shared [`super::SessionMetaAcc`]
+        // skeleton — tracked over the FULL file, not just the cursor tail (system
+        // data is refreshable, and started_at/cwd/title would be lost if we only
+        // saw the appended lines on a re-collect); every parseable line feeds it.
+        let mut meta = SessionMetaAcc::default();
+        // Claude-specific title sources ABOVE the shared first-user layer, both
+        // LATEST non-empty wins (unlike the user title these must refresh):
+        //   - summary — Claude may emit it later in the file (e.g. after a
+        //     /compact); the title follows that update instead of freezing on
+        //     the first-seen value;
+        //   - custom_title — the user's manual session name; a mid-session
+        //     rename must refresh the title (the first-wins bug CC-Switch has).
+        // Both land in `finish` as extra levels ahead of the user title.
         let mut summary = String::new();
         let mut custom_title: Option<String> = None;
-        let mut first_user_text: Option<String> = None;
-        let mut saw_any_event = false;
 
         for (idx, raw) in text.lines().enumerate() {
             let line_no = idx as i64 + 1; // 1-based, matching the cursor
@@ -148,55 +145,38 @@ impl ClaudeCodeSourceParser {
                 }
             };
 
-            // ---- session meta (full file, every pass) ----
-            if !saw_any_event {
-                started_at = ev.timestamp.clone().unwrap_or_default();
-                saw_any_event = true;
-            }
-            if let Some(ts) = &ev.timestamp {
-                if !ts.is_empty() {
-                    last_active_at = ts.clone();
-                }
-            }
-            if first_cwd.is_none() {
-                if let Some(c) = &ev.cwd {
-                    let c = c.trim();
-                    if !c.is_empty() {
-                        first_cwd = Some(c.to_string());
-                    }
-                }
-            }
-            // summary: latest non-empty wins — Claude may emit it later in
-            // the file (e.g. after a /compact); the title follows that update
-            // instead of freezing on the first-seen value.
+            // ---- session meta (full file, every pass) — every parseable line
+            // feeds the accumulator; project_dir deliberately takes cwd from ANY
+            // event (cwd rides on user/assistant/system events alike, and
+            // subagent or short sessions carry no cwd-bearing system event at
+            // all); the accumulator picks the FIRST non-empty one (#83: the
+            // launch directory, not the cwd mode).
+            meta.observe_ts(ev.timestamp.as_deref());
+            meta.observe_cwd(ev.cwd.as_deref());
+            // summary / custom_title: latest non-empty wins (see locals above).
             if let Some(s) = &ev.summary {
                 let s = s.trim();
                 if !s.is_empty() {
                     summary = s.to_string();
                 }
             }
-            // custom_title: latest non-empty wins. The user's manual session
-            // name in Claude Code; a mid-session rename must refresh the title
-            // (the first-wins bug CC-Switch has).
             if let Some(ct) = &ev.custom_title {
                 let ct = ct.trim();
                 if !ct.is_empty() {
                     custom_title = Some(ct.to_string());
                 }
             }
-            if first_user_text.is_none() {
-                if let Some(m) = &ev.message {
-                    if m.role.as_deref() == Some("user") {
-                        if let Some(t) = first_text_of(m) {
-                            // Skip Claude Code command/caveat noise so the
-                            // title is the first real prompt, not `/clear`.
-                            let t = t.trim();
-                            if !t.is_empty()
-                                && !t.contains("<local-command-caveat>")
-                                && !t.starts_with("<command-name>")
-                            {
-                                first_user_text = Some(t.to_string());
-                            }
+            if let Some(m) = &ev.message {
+                if m.role.as_deref() == Some("user") {
+                    if let Some(t) = first_text_of(m) {
+                        // Skip Claude Code command/caveat noise so the
+                        // title is the first real prompt, not `/clear`.
+                        let t = t.trim();
+                        if !t.is_empty()
+                            && !t.contains("<local-command-caveat>")
+                            && !t.starts_with("<command-name>")
+                        {
+                            meta.offer_user_title(t);
                         }
                     }
                 }
@@ -233,60 +213,55 @@ impl ClaudeCodeSourceParser {
             }
         }
 
-        let sessions = if saw_any_event {
-            let project_dir = first_cwd.unwrap_or_default();
-            // Subagent sessions title from the task description (the only
-            // meaningful name Claude Code gives them — no custom-title/summary
-            // events are written for subagents). Main sessions keep the
-            // custom-title > summary > first-user-message chain.
-            let title_orig = if is_agent {
-                agent_meta
-                    .as_ref()
-                    .and_then(|m| m.description.as_deref())
-                    .map(str::trim)
-                    .filter(|s| !s.is_empty())
-                    .map(|s| truncate(s, TITLE_MAX))
-                    .unwrap_or_default()
-            } else {
-                let title = custom_title
-                    .as_deref()
-                    .filter(|s| !s.is_empty())
-                    .or_else(|| (!summary.is_empty()).then_some(summary.as_str()))
-                    .or_else(|| first_user_text.as_deref().filter(|s| !s.is_empty()))
-                    .or_else(|| {
-                        Path::new(&project_dir)
-                            .file_name()
-                            .and_then(|n| n.to_str())
-                            .filter(|s| !s.is_empty())
-                    });
-                truncate(title.unwrap_or(""), TITLE_MAX)
-            };
-            // Type tag: `""` for main sessions; the `.meta.json` agent type
-            // (e.g. `Explore`) for subagents, `"agent"` when the sidecar is
-            // missing. Drives the list's type column.
-            let agent_type = if is_agent {
-                agent_meta
-                    .as_ref()
-                    .and_then(|m| m.agent_type.as_deref())
-                    .map(str::trim)
-                    .filter(|s| !s.is_empty())
-                    .unwrap_or("agent")
-                    .to_string()
-            } else {
-                String::new()
-            };
-            vec![RawSession {
-                id: session_id,
-                source: SOURCE_TAG.to_string(),
-                project_dir,
-                title_orig,
-                started_at,
-                last_active_at,
-                agent_type,
-                parent_session_id,
-            }]
+        // Session assembly is `finish`'s job (title chain + truncation +
+        // saw_any_event → Option<RawSession>); only the per-source differences
+        // live here: subagent sessions title from the task description via the
+        // `.meta.json` sidecar (the only meaningful name Claude Code gives them —
+        // no custom-title/summary events are written for subagents), while main
+        // sessions keep the custom-title > summary > first-user-message chain as
+        // extra levels. agent_type: `""` for main sessions; the sidecar's agent
+        // type (e.g. `Explore`) for subagents, `"agent"` when the sidecar is
+        // missing — drives the list's type column.
+        let sessions = if is_agent {
+            let agent_type = agent_meta
+                .as_ref()
+                .and_then(|m| m.agent_type.as_deref())
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+                .unwrap_or("agent")
+                .to_string();
+            // The task description IS the subagent title: present → it wins,
+            // absent/blank → forced-empty (a subagent never falls through to
+            // the user-message/basename chain).
+            let agent_title = agent_meta
+                .as_ref()
+                .and_then(|m| m.description.as_deref())
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+                .unwrap_or("");
+            meta.finish(
+                SOURCE_TAG,
+                session_id,
+                SessionExtras {
+                    title_override: Some(agent_title),
+                    agent_type: &agent_type,
+                    parent_session_id: &parent_session_id,
+                    ..Default::default()
+                },
+            )
+            .into_iter()
+            .collect()
         } else {
-            Vec::new()
+            meta.finish(
+                SOURCE_TAG,
+                session_id,
+                SessionExtras {
+                    extra_title_levels: &[custom_title.as_deref().unwrap_or(""), summary.as_str()],
+                    ..Default::default()
+                },
+            )
+            .into_iter()
+            .collect()
         };
 
         super::FileParseOutcome {
@@ -1328,10 +1303,15 @@ mod tests {
             r#"{"agentType": "Explore", "description": "核实 cc-switch 供应商"}"#,
         )
         .unwrap();
-        // Subagent without sidecar: generic "agent" tag, no title.
+        // Subagent without sidecar: generic "agent" tag, no title — even when
+        // the file carries cwd lines, it never falls through to the
+        // main-session title chain.
         write_lines(
             &proj.join("agent-bbb.jsonl"),
-            &[assistant_line("u2", "msg_B", 20)],
+            &[
+                assistant_line("u2", "msg_B", 20),
+                r#"{"type":"assistant","timestamp":"2026-08-01T10:00:00Z","uuid":"u5","cwd":"/tmp/agent-proj","message":{"id":"m9","model":"glm-5.2","role":"assistant","usage":{"input_tokens":1,"output_tokens":1}}}"#.to_string(),
+            ],
         );
         // Main session: empty agent_type, regular title chain (first user msg).
         write_lines(
