@@ -450,19 +450,11 @@ impl super::Store {
                     COALESCE(SUM(agg.total_cost_usd), 0.0) AS total_cost_usd,
                     MAX(s.last_active_at) AS last_active_at
              FROM sessions s
-             LEFT JOIN (
-                SELECT session_id, device_id,
-                       COUNT(*) AS request_count,
-                       SUM(input_tokens) AS input_tokens,
-                       SUM(output_tokens) AS output_tokens,
-                       SUM(cache_creation_tokens) AS cache_creation_tokens,
-                       SUM(cache_read_tokens) AS cache_read_tokens,
-                       SUM(CAST(total_cost_usd AS REAL)) AS total_cost_usd
-                FROM usage_records GROUP BY session_id, device_id
-             ) agg ON agg.session_id = s.id AND agg.device_id = s.device_id
+             LEFT JOIN ({agg}) agg ON agg.session_id = s.id AND agg.device_id = s.device_id
              {clause}
              GROUP BY pid
-             ORDER BY last_active_at DESC, pid"
+             ORDER BY last_active_at DESC, pid",
+            agg = super::aggregate_sql::usage_agg_subquery(false)
         );
         let mut stmt = conn.prepare(&sql)?;
         let rows = stmt.query_map(params_from_iter(params_vec.iter()), |r| {
@@ -531,15 +523,10 @@ impl super::Store {
                 );
             }
             let usql = format!(
-                "SELECT COUNT(*),
-                        COALESCE(SUM(input_tokens),0),
-                        COALESCE(SUM(output_tokens),0),
-                        COALESCE(SUM(cache_creation_tokens),0),
-                        COALESCE(SUM(cache_read_tokens),0),
-                        COALESCE(SUM(CAST(total_cost_usd AS REAL)),0),
-                        COALESCE(MAX(timestamp),'')
+                "SELECT COUNT(*), {sums}, COALESCE(MAX(u.timestamp),'')
                  FROM usage_records u WHERE {}",
-                conds.join(" AND ")
+                conds.join(" AND "),
+                sums = super::aggregate_sql::usage_sum_cols("u.")
             );
             let (request_count, input, output, cc, cr, cost, last): (
                 i64,
@@ -624,22 +611,14 @@ impl super::Store {
                     COALESCE(u.total_cost_usd, 0.0),
                     u.model
              FROM sessions s
-             LEFT JOIN (
-                SELECT session_id, device_id, model,
-                       COUNT(*) AS request_count,
-                       SUM(input_tokens) AS input_tokens,
-                       SUM(output_tokens) AS output_tokens,
-                       SUM(cache_creation_tokens) AS cache_creation_tokens,
-                       SUM(cache_read_tokens) AS cache_read_tokens,
-                       SUM(CAST(total_cost_usd AS REAL)) AS total_cost_usd
-                FROM usage_records GROUP BY session_id, device_id, model
-             ) u ON u.session_id = s.id AND u.device_id = s.device_id
+             LEFT JOIN ({uagg}) u ON u.session_id = s.id AND u.device_id = s.device_id
              LEFT JOIN (
                 SELECT session_id, device_id, COUNT(*) AS message_count
                 FROM session_messages GROUP BY session_id, device_id
              ) m ON m.session_id = s.id AND m.device_id = s.device_id
              {clause}
-             ORDER BY s.last_active_at DESC, s.device_id, s.id, u.model"
+             ORDER BY s.last_active_at DESC, s.device_id, s.id, u.model",
+            uagg = super::aggregate_sql::usage_agg_subquery(true)
         );
         let mut stmt = conn.prepare(&sql)?;
         let raw = stmt.query_map(params_from_iter(params_vec.iter()), |r| {
@@ -899,7 +878,10 @@ fn like_pattern(q: &str) -> String {
 /// WHERE), ending in a stable time-desc ORDER BY. `device_id`/`id`
 /// tiebreakers make the ordering total, so offset paging never duplicates or
 /// skips a row across page turns. Callers append `LIMIT ? OFFSET ?` when
-/// paging (or leave the clause empty for the full unpaged read).
+/// paging (or leave the clause empty for the full unpaged read). The usage
+/// aggregate is the one [`super::aggregate_sql::usage_agg_subquery`];
+/// `total_tokens` sums its four bucket columns at read time (the shared total
+/// caliber over aggregated columns).
 fn sessions_select_sql(clause: &str) -> String {
     format!(
         "SELECT s.id, s.device_id, s.source, s.project_dir,
@@ -907,18 +889,14 @@ fn sessions_select_sql(clause: &str) -> String {
                 s.favorited, s.local_group_id, s.synced_group_id,
                 s.started_at, s.last_active_at, s.agent_type, s.parent_session_id,
                 COALESCE(agg.request_count, 0),
-                COALESCE(agg.total_tokens, 0),
+                {total_of} AS total_tokens,
                 COALESCE(agg.total_cost_usd, 0.0)
          FROM sessions s
-         LEFT JOIN (
-            SELECT session_id, device_id,
-                   COUNT(*) AS request_count,
-                   COALESCE(SUM(input_tokens+output_tokens+cache_creation_tokens+cache_read_tokens),0) AS total_tokens,
-                   COALESCE(SUM(CAST(total_cost_usd AS REAL)),0) AS total_cost_usd
-            FROM usage_records GROUP BY session_id, device_id
-         ) agg ON agg.session_id = s.id AND agg.device_id = s.device_id
+         LEFT JOIN ({agg}) agg ON agg.session_id = s.id AND agg.device_id = s.device_id
          {clause}
-         ORDER BY s.last_active_at DESC, s.device_id, s.id"
+         ORDER BY s.last_active_at DESC, s.device_id, s.id",
+        agg = super::aggregate_sql::usage_agg_subquery(false),
+        total_of = super::aggregate_sql::usage_total_of_cols("agg.")
     )
 }
 
@@ -1653,6 +1631,144 @@ mod tests {
             [("glm-5.2", 200), ("glm-5.2-air", 90)],
             "per-model slices, most-tokens-first, bucket sums intact"
         );
+    }
+
+    /// 口径一致性（架构审查Ⅲ候选④）：同一 seeded 数据经三条读路径聚合相等
+    /// ——会话列表行（query_sessions_page）、会话粒统计（query_session_stats）、
+    /// 项目桶（query_project_stats）共享同一份聚合子查询与桶清单。
+    /// `query_session_stats` 文档宣称 "the two dimensions can never disagree …
+    /// only the grain differs"——这里把那句散文变成断言。
+    #[test]
+    fn sessions_page_stats_and_project_buckets_aggregate_identically() {
+        let s = mem();
+        seed_session_project(&s, "s1", "dev", "/proj/alpha", "2026-08-10T10:00:00.000Z");
+        seed_session_project(&s, "s2", "dev", "/proj/alpha", "2026-08-12T10:00:00.000Z");
+        seed_session_project(&s, "b1", "dev", "/proj/beta", "2026-08-11T10:00:00.000Z");
+        let bound = |uuid: &str, sid: &str, model: &str, t: TokenCounts, cost: f64| {
+            let mut r = rec(uuid, "2026-08-15", model, "dev", t.input, t.output, cost);
+            r.session_id = sid.into();
+            r.tokens = t;
+            s.ingest_marking_dirty(&[r]).unwrap();
+        };
+        // s1 跨两模型、s2 / b1 各一模型，桶值互异——任何读路径间的错配都会
+        // 显形，而不是恰好对上。
+        bound(
+            "u1",
+            "s1",
+            "glm-5.2",
+            TokenCounts {
+                input: 100,
+                output: 20,
+                cache_creation: 10,
+                cache_read: 70,
+            },
+            1.0,
+        );
+        bound(
+            "u2",
+            "s1",
+            "glm-5.2-air",
+            TokenCounts {
+                input: 30,
+                output: 0,
+                cache_creation: 60,
+                cache_read: 0,
+            },
+            2.0,
+        );
+        bound(
+            "u3",
+            "s2",
+            "glm-5.2",
+            TokenCounts {
+                input: 50,
+                output: 5,
+                cache_creation: 0,
+                cache_read: 50,
+            },
+            0.5,
+        );
+        bound(
+            "u4",
+            "b1",
+            "glm-5.2",
+            TokenCounts {
+                input: 7,
+                output: 8,
+                cache_creation: 9,
+                cache_read: 10,
+            },
+            0.25,
+        );
+
+        let page: std::collections::HashMap<String, SessionRow> = s
+            .query_sessions_page(&SessionQuery {
+                filter: None,
+                limit: 50,
+                offset: 0,
+            })
+            .unwrap()
+            .into_iter()
+            .map(|r| (r.id.clone(), r))
+            .collect();
+        let stats: std::collections::HashMap<String, SessionStatsRow> = s
+            .query_session_stats(None)
+            .unwrap()
+            .into_iter()
+            .map(|r| (r.id.clone(), r))
+            .collect();
+        let buckets: std::collections::HashMap<String, ProjectStatsRow> = s
+            .query_project_stats(None)
+            .unwrap()
+            .into_iter()
+            .map(|r| (r.project_dir.clone(), r))
+            .collect();
+
+        // 会话粒两条路径逐会话相等：请求数 / 总 token / 成本。
+        for sid in ["s1", "s2", "b1"] {
+            let (p, st) = (&page[sid], &stats[sid]);
+            assert_eq!(p.request_count, st.request_count, "{sid}: request_count");
+            assert_eq!(
+                p.total_tokens,
+                st.input_tokens
+                    + st.output_tokens
+                    + st.cache_creation_tokens
+                    + st.cache_read_tokens,
+                "{sid}: total_tokens"
+            );
+            assert!(
+                (p.total_cost_usd - st.total_cost_usd).abs() < 1e-9,
+                "{sid}: total_cost_usd"
+            );
+        }
+        assert_eq!(page["s1"].request_count, 2, "s1 跨两模型各一条");
+
+        // 项目桶 = 成员会话之和（alpha 两会话、beta 一会话）。
+        let alpha = &buckets["/proj/alpha"];
+        assert_eq!(alpha.session_count, 2);
+        assert_eq!(
+            alpha.request_count,
+            page["s1"].request_count + page["s2"].request_count
+        );
+        let sum_of = |f: fn(&SessionStatsRow) -> u32| -> u32 {
+            ["s1", "s2"].iter().map(|sid| f(&stats[*sid])).sum()
+        };
+        assert_eq!(alpha.input_tokens, sum_of(|r| r.input_tokens));
+        assert_eq!(alpha.output_tokens, sum_of(|r| r.output_tokens));
+        assert_eq!(
+            alpha.cache_creation_tokens,
+            sum_of(|r| r.cache_creation_tokens)
+        );
+        assert_eq!(alpha.cache_read_tokens, sum_of(|r| r.cache_read_tokens));
+        assert!(
+            (alpha.total_cost_usd - (stats["s1"].total_cost_usd + stats["s2"].total_cost_usd))
+                .abs()
+                < 1e-9
+        );
+        let beta = &buckets["/proj/beta"];
+        assert_eq!(beta.session_count, 1);
+        assert_eq!(beta.request_count, page["b1"].request_count);
+        assert_eq!(beta.input_tokens, stats["b1"].input_tokens);
     }
 
     /// The session grain applies the same project-identity truncation as the

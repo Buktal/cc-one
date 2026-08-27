@@ -13,12 +13,9 @@ impl super::Store {
         let sql = format!(
             "SELECT
                 COUNT(*),
-                COALESCE(SUM(input_tokens),0),
-                COALESCE(SUM(output_tokens),0),
-                COALESCE(SUM(cache_creation_tokens),0),
-                COALESCE(SUM(cache_read_tokens),0),
-                COALESCE(SUM(CAST(total_cost_usd AS REAL)),0)
-             FROM usage_records {clause}"
+                {sums}
+             FROM usage_records {clause}",
+            sums = super::aggregate_sql::usage_sum_cols("")
         );
         let row = conn.query_row(&sql, params_from_iter(params_vec.iter()), |r| {
             Ok(UsageStats {
@@ -99,22 +96,24 @@ impl super::Store {
     pub fn query_models(&self, filter: &UsageFilter) -> AppResult<Vec<ModelStatsRow>> {
         let conn = self.conn.lock().expect("db mutex poisoned");
         let (clause, params_vec) = build_where(filter, true, true, true, "usage_records");
+        // 列序：model / COUNT / 四桶总和 / 共享 SUM 清单（input..cost）。
+        // output 走清单但不解码——ModelStatsRow 不携带它；占位是为让桶口径
+        // 只有一份拼写（新增桶时这里与其它读同步）。
         let sql = format!(
             "SELECT model,
                 COUNT(*),
-                COALESCE(SUM(input_tokens+output_tokens+cache_creation_tokens+cache_read_tokens),0),
-                COALESCE(SUM(CAST(total_cost_usd AS REAL)),0),
-                COALESCE(SUM(input_tokens),0),
-                COALESCE(SUM(cache_creation_tokens),0),
-                COALESCE(SUM(cache_read_tokens),0)
+                COALESCE({total},0),
+                {sums}
              FROM usage_records {clause}
-             GROUP BY model ORDER BY 4 DESC"
+             GROUP BY model ORDER BY 3 DESC",
+            total = super::aggregate_sql::usage_total_sum(""),
+            sums = super::aggregate_sql::usage_sum_cols("")
         );
         let mut stmt = conn.prepare(&sql)?;
         let rows = stmt.query_map(params_from_iter(params_vec.iter()), |r| {
             // 缓存命中率复用 TokenCounts 的唯一实现 (与 query_stats 一致)。
             let cache = TokenCounts {
-                input: r.get::<_, i64>(4)? as u32,
+                input: r.get::<_, i64>(3)? as u32,
                 output: 0,
                 cache_creation: r.get::<_, i64>(5)? as u32,
                 cache_read: r.get::<_, i64>(6)? as u32,
@@ -123,7 +122,7 @@ impl super::Store {
                 model: r.get(0)?,
                 request_count: r.get::<_, i64>(1)? as u32,
                 total_tokens: r.get::<_, i64>(2)? as u32,
-                total_cost_usd: r.get(3)?,
+                total_cost_usd: r.get(7)?,
                 cache_hit_rate: cache.cache_hit_rate(),
             })
         })?;
@@ -153,13 +152,10 @@ impl super::Store {
         let sql = format!(
             "SELECT {grouping} AS bucket,
                 COUNT(*),
-                COALESCE(SUM(input_tokens),0),
-                COALESCE(SUM(output_tokens),0),
-                COALESCE(SUM(cache_creation_tokens),0),
-                COALESCE(SUM(cache_read_tokens),0),
-                COALESCE(SUM(CAST(total_cost_usd AS REAL)),0)
+                {sums}
              FROM usage_records {clause}
-             GROUP BY bucket ORDER BY bucket"
+             GROUP BY bucket ORDER BY bucket",
+            sums = super::aggregate_sql::usage_sum_cols("")
         );
         let mut stmt = conn.prepare(&sql)?;
         let rows = stmt.query_map(params_from_iter(params_vec.iter()), |r| {
@@ -298,29 +294,27 @@ impl super::Store {
         // identity expression COALESCEs the NULL of a session-less row (the
         // UDF takes TEXT, not NULL) and folds the empty identity in with the
         // sentinel. `COUNT(DISTINCT a, b)` skips the NULL CASE arm, so only
-        // buckets with a real session row count sessions.
+        // buckets with a real session row count sessions. The projection is
+        // the bare bucket columns (one list); the SUMs read them through the
+        // shared prefix-parameterized list.
         let sql = format!(
             "SELECT COALESCE(NULLIF(project_identity(COALESCE(s.project_dir, '')), ''), '{UNKNOWN_PROJECT}') AS pid,
                     COUNT(*),
                     COUNT(DISTINCT CASE WHEN s.id IS NOT NULL
                          THEN sel.session_id || ':' || sel.device_id END),
-                    COALESCE(SUM(sel.input_tokens),0),
-                    COALESCE(SUM(sel.output_tokens),0),
-                    COALESCE(SUM(sel.cache_creation_tokens),0),
-                    COALESCE(SUM(sel.cache_read_tokens),0),
-                    COALESCE(SUM(sel.cost),0.0),
-                    COALESCE(SUM(sel.input_tokens + sel.output_tokens
-                        + sel.cache_creation_tokens + sel.cache_read_tokens),0) AS total_tokens,
-                    MAX(sel.ts)
+                    {sums},
+                    COALESCE({total},0) AS total_tokens,
+                    MAX(sel.timestamp)
              FROM (
-                SELECT session_id, device_id, timestamp AS ts,
-                       input_tokens, output_tokens, cache_creation_tokens, cache_read_tokens,
-                       CAST(total_cost_usd AS REAL) AS cost
+                SELECT session_id, device_id, timestamp, {buckets}, total_cost_usd
                 FROM usage_records {clause}
              ) sel
              LEFT JOIN sessions s ON s.id = sel.session_id AND s.device_id = sel.device_id
              GROUP BY pid
-             ORDER BY total_tokens DESC, pid"
+             ORDER BY total_tokens DESC, pid",
+            sums = super::aggregate_sql::usage_sum_cols("sel."),
+            total = super::aggregate_sql::usage_total_sum("sel."),
+            buckets = super::aggregate_sql::usage_bucket_cols("")
         );
         let mut stmt = conn.prepare(&sql)?;
         let rows = stmt.query_map(params_from_iter(params_vec.iter()), |r| {
@@ -367,23 +361,18 @@ impl super::Store {
                     COALESCE(NULLIF(COALESCE(NULLIF(s.custom_title,''), s.title_orig),''), sel.session_id) AS title,
                     COALESCE(s.agent_type, ''),
                     s.started_at,
-                    MAX(sel.ts), COUNT(*),
-                    COALESCE(SUM(sel.input_tokens),0),
-                    COALESCE(SUM(sel.output_tokens),0),
-                    COALESCE(SUM(sel.cache_creation_tokens),0),
-                    COALESCE(SUM(sel.cache_read_tokens),0),
-                    COALESCE(SUM(sel.cost),0.0)
+                    MAX(sel.timestamp), COUNT(*),
+                    {sums}
              FROM (
-                SELECT session_id, device_id, timestamp AS ts,
-                       input_tokens, output_tokens, cache_creation_tokens, cache_read_tokens,
-                       CAST(total_cost_usd AS REAL) AS cost
+                SELECT session_id, device_id, timestamp, {buckets}, total_cost_usd
                 FROM usage_records {clause}
              ) sel
              JOIN sessions s ON s.id = sel.session_id AND s.device_id = sel.device_id
              GROUP BY sel.session_id, sel.device_id
-             ORDER BY (COALESCE(SUM(sel.input_tokens),0) + COALESCE(SUM(sel.output_tokens),0)
-                 + COALESCE(SUM(sel.cache_creation_tokens),0)
-                 + COALESCE(SUM(sel.cache_read_tokens),0)) DESC, sel.session_id"
+             ORDER BY COALESCE({total},0) DESC, sel.session_id",
+            sums = super::aggregate_sql::usage_sum_cols("sel."),
+            buckets = super::aggregate_sql::usage_bucket_cols(""),
+            total = super::aggregate_sql::usage_total_sum("sel.")
         );
         let mut stmt = conn.prepare(&sql)?;
         let rows = stmt.query_map(params_from_iter(params_vec.iter()), |r| {
@@ -455,17 +444,14 @@ impl super::Store {
         let sql = format!(
             "SELECT device_id,
                     COUNT(*),
-                    COALESCE(SUM(input_tokens),0),
-                    COALESCE(SUM(output_tokens),0),
-                    COALESCE(SUM(cache_creation_tokens),0),
-                    COALESCE(SUM(cache_read_tokens),0),
-                    COALESCE(SUM(CAST(total_cost_usd AS REAL)),0),
-                    COALESCE(SUM(input_tokens + output_tokens
-                        + cache_creation_tokens + cache_read_tokens),0) AS total_tokens,
+                    {sums},
+                    COALESCE({total},0) AS total_tokens,
                     MAX(timestamp)
              FROM usage_records {clause}
              GROUP BY device_id
-             ORDER BY total_tokens DESC, device_id"
+             ORDER BY total_tokens DESC, device_id",
+            sums = super::aggregate_sql::usage_sum_cols(""),
+            total = super::aggregate_sql::usage_total_sum("")
         );
         let mut stmt = conn.prepare(&sql)?;
         let rows = stmt.query_map(params_from_iter(params_vec.iter()), |r| {
