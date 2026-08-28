@@ -221,6 +221,7 @@ fn opencode_db_path_at(home: &Path) -> Option<PathBuf> {
 ///     `opencode/opencode.db`）；相对路径忽略；
 ///   - 否则 `XDG_DATA_HOME` 为绝对路径 → `<XDG_DATA_HOME>/opencode/opencode.db`；
 ///   - 两者皆缺或相对 → home 兜底 `<home>/.local/share/opencode/opencode.db`。
+///
 /// OpenCode 跨平台统一用 xdg-basedir，Windows 与 Linux 同路径。
 fn opencode_db_path_from(
     home: &Path,
