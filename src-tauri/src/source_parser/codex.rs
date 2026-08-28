@@ -16,6 +16,7 @@
 //! baseline and is never emitted, and such sessions produce no [`RawSession`] /
 //! transcript (they are not user-facing top-level sessions).
 
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 use crate::error::AppResult;
@@ -33,6 +34,15 @@ use super::{
 /// DB source column; the single literal behind `name()`, usage, and session
 /// construction.
 const SOURCE_TAG: &str = "codex_cli";
+
+/// Codex 的线程索引库文件名。Codex 跨版本会 bump 版本号（state_4 → state_5，
+/// 未来可能是 state_6）；新版本文件名在此单点更新（CC-Switch 同款收法）。
+const CODEX_STATE_DB_FILENAME: &str = "state_5.sqlite";
+
+/// 重定位 Codex SQLite 状态目录的环境变量。Codex 官方支持把 state 库搬离
+/// `~/.codex`：`config.toml` 的 `sqlite_home` 键优先，`CODEX_SQLITE_HOME`
+/// 次之（候选收法见 [`codex_state_db_paths_at`]）。
+const CODEX_SQLITE_HOME_ENV: &str = "CODEX_SQLITE_HOME";
 
 /// Codex 的会话身份源声明（rollout 文件头首个 `session_meta` 的线程 id → 文件名
 /// 尾随 UUID → stem；链的取值实现是 [`session_id_from`]）——trait 声明与 seen
@@ -90,6 +100,26 @@ impl CodexSourceParser {
     pub(crate) fn with_dir(dir: PathBuf) -> Self {
         Self { codex_dir: dir }
     }
+
+    /// 每个 collect 一次：读 state_5.sqlite 的 `thread_id → title` 映射
+    /// （config.toml `sqlite_home` / `CODEX_SQLITE_HOME` 重定位候选一并读入，
+    /// 后读覆盖先读）。JSONL fold 逐文件拿它作标题链最高优先级层；读取失败
+    /// 即空映射，标题照旧回退现有链（见 [`load_thread_titles_from_db`]）。
+    fn thread_titles(&self) -> HashMap<String, String> {
+        let config_text = std::fs::read_to_string(self.codex_dir.join("config.toml")).ok();
+        let env_sqlite_home = std::env::var(CODEX_SQLITE_HOME_ENV).ok();
+        let home = dirs::home_dir().unwrap_or_default();
+        let mut titles = HashMap::new();
+        for path in codex_state_db_paths_at(
+            &self.codex_dir,
+            &home,
+            config_text.as_deref(),
+            env_sqlite_home.as_deref(),
+        ) {
+            titles.extend(load_thread_titles_from_db(&path));
+        }
+        titles
+    }
 }
 
 impl SourceParser for CodexSourceParser {
@@ -129,8 +159,9 @@ impl SourceParser for CodexSourceParser {
         &self,
         progress: &ScanProgress,
     ) -> AppResult<(CollectResult, ScanProgressDelta)> {
+        let thread_titles = self.thread_titles();
         collect_jsonl_incremental(self, progress, |file: &Path, text, start_line| {
-            fold_codex_file(file, text, start_line)
+            fold_codex_file(file, text, start_line, &thread_titles)
         })
     }
 
@@ -279,7 +310,12 @@ fn is_codex_candidate_line(line: &str) -> bool {
 /// ≠ thread id) emit no [`RawSession`] and no transcript — only their own
 /// post-boundary usage (with an empty `session_id`, since they have no
 /// top-level session row to group under).
-fn fold_codex_file(file: &Path, text: &str, start_line: i64) -> FileParseOutcome {
+fn fold_codex_file(
+    file: &Path,
+    text: &str,
+    start_line: i64,
+    thread_titles: &HashMap<String, String>,
+) -> FileParseOutcome {
     let (identity, boundary) = prescan_codex_text(text);
     let is_subagent = identity
         .as_ref()
@@ -512,16 +548,24 @@ fn fold_codex_file(file: &Path, text: &str, start_line: i64) -> FileParseOutcome
     // Session assembly is `finish`'s job (title chain + truncation +
     // saw_any_event → Option<RawSession>); sub-agent logs carry no top-level
     // session, so they finish into nothing.
-    // Title priority (the default chain): first real user message
-    // (noise-filtered) → cwd basename.
-    // TODO: state_5.sqlite `threads.title` is a richer title source (CC-Switch
-    // loads it via `load_thread_titles_from_db`), but locating/reading the
-    // Codex state DB needs its own discovery path; until that lands, the
-    // first real prompt is the best-effort title (cwd basename fallback).
+    // Title priority: state_5.sqlite `threads.title`（Codex 续聊列表真正读的
+    // 标题，用户重命名或生成器命名后才与首条 user 消息不同、才入库，见
+    // `load_thread_titles_from_db`）→ 首条真实 user 消息（噪声过滤）→ cwd
+    // basename。DB 标题作为标题链最高优先级层（extra_levels，见
+    // `SessionExtras`）注入：有则压过 user 消息，无则链照旧——与 CC-Switch
+    // 的标题优先级一致。
     let sessions = if !is_subagent {
-        meta.finish(SOURCE_TAG, session_id, SessionExtras::default())
-            .into_iter()
-            .collect()
+        let db_title = thread_titles.get(&session_id).map(String::as_str);
+        meta.finish(
+            SOURCE_TAG,
+            session_id,
+            SessionExtras {
+                extra_title_levels: &[db_title.unwrap_or("")],
+                ..Default::default()
+            },
+        )
+        .into_iter()
+        .collect()
     } else {
         Vec::new()
     };
@@ -610,6 +654,111 @@ pub(super) fn session_id_from(file: &Path, thread_id: Option<&str>) -> String {
 /// subagent 维度。
 pub(super) fn prescan_thread_id(text: &str) -> Option<String> {
     prescan_codex_text(text).0.map(|i| i.thread_id)
+}
+
+// ---- state_5.sqlite 线程标题（标题链的 DB 增强层） ----
+
+/// 候选 `state_5.sqlite` 路径（CC-Switch `codex_state_db_paths` 同款收法）：
+/// `<codex_dir>/state_5.sqlite` 恒在候选；Codex 把 SQLite 状态重定位到别的
+/// 目录时，`config.toml` 的 `sqlite_home` 键（优先）或 `CODEX_SQLITE_HOME`
+/// 环境变量追加第二个候选（config 在时 env 不 consult）。config 文本与 env
+/// 值以参数注入——纯函数，不读进程环境、不做 I/O；`home` 供 `~`/`~/`/`~\`
+/// 展开。返回顺序稳定、去重。
+fn codex_state_db_paths_at(
+    codex_dir: &Path,
+    home: &Path,
+    config_text: Option<&str>,
+    env_sqlite_home: Option<&str>,
+) -> Vec<PathBuf> {
+    let mut paths = Vec::new();
+    push_unique_path(&mut paths, codex_dir.join(CODEX_STATE_DB_FILENAME));
+    let relocated: Option<String> =
+        config_text
+            .and_then(sqlite_home_from_codex_config)
+            .or_else(|| {
+                env_sqlite_home
+                    .map(str::trim)
+                    .filter(|s| !s.is_empty())
+                    .map(str::to_string)
+            });
+    if let Some(raw) = relocated {
+        push_unique_path(
+            &mut paths,
+            expand_home(&raw, home).join(CODEX_STATE_DB_FILENAME),
+        );
+    }
+    paths
+}
+
+/// `config.toml` 的 `sqlite_home` 键：顶层字符串，trim 后非空才认（返回
+/// owned 值——`DocumentMut` 是函数内局部，不能把借用带出去）。
+fn sqlite_home_from_codex_config(config_text: &str) -> Option<String> {
+    let doc = config_text.parse::<toml_edit::DocumentMut>().ok()?;
+    let raw = doc.get("sqlite_home")?.as_str()?.trim();
+    (!raw.is_empty()).then(|| raw.to_string())
+}
+
+/// `~` / `~/` / `~\` 前缀展开到 `home`（CC-Switch `resolve_user_path` 同款）；
+/// 其余路径原样返回。
+fn expand_home(raw: &str, home: &Path) -> PathBuf {
+    if raw == "~" {
+        return home.to_path_buf();
+    }
+    if let Some(rest) = raw.strip_prefix("~/").or_else(|| raw.strip_prefix("~\\")) {
+        return home.join(rest);
+    }
+    PathBuf::from(raw)
+}
+
+fn push_unique_path(paths: &mut Vec<PathBuf>, path: PathBuf) {
+    if !paths.contains(&path) {
+        paths.push(path);
+    }
+}
+
+/// 读一个 state 库的 `threads` 表为 `thread id → title` 映射。查询镜像 Codex
+/// 自己的 `distinct_thread_metadata_title`：标题非空且与库内首条 user 消息不同
+/// ——「用户重命名过才算数」；比较推进 SQL（NULL 安全）是为了绝不 SELECT 无界
+/// 的 `first_user_message` blob（openai/codex#29007 的 OOM 事故）。任何失败
+/// （文件缺失 / 打不开 / 表结构版本差异）→ 空映射：标题只是标题链的增强层，
+/// JSONL 本体不受影响，也不计 skipped（与 opencode 把 db 当源、失败计
+/// skipped 不同）。Codex 运行中会持有并写锁此库，读前设 2 秒 busy timeout
+/// （CC-Switch 同款）。
+fn load_thread_titles_from_db(db_path: &Path) -> HashMap<String, String> {
+    let Ok(conn) = rusqlite::Connection::open_with_flags(
+        db_path,
+        rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY | rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX,
+    ) else {
+        return HashMap::new();
+    };
+    if conn
+        .busy_timeout(std::time::Duration::from_secs(2))
+        .is_err()
+    {
+        return HashMap::new();
+    }
+    let Ok(mut stmt) = conn.prepare(
+        "SELECT id, title FROM threads
+         WHERE title <> ''
+         AND (first_user_message IS NULL OR TRIM(title) <> TRIM(first_user_message))",
+    ) else {
+        return HashMap::new();
+    };
+    let Ok(rows) = stmt.query_map([], |row| {
+        Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+    }) else {
+        return HashMap::new();
+    };
+    let mut titles = HashMap::new();
+    for row in rows.flatten() {
+        let (id, title) = row;
+        let id = id.trim();
+        let title = title.trim();
+        if !id.is_empty() && !title.is_empty() {
+            titles.insert(id.to_string(), title.to_string());
+        }
+    }
+    titles
 }
 
 /// Extract a trailing UUID (`8-4-4-4-12` hex) from a filename's stem, e.g.
@@ -886,7 +1035,10 @@ fn parse_cumulative_tokens(total_usage: &serde_json::Value) -> Option<Cumulative
 #[cfg(test)]
 impl CodexSourceParser {
     pub(crate) fn parse_full(&self, files: &[PathBuf]) -> AppResult<CollectResult> {
-        super::parse_jsonl_full(self, files, fold_codex_file)
+        let thread_titles = self.thread_titles();
+        super::parse_jsonl_full(self, files, |file, text, start_line| {
+            fold_codex_file(file, text, start_line, &thread_titles)
+        })
     }
 }
 
@@ -1987,5 +2139,195 @@ mod tests {
         assert_eq!(result.sessions[0].id, "thread-xyz");
         assert_eq!(result.events[0].session_id, "thread-xyz");
         assert_eq!(p.session_identity().seen(&files), vec!["thread-xyz"]);
+    }
+
+    // ---- state_5.sqlite 线程标题（标题链 DB 层） ----
+
+    /// 路径定位的直测（纯函数，env/config 值注入）：默认候选恒在；config.toml
+    /// `sqlite_home` 优先于 `CODEX_SQLITE_HOME`（config 在时 env 不 consult）；
+    /// `~` / `~/` 展开；同路径去重；非字符串 / 空串不算候选。
+    #[test]
+    fn codex_state_db_paths_default_config_env_and_tilde() {
+        let tmp = tempfile::tempdir().unwrap();
+        let codex_dir = tmp.path().join("codex");
+        let home = tmp.path().to_path_buf();
+        let db = |dir: &std::path::Path| dir.join("state_5.sqlite");
+
+        // 无 config 无 env → 只有默认候选。
+        assert_eq!(
+            codex_state_db_paths_at(&codex_dir, &home, None, None),
+            vec![db(&codex_dir)]
+        );
+        // config sqlite_home 绝对路径 → 追加候选。
+        let reloc = tmp.path().join("reloc");
+        let config = format!("sqlite_home = '{}'\n", reloc.display());
+        assert_eq!(
+            codex_state_db_paths_at(&codex_dir, &home, Some(&config), None),
+            vec![db(&codex_dir), db(&reloc)]
+        );
+        // config 的 `~` / `~/` 前缀展开（单引号字面量：Windows 路径含反斜杠，
+        // 双引号 basic string 会把 `\r` 等当转义导致解析失败）。
+        let config = "sqlite_home = '~/reloc'\n";
+        assert_eq!(
+            codex_state_db_paths_at(&codex_dir, &home, Some(config), None),
+            vec![db(&codex_dir), db(&home.join("reloc"))]
+        );
+        let config = "sqlite_home = '~'\n";
+        assert_eq!(
+            codex_state_db_paths_at(&codex_dir, &home, Some(config), None),
+            vec![db(&codex_dir), db(&home)]
+        );
+        // config 缺失 → env 接棒；trim 后空串不算。
+        assert_eq!(
+            codex_state_db_paths_at(&codex_dir, &home, None, Some(reloc.to_str().unwrap())),
+            vec![db(&codex_dir), db(&reloc)]
+        );
+        assert_eq!(
+            codex_state_db_paths_at(&codex_dir, &home, None, Some("  ")),
+            vec![db(&codex_dir)]
+        );
+        // config 与 env 同时在 → config 优先，env 不 consult。
+        let env_home = tmp.path().join("env-home");
+        assert_eq!(
+            codex_state_db_paths_at(
+                &codex_dir,
+                &home,
+                Some("sqlite_home = '~'\n"),
+                Some(env_home.to_str().unwrap())
+            ),
+            vec![db(&codex_dir), db(&home)]
+        );
+        // config sqlite_home 与默认候选重合 → 去重。
+        let config = format!("sqlite_home = '{}'\n", codex_dir.display());
+        assert_eq!(
+            codex_state_db_paths_at(&codex_dir, &home, Some(&config), None),
+            vec![db(&codex_dir)]
+        );
+        // sqlite_home 不是字符串 / 是空串 → 不算候选。
+        let config = "sqlite_home = 123\n";
+        assert_eq!(
+            codex_state_db_paths_at(&codex_dir, &home, Some(config), None),
+            vec![db(&codex_dir)]
+        );
+        let config = "sqlite_home = ''\n";
+        assert_eq!(
+            codex_state_db_paths_at(&codex_dir, &home, Some(config), None),
+            vec![db(&codex_dir)]
+        );
+    }
+
+    /// 容错直测：缺失文件 / 非 sqlite 垃圾字节 / 缺 `first_user_message` 列
+    /// 的旧版 schema → 空映射；标题非空且与首条 user 消息不同（TRIM 比较）
+    /// 才保留，入库前 trim 后判空。
+    #[test]
+    fn codex_thread_titles_from_db_filters_and_tolerates() {
+        let tmp = tempfile::tempdir().unwrap();
+        // 缺失 → 空。
+        assert!(load_thread_titles_from_db(&tmp.path().join("nope.sqlite")).is_empty());
+        // 垃圾字节 → 空。
+        let garbage = tmp.path().join("garbage.sqlite");
+        std::fs::write(&garbage, b"definitely not sqlite").unwrap();
+        assert!(load_thread_titles_from_db(&garbage).is_empty());
+
+        // 完整 schema：只有「重命名过」的线程（title 非空且 ≠ 首条消息）入库。
+        let db = tmp.path().join("state_5.sqlite");
+        {
+            let conn = rusqlite::Connection::open(&db).unwrap();
+            conn.execute_batch(
+                "CREATE TABLE threads (id TEXT, title TEXT, first_user_message TEXT);
+                 INSERT INTO threads VALUES ('t_renamed','Renamed title','Old first message');
+                 INSERT INTO threads VALUES ('t_same','Same text','  Same text  ');
+                 INSERT INTO threads VALUES ('t_blank','   ','Some message');
+                 INSERT INTO threads VALUES ('t_null', NULL, NULL);",
+            )
+            .unwrap();
+        }
+        let titles = load_thread_titles_from_db(&db);
+        assert_eq!(titles.len(), 1, "仅重命名过的线程入库");
+        assert_eq!(
+            titles.get("t_renamed").map(String::as_str),
+            Some("Renamed title")
+        );
+
+        // 旧版 schema 没有 first_user_message 列 → prepare 失败 → 空映射。
+        let old = tmp.path().join("old.sqlite");
+        {
+            let conn = rusqlite::Connection::open(&old).unwrap();
+            conn.execute_batch(
+                "CREATE TABLE threads (id TEXT, title TEXT);
+                 INSERT INTO threads VALUES ('t_old','Old title');",
+            )
+            .unwrap();
+        }
+        assert!(load_thread_titles_from_db(&old).is_empty());
+    }
+
+    /// 端到端：state_5.sqlite 里的线程标题（重命名过）压过首条 user 消息成为
+    /// `title_orig`；DB 标题与库内首条消息相同（未重命名）时被 SQL 排除，链上
+    /// 噪声过滤后的首条真实 prompt 照常胜出。
+    #[test]
+    fn codex_session_title_prefers_state_db_title() {
+        // 重命名过：DB 标题 = 标题链最高优先级层。
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("sessions").join("s.jsonl");
+        std::fs::create_dir_all(file.parent().unwrap()).unwrap();
+        write_jsonl(
+            &file,
+            &[
+                codex_session_meta_cwd("t1", "/tmp/proj"),
+                codex_response_message(
+                    "m_u1",
+                    "user",
+                    "2026-07-10T03:00:10Z",
+                    serde_json::json!("Fix the login bug"),
+                ),
+            ],
+        );
+        {
+            let conn = rusqlite::Connection::open(dir.path().join("state_5.sqlite")).unwrap();
+            conn.execute_batch(
+                "CREATE TABLE threads (id TEXT, title TEXT, first_user_message TEXT);
+                 INSERT INTO threads VALUES ('t1','修复登录 bug','Fix the login bug');",
+            )
+            .unwrap();
+        }
+        let p = CodexSourceParser::with_dir(dir.path().to_path_buf());
+        let result = p.parse_full(&p.discover().unwrap()).unwrap();
+        assert_eq!(result.sessions[0].title_orig, "修复登录 bug");
+
+        // 未重命名（title == 库内首条消息，恰为噪声消息）：SQL 排除 DB 层，
+        // 链的噪声过滤跳过 AGENTS.md 前导，落到下一条真实 prompt。
+        let dir2 = tempfile::tempdir().unwrap();
+        let file2 = dir2.path().join("sessions").join("s.jsonl");
+        std::fs::create_dir_all(file2.parent().unwrap()).unwrap();
+        write_jsonl(
+            &file2,
+            &[
+                codex_session_meta_cwd("t2", "/tmp/proj"),
+                codex_response_message(
+                    "m_u1",
+                    "user",
+                    "2026-07-10T03:00:10Z",
+                    serde_json::json!("# AGENTS.md preamble"),
+                ),
+                codex_response_message(
+                    "m_u2",
+                    "user",
+                    "2026-07-10T03:00:11Z",
+                    serde_json::json!("Fix the login bug"),
+                ),
+            ],
+        );
+        {
+            let conn = rusqlite::Connection::open(dir2.path().join("state_5.sqlite")).unwrap();
+            conn.execute_batch(
+                "CREATE TABLE threads (id TEXT, title TEXT, first_user_message TEXT);
+                 INSERT INTO threads VALUES ('t2','# AGENTS.md preamble','# AGENTS.md preamble');",
+            )
+            .unwrap();
+        }
+        let p = CodexSourceParser::with_dir(dir2.path().to_path_buf());
+        let result = p.parse_full(&p.discover().unwrap()).unwrap();
+        assert_eq!(result.sessions[0].title_orig, "Fix the login bug");
     }
 }

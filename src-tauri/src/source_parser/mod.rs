@@ -186,9 +186,10 @@ pub trait SourceParser: Send + Sync {
     /// Incremental gate strategy for one of this parser's source files —
     /// declared, not assumed, so [`collect_jsonl_incremental`] never pretends
     /// a line cursor for files that don't honor it (Gemini's single-JSON
-    /// files, Grok summary.json) and SQLite parsers (OpenCode) state their
-    /// watermark model. The driver consults this per file; the default is the
-    /// append-JSONL line cursor.
+    /// files, Grok summary.json). The driver consults this per file; the
+    /// default is the append-JSONL line cursor. Parsers that keep their own
+    /// incremental driver (OpenCode, SQLite) never enter this one — a
+    /// declaration there would be moot, so they don't override it.
     fn gate_mode(&self, _file: &Path) -> GateMode {
         GateMode::LineCursor
     }
@@ -375,9 +376,6 @@ pub enum GateMode {
     /// offset is meaningless and stays 0. Single-object JSON: Gemini,
     /// Grok summary.json.
     MtimeOnly,
-    /// Per-session watermark inside the source (SQLite: OpenCode). The shared
-    /// JSONL driver does not apply.
-    SessionWatermark,
 }
 
 /// Shared incremental collect for line-oriented JSONL sources. Walks every
@@ -778,7 +776,8 @@ pub(super) struct SessionExtras<'a> {
     /// 标题链最高优先级层：依次取第一个非空值。claude 传
     /// `[custom_title, summary]`——两者都是「文件内最新者胜」（summary 会随
     /// /compact 重写、改名必须刷新标题），最新者胜的累积留在 claude 侧完成，
-    /// 这里只收最终值。
+    /// 这里只收最终值。codex 传 state_5.sqlite 的线程标题（per-session 查找
+    /// 的单值，无则传空串、链落到 user 消息层）。
     pub(super) extra_title_levels: &'a [&'a str],
     /// 固定标题（claude 子代理取 `.meta.json` 任务描述），置位时跳过整条链直接
     /// 截断——`None` 才走标准链，`Some("")` 是调用方裁决出的「强制无题」。

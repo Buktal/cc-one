@@ -8,8 +8,8 @@ use crate::time::epoch_millis_to_iso;
 
 use super::transcript::{MessageSpec, MessageUuid, RawMessage, TextKeys};
 use super::{
-    metadata_modified_nanos, CollectResult, FileCursor, GateMode, RawUsage, ScanProgress,
-    ScanProgressDelta, SessionIdentity, SourceParser,
+    metadata_modified_nanos, CollectResult, FileCursor, RawUsage, ScanProgress, ScanProgressDelta,
+    SessionIdentity, SourceParser,
 };
 
 /// Stable source tag — becomes `RawUsage.source` / `RawSession.source` and the
@@ -190,15 +190,6 @@ impl SourceParser for OpenCodeSourceParser {
         Ok((result, delta))
     }
 
-    /// SQLite-backed: the incremental gate is a per-session watermark (db
-    /// mtime + per-session `time_updated`), not a line cursor — declared so
-    /// the shared driver's line-cursor contract is not assumed for this
-    /// parser. Its own `collect_incremental` does not consult this; the
-    /// declaration pins the strategy where a future driver change can see it.
-    fn gate_mode(&self, _file: &Path) -> GateMode {
-        GateMode::SessionWatermark
-    }
-
     /// 无文件身份：会话表在 SQLite 里自管（身份 = 行 id），file-backed 对账
     /// 不适用——声明为 [`SessionIdentity::SelfManaged`]，seen 集恒空即对账
     /// 整体停用（与 `collect_incremental` 里 `session_ids: Vec::new()` 同一
@@ -213,15 +204,36 @@ impl SourceParser for OpenCodeSourceParser {
 /// across platforms, so this is the same path on Windows as on Linux. The
 /// home-dir fallback is injected (`home`) — the root-injection seam
 /// (`OpenCodeSourceParser::new_at`) used by the collect orchestration factory;
-/// production resolves the real home.
+/// production resolves the real home. The env-resolution core is the pure
+/// [`opencode_db_path_from`]; this wrapper is the one place the process
+/// environment is read (tests inject values instead of mutating env).
 fn opencode_db_path_at(home: &Path) -> Option<PathBuf> {
-    if let Ok(v) = std::env::var("OPENCODE_DB") {
+    opencode_db_path_from(
+        home,
+        std::env::var("OPENCODE_DB").ok().as_deref(),
+        std::env::var("XDG_DATA_HOME").ok().as_deref(),
+    )
+}
+
+/// 纯 env 解析核心（env 值以参数注入，不在函数内读环境变量——测试直喂各分支，
+/// 不碰进程环境）：
+///   - `OPENCODE_DB` 为绝对路径 → 原样使用（变量指向 db 文件本身，不再拼
+///     `opencode/opencode.db`）；相对路径忽略；
+///   - 否则 `XDG_DATA_HOME` 为绝对路径 → `<XDG_DATA_HOME>/opencode/opencode.db`；
+///   - 两者皆缺或相对 → home 兜底 `<home>/.local/share/opencode/opencode.db`。
+/// OpenCode 跨平台统一用 xdg-basedir，Windows 与 Linux 同路径。
+fn opencode_db_path_from(
+    home: &Path,
+    opencode_db: Option<&str>,
+    xdg_data_home: Option<&str>,
+) -> Option<PathBuf> {
+    if let Some(v) = opencode_db {
         let p = PathBuf::from(v);
         if p.is_absolute() {
             return Some(p);
         }
     }
-    if let Ok(v) = std::env::var("XDG_DATA_HOME") {
+    if let Some(v) = xdg_data_home {
         let p = PathBuf::from(v);
         if p.is_absolute() {
             return Some(p.join("opencode").join("opencode.db"));
@@ -1089,5 +1101,69 @@ mod tests {
         assert_eq!(r1.messages[0].uuid, "msg_a");
         assert_eq!(r1.events.len(), 1);
         assert_eq!(r1.events[0].session_id, "ses_1");
+    }
+
+    // ---- env 解析（纯函数直测，env 值注入） ----
+
+    /// `opencode_db_path_from` 的各分支：OPENCODE_DB 绝对路径优先且原样使用
+    /// （指向 db 文件本身，不拼 `opencode/opencode.db`）；相对路径忽略；
+    /// XDG_DATA_HOME 回退并拼 `opencode/opencode.db`（相对同样忽略）；两者
+    /// 皆缺 → home 兜底。路径全部用 tempdir 构造，跨平台都是绝对路径。
+    #[test]
+    fn opencode_db_path_env_priority_and_fallbacks() {
+        let tmp = tempfile::tempdir().unwrap();
+        let home = tmp.path().join("home");
+        let db_file = tmp.path().join("opencode.db");
+        let xdg = tmp.path().join("xdg");
+
+        // OPENCODE_DB 绝对路径 → 原样返回，且压过 XDG。
+        assert_eq!(
+            opencode_db_path_from(
+                &home,
+                Some(db_file.to_str().unwrap()),
+                Some(xdg.to_str().unwrap())
+            ),
+            Some(db_file.clone())
+        );
+        // OPENCODE_DB 相对路径 → 忽略，XDG_DATA_HOME 接棒。
+        assert_eq!(
+            opencode_db_path_from(&home, Some("rel/opencode.db"), Some(xdg.to_str().unwrap())),
+            Some(xdg.join("opencode").join("opencode.db"))
+        );
+        // XDG 绝对路径 → <XDG>/opencode/opencode.db（拼接语义钉住）。
+        assert_eq!(
+            opencode_db_path_from(&home, None, Some(xdg.to_str().unwrap())),
+            Some(xdg.join("opencode").join("opencode.db"))
+        );
+        // XDG 相对路径 → 忽略，落 home 兜底。
+        assert_eq!(
+            opencode_db_path_from(&home, None, Some("rel")),
+            Some(
+                home.join(".local")
+                    .join("share")
+                    .join("opencode")
+                    .join("opencode.db")
+            )
+        );
+        // 两者皆缺 → home 兜底。
+        assert_eq!(
+            opencode_db_path_from(&home, None, None),
+            Some(
+                home.join(".local")
+                    .join("share")
+                    .join("opencode")
+                    .join("opencode.db")
+            )
+        );
+        // OPENCODE_DB 相对 + XDG 缺失 → home 兜底。
+        assert_eq!(
+            opencode_db_path_from(&home, Some("rel/opencode.db"), None),
+            Some(
+                home.join(".local")
+                    .join("share")
+                    .join("opencode")
+                    .join("opencode.db")
+            )
+        );
     }
 }
