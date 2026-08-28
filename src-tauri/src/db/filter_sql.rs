@@ -13,7 +13,7 @@
 //!   （#94/#100 的事故形态）。
 //!
 //! 消费方：`store_reads` 的 `UsageFilter` 构建、`store_dimensions` 的维度
-//! 查询与其未知桶的 usage-粒直读、`store_transcript` 的 `SessionFilter`
+//! 查询与其未知桶的 usage-粒直读、`store_sessions_reads` 的 `SessionFilter`
 //! 会话粒构建。会话粒特有的语义差异刻意不并入本模块（known 按 session
 //! USED model 门控的 EXISTS 形式 vs 行级直等、时间列 last_active_at 与
 //! timestamp 属调用方契约），只收敛真正同形的部分。
@@ -72,8 +72,8 @@ pub(super) fn push_ts_range(
 /// predicate ([`super::aggregate_sql::session_pair_join`]) — the EXISTS forms
 /// here and every dimension JOIN stay one spelling.
 ///
-/// （架构审查候选④自 store_reads 收口至此：store_transcript 的未知桶种子与
-/// turn 侧的哨兵获取共用这一份实现。）
+/// （架构审查候选④自 store_reads 收口至此：store_sessions_reads 会话粒
+/// 未知桶的种子与 turn 侧的哨兵获取共用这一份实现。）
 pub(super) fn project_condition(driving: &str, project: &str) -> (String, Option<SqlValue>) {
     let pair = super::aggregate_sql::session_pair_join(driving, "s");
     if project == UNKNOWN_PROJECT {

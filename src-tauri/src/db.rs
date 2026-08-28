@@ -28,7 +28,12 @@ mod store_ingest;
 mod store_pricing;
 mod store_providers;
 mod store_reads;
-mod store_sessions;
+// The `sessions` domain is split by ownership: the table's write path + sync
+// coupling (`store_sessions_writes`), its read path + the shared
+// SessionFilter→SQL clause builder (`store_sessions_reads`), and the
+// `session_messages` transcript body (`store_transcript`).
+mod store_sessions_reads;
+mod store_sessions_writes;
 mod store_transcript;
 mod usage_records_io;
 
@@ -37,7 +42,7 @@ pub(crate) mod testutil;
 
 pub use store_dirty_days::DaySnapshot;
 pub use store_reads::DistinctColumn;
-pub use store_transcript::SessionCounts;
+pub use store_sessions_writes::SessionCounts;
 
 use std::sync::Mutex;
 

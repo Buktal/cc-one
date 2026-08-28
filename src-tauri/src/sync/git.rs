@@ -5,12 +5,13 @@
 //! high-level sync flow that composes these primitives with the store lives in
 //! `super::flow`.
 
+use std::collections::HashSet;
 use std::path::Path;
 
 use git2::build::{CheckoutBuilder, RepoBuilder};
 use git2::{
-    AnnotatedCommit, Cred, FetchOptions, Index, Oid, ProxyOptions, PushOptions, RemoteCallbacks,
-    Repository, ResetType, Signature, Status,
+    AnnotatedCommit, Cred, FetchOptions, Index, ObjectType, Oid, ProxyOptions, PushOptions,
+    RemoteCallbacks, Repository, ResetType, Signature, Status,
 };
 
 use crate::config::ConfigData;
@@ -456,6 +457,88 @@ pub(super) fn is_ahead_of_origin(repo: &Repository) -> AppResult<bool> {
     };
     let (ahead, _behind) = repo.graph_ahead_behind(local.id(), remote.id())?;
     Ok(ahead > 0)
+}
+
+// ---------------------------------------------------------------------------
+// Membership oracle: which devices git itself carries
+// ---------------------------------------------------------------------------
+
+/// Which device ids git itself still carries locally, read off the HEAD tree:
+/// devices with a `config/devices_<id>.json` name artifact (plus the read-only
+/// legacy `config/devices/<id>.json` layout the artifact reader also accepts)
+/// or a `data/<id>/` subtree. This is the committed tree, NOT the worktree —
+/// device membership ([`crate::devices::reconcile_devices`]) is decided here so
+/// a failed force-checkout, an interrupted rebase, or an external branch switch
+/// (worktree files transiently missing while HEAD still carries them) can never
+/// read as a device leaving the repo. Local HEAD is the right truth in both
+/// modes: Synced keeps it at the pulled remote tip, and Standalone-after-unbind
+/// still has no repo (see `None` below).
+///
+/// `None` = no usable local git state: no `.git` (Standalone never opened a
+/// repo), an unborn HEAD (bound to an empty remote, first commit pending), or
+/// an unreadable tree. The caller must then degrade to the worktree
+/// approximation instead of reading the failure as "nobody is present" — the
+/// consumer (reconcile) forgets absent devices destructively, so an unreadable
+/// truth falls back to the old lenient source, never to aggressive deletion.
+pub fn head_tree_device_ids(repo_path: &Path) -> Option<HashSet<String>> {
+    let repo = Repository::open(repo_path).ok()?;
+    let tree = repo.head().ok()?.peel_to_tree().ok()?;
+    let mut ids: HashSet<String> = HashSet::new();
+    let mut insert_if_valid = |id: &str| {
+        if crate::config::is_valid_device_id(id) {
+            ids.insert(id.to_string());
+        }
+    };
+    for entry in tree.iter() {
+        match entry.name() {
+            // Name artifacts: flat `config/devices_<id>.json` blobs, plus the
+            // legacy `config/devices/<id>.json` layout (the same two layouts
+            // `crate::devices::read_all_device_artifacts` reads from the
+            // worktree, so both membership sources accept the same shapes).
+            Some("config") => {
+                let Ok(config) = entry.to_object(&repo).and_then(|o| o.peel_to_tree()) else {
+                    continue;
+                };
+                for e in config.iter() {
+                    let Some(name) = e.name() else { continue };
+                    if let Some(id) = name
+                        .strip_prefix("devices_")
+                        .and_then(|s| s.strip_suffix(".json"))
+                    {
+                        insert_if_valid(id);
+                    } else if name == "devices" {
+                        // Legacy layout subtree: <id>.json blobs.
+                        let Ok(obj) = e.to_object(&repo) else {
+                            continue;
+                        };
+                        let Ok(legacy) = obj.peel_to_tree() else {
+                            continue;
+                        };
+                        for f in legacy.iter() {
+                            if let Some(id) = f.name().and_then(|n| n.strip_suffix(".json")) {
+                                insert_if_valid(id);
+                            }
+                        }
+                    }
+                }
+            }
+            // Per-device data subtrees: `data/<id>/`.
+            Some("data") => {
+                let Ok(data) = entry.to_object(&repo).and_then(|o| o.peel_to_tree()) else {
+                    continue;
+                };
+                for e in data.iter() {
+                    if e.kind() == Some(ObjectType::Tree) {
+                        if let Some(id) = e.name() {
+                            insert_if_valid(id);
+                        }
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    Some(ids)
 }
 
 // ---------------------------------------------------------------------------

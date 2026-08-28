@@ -1,12 +1,21 @@
-//! Sessions table: per-session UPSERT + per-field user-data setters.
+//! `sessions` 表写路径 + 同步耦合：per-session UPSERT、per-field 用户数据
+//! setter、dirty 核心、pull 侧快照导入与收藏对账。
+//!
+//! 「写路径」归这里的不只是 UPDATE/INSERT：把一条写送上 git 的整套耦合也在这
+//! —— [`PushTrack`]（哪列进快照）、dirty 核心
+//! （[`tx_mark_session_dirty`] / [`mark_sessions_dirty`]，同事务标脏规则）、
+//! push 物化路径的输入读 [`Store::get_session_snapshot_meta`] 与
+//! [`Store::dirty_sessions`]（读的是 push 路径的输入，随 push 耦合同住，不随
+//! 读路径住 `store_sessions_reads`）。会话列表/计数的读路径在
+//! `super::store_sessions_reads`；消息本体（`session_messages` 表）在
+//! `super::store_transcript`。
 //!
 //! Hosts the shared `upsert_session_row` / `SessionUpsertPolicy` core used by
 //! both collect ([`Store::upsert_session`]) and pull
-//! ([`super::transcript::Store::import_session_snapshot`]), plus
-//! [`PushTrack`] — the single authority for which `sessions` columns ride git
-//! (and therefore which setters flag the session dirty for the push path).
+//! ([`Store::import_session_snapshot`]), plus [`PushTrack`] — the single
+//! authority for which `sessions` columns ride git (and therefore which setters
+//! flag the session dirty for the push path).
 
-use super::store_transcript::{mark_sessions_dirty, tx_mark_session_dirty};
 use super::*;
 
 // ---- push-track classification: which `sessions` columns ride git ----
@@ -62,6 +71,140 @@ fn tx_apply_push_track(
         PushTrack::GitTracked => tx_mark_session_dirty(tx, session_id),
         PushTrack::DeviceLocal => Ok(()),
     }
+}
+
+/// Flag ONE session dirty inside `tx` — the same-tx core of the whole
+/// dirty-session mechanism. The flag must land atomically with the write that
+/// made the session dirty (a separate transaction could leave a committed
+/// write whose session is never flagged, silently dropping it from the next
+/// push — the same failure `mark_days_dirty` guards against for usage rows).
+/// `INSERT OR IGNORE` keeps re-flagging idempotent. Setter-path callers go
+/// through [`tx_apply_push_track`], which applies this only for
+/// `PushTrack::GitTracked` columns.
+pub(super) fn tx_mark_session_dirty(tx: &rusqlite::Transaction, session_id: &str) -> AppResult<()> {
+    tx.execute(
+        "INSERT OR IGNORE INTO dirty_sessions(session_id) VALUES (?1)",
+        params![session_id],
+    )?;
+    Ok(())
+}
+
+/// Flag each session in `sessions` dirty within `tx` — the batch form of
+/// [`tx_mark_session_dirty`] for the multi-row writers (transcript ingest,
+/// `delete_sessions`), so every flag still lands in the writer's transaction.
+pub(super) fn mark_sessions_dirty(
+    tx: &rusqlite::Transaction,
+    sessions: &std::collections::BTreeSet<String>,
+) -> AppResult<()> {
+    for sid in sessions {
+        tx_mark_session_dirty(tx, sid)?;
+    }
+    Ok(())
+}
+
+/// Recompute-time message count for one session — what the push wrote.
+/// `Store::clear_dirty_flags_if_unchanged` re-checks it before dropping the
+/// session's dirty flag, so a message that raced in after the snapshot keeps
+/// the session dirty (a blind delete would strand it on the local-only side
+/// of git forever).
+pub struct SessionCounts {
+    pub session_id: String,
+    pub message_rows: usize,
+}
+
+// ---- sessions-table UPSERT core (shared by collect + pull) ----
+//
+// `Store::upsert_session` (collect / re-extract) and
+// `Store::import_session_snapshot` (pull) both write one row of the SAME
+// `sessions` table with an identical 12-column INSERT. They differ ONLY in
+// which columns an existing row gets refreshed on conflict — so that
+// difference lives in one typed place (`SessionUpsertPolicy`) instead of two
+// `ON CONFLICT` clauses kept in sync only by comments.
+
+/// Which columns an [`upsert_session_row`] conflict-update refreshes. The two
+/// sessions-table UPSERT callers differ ONLY here, so this enum is the single
+/// typed home of that difference.
+pub(super) enum SessionUpsertPolicy {
+    /// Collect / re-extract: refresh the 7 system-data columns only. Never
+    /// touches user-data columns — the "re-extract must not overwrite user
+    /// edits" invariant (which is also what keeps a soft-deleted session
+    /// excluded across every re-collect).
+    RefreshSystemOnly,
+    /// Pull / import: refresh the 7 system columns AND the two
+    /// [`PushTrack::GitTracked`] columns — a peer's snapshot is authoritative
+    /// for its own row's git-riding fields. The [`PushTrack::DeviceLocal`]
+    /// columns stay untouched either way (never carried by a snapshot).
+    RefreshSystemAndFavorites,
+}
+
+impl SessionUpsertPolicy {
+    /// The `ON CONFLICT(id, device_id) DO UPDATE SET` clause this policy
+    /// drives. Every policy refreshes the 7 shared system-data columns; pull
+    /// additionally takes the two [`PushTrack::GitTracked`] columns. The
+    /// [`PushTrack::DeviceLocal`] columns never appear here.
+    fn conflict_set(&self) -> String {
+        // The refreshable system-data columns — shared by both policies, so
+        // declared once (single source of truth).
+        const SYSTEM: &str = "source=excluded.source, project_dir=excluded.project_dir, \
+                              title_orig=excluded.title_orig, started_at=excluded.started_at, \
+                              last_active_at=excluded.last_active_at, \
+                              agent_type=excluded.agent_type, \
+                              parent_session_id=excluded.parent_session_id";
+        match self {
+            SessionUpsertPolicy::RefreshSystemOnly => SYSTEM.to_string(),
+            SessionUpsertPolicy::RefreshSystemAndFavorites => format!(
+                "{SYSTEM}, favorited=excluded.favorited, synced_group_id=excluded.synced_group_id"
+            ),
+        }
+    }
+}
+
+/// UPSERT one `sessions` row keyed by `(sys.id, device_id)` — the shared core
+/// of [`Store::upsert_session`] (collect) and [`Store::import_session_snapshot`]
+/// (pull). The INSERT lists all 14 columns (single source); on conflict,
+/// `policy` picks which columns refresh. `custom_title`, `local_group_id` and
+/// `excluded` seed as empty/off on INSERT for every caller (none is carried:
+/// `custom_title` is a local edit, `local_group_id` never enters git, and
+/// `excluded` — the soft-delete marker — is device-private user data no
+/// collector may set). `favorited` / `synced_group_id` seed with the caller's
+/// values — defaults for collect, the snapshot's for pull — and only
+/// `RefreshSystemAndFavorites` overwrites them on conflict.
+pub(super) fn upsert_session_row(
+    tx: &rusqlite::Transaction,
+    device_id: &str,
+    sys: &SessionSystemData,
+    favorited: bool,
+    synced_group_id: &str,
+    policy: SessionUpsertPolicy,
+) -> AppResult<()> {
+    tx.execute(
+        &format!(
+            "INSERT INTO sessions
+             (id, device_id, source, project_dir, title_orig, started_at, last_active_at,
+              agent_type, parent_session_id, custom_title, favorited, synced_group_id,
+              local_group_id, excluded)
+             VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14)
+             ON CONFLICT(id, device_id) DO UPDATE SET {}",
+            policy.conflict_set()
+        ),
+        params![
+            sys.id,
+            device_id,
+            sys.source,
+            sys.project_dir,
+            sys.title_orig,
+            sys.started_at,
+            sys.last_active_at,
+            sys.agent_type,
+            sys.parent_session_id,
+            "", // custom_title — device-local; neither caller carries it
+            favorited as i64,
+            synced_group_id,
+            "", // local_group_id — device-private, never in git
+            0,  // excluded — device-private soft-delete marker; collect never sets it
+        ],
+    )?;
+    Ok(())
 }
 
 impl super::Store {
@@ -254,13 +397,14 @@ impl super::Store {
     }
 
     /// Batch soft-delete: set the `excluded` marker on the given sessions so
-    /// every sessions-side read (`build_session_where` filters `excluded = 0`)
-    /// stops surfacing them. Soft by design — the app re-collects from the
-    /// source session files, so a physical row delete would re-import on the
-    /// next pass, and the user's source files must never be touched. The
-    /// marker is device-private user data: no upsert conflict clause refreshes
-    /// it, so neither a re-collect (`RefreshSystemOnly`) nor a peer-snapshot
-    /// pull (`RefreshSystemAndFavorites`) can resurrect a deleted session.
+    /// every sessions-side read (`build_session_where` in
+    /// `store_sessions_reads` filters `excluded = 0`) stops surfacing them.
+    /// Soft by design — the app re-collects from the source session files, so
+    /// a physical row delete would re-import on the next pass, and the user's
+    /// source files must never be touched. The marker is device-private user
+    /// data: no upsert conflict clause refreshes it, so neither a re-collect
+    /// (`RefreshSystemOnly`) nor a peer-snapshot pull
+    /// (`RefreshSystemAndFavorites`) can resurrect a deleted session.
     ///
     /// Deleting also clears `favorited` and flags every deleted id dirty in
     /// the SAME transaction. Clearing `favorited` is a
@@ -270,10 +414,10 @@ impl super::Store {
     /// "snapshot exists ⇔ favorited" invariant keeps holding (`excluded`
     /// itself is [`PushTrack::DeviceLocal`]: device-private, never
     /// serialized). This is the push-side mirror of a deletion; the pull-side
-    /// mirror (`bulk_unfavorite_sessions`) deliberately does NOT flag dirty —
-    /// an independent decision, see its doc. Transcript messages are kept (the
-    /// exclusion is reversible in principle; messages are re-collectable
-    /// derived data anyway). Returns how many rows matched
+    /// mirror ([`Store::bulk_unfavorite_sessions`]) deliberately does NOT flag
+    /// dirty — an independent decision, see its doc. Transcript messages are
+    /// kept (the exclusion is reversible in principle; messages are
+    /// re-collectable derived data anyway). Returns how many rows matched
     /// (keys addressing no row simply don't count — a peer's row already
     /// reconciled away is not an error). Empty input is a no-op.
     pub fn delete_sessions(&self, keys: &[SessionKey]) -> AppResult<usize> {
@@ -299,101 +443,187 @@ impl super::Store {
         tx.commit()?;
         Ok(n)
     }
-}
 
-// ---- sessions-table UPSERT core (shared by collect + pull) ----
-//
-// `Store::upsert_session` (collect / re-extract) and
-// `Store::import_session_snapshot` (pull) both write one row of the SAME
-// `sessions` table with an identical 12-column INSERT. They differ ONLY in
-// which columns an existing row gets refreshed on conflict — so that
-// difference lives in one typed place (`SessionUpsertPolicy`) instead of two
-// `ON CONFLICT` clauses kept in sync only by comments.
-
-/// Which columns an [`upsert_session_row`] conflict-update refreshes. The two
-/// sessions-table UPSERT callers differ ONLY here, so this enum is the single
-/// typed home of that difference.
-pub(super) enum SessionUpsertPolicy {
-    /// Collect / re-extract: refresh the 7 system-data columns only. Never
-    /// touches user-data columns — the "re-extract must not overwrite user
-    /// edits" invariant (which is also what keeps a soft-deleted session
-    /// excluded across every re-collect).
-    RefreshSystemOnly,
-    /// Pull / import: refresh the 7 system columns AND the two
-    /// [`PushTrack::GitTracked`] columns — a peer's snapshot is authoritative
-    /// for its own row's git-riding fields. The [`PushTrack::DeviceLocal`]
-    /// columns stay untouched either way (never carried by a snapshot).
-    RefreshSystemAndFavorites,
-}
-
-impl SessionUpsertPolicy {
-    /// The `ON CONFLICT(id, device_id) DO UPDATE SET` clause this policy
-    /// drives. Every policy refreshes the 7 shared system-data columns; pull
-    /// additionally takes the two [`PushTrack::GitTracked`] columns. The
-    /// [`PushTrack::DeviceLocal`] columns never appear here.
-    fn conflict_set(&self) -> String {
-        // The refreshable system-data columns — shared by both policies, so
-        // declared once (single source of truth).
-        const SYSTEM: &str = "source=excluded.source, project_dir=excluded.project_dir, \
-                              title_orig=excluded.title_orig, started_at=excluded.started_at, \
-                              last_active_at=excluded.last_active_at, \
-                              agent_type=excluded.agent_type, \
-                              parent_session_id=excluded.parent_session_id";
-        match self {
-            SessionUpsertPolicy::RefreshSystemOnly => SYSTEM.to_string(),
-            SessionUpsertPolicy::RefreshSystemAndFavorites => format!(
-                "{SYSTEM}, favorited=excluded.favorited, synced_group_id=excluded.synced_group_id"
-            ),
-        }
+    /// The session ids holding un-pushed changes, in deterministic order (sorted).
+    /// Drives the push path's per-session jsonl recompute (a recompute WRITES the
+    /// snapshot for a favorited session, DELETES it for a non-favorited one).
+    /// Read-only — it does NOT clear: clearing happens only after a push lands
+    /// (`Store::clear_dirty_flags_if_unchanged`), so a failed push retries on
+    /// the next attempt. Pure local state: makes no claim about the git worktree.
+    pub fn dirty_sessions(&self) -> AppResult<Vec<String>> {
+        let conn = self.conn.lock().expect("db mutex poisoned");
+        let mut stmt = conn.prepare("SELECT session_id FROM dirty_sessions ORDER BY session_id")?;
+        let rows = stmt.query_map([], |r| r.get::<_, String>(0))?;
+        rows.collect::<rusqlite::Result<Vec<_>>>()
+            .map_err(AppError::from)
     }
-}
 
-/// UPSERT one `sessions` row keyed by `(sys.id, device_id)` — the shared core
-/// of [`Store::upsert_session`] (collect) and [`Store::import_session_snapshot`]
-/// (pull). The INSERT lists all 14 columns (single source); on conflict,
-/// `policy` picks which columns refresh. `custom_title`, `local_group_id` and
-/// `excluded` seed as empty/off on INSERT for every caller (none is carried:
-/// `custom_title` is a local edit, `local_group_id` never enters git, and
-/// `excluded` — the soft-delete marker — is device-private user data no
-/// collector may set). `favorited` / `synced_group_id` seed with the caller's
-/// values — defaults for collect, the snapshot's for pull — and only
-/// `RefreshSystemAndFavorites` overwrites them on conflict.
-pub(super) fn upsert_session_row(
-    tx: &rusqlite::Transaction,
-    device_id: &str,
-    sys: &SessionSystemData,
-    favorited: bool,
-    synced_group_id: &str,
-    policy: SessionUpsertPolicy,
-) -> AppResult<()> {
-    tx.execute(
-        &format!(
-            "INSERT INTO sessions
-             (id, device_id, source, project_dir, title_orig, started_at, last_active_at,
-              agent_type, parent_session_id, custom_title, favorited, synced_group_id,
-              local_group_id, excluded)
-             VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14)
-             ON CONFLICT(id, device_id) DO UPDATE SET {}",
-            policy.conflict_set()
-        ),
-        params![
-            sys.id,
+    /// The meta line the push path writes as the first line of a session's jsonl
+    /// snapshot, read straight from the sessions row (system data + the two
+    /// `PushTrack::GitTracked` user fields — the column-track authority is
+    /// [`PushTrack`]). `None` when the session is not in the table — the
+    /// caller treats that as "nothing to snapshot".
+    pub fn get_session_snapshot_meta(
+        &self,
+        device_id: &str,
+        session_id: &str,
+    ) -> AppResult<Option<SessionSnapshotMeta>> {
+        let conn = self.conn.lock().expect("db mutex poisoned");
+        let row = conn
+            .query_row(
+                "SELECT id, source, project_dir, title_orig, started_at, last_active_at,
+                        agent_type, parent_session_id, favorited, synced_group_id
+                 FROM sessions WHERE id = ?1 AND device_id = ?2",
+                params![session_id, device_id],
+                |r| {
+                    Ok(SessionSnapshotMeta {
+                        v: SESSION_SNAPSHOT_VERSION,
+                        id: r.get(0)?,
+                        source: r.get(1)?,
+                        project_dir: r.get(2)?,
+                        title_orig: r.get(3)?,
+                        started_at: r.get(4)?,
+                        last_active_at: r.get(5)?,
+                        agent_type: r.get(6)?,
+                        parent_session_id: r.get(7)?,
+                        favorited: r.get::<_, i64>(8)? != 0,
+                        synced_group_id: r.get(9)?,
+                    })
+                },
+            )
+            .optional()?;
+        Ok(row)
+    }
+
+    /// Import a peer's session snapshot into the store (pull path). UPSERTs the
+    /// session row keyed by `(meta.id, device_id)`; the peer's `favorited` and
+    /// `synced_group_id` (carried by the snapshot) overwrite — the peer is
+    /// authoritative for its own row's `PushTrack::GitTracked` columns. System
+    /// fields refresh on conflict; the `PushTrack::DeviceLocal` columns
+    /// (`custom_title` / `local_group_id`) are never carried by the snapshot.
+    /// Messages land deduped by `(device_id, uuid)`, NOT marked dirty (pull
+    /// data is already on git — the same split as `ingest` vs
+    /// `ingest_marking_dirty` for usage rows).
+    pub fn import_session_snapshot(
+        &self,
+        device_id: &str,
+        meta: &SessionSnapshotMeta,
+        messages: &[SessionMessage],
+    ) -> AppResult<()> {
+        let mut conn = self.conn.lock().expect("db mutex poisoned");
+        let tx = conn.transaction()?;
+        // Project the snapshot meta into the system-data carrier (the 7 fields
+        // a snapshot shares with a freshly collected session); the GitTracked
+        // columns ride the builder args + RefreshSystemAndFavorites.
+        upsert_session_row(
+            &tx,
             device_id,
-            sys.source,
-            sys.project_dir,
-            sys.title_orig,
-            sys.started_at,
-            sys.last_active_at,
-            sys.agent_type,
-            sys.parent_session_id,
-            "", // custom_title — device-local; neither caller carries it
-            favorited as i64,
-            synced_group_id,
-            "", // local_group_id — device-private, never in git
-            0,  // excluded — device-private soft-delete marker; collect never sets it
-        ],
-    )?;
-    Ok(())
+            &SessionSystemData {
+                id: meta.id.clone(),
+                source: meta.source.clone(),
+                project_dir: meta.project_dir.clone(),
+                title_orig: meta.title_orig.clone(),
+                started_at: meta.started_at.clone(),
+                last_active_at: meta.last_active_at.clone(),
+                agent_type: meta.agent_type.clone(),
+                parent_session_id: meta.parent_session_id.clone(),
+            },
+            meta.favorited,
+            &meta.synced_group_id,
+            SessionUpsertPolicy::RefreshSystemAndFavorites,
+        )?;
+        {
+            let mut stmt = tx.prepare(
+                "INSERT INTO session_messages
+                 (device_id, session_id, uuid, role, ts, model, name, content)
+                 VALUES (?1,?2,?3,?4,?5,?6,?7,?8)
+                 ON CONFLICT (device_id, uuid) DO NOTHING",
+            )?;
+            for m in messages {
+                stmt.execute(params![
+                    device_id,
+                    m.session_id,
+                    m.uuid,
+                    m.role.as_str(),
+                    m.ts,
+                    m.model.as_deref().unwrap_or(""),
+                    m.name.as_deref().unwrap_or(""),
+                    m.content,
+                ])?;
+            }
+        }
+        tx.commit()?;
+        Ok(())
+    }
+
+    /// The peer devices that currently have a favorited session row, excluding
+    /// self. Drives the un-favorite propagation's "which peers to reconcile"
+    /// loop — a peer that ships NO snapshot files this pull still needs its rows
+    /// checked, because it may have un-favorited everything.
+    pub fn favorited_session_devices(&self, self_device_id: &str) -> AppResult<Vec<String>> {
+        let conn = self.conn.lock().expect("db mutex poisoned");
+        let mut stmt = conn.prepare(
+            "SELECT DISTINCT device_id FROM sessions \
+             WHERE favorited = 1 AND device_id != ?1 ORDER BY device_id",
+        )?;
+        let rows = stmt.query_map(params![self_device_id], |r| r.get::<_, String>(0))?;
+        rows.collect::<rusqlite::Result<Vec<_>>>()
+            .map_err(AppError::from)
+    }
+
+    /// The session ids this device currently has favorited. Paired with the
+    /// still-present snapshot files via `snapshot_policy::presence_mismatches`
+    /// to drive the pull-side un-favorite reconciliation. Sorted for
+    /// deterministic reconciliation.
+    pub fn favorited_session_ids(&self, device_id: &str) -> AppResult<Vec<String>> {
+        let conn = self.conn.lock().expect("db mutex poisoned");
+        let mut stmt = conn.prepare(
+            "SELECT id FROM sessions WHERE device_id = ?1 AND favorited = 1 ORDER BY id",
+        )?;
+        let rows = stmt.query_map(params![device_id], |r| r.get::<_, String>(0))?;
+        rows.collect::<rusqlite::Result<Vec<_>>>()
+            .map_err(AppError::from)
+    }
+
+    /// Clear the favorited flag and drop shared transcript messages for a set
+    /// of the device's sessions (pull path: these are sessions a peer
+    /// un-favorited, detected by their snapshot file vanishing — the set is the
+    /// `snapshot_policy::presence_mismatches` oracle's `favorites_without_files`
+    /// half, already computed by the caller). One transaction: both writes land
+    /// together or neither does; the meta row stays (its system data is
+    /// harmless, and self may hold its own row for the same session). No-op
+    /// (returns 0) on an empty set.
+    ///
+    /// NOT marked dirty — an independent decision that deliberately departs
+    /// from the setter-path rule for a `PushTrack::GitTracked` column (see
+    /// [`PushTrack`]): this write does not CREATE a local change needing a
+    /// push, it MIRRORS one already on git (the peer removed its snapshot file
+    /// — that vanishing is how these ids were selected). The dirty flag also
+    /// keys by bare session id while the push materializes only SELF's rows,
+    /// so flagging a peer-row write would at best trigger a meaningless
+    /// recompute of self's row for the same id.
+    pub fn bulk_unfavorite_sessions(&self, device_id: &str, ids: &[String]) -> AppResult<usize> {
+        if ids.is_empty() {
+            // Nothing to write; skip opening a transaction entirely.
+            return Ok(0);
+        }
+        let mut conn = self.conn.lock().expect("db mutex poisoned");
+        let tx = conn.transaction()?;
+        let json = serde_json::to_string(ids)
+            .map_err(|e| AppError::Internal(format!("bulk unfavorite: {e}")))?;
+        tx.execute(
+            "UPDATE sessions SET favorited = 0 \
+             WHERE device_id = ?1 AND id IN (SELECT value FROM json_each(?2))",
+            params![device_id, json],
+        )?;
+        tx.execute(
+            "DELETE FROM session_messages \
+             WHERE device_id = ?1 AND session_id IN (SELECT value FROM json_each(?2))",
+            params![device_id, json],
+        )?;
+        tx.commit()?;
+        Ok(ids.len())
+    }
 }
 
 #[cfg(test)]
@@ -446,110 +676,6 @@ mod tests {
         assert!(m.favorited, "favorited preserved");
         assert_eq!(m.synced_group_id, "sg1", "synced_group_id preserved");
         assert_eq!(m.local_group_id, "lg1", "local_group_id preserved");
-    }
-
-    #[test]
-    fn query_sessions_time_range_filters_last_active_at() {
-        let s = mem();
-        seed_session(&s, "old", "dev", "2026-08-01T10:00:00.000Z");
-        seed_session(&s, "mid", "dev", "2026-08-15T10:00:00.000Z");
-        seed_session(&s, "new", "dev", "2026-08-31T10:00:00.000Z");
-
-        // from_ts narrows to sessions at or after Aug 10.
-        let from = SessionFilter {
-            from_ts: Some("2026-08-10T00:00:00.000Z".into()),
-            ..Default::default()
-        };
-        let ids: Vec<String> = s
-            .query_sessions(Some(&from))
-            .unwrap()
-            .into_iter()
-            .map(|r| r.id)
-            .collect();
-        assert_eq!(ids, ["new", "mid"], "from_ts excludes early sessions");
-
-        // to_ts narrows to sessions at or before Aug 20.
-        let to = SessionFilter {
-            to_ts: Some("2026-08-20T23:59:59.999Z".into()),
-            ..Default::default()
-        };
-        let ids: Vec<String> = s
-            .query_sessions(Some(&to))
-            .unwrap()
-            .into_iter()
-            .map(|r| r.id)
-            .collect();
-        assert_eq!(ids, ["mid", "old"], "to_ts excludes late sessions");
-
-        // both bounds → only "mid".
-        let both = SessionFilter {
-            from_ts: Some("2026-08-10T00:00:00.000Z".into()),
-            to_ts: Some("2026-08-20T23:59:59.999Z".into()),
-            ..Default::default()
-        };
-        let ids: Vec<String> = s
-            .query_sessions(Some(&both))
-            .unwrap()
-            .into_iter()
-            .map(|r| r.id)
-            .collect();
-        assert_eq!(ids, ["mid"], "from_ts + to_ts intersect to one session");
-    }
-
-    #[test]
-    fn query_sessions_model_filter_uses_exists_semantics() {
-        let s = mem();
-        // s1 uses model A + B; s2 uses only B.
-        seed_session_with_record(&s, "s1", "dev", "model-a");
-        seed_session_with_record(&s, "s1", "dev", "model-b");
-        seed_session_with_record(&s, "s2", "dev", "model-b");
-
-        let ids = |model: &str| -> Vec<String> {
-            let f = SessionFilter {
-                model: Some(model.into()),
-                ..Default::default()
-            };
-            s.query_sessions(Some(&f))
-                .unwrap()
-                .into_iter()
-                .map(|r| r.id)
-                .collect()
-        };
-        assert_eq!(ids("model-a"), ["s1"], "A matches only s1");
-        let both: std::collections::BTreeSet<String> = ids("model-b").into_iter().collect();
-        assert_eq!(
-            both,
-            std::collections::BTreeSet::from(["s1".to_string(), "s2".to_string()]),
-            "B matches both (same last_active_at ⇒ order is unspecified)"
-        );
-        assert!(
-            ids("no-such-model").is_empty(),
-            "a model nobody used matches nothing"
-        );
-    }
-
-    #[test]
-    fn query_sessions_model_filter_is_device_isolated() {
-        let s = mem();
-        // Same session id on two devices; the model record exists only on dev1.
-        seed_session_with_record(&s, "same", "dev1", "model-x");
-        seed_session(&s, "same", "dev2", "2026-08-15T10:00:00.000Z");
-
-        let f = SessionFilter {
-            device_scope: Some("dev2".into()),
-            model: Some("model-x".into()),
-            ..Default::default()
-        };
-        let ids: Vec<String> = s
-            .query_sessions(Some(&f))
-            .unwrap()
-            .into_iter()
-            .map(|r| r.id)
-            .collect();
-        assert!(
-            ids.is_empty(),
-            "dev2's row must not match dev1's usage record (session ids can collide across devices)"
-        );
     }
 
     /// `bulk_unfavorite_sessions` clears the favorited flag and deletes shared
@@ -763,211 +889,6 @@ mod tests {
         assert_eq!(s.query_sessions(None).unwrap().len(), 1);
     }
 
-    // ---------------------------------------------------------- paging ------
-
-    /// Paged reads return consecutive time-desc slices with no overlap or gap
-    /// (the ORDER BY tiebreakers make the ordering total) and the page sizes
-    /// agree with the count query's total under the same filter.
-    #[test]
-    fn query_sessions_page_is_consecutive_and_agrees_with_count() {
-        let s = mem();
-        seed_session(&s, "d", "dev", "2026-08-04T10:00:00.000Z");
-        seed_session(&s, "a", "dev", "2026-08-01T10:00:00.000Z");
-        seed_session(&s, "c", "dev", "2026-08-03T10:00:00.000Z");
-        seed_session(&s, "e", "dev", "2026-08-05T10:00:00.000Z");
-        seed_session(&s, "b", "dev", "2026-08-02T10:00:00.000Z");
-
-        let page1 = s
-            .query_sessions_page(&SessionQuery {
-                filter: None,
-                limit: 2,
-                offset: 0,
-            })
-            .unwrap();
-        let page2 = s
-            .query_sessions_page(&SessionQuery {
-                filter: None,
-                limit: 2,
-                offset: 2,
-            })
-            .unwrap();
-        let page3 = s
-            .query_sessions_page(&SessionQuery {
-                filter: None,
-                limit: 2,
-                offset: 4,
-            })
-            .unwrap();
-        let ids =
-            |rows: Vec<SessionRow>| -> Vec<String> { rows.into_iter().map(|r| r.id).collect() };
-        assert_eq!(ids(page1), ["e", "d"], "page 1 = newest two");
-        assert_eq!(ids(page2), ["c", "b"], "page 2 = next two");
-        assert_eq!(ids(page3), ["a"], "page 3 = the tail");
-        // Offsets past the end return an empty page, never an error.
-        let past = s
-            .query_sessions_page(&SessionQuery {
-                filter: None,
-                limit: 2,
-                offset: 99,
-            })
-            .unwrap();
-        assert!(past.is_empty());
-
-        let counts = s.count_sessions(None, GroupTrack::Local).unwrap();
-        assert_eq!(counts.total, 5, "count total matches the paged set");
-        let all = s.query_sessions(None).unwrap();
-        assert_eq!(all.len(), 5, "unpaged read still returns everything");
-    }
-
-    /// 越界 limit 被夹紧（#66：会话分页原漏夹紧、直接透传 query.limit）：
-    /// 0 → 1（不空翻整页），超大 → 1000（不一次物化全表）。
-    #[test]
-    fn query_sessions_page_clamps_out_of_range_limits() {
-        let s = mem();
-        seed_session(&s, "a", "dev", "2026-08-01T10:00:00.000Z");
-        seed_session(&s, "b", "dev", "2026-08-02T10:00:00.000Z");
-        // 0 → 夹到 1（返回一行，不空翻整页也不报错）；超大 → 夹到 1000（全返回）。
-        let zero = s
-            .query_sessions_page(&SessionQuery {
-                filter: None,
-                limit: 0,
-                offset: 0,
-            })
-            .unwrap();
-        assert_eq!(zero.len(), 1, "limit=0 夹到 1");
-        let huge = s
-            .query_sessions_page(&SessionQuery {
-                filter: None,
-                limit: u32::MAX,
-                offset: 0,
-            })
-            .unwrap();
-        assert_eq!(huge.len(), 2, "limit 超大夹到 1000，全部返回");
-    }
-
-    /// Search is backend-side (LIKE) so a paged result searches the whole set,
-    /// not just the loaded page. Matches the display title (custom title wins)
-    /// and the project path, case-insensitively.
-    #[test]
-    fn query_sessions_page_search_matches_title_project_and_custom_title() {
-        let s = mem();
-        s.upsert_session(
-            "dev",
-            &SessionSystemData {
-                id: "s1".into(),
-                source: "claude_code".into(),
-                project_dir: "/home/u/parser".into(),
-                title_orig: "Refactor tokenizer".into(),
-                ..sys_session("s1", "2026-08-01T10:00:00.000Z")
-            },
-        )
-        .unwrap();
-        s.upsert_session(
-            "dev",
-            &SessionSystemData {
-                id: "s2".into(),
-                project_dir: "/home/u/www".into(),
-                title_orig: "Unrelated".into(),
-                ..sys_session("s2", "2026-08-02T10:00:00.000Z")
-            },
-        )
-        .unwrap();
-
-        let ids = |q: &str| -> Vec<String> {
-            let filter = SessionFilter {
-                search: Some(q.into()),
-                ..Default::default()
-            };
-            s.query_sessions_page(&SessionQuery {
-                filter: Some(filter),
-                limit: 50,
-                offset: 0,
-            })
-            .unwrap()
-            .into_iter()
-            .map(|r| r.id)
-            .collect()
-        };
-        assert_eq!(ids("refactor"), ["s1"], "title_orig matches");
-        assert_eq!(ids("parser"), ["s1"], "project_dir matches");
-        assert!(ids("HELLO").is_empty(), "no match for unrelated text");
-        // Custom title replaces the display title — search then sees it, not
-        // the title_orig behind it (same COALESCE as the SELECT).
-        s.set_session_custom_title("dev", "s1", Some("Casework"))
-            .unwrap();
-        assert_eq!(
-            ids("casework"),
-            ["s1"],
-            "custom title becomes the searchable display title"
-        );
-        assert!(
-            ids("refactor").is_empty(),
-            "title_orig behind a custom title is not searched"
-        );
-        assert!(ids("zzz").is_empty(), "no match");
-        // Search composes with the tab filter (device scope).
-        let scoped = SessionFilter {
-            device_scope: Some("other-dev".into()),
-            search: Some("refactor".into()),
-            ..Default::default()
-        };
-        assert!(s
-            .query_sessions_page(&SessionQuery {
-                filter: Some(scoped),
-                limit: 50,
-                offset: 0,
-            })
-            .unwrap()
-            .is_empty());
-    }
-
-    /// LIKE wildcards in the search query are escaped — a literal `%` or `_`
-    /// matches itself, mirroring the old client-side substring filter.
-    #[test]
-    fn query_sessions_page_search_escapes_like_wildcards() {
-        let s = mem();
-        s.upsert_session(
-            "dev",
-            &SessionSystemData {
-                id: "pct".into(),
-                title_orig: "100% done".into(),
-                ..sys_session("pct", "2026-08-01T10:00:00.000Z")
-            },
-        )
-        .unwrap();
-        s.upsert_session(
-            "dev",
-            &SessionSystemData {
-                id: "plain".into(),
-                title_orig: "One hundred".into(),
-                ..sys_session("plain", "2026-08-02T10:00:00.000Z")
-            },
-        )
-        .unwrap();
-        let ids = |q: &str| -> Vec<String> {
-            let filter = SessionFilter {
-                search: Some(q.into()),
-                ..Default::default()
-            };
-            s.query_sessions_page(&SessionQuery {
-                filter: Some(filter),
-                limit: 50,
-                offset: 0,
-            })
-            .unwrap()
-            .into_iter()
-            .map(|r| r.id)
-            .collect()
-        };
-        assert_eq!(ids("%"), ["pct"], "a lone % matches the literal % row only");
-        assert_eq!(ids("00%"), ["pct"], "% is not a wildcard in the query");
-        assert_eq!(
-            ids("One hundred"),
-            ["plain"],
-            "plain query unaffected by escaping"
-        );
-    }
-
     // ---- delete_sessions (soft delete / exclusion marker, #91) ----
 
     /// Soft delete hides the sessions from EVERY sessions-side read (the list,
@@ -1129,85 +1050,72 @@ mod tests {
         );
     }
 
-    /// Parent link roundtrip (#90): a subagent row's `parent_session_id`
-    /// persists and crosses to the list DTO, keyed to the same device.
+    /// The other policy half: `import_session_snapshot` (pull) uses
+    /// `RefreshSystemAndFavorites`, so on conflict it overwrites the
+    /// `PushTrack::GitTracked` columns (a peer is authoritative for its own
+    /// row's favorited / synced_group_id) but leaves the
+    /// `PushTrack::DeviceLocal` columns (custom_title, local_group_id)
+    /// untouched.
     #[test]
-    fn session_list_carries_parent_link() {
-        let s = mem();
-        s.upsert_session(
-            "dev",
-            &SessionSystemData {
-                id: "main-1".into(),
-                agent_type: String::new(),
-                parent_session_id: String::new(),
-                ..sys_session("main-1", "2026-08-02T10:00:00.000Z")
-            },
-        )
-        .unwrap();
-        s.upsert_session(
-            "dev",
-            &SessionSystemData {
-                id: "agent-x".into(),
-                agent_type: "Explore".into(),
-                parent_session_id: "main-1".into(),
-                ..sys_session("agent-x", "2026-08-01T10:00:00.000Z")
-            },
-        )
-        .unwrap();
-        let rows = s.query_sessions(None).unwrap();
-        let by_id = |id: &str| rows.iter().find(|r| r.id == id).unwrap();
-        assert_eq!(by_id("agent-x").agent_type, "Explore");
-        assert_eq!(by_id("agent-x").parent_session_id, "main-1");
-        assert_eq!(by_id("main-1").parent_session_id, "");
-    }
+    fn import_session_snapshot_refreshes_favorites_but_not_device_local() {
+        let store = mem();
+        let dev = "aabbccddeeff"; // a peer's device id
 
-    /// Sidebar counts: total under the filter + one bucket per distinct group
-    /// column value (empty string = ungrouped), per track.
-    #[test]
-    fn count_sessions_totals_and_group_buckets_per_track() {
-        let s = mem();
-        for (id, last) in [
-            ("a", "2026-08-01T10:00:00.000Z"),
-            ("b", "2026-08-02T10:00:00.000Z"),
-            ("c", "2026-08-03T10:00:00.000Z"),
-            ("d", "2026-08-04T10:00:00.000Z"),
-        ] {
-            seed_session(&s, id, "dev", last);
-        }
-        s.set_session_local_group("dev", "a", Some("lg1")).unwrap();
-        s.set_session_local_group("dev", "b", Some("lg1")).unwrap();
-        s.set_session_local_group("dev", "c", Some("lg2")).unwrap();
-        s.set_session_synced_group("dev", "a", Some("sg1")).unwrap();
-
-        let local = s.count_sessions(None, GroupTrack::Local).unwrap();
-        assert_eq!(local.total, 4, "total ignores the track");
-        let buckets: std::collections::BTreeMap<String, u32> = local
-            .groups
-            .iter()
-            .map(|g| (g.group_id.clone(), g.count))
-            .collect();
-        assert_eq!(buckets["lg1"], 2, "two sessions in lg1");
-        assert_eq!(buckets["lg2"], 1, "one session in lg2");
-        assert_eq!(buckets[""], 1, "the ungrouped bucket is the empty id");
-
-        let synced = s.count_sessions(None, GroupTrack::Synced).unwrap();
-        let synced_buckets: std::collections::BTreeMap<String, u32> = synced
-            .groups
-            .iter()
-            .map(|g| (g.group_id.clone(), g.count))
-            .collect();
-        assert_eq!(synced_buckets["sg1"], 1);
-        assert_eq!(synced_buckets[""], 3);
-
-        // Filtered counts narrow with the filter (source scope).
-        let src_filter = SessionFilter {
-            source: Some("codex_cli".into()),
-            ..Default::default()
-        };
-        let empty = s
-            .count_sessions(Some(&src_filter), GroupTrack::Local)
+        // Local state: the row already exists with custom_title + local_group,
+        // and the session is NOT favorited locally.
+        store
+            .upsert_session(dev, &sys_session("s1", "2026-08-01T01:00:00.000Z"))
             .unwrap();
-        assert_eq!(empty.total, 0);
-        assert!(empty.groups.is_empty());
+        store
+            .set_session_custom_title(dev, "s1", Some("LocalName"))
+            .unwrap();
+        store
+            .set_session_local_group(dev, "s1", Some("lg-local"))
+            .unwrap();
+
+        // Peer imports a snapshot: favorited=true, synced_group=sg-peer, with
+        // refreshed system data. Favorites-track columns follow the peer;
+        // device-local columns survive.
+        let meta = SessionSnapshotMeta {
+            v: SESSION_SNAPSHOT_VERSION,
+            id: "s1".into(),
+            source: "claude_code".into(),
+            project_dir: "/proj".into(),
+            title_orig: "orig-title".into(),
+            started_at: "2026-08-01T00:00:00.000Z".into(),
+            last_active_at: "2026-08-02T09:00:00.000Z".into(),
+            agent_type: "Explore".into(),
+            parent_session_id: String::new(),
+            favorited: true,
+            synced_group_id: "sg-peer".into(),
+        };
+        store.import_session_snapshot(dev, &meta, &[]).unwrap();
+        let m = store
+            .query_sessions(None)
+            .unwrap()
+            .into_iter()
+            .find(|r| r.id == "s1")
+            .unwrap();
+        assert_eq!(
+            m.last_active_at, "2026-08-02T09:00:00.000Z",
+            "system refreshed from peer"
+        );
+        assert_eq!(
+            m.agent_type, "Explore",
+            "agent_type refreshed from peer snapshot (pull must not zero it)"
+        );
+        assert!(m.favorited, "favorited overwritten by peer");
+        assert_eq!(
+            m.synced_group_id, "sg-peer",
+            "synced_group_id overwritten by peer"
+        );
+        assert_eq!(
+            m.title, "LocalName",
+            "custom_title preserved (device-local, not in snapshot)"
+        );
+        assert_eq!(
+            m.local_group_id, "lg-local",
+            "local_group_id preserved (device-private, never in git)"
+        );
     }
 }

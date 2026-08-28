@@ -72,13 +72,15 @@ pub fn collect_into_with(
         merged_delta.extend(delta);
     }
     merged.source = sources_with_rows.join(",");
-    // Post-collect device-registry maintenance: touch self, discover
-    // usage-only devices, then reconcile residue — one entry, discover-before-
-    // reconcile order pinned inside (`devices::refresh_device_registry`). Runs
-    // here, on the collect path — not on the read-only list_devices command —
-    // so a query never mutates the DB. Worst-case latency to surface a new
-    // device is one collect interval.
-    crate::devices::refresh_device_registry(store, &paths, &cfg)?;
+    // Post-collect device-registry maintenance — NON-destructive by design:
+    // touch self + discover usage-only devices, nothing that can delete data
+    // (ADR-0013: the destructive reconcile lives at the single post-pull point
+    // `devices::reload_devices_into_store`, so no collect-tick misread of a
+    // jittering worktree can ever fire a forget). Runs here, on the collect
+    // path — not on the read-only list_devices command — so a query never
+    // mutates the DB. Worst-case latency to surface a new device is one
+    // collect interval.
+    crate::devices::refresh_device_registry(store, &cfg)?;
     store.save_scan_progress(&merged_delta)?;
     Ok(merged)
 }

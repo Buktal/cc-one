@@ -34,8 +34,9 @@ pub use remote_probe::{verify_remote, VerifyReport};
 // non-test builds stay free of unused-import warnings (a `pub use` of a symbol
 // no outer module references is itself flagged unused).
 
-// Low-level git primitive used outside sync.
-pub use git::reset_local_git;
+// Low-level git primitives used outside sync: the unbind helper, and the
+// HEAD-tree membership oracle the devices domain's reconcile is driven by.
+pub use git::{head_tree_device_ids, reset_local_git};
 // High-level flow entries used outside sync.
 pub use flow::{commit_and_push_best_effort, pull_and_import, push_usage, push_usage_best_effort};
 // (verify_remote / VerifyReport are re-exported above, next to `mod remote_probe`.)

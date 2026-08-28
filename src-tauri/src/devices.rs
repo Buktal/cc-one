@@ -6,10 +6,14 @@
 //! - **Device-name artifact** (`config/devices_<id>.json`, one file per device):
 //!   the cloud registry a device publishes its identity to and reads its peers'
 //!   identities from. Carried by the normal Git sync.
-//! - **Membership**: "which devices exist" is computed from three sources —
-//!   this device's own id, the published name artifacts, and the
-//!   `repo/data/<id>/` directories — and reconciled against the Local Store's
-//!   `device` table (stale local-only rows pruned).
+//! - **Membership**: "which devices exist" is decided by git itself — the local
+//!   HEAD tree (a `config/devices_<id>.json` blob or a `data/<id>/` subtree,
+//!   via `crate::sync::head_tree_device_ids`) — and reconciled against the
+//!   Local Store's `device` table (stale local-only rows pruned). The worktree
+//!   is only the degradation path for when no usable git state exists
+//!   (Standalone, unborn HEAD). The destructive reconcile runs ONLY at the
+//!   single post-pull point ([`reload_devices_into_store`]); the collect
+//!   heartbeat does non-destructive maintenance only.
 //! - **Naming**: local aliases (set via `set_device_display_name`) are layered
 //!   over the synced names at read time.
 //!
@@ -161,14 +165,28 @@ pub fn iter_data_device_ids(paths: &Paths) -> AppResult<Vec<String>> {
     Ok(ids)
 }
 
-/// The set of device ids the local repo currently backs: this device ∪ devices
-/// with a published name artifact (`config/devices_<id>.json`) ∪ devices with a
-/// data dir under `repo/data/<id>/`. The local repo filesystem is always
-/// available (even Standalone), so the caller can run this on both the sync
-/// and collect paths. Self is always present.
+/// The set of device ids the local repo still backs — THE membership set. Git
+/// is the source of truth, and the truth read here is git ITSELF (the local
+/// HEAD tree via [`crate::sync::head_tree_device_ids`]: name artifacts and
+/// per-device data subtrees, committed state), not the worktree: a failed
+/// force-checkout, an interrupted rebase, or an external branch switch can
+/// transiently empty `repo/data/<peer>/` while HEAD still carries it, and such
+/// jitter must never read as a device leaving (the destructive reconcile
+/// forgets absent devices — ADR-0013). Degrades to the worktree approximation
+/// (self ∪ worktree name artifacts ∪ worktree `data/<id>/` dirs) only when no
+/// usable local git state exists — Standalone (no `.git`), an unborn HEAD, or
+/// a failed git read: forget is destructive, so an unreadable truth falls back
+/// to the old lenient source, never to "nobody present". Self is always
+/// present.
 fn present_device_ids(paths: &Paths, self_device_id: &str) -> HashSet<String> {
     let mut present: HashSet<String> = HashSet::new();
     present.insert(self_device_id.to_string());
+    if let Some(git_ids) = crate::sync::head_tree_device_ids(&paths.repo) {
+        present.extend(git_ids);
+        return present;
+    }
+    // No usable git state (Standalone / unborn HEAD / unreadable): the
+    // worktree is the only membership signal left.
     for a in read_all_device_artifacts(paths) {
         present.insert(a.device_id.clone());
     }
@@ -178,11 +196,12 @@ fn present_device_ids(paths: &Paths, self_device_id: &str) -> HashSet<String> {
     present
 }
 
-/// The device ids the local repo currently backs, as an ordered list with this
+/// The device ids the local repo still backs, as an ordered list with this
 /// device first — the single enumeration for callers that walk per-device
 /// subtrees (e.g. `library::scan`'s "all" scope). Same membership basis as the
-/// private `present_device_ids` (self ∪ name artifacts ∪ `repo/data/<id>/`
-/// dirs); ordered here because subtree walks are displayed, self first.
+/// private `present_device_ids` (git's HEAD tree, worktree only as the
+/// Standalone degradation); ordered here because subtree walks are displayed,
+/// self first.
 pub fn known_device_ids(paths: &Paths, cfg: &ConfigData) -> Vec<String> {
     let mut ids: Vec<String> = present_device_ids(paths, &cfg.device_id)
         .into_iter()
@@ -193,46 +212,43 @@ pub fn known_device_ids(paths: &Paths, cfg: &ConfigData) -> Vec<String> {
 
 // ---------------- Registry reconciliation ----------------
 
-/// Refresh the device registry on the collect path — the single post-collect
-/// maintenance entry, replacing the caller's ad-hoc sequencing:
+/// Refresh the device registry on the collect path — the collect-side
+/// maintenance entry, NON-DESTRUCTIVE by design:
 ///   1. [`touch_self`] — keep THIS device's row current (a rename self-heals);
 ///   2. `Store::discover_devices_from_usage` — materialize rows for devices
-///      that have usage but never published a name artifact;
-///   3. [`reconcile_devices`] — purge rows the local repo no longer backs
-///      (Git is the source of truth; a row with no git presence is residue).
+///      that have usage but no row yet (picker latency ≤ one collect interval).
 ///
-/// THE ORDER IS LOAD-BEARING: discover must run BEFORE reconcile, so the rows
-/// discover just materialized are reconciled against git truth IN THE SAME
-/// PASS — a usage-only device whose repo presence is gone (a peer deleted
-/// itself, a regenerated-id residue) is purged immediately, together with its
-/// usage, instead of appearing in the picker for one collect interval until
-/// the next pass purges it. (Reconcile iterates the store's `device` table, so
-/// a usage-backed device that has NO row yet is only purgeable once discover
-/// has materialized it — discover-first is what makes the same-pass cleanup
-/// happen.) Pinned inside this one entry so the collect path cannot reorder
-/// the steps; the invariant is unit-tested here
-/// ([`tests::refresh_device_registry_pins_discover_before_reconcile`]).
-pub fn refresh_device_registry(store: &Store, paths: &Paths, cfg: &ConfigData) -> AppResult<()> {
+/// Reconcile (the purge of rows git no longer backs) deliberately does NOT run
+/// here: it deletes the forgotten device's entire local footprint, and the
+/// collect heartbeat must never be able to fire that off a misread — presence
+/// read from the worktree once let a transient FS glitch (failed
+/// force-checkout, interrupted rebase, external branch switch) wipe a live
+/// peer's local data on the very next collect tick. The destructive half lives
+/// at the single post-pull point ([`reload_devices_into_store`]), where
+/// presence was just re-established by a successful fetch + checkout
+/// (ADR-0013).
+pub fn refresh_device_registry(store: &Store, cfg: &ConfigData) -> AppResult<()> {
     touch_self(store, cfg)?;
-    store.discover_devices_from_usage()?;
-    reconcile_devices(store, paths, &cfg.device_id)
+    store.discover_devices_from_usage()
 }
 
-/// Purge local device rows Git no longer backs. Git is the source of truth for
+/// Purge local device rows git no longer backs. Git is the source of truth for
 /// which devices exist, so a device with NO git presence is residue and is
 /// forgotten locally (registry row + its full data footprint: usage, turns,
-/// session rows, transcript messages). "Present" = this device ∪ devices
-/// with a registry file (`config/devices_<id>.json`) ∪ devices with a data dir
-/// under `repo/data/<id>/`. The local repo filesystem is always available (even
-/// Standalone), so this runs on both the sync and collect paths — a stale
-/// device is cleaned on the next collect (~30 s via the background scheduler),
-/// not only on a pull. `self_device_id` is always kept. A failure on one id is
+/// session rows, transcript messages). "Present" = this device ∪ devices git's
+/// local HEAD tree still carries (a `config/devices_<id>.json` name artifact
+/// or a `data/<id>/` subtree — committed state, via [`present_device_ids`],
+/// which degrades to the worktree only when no usable local git state exists).
+/// Runs ONLY at the single post-pull point ([`reload_devices_into_store`]) —
+/// never on the collect heartbeat — so worktree/git jitter can never reach the
+/// destructive path, and a purge always rides a pull that just confirmed what
+/// git carries. `self_device_id` is always kept. A failure on one id is
 /// logged, not fatal.
 pub fn reconcile_devices(store: &Store, paths: &Paths, self_device_id: &str) -> AppResult<()> {
-    // Build the set of devices Git still backs.
+    // Build the set of devices git still backs.
     let present = present_device_ids(paths, self_device_id);
 
-    // Purge dirty rows: local-only devices Git no longer backs. Self is always
+    // Purge dirty rows: local-only devices git no longer backs. Self is always
     // kept (it's in `present`). A failure on one id is logged, not fatal.
     for id in store.list_device_ids()? {
         if id == self_device_id || present.contains(&id) {
@@ -246,13 +262,29 @@ pub fn reconcile_devices(store: &Store, paths: &Paths, self_device_id: &str) -> 
     Ok(())
 }
 
-/// Reload the (just-pulled) cloud device registry into the Store, then
-/// reconcile dirty devices. Each registry file upsert is best-effort so one bad
-/// row can't abort the rest. Aliases stay local and are layered on at
-/// `list_devices`. Used by the sync pull path as the devices domain's import
-/// (the `sync::domains::DOMAINS` table points here); reconcile itself also
-/// runs on the collect path. Takes only `self_device_id` — this half of the
-/// registry never needs the rest of the config.
+/// Reload the (just-pulled) cloud device registry into the Store, then run the
+/// registry's destructive maintenance — the SINGLE reconcile trigger. Each
+/// registry file upsert is best-effort so one bad row can't abort the rest.
+/// Aliases stay local and are layered on at `list_devices`. Used by the sync
+/// pull path as the devices domain's import (the `sync::domains::DOMAINS`
+/// table points here); running inside the pull is the point: presence was just
+/// re-established by a successful fetch + checkout, so a purge decided here
+/// reflects what git actually carries, and a transient worktree/git glitch on
+/// the collect heartbeat can never fire a forget (ADR-0013). Takes only
+/// `self_device_id` — this half of the registry never needs the rest of the
+/// config.
+///
+/// THE ORDER IS LOAD-BEARING: `Store::discover_devices_from_usage` must run
+/// BEFORE [`reconcile_devices`], so rows discover just materialized are
+/// reconciled against git truth IN THE SAME PASS — a usage-only device whose
+/// repo presence is gone (a peer deleted itself, a regenerated-id residue) is
+/// purged immediately, together with its usage, instead of lingering in the
+/// picker until a later pass purges it. (Reconcile iterates the store's
+/// `device` table, so a usage-backed device that has NO row yet is only
+/// purgeable once discover has materialized it — discover-first is what makes
+/// the same-pass cleanup happen.) Pinned inside this one entry so the pull
+/// path cannot reorder the steps; the invariant is unit-tested here
+/// ([`tests::reload_devices_into_store_pins_discover_before_reconcile`]).
 ///
 /// Returns the number of registry rows loaded from the pulled name artifacts
 /// (the devices domain's `imported` count; a re-pull recounts unchanged rows —
@@ -271,6 +303,7 @@ pub(crate) fn reload_devices_into_store(
             eprintln!("[cc-one] device reload skipped {}: {e}", a.device_id);
         }
     }
+    store.discover_devices_from_usage()?;
     reconcile_devices(store, paths, self_device_id)?;
     Ok(loaded)
 }
@@ -500,10 +533,13 @@ mod tests {
     use super::*;
     use crate::config::Paths;
 
-    /// Git is the source of truth for which devices exist. After a pull,
-    /// `reload_devices_into_store` must keep devices Git still backs (this
-    /// device, a peer with a registry file, a peer with a data dir) and purge
-    /// local-only residue (a device with no git presence at all).
+    /// The Standalone DEGRADATION path of membership: with no usable local git
+    /// state (this fixture has no `.git` at `repo/` — Standalone before a first
+    /// bind), `present_device_ids` falls back to the worktree approximation,
+    /// and `reload_devices_into_store` keeps devices the worktree still backs
+    /// (this device, a peer with a registry file, a peer with a data dir) while
+    /// purging local-only residue (a device with no presence at all). The
+    /// git-backed primary path is pinned by the membership tests below.
     #[test]
     fn reload_devices_reconciles_stale_local_only_devices() {
         let tmp = tempfile::tempdir().unwrap();
@@ -540,38 +576,41 @@ mod tests {
         );
     }
 
-    /// The refresh entry's ORDER INVARIANT (discover before reconcile, pinned
-    /// inside `refresh_device_registry`), the two facts that make the order
-    /// observable after ONE refresh:
-    ///   - a usage-backed device that IS git-present (data dir in the repo)
-    ///     but never published a name artifact gets a materialized row and is
-    ///     KEPT — discover's purpose ("appears in the picker");
-    ///   - a usage-backed device with NO git presence (no artifact, no data
-    ///     dir — e.g. a peer that deleted itself, a regenerated-id residue) is
-    ///     purged IN THE SAME PASS, row AND usage: discover first gives
-    ///     reconcile a row to purge. The reverse order (reconcile first) would
-    ///     leave it alive — reconcile iterates only existing `device` rows, so
-    ///     the not-yet-materialized device would survive the pass, show in the
-    ///     picker for one collect interval, and only be purged next pass.
+    /// The pull entry's ORDER INVARIANT (discover before reconcile, pinned
+    /// inside `reload_devices_into_store` — the single reconcile trigger), the
+    /// two facts that make the order observable after ONE pull:
+    ///   - a usage-backed device that IS git-present (a `data/<id>/` subtree
+    ///     committed to HEAD) but never published a name artifact gets a
+    ///     materialized row and is KEPT — discover's purpose ("appears in the
+    ///     picker");
+    ///   - a usage-backed device with NO git presence (no artifact blob, no
+    ///     data subtree in HEAD — e.g. a peer that deleted itself, a
+    ///     regenerated-id residue) is purged IN THE SAME PASS, row AND usage:
+    ///     discover first gives reconcile a row to purge. The reverse order
+    ///     (reconcile first) would leave it alive — reconcile iterates only
+    ///     existing `device` rows, so the not-yet-materialized device would
+    ///     survive the pass, show in the picker, and only be purged on a later
+    ///     pull.
     #[test]
-    fn refresh_device_registry_pins_discover_before_reconcile() {
+    fn reload_devices_into_store_pins_discover_before_reconcile() {
         let tmp = tempfile::tempdir().unwrap();
         let paths = Paths::resolve(tmp.path());
-        std::fs::create_dir_all(&paths.repo_config).unwrap();
         std::fs::create_dir_all(&paths.repo_data).unwrap();
         let store = crate::db::Store::open(std::path::Path::new(":memory:")).unwrap();
 
         let self_id = "0123456789ab";
-        let peer_usage_only = "aaaaaaaaaaaa"; // usage rows, no artifact, data dir present
+        let peer_usage_only = "aaaaaaaaaaaa"; // usage rows, no artifact, data subtree committed
         let orphan_usage_only = "bbbbbbbbbbbb"; // usage rows, no artifact, NO git presence
-        let cfg = ConfigData {
-            device_id: self_id.into(),
-            ..Default::default()
-        };
 
-        // Usage rows for both; git presence (data dir) only for the peer.
+        // Usage rows for both; git presence (committed data subtree — git
+        // carries files, never empty dirs) only for the peer. Self is
+        // registered directly (boot); no config needed — the pull entry takes
+        // only the self id.
         store.upsert_device(self_id, "self", true).unwrap();
-        std::fs::create_dir_all(paths.device_data_dir(peer_usage_only)).unwrap();
+        let peer_dir = paths.device_data_dir(peer_usage_only);
+        std::fs::create_dir_all(&peer_dir).unwrap();
+        std::fs::write(peer_dir.join("usage-2026-07-30.jsonl"), "{}\n").unwrap();
+        commit_worktree(&paths);
         store
             .ingest(&[
                 crate::db::testutil::rec(
@@ -595,7 +634,7 @@ mod tests {
             ])
             .unwrap();
 
-        refresh_device_registry(&store, &paths, &cfg).unwrap();
+        reload_devices_into_store(&store, &paths, self_id).unwrap();
 
         // The git-present usage-only peer: row materialized by discover, kept
         // by reconcile — this is the "appears in the picker" case.
@@ -637,6 +676,179 @@ mod tests {
             "its usage rows are gone with it"
         );
         assert!(ids.iter().any(|i| i == self_id), "self always kept");
+    }
+
+    /// Init a real git repo at `paths.repo` and commit the current worktree —
+    /// the test seam for git-backed presence (HEAD tree = the committed
+    /// worktree). Call again after worktree edits to commit removals, mirroring
+    /// how the production flow lands changes (`commit_all`).
+    fn commit_worktree(paths: &Paths) {
+        let repo = git2::Repository::init(&paths.repo).unwrap();
+        let mut index = repo.index().unwrap();
+        index
+            .add_all(["*"], git2::IndexAddOption::DEFAULT, None)
+            .unwrap();
+        index.write().unwrap();
+        let tree_id = index.write_tree().unwrap();
+        let tree = repo.find_tree(tree_id).unwrap();
+        let sig = git2::Signature::now("test", "test@devices.cc-one").unwrap();
+        let head = repo.head();
+        // Unborn HEAD ⇒ a parentless first commit (creates the branch).
+        let oid = match &head {
+            Ok(h) => {
+                let parent = h.peel_to_commit().unwrap();
+                repo.commit(Some("HEAD"), &sig, &sig, "test", &tree, &[&parent])
+                    .unwrap()
+            }
+            Err(_) => repo
+                .commit(Some("HEAD"), &sig, &sig, "test", &tree, &[])
+                .unwrap(),
+        };
+        let _ = oid;
+    }
+
+    /// THE jitter case the HEAD-tree oracle exists for (ADR-0013): the worktree
+    /// lost a device's files — a failed force-checkout, an interrupted rebase,
+    /// an external branch switch — while the HEAD tree still carries it.
+    /// Reconcile must NOT forget: the device's row AND its usage survive. Under
+    /// the old worktree-read membership this exact state wiped a live peer's
+    /// local data on the next trigger.
+    #[test]
+    fn reconcile_keeps_a_device_the_worktree_lost_while_head_still_carries() {
+        let tmp = tempfile::tempdir().unwrap();
+        let paths = Paths::resolve(tmp.path());
+        let store = crate::db::Store::open(std::path::Path::new(":memory:")).unwrap();
+
+        let self_id = "0123456789ab";
+        let peer = "aaaaaaaaaaaa";
+        store.upsert_device(self_id, "self", true).unwrap();
+        store.upsert_device(peer, "Peer One", false).unwrap();
+        // Peer presence committed to HEAD: data subtree + name artifact.
+        let peer_dir = paths.device_data_dir(peer);
+        std::fs::create_dir_all(&peer_dir).unwrap();
+        std::fs::write(peer_dir.join("usage-2026-07-30.jsonl"), "{}\n").unwrap();
+        ensure_own_device_artifact(&paths, peer, "Peer One").unwrap();
+        commit_worktree(&paths);
+        store
+            .ingest(&[crate::db::testutil::rec(
+                "u1",
+                "2026-07-13",
+                "glm-5.2",
+                peer,
+                100,
+                50,
+                0.0,
+            )])
+            .unwrap();
+
+        // The worktree glitch: both per-device traces vanish from the worktree.
+        std::fs::remove_dir_all(paths.device_data_dir(peer)).unwrap();
+        std::fs::remove_file(paths.devices_file_path(peer)).unwrap();
+
+        reconcile_devices(&store, &paths, self_id).unwrap();
+
+        assert!(
+            store.list_device_ids().unwrap().iter().any(|i| i == peer),
+            "HEAD still carries the peer — worktree loss is not a departure"
+        );
+        assert_eq!(
+            store
+                .count_logs(&crate::model::UsageFilter {
+                    device_scope: Some(peer.into()),
+                    ..crate::model::UsageFilter::default()
+                })
+                .unwrap(),
+            1,
+            "the peer's usage survives the worktree glitch"
+        );
+    }
+
+    /// Git-truth semantics: once the HEAD tree no longer carries a device (its
+    /// removal was committed — the state a peer deleting itself and pushing
+    /// leaves behind), reconcile forgets it: registry row AND local footprint.
+    #[test]
+    fn reconcile_forgets_a_device_head_no_longer_carries() {
+        let tmp = tempfile::tempdir().unwrap();
+        let paths = Paths::resolve(tmp.path());
+        let store = crate::db::Store::open(std::path::Path::new(":memory:")).unwrap();
+
+        let self_id = "0123456789ab";
+        let peer = "aaaaaaaaaaaa";
+        store.upsert_device(self_id, "self", true).unwrap();
+        store.upsert_device(peer, "Peer One", false).unwrap();
+        let peer_dir = paths.device_data_dir(peer);
+        std::fs::create_dir_all(&peer_dir).unwrap();
+        std::fs::write(peer_dir.join("usage-2026-07-30.jsonl"), "{}\n").unwrap();
+        ensure_own_device_artifact(&paths, peer, "Peer One").unwrap();
+        commit_worktree(&paths);
+        store
+            .ingest(&[crate::db::testutil::rec(
+                "u1",
+                "2026-07-13",
+                "glm-5.2",
+                peer,
+                100,
+                50,
+                0.0,
+            )])
+            .unwrap();
+
+        // The peer deletes itself and pushes: its files leave the worktree and
+        // the removal is committed — HEAD no longer carries the device.
+        std::fs::remove_dir_all(paths.device_data_dir(peer)).unwrap();
+        std::fs::remove_file(paths.devices_file_path(peer)).unwrap();
+        commit_worktree(&paths);
+
+        reconcile_devices(&store, &paths, self_id).unwrap();
+
+        assert!(
+            !store.list_device_ids().unwrap().iter().any(|i| i == peer),
+            "a device HEAD dropped is residue — forgotten"
+        );
+        assert_eq!(
+            store
+                .count_logs(&crate::model::UsageFilter {
+                    device_scope: Some(peer.into()),
+                    ..crate::model::UsageFilter::default()
+                })
+                .unwrap(),
+            0,
+            "its local data footprint goes with it"
+        );
+    }
+
+    /// Worktree presence is NOT membership once git truth is readable: a repo
+    /// with a committed baseline plus a peer's files sitting UNCOMMITTED in the
+    /// worktree — reconcile still forgets the peer, because HEAD carries
+    /// nothing for it. Legitimate peer files always arrive via checkout of
+    /// committed content, so uncommitted peer files are transient residue; the
+    /// worktree decides only when no usable git state exists (the Standalone
+    /// degradation path pinned by
+    /// [`reload_devices_reconciles_stale_local_only_devices`]).
+    #[test]
+    fn reconcile_ignores_worktree_only_presence_once_git_truth_is_readable() {
+        let tmp = tempfile::tempdir().unwrap();
+        let paths = Paths::resolve(tmp.path());
+        let store = crate::db::Store::open(std::path::Path::new(":memory:")).unwrap();
+
+        let self_id = "0123456789ab";
+        let peer = "aaaaaaaaaaaa";
+        store.upsert_device(self_id, "self", true).unwrap();
+        store.upsert_device(peer, "Peer One", false).unwrap();
+        // A committed baseline (git state readable), then the peer's files
+        // land in the worktree WITHOUT a commit.
+        std::fs::create_dir_all(&paths.repo).unwrap();
+        std::fs::write(paths.repo.join("README"), "seed\n").unwrap();
+        commit_worktree(&paths);
+        std::fs::create_dir_all(paths.device_data_dir(peer)).unwrap();
+        ensure_own_device_artifact(&paths, peer, "Peer One").unwrap();
+
+        reconcile_devices(&store, &paths, self_id).unwrap();
+
+        assert!(
+            !store.list_device_ids().unwrap().iter().any(|i| i == peer),
+            "uncommitted worktree presence is not git backing"
+        );
     }
 
     #[test]

@@ -90,12 +90,13 @@ impl super::Store {
     }
 
     /// Locally forget a device: drop its registry row and ALL its local data
-    /// footprint — usage_records, turn_durations, and its session footprint
-    /// (`sessions` rows, `session_messages`, and the dirty flags of sessions
-    /// no other device holds). No Git effect — a peer still in the repo
-    /// reappears on the next pull, which force-checks-out its still-published
-    /// files back into the worktree and fully re-imports them (registry entry,
-    /// per-day usage JSONL, favorite snapshots — pinned by
+    /// footprint — every device-keyed table (the list is schema-owned:
+    /// `schema::DEVICE_KEYED_TABLES`, arity-pinned against the DDL by the
+    /// `device_keyed_tables_match_schema` test) plus the one exception below.
+    /// No Git effect — a peer still in the repo reappears on the next pull,
+    /// which force-checks-out its still-published files back into the worktree
+    /// and fully re-imports them (registry entry, per-day usage JSONL, favorite
+    /// snapshots — pinned by
     /// `forget_device_local_is_undone_by_a_pull_that_restores_the_snapshot`
     /// in `sync::domains`'s no-git round-trip suite). The caller MUST guard
     /// `is_self` (this device is never forgettable). Returns the total rows
@@ -104,38 +105,32 @@ impl super::Store {
         let mut conn = self.conn.lock().expect("db mutex poisoned");
         let tx = conn.transaction()?;
         let mut deleted = 0;
-        deleted += tx.execute(
-            "DELETE FROM usage_records WHERE device_id = ?1",
-            params![device_id],
-        )?;
-        deleted += tx.execute(
-            "DELETE FROM turn_durations WHERE device_id = ?1",
-            params![device_id],
-        )?;
-        deleted += tx.execute(
-            "DELETE FROM session_messages WHERE device_id = ?1",
-            params![device_id],
-        )?;
-        // `dirty_sessions` has no device column — resolve through `sessions`,
-        // so this MUST run before the sessions DELETE below (it reads the rows
-        // being deleted). Only ids NO OTHER device holds: session ids can
-        // collide across devices, and a shared id's dirty flag also guards the
-        // survivors' pending push — deleting it would silently drop a
-        // surviving device's un-pushed snapshot recompute.
+        // The EXCEPTION, first: `dirty_sessions` has no device column — resolve
+        // through `sessions`, so this must run BEFORE the mechanical loop below
+        // deletes those `sessions` rows (it reads the rows being deleted). Only
+        // ids NO OTHER device holds: session ids can collide across devices, and
+        // a shared id's dirty flag also guards the survivors' pending push —
+        // deleting it would silently drop a surviving device's un-pushed
+        // snapshot recompute. This subquery stays hand-written (outside the
+        // schema-owned list) because the survivor-aware resolution is logic,
+        // not a column purge.
         deleted += tx.execute(
             "DELETE FROM dirty_sessions WHERE session_id IN (\
                 SELECT id FROM sessions WHERE device_id = ?1 \
                   AND id NOT IN (SELECT id FROM sessions WHERE device_id != ?1))",
             params![device_id],
         )?;
-        deleted += tx.execute(
-            "DELETE FROM sessions WHERE device_id = ?1",
-            params![device_id],
-        )?;
-        deleted += tx.execute(
-            "DELETE FROM device WHERE device_id = ?1",
-            params![device_id],
-        )?;
+        // The mechanical half: one DELETE per device-keyed table, driven by the
+        // schema-owned list — a new device-keyed table joins this loop the
+        // moment its row is added to `schema::DEVICE_KEYED_TABLES` (the schema
+        // arity test forces the list to follow the DDL, so forget can never
+        // silently miss a table).
+        for table in schema::DEVICE_KEYED_TABLES {
+            deleted += tx.execute(
+                &format!("DELETE FROM {table} WHERE device_id = ?1"),
+                params![device_id],
+            )?;
+        }
         tx.commit()?;
         Ok(deleted)
     }

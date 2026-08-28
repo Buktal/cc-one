@@ -21,7 +21,7 @@ use super::aggregate_sql::{
     read_bucket_sums, session_pair_join, session_pair_key, usage_driver_subquery,
 };
 use super::filter_sql::{build_where, project_condition, push_usage_facets, Facet, FacetGates};
-use super::store_transcript::build_session_where;
+use super::store_sessions_reads::build_session_where;
 use super::*;
 
 impl super::Store {

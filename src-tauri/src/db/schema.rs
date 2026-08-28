@@ -242,6 +242,24 @@ pub(super) const PROVIDERS_COLS_DDL: &str = "\
     meta TEXT NOT NULL DEFAULT '{}', \
     updated_at TEXT NOT NULL";
 
+/// The device-keyed tables — every table whose rows carry a `device_id` and
+/// therefore everything `forget_device_local` must purge when a device leaves.
+/// Declared HERE, next to the DDLs, so "add a device-keyed table" is a
+/// two-line edit in one file (DDL + this list); the
+/// `device_keyed_tables_match_schema` test (this module's tests) derives the
+/// device-keyed set from the built schema itself and fails on drift in EITHER
+/// direction — a new device-keyed table missing from this list would otherwise
+/// make forget silently leave its rows behind. `dirty_sessions` is deliberately
+/// absent: it carries no `device_id` column and its survivor-aware resolution
+/// is hand-written in the forget path (see `store_devices`).
+pub(super) const DEVICE_KEYED_TABLES: &[&str] = &[
+    "usage_records",
+    "turn_durations",
+    "device",
+    "sessions",
+    "session_messages",
+];
+
 /// All `CREATE TABLE IF NOT EXISTS` statements (no indexes). [`Store::open`]
 /// runs this FIRST so every table shell exists before
 /// [`migrate::migrate_schema`] ALTERs legacy columns onto them — and before any
@@ -397,5 +415,65 @@ mod tests {
             .collect();
         assert!(!tables.contains("daily_rollups"));
         assert!(!tables.contains("ledger"));
+    }
+
+    /// [`DEVICE_KEYED_TABLES`] stays in lockstep with the schema, in BOTH
+    /// directions, derived from the built schema itself (not from a second
+    /// hand-written list): every listed table exists AND actually carries a
+    /// `device_id` column, and EVERY schema table that carries a `device_id`
+    /// is listed. The completeness half is the guard that matters: adding a
+    /// device-keyed table to the DDL without extending the list fails HERE,
+    /// instead of `forget_device_local` silently leaving the new table's rows
+    /// behind on a device forget.
+    #[test]
+    fn device_keyed_tables_match_schema() {
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        conn.execute_batch(&schema_tables_sql()).unwrap();
+        let mut stmt = conn
+            .prepare("SELECT name FROM sqlite_master WHERE type = 'table'")
+            .unwrap();
+        let mut schema_tables: Vec<String> = stmt
+            .query_map([], |r| r.get::<_, String>(0))
+            .unwrap()
+            .flatten()
+            .collect();
+        schema_tables.sort();
+
+        for table in DEVICE_KEYED_TABLES {
+            assert!(
+                has_device_id_column(&conn, table),
+                "{table} is listed as device-keyed but has no device_id column"
+            );
+        }
+
+        // The derived set (every schema table carrying a device_id column),
+        // compared against the list — this is the direction that catches a
+        // forgotten entry.
+        let mut derived: Vec<String> = schema_tables
+            .into_iter()
+            .filter(|t| has_device_id_column(&conn, t))
+            .collect();
+        derived.sort();
+        let mut listed: Vec<String> = DEVICE_KEYED_TABLES.iter().map(|s| s.to_string()).collect();
+        listed.sort();
+        assert_eq!(
+            derived, listed,
+            "device-keyed table list drifted from the schema — update DEVICE_KEYED_TABLES with the DDL"
+        );
+    }
+
+    /// Whether the built table carries a `device_id` column (PRAGMA table_info
+    /// can't be parameterized, so the name is formatted in — a test-only
+    /// literal, never user input).
+    fn has_device_id_column(conn: &rusqlite::Connection, table: &str) -> bool {
+        let mut info = conn
+            .prepare(&format!("PRAGMA table_info({table})"))
+            .unwrap();
+        let names: Vec<String> = info
+            .query_map([], |r| r.get::<_, String>(1))
+            .unwrap()
+            .flatten()
+            .collect();
+        names.iter().any(|n| n == "device_id")
     }
 }
