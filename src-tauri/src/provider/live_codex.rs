@@ -9,10 +9,10 @@
 //!   无身份配置）；用户手动的 `mcp_servers` / `web_search` / `approval_policy`
 //!   等非受控字段从 live 原样保留（`toml_edit` 重写保留注释与格式）。**绝不
 //!   整文件覆盖**——目标是受控键替换，不是把 live 换成快照。
-//! - **auth.json**：供应商带非空 `OPENAI_API_KEY`（settingsConfig.auth）
-//!   → 受控合并写（只替换 `OPENAI_API_KEY`，登录 token 等非受控字段保留）；
-//!   **登录态版**（官方预设无 key）→ 完全不写 auth.json，保留既有 ChatGPT
-//!   登录态。
+//! - **auth.json**：供应商带非空 `OPENAI_API_KEY`（settingsConfig 的 auth
+//!   对象，键名归 [`crate::provider::settings_codec`]）→ 受控合并写（只替换
+//!   该键，登录 token 等非受控字段保留）；**登录态版**（官方预设无 key）→
+//!   完全不写 auth.json，保留既有 ChatGPT 登录态。
 //! - 写前备份 `config.toml.bak`（单份覆盖；auth.json 是凭据/登录态，不
 //!   备份）；两文件各自「临时文件 + 改名」原子写；先 auth 后 config，
 //!   config 一步失败回滚 auth——任何失败路径都不产生半截状态。
@@ -22,6 +22,10 @@
 //! `merge_codex_config` 是纯函数（本项目最高价值的测试接缝之一）：输入
 //! (当前 live TOML 文本, 目标 TOML 文本) → 输出合并后的 TOML 文本，不碰
 //! 文件系统。「非受控字段保留」这个关键不变量靠它落进可测代码。
+//!
+//! settingsConfig 的解析（`{"auth":{...},"config":"<TOML>"}` 形状）归
+//! [`crate::provider::settings_codec`]（per-app 形状单源），本模块只做合并与
+//! 文件 IO。
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -29,6 +33,7 @@ use std::path::{Path, PathBuf};
 use toml_edit::DocumentMut;
 
 use crate::error::{AppError, AppResult};
+use crate::provider::settings_codec::{parse_codex_settings, CODEX_AUTH_SECRET_KEY};
 
 /// Codex 受控键清单（与 claude 的 `CONTROLLED_FIELDS` 并列，各自是所属
 /// 应用写盘的唯一权威）：供应商快照（TOML）里出现这些键 → 整块替换 live
@@ -65,58 +70,6 @@ pub fn codex_config_path() -> AppResult<PathBuf> {
 /// `~/.codex/auth.json` 路径（ChatGPT 登录态 + 受控 `OPENAI_API_KEY`）。
 pub fn codex_auth_path() -> AppResult<PathBuf> {
     Ok(codex_config_dir()?.join("auth.json"))
-}
-
-/// 一次 codex 写盘的受控载荷：从供应商 settingsConfig（`{"auth": ...,
-/// "config": "TOML"}` JSON 对象）提取出的写盘内容。`auth_key` 为 `None` 即
-/// 登录态版——不写 auth.json。
-pub struct CodexSnapshot {
-    /// 供应商带的有效 `OPENAI_API_KEY`（trim 后非空）。`None` → 不碰
-    /// auth.json，保留既有 ChatGPT 登录态。
-    pub auth_key: Option<String>,
-    /// 目标 config.toml 文本（受控合并的 target；缺省 = 空串 = 无受控内容）。
-    pub config: String,
-}
-
-/// 解析供应商 settingsConfig 为写盘载荷（内部 meta 字段已在公共解析层
-/// `parse_and_strip_settings` 剥除），提取 `auth.OPENAI_API_KEY` 与 `config`。
-///
-/// 边界：空串/纯空白 → 空载荷（无 key 无 config）；非对象 settingsConfig、
-/// 非对象 `auth`、非字符串 `OPENAI_API_KEY`（空串除外，视为无 key）、非
-/// 字符串 `config` → `Err`（坏配置不能进用户 auth.json / config.toml）。
-pub fn parse_codex_settings(settings_config: &str) -> AppResult<CodexSnapshot> {
-    let Some(obj) = crate::provider::live::parse_and_strip_settings(settings_config)? else {
-        return Ok(CodexSnapshot {
-            auth_key: None,
-            config: String::new(),
-        });
-    };
-    let auth_key = match obj.get("auth") {
-        None => None,
-        Some(auth) => {
-            let auth_obj = auth.as_object().ok_or_else(|| {
-                AppError::Config("provider settingsConfig auth is not a JSON object".into())
-            })?;
-            match auth_obj.get("OPENAI_API_KEY") {
-                None => None,
-                Some(key) => {
-                    let key = key.as_str().ok_or_else(|| {
-                        AppError::Config(
-                            "provider settingsConfig auth.OPENAI_API_KEY must be a string".into(),
-                        )
-                    })?;
-                    let key = key.trim();
-                    if key.is_empty() {
-                        None
-                    } else {
-                        Some(key.to_string())
-                    }
-                }
-            }
-        }
-    };
-    let config = crate::provider::live::config_toml_field(&obj)?;
-    Ok(CodexSnapshot { auth_key, config })
 }
 
 /// TOML 受控合并纯函数（最高价值测试接缝）：目标（供应商快照）里出现的
@@ -177,9 +130,9 @@ fn codex_identity_hit(doc: &DocumentMut) -> Option<String> {
 }
 
 /// 构建 auth.json 受控写入载荷：现有内容（缺失 → 空对象）上替换受控键
-/// `OPENAI_API_KEY`，其余键（登录 token / auth_mode 等）原样保留。现有
-/// 内容不是合法 JSON 对象 → `Err`（解析不了就没法证明能保留既有登录态，
-/// 宁可失败）。
+/// （[`CODEX_AUTH_SECRET_KEY`]，键名归 settings_codec 单源），其余键（登录
+/// token / auth_mode 等）原样保留。现有内容不是合法 JSON 对象 → `Err`（解析
+/// 不了就没法证明能保留既有登录态，宁可失败）。
 fn build_auth_payload(existing: Option<&str>, key: &str) -> AppResult<String> {
     let mut obj: serde_json::Map<String, serde_json::Value> = match existing {
         Some(text) => {
@@ -192,7 +145,7 @@ fn build_auth_payload(existing: Option<&str>, key: &str) -> AppResult<String> {
         None => serde_json::Map::new(),
     };
     obj.insert(
-        "OPENAI_API_KEY".into(),
+        CODEX_AUTH_SECRET_KEY.into(),
         serde_json::Value::String(key.to_string()),
     );
     Ok(serde_json::to_string_pretty(&serde_json::Value::Object(
@@ -200,9 +153,9 @@ fn build_auth_payload(existing: Option<&str>, key: &str) -> AppResult<String> {
     ))?)
 }
 
-/// 切换写盘全流程（薄壳，按序调用）：解析快照 → TOML 受控合并 → 判定
-/// auth.json 是否要写 → 组副文件参数调事务原语（先 auth 后 config / 配对
-/// 无变化无操作 / 主败回滚 auth 的次序收口在
+/// 切换写盘全流程（薄壳，按序调用）：解析快照（settings_codec 单源）→ TOML
+/// 受控合并 → 判定 auth.json 是否要写 → 组副文件参数调事务原语（先 auth 后
+/// config / 配对无变化无操作 / 主败回滚 auth 的次序收口在
 /// [`crate::provider::live::commit_two_files`]）。
 pub fn switch_codex_live(
     config_path: &Path,
@@ -212,7 +165,7 @@ pub fn switch_codex_live(
 ) -> AppResult<()> {
     let snapshot = parse_codex_settings(settings_config)?;
     let live = crate::provider::live::read_live_settings(config_path)?;
-    let mut merged = merge_codex_config(&live, &snapshot.config)?;
+    let mut merged = merge_codex_config(&live, &snapshot.config_toml)?;
     // 写盘层补片段：merge_codex_config 只搬身份键、丢弃其余，故片段必须在此补
     // （settings_config 层合会被白名单滤掉→零效果，见 ADR-0010）。片段空则跳过。
     if !snippet.trim().is_empty() {
@@ -501,63 +454,6 @@ name = "New"
             matches!(r, Err(AppError::Config(_))),
             "目标非法 TOML 必须失败——坏配置不能进用户 config.toml"
         );
-    }
-
-    #[test]
-    fn parse_settings_extracts_key_and_config() {
-        let s = parse_codex_settings(
-            r#"{"auth":{"OPENAI_API_KEY":" sk-123 "},"config":"model = \"m\""}"#,
-        )
-        .unwrap();
-        assert_eq!(s.auth_key.as_deref(), Some("sk-123"), "key 要 trim");
-        assert_eq!(s.config, r#"model = "m""#);
-    }
-
-    #[test]
-    fn parse_settings_login_state_versions_have_no_key() {
-        // 官方登录态版：空 auth / 空 key / 无 auth 字段 → 都不写 auth.json。
-        for raw in [
-            r#"{"auth":{}}"#,
-            r#"{"auth":{"OPENAI_API_KEY":""}}"#,
-            r#"{"auth":{"OPENAI_API_KEY":"   "}}"#,
-            r#"{"config":"model = \"m\""}"#,
-            "{}",
-        ] {
-            let s = parse_codex_settings(raw).unwrap();
-            assert_eq!(s.auth_key, None, "登录态版无 key: {raw}");
-        }
-    }
-
-    #[test]
-    fn parse_settings_strips_internal_meta_keys() {
-        let s = parse_codex_settings(
-            r#"{"api_format":"openai","apiFormat":"openai","openrouter_compat_mode":true,"openrouterCompatMode":true,"auth":{"OPENAI_API_KEY":"sk-1"},"config":"model = \"m\""}"#,
-        )
-        .unwrap();
-        assert_eq!(s.auth_key.as_deref(), Some("sk-1"));
-        assert_eq!(s.config, r#"model = "m""#);
-    }
-
-    #[test]
-    fn parse_settings_rejects_bad_shapes() {
-        // 非对象 settingsConfig。
-        assert!(parse_codex_settings("[1,2]").is_err());
-        assert!(parse_codex_settings(r#""just a string""#).is_err());
-        // 非对象 auth。
-        assert!(parse_codex_settings(r#"{"auth":"sk-plain"}"#).is_err());
-        // 非字符串 OPENAI_API_KEY。
-        assert!(parse_codex_settings(r#"{"auth":{"OPENAI_API_KEY":123}}"#).is_err());
-        // 非字符串 config。
-        assert!(parse_codex_settings(r#"{"config":123}"#).is_err());
-    }
-
-    #[test]
-    fn empty_settings_is_an_empty_snapshot() {
-        for raw in ["", "   "] {
-            let s = parse_codex_settings(raw).unwrap();
-            assert_eq!(s.auth_key, None);
-            assert_eq!(s.config, "");
-        }
     }
 
     /// 临时目录里放好 auth.json（模拟用户 ChatGPT 登录态）+ config.toml。

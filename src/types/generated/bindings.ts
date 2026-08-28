@@ -505,19 +505,21 @@ export const commands = {
 	 */
 	addProviderToLiveCmd: (app: App, id: string) => typedError<Provider, AppError>(__TAURI_INVOKE("add_provider_to_live_cmd", { app, id })),
 	/**
-	 *  附加模式「移除」按钮：从 opencode.json 删 provider（设 liveManaged=false，DB
-	 *  记录保留，随时再加回来）。
+	 *  附加模式「移除」按钮：从 live 配置删 provider 条目（DB 记录保留，随时再加
+	 *  回来）。编排（撤除写盘 + meta.liveManaged=false + 落库，liveKey 保留）收口
+	 *  在 [`activation::remove_from_live`]——与删除供应商路径共用同一入口。
 	 */
 	removeProviderFromLiveCmd: (app: App, id: string) => typedError<Provider, AppError>(__TAURI_INVOKE("remove_provider_from_live_cmd", { app, id })),
 	/**
-	 *  附加模式「从配置文件导入」按钮：把现有 opencode.json 的 `provider.*` 反向拉进
-	 *  cc one DB。返回导入/更新条数。
+	 *  「从 live 配置导入」：读该应用的 live 文件(s)（路径序 = [`App::live_paths`]，
+	 *  附加模式即 opencode.json）→ 0..N 条待导入条目 → 落库。条目推导与冲突键
+	 *  策略（单激活 Name / 附加模式 LiveKey，按 `is_additive_mode` 分派）都在
+	 *  [`import_live::import_from_live_texts`]。返回写入条数。
 	 */
 	importProvidersFromLiveCmd: (app: App, nameOverrides: { [key in string]: string }) => typedError<number, AppError>(__TAURI_INVOKE("import_providers_from_live_cmd", { app, nameOverrides })),
 	/**
-	 *  「从本机配置文件导入」预览：只读命令，按 app 分派（opencode 走读盘 +
-	 *  Missing 状态；单激活应用走快照解析），返回将导入的供应商（名称/端点/是否
-	 *  含密钥/新建或更新/片段候选）。确认导入仍走 import_providers_from_live_cmd。
+	 *  「从本机配置文件导入」预览（只读命令）：返回将导入的供应商（名称/端点/
+	 *  是否含密钥/新建或更新/片段候选）。确认导入仍走 import_providers_from_live_cmd。
 	 *  不 emit、不失效任何 tag。
 	 */
 	previewLiveImportCmd: (app: App) => typedError<LiveImportPreview, AppError>(__TAURI_INVOKE("preview_live_import_cmd", { app })),
@@ -818,40 +820,44 @@ export type LightweightExpand =
 "hover";
 
 /**
- *  「从 live 配置导入」的预览载荷（opencode 与单激活应用共用，ADR-0012）。
- *  文件不存在 → `Missing`（带完整路径，前端展示，仅 opencode 路径）；存在 →
+ *  「从 live 配置导入」的预览载荷（附加模式与单激活应用共用，ADR-0012）。
+ *  附加模式的配置文件不存在 → `Missing`（带完整路径，前端展示）；存在 →
  *  将导入的条目列表（空 = 无 provider 段 / 无可导入）。
  */
 export type LiveImportPreview = { kind: "missing"; path: string } | { kind: "ready"; entries: LiveImportPreviewEntry[] };
 
 /**
  *  一条将导入的供应商预览。**密钥绝不进预览载荷**——只有布尔
- *  `has_secret`，apiKey / headers 值不跨边界（见 `secret_in_entry`）。
+ *  `has_secret`，apiKey / headers 值不跨边界（泄漏守卫见
+ *  `preview_payload_never_contains_secret_value` 测试）。
  */
 export type LiveImportPreviewEntry = {
-	/**  `provider.<key>`（opencode）或 name（单激活应用），即导入后的去重键。 */
+	/**  `provider.<key>`（附加模式）或 name（单激活应用），即导入后的去重键。 */
 	key: string,
 	/**
-	 *  entry.name 非空优先，缺失或空串 → key（与导入共用
-	 *  `live_opencode::entry_display_name`，同一推导）。
+	 *  显示名（entry.name 优先 / base_url 注册域 / key 回退——推导在
+	 *  `import_live`，与导入共用同一份）。
 	 */
 	name: string,
 	/**
-	 *  名字是否由 base_url 的注册域推导（单激活应用，后端 host_of）；opencode
-	 *  的名字来自 entry.name / key，恒 false。前端理由行只在该标志为 true 时
-	 *  显示「名取自 <url>」——否则对用户说谎。
+	 *  名字是否由 base_url 的注册域推导（单激活应用）；附加模式的名字来自
+	 *  entry.name / key，恒 false。前端理由行只在该标志为 true 时显示
+	 *  「名取自 <url>」——否则对用户说谎。
 	 */
 	nameDerivedFromUrl: boolean,
-	/**  options.baseURL（opencode）或 live 里 base_url（单激活），缺 → ""。 */
+	/**  options.baseURL（附加模式）或 live 里 base_url（单激活），缺 → ""。 */
 	baseUrl: string,
 	/**
-	 *  options.apiKey / options.headers（opencode）或 settingsConfig 携带凭据
+	 *  options.apiKey / options.headers（附加模式）或 settingsConfig 携带凭据
 	 *  （单激活）任一非空。
 	 */
 	hasSecret: boolean,
-	/**  DB 无此 key → 新建；有 → 更新（与导入的判定一致）。 */
+	/**  DB 无此去重键 → 新建；有 → 更新（与导入的冲突键判定一致）。 */
 	isNew: boolean,
-	/**  可共享键候选（单激活应用导入后可提取为通用片段；opencode 无此概念 → 空）。 */
+	/**
+	 *  可共享键候选（单激活应用导入后可提取为通用片段；附加模式无此概念 →
+	 *  空）。
+	 */
 	snippetCandidates: string[],
 };
 

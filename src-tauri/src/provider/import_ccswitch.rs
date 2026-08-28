@@ -33,6 +33,10 @@ use toml_edit::{DocumentMut, Item, Table};
 
 use crate::error::{AppError, AppResult};
 use crate::model::{App, Provider, ProviderCategory};
+use crate::provider::settings_codec::{
+    build_claude_settings, build_codex_settings, build_gemini_settings, GEMINI_API_KEY_ENV,
+    GOOGLE_GEMINI_BASE_URL_ENV,
+};
 use rusqlite::{Connection, OptionalExtension};
 
 // ── 输入类型（CC-Switch 侧，宽容反序列化）───────────────────────────────────
@@ -338,21 +342,33 @@ fn settings_env_string(settings: &Value, key: &str) -> String {
         .to_string()
 }
 
-/// 统一供应商子 Provider 的 settings_config（各应用形状，模型用缺省）。
-fn universal_claude_settings(base_url: &str, api_key: &str) -> Value {
-    serde_json::json!({
-        "env": {
-            "ANTHROPIC_BASE_URL": base_url,
-            "ANTHROPIC_AUTH_TOKEN": api_key,
-            "ANTHROPIC_MODEL": "claude-sonnet-4-20250514",
-            "ANTHROPIC_DEFAULT_HAIKU_MODEL": "claude-haiku-4-5-20251001",
-            "ANTHROPIC_DEFAULT_SONNET_MODEL": "claude-sonnet-4-20250514",
-            "ANTHROPIC_DEFAULT_OPUS_MODEL": "claude-opus-4-20250514"
-        }
-    })
+/// 统一供应商子 Provider 的 settings_config（各应用形状，模型用缺省）。形状
+/// 包装（auth / config / env 的字段名与密钥键名）归 settings_codec 的 build
+/// 半向——这里只提供各 app 的内容值。
+fn universal_claude_settings(base_url: &str, api_key: &str) -> String {
+    build_claude_settings([
+        ("ANTHROPIC_BASE_URL".to_string(), base_url.to_string()),
+        ("ANTHROPIC_AUTH_TOKEN".to_string(), api_key.to_string()),
+        (
+            "ANTHROPIC_MODEL".to_string(),
+            "claude-sonnet-4-20250514".to_string(),
+        ),
+        (
+            "ANTHROPIC_DEFAULT_HAIKU_MODEL".to_string(),
+            "claude-haiku-4-5-20251001".to_string(),
+        ),
+        (
+            "ANTHROPIC_DEFAULT_SONNET_MODEL".to_string(),
+            "claude-sonnet-4-20250514".to_string(),
+        ),
+        (
+            "ANTHROPIC_DEFAULT_OPUS_MODEL".to_string(),
+            "claude-opus-4-20250514".to_string(),
+        ),
+    ])
 }
 
-fn universal_codex_settings(base_url: &str, api_key: &str, name: &str) -> Value {
+fn universal_codex_settings(base_url: &str, api_key: &str, name: &str) -> String {
     // 与 cc one codex 预设同形的 config TOML（model_provider = custom +
     // [model_providers.custom] 表），model 留空——用户在 cc one 内填或获取。用
     // toml_edit 构造以保证字符串正确转义（Rust Debug 格式不等于 TOML 转义）。
@@ -367,17 +383,20 @@ fn universal_codex_settings(base_url: &str, api_key: &str, name: &str) -> Value 
     let mut providers = Table::new();
     providers.insert("custom", Item::Table(custom));
     doc.insert("model_providers", Item::Table(providers));
-    serde_json::json!({ "auth": { "OPENAI_API_KEY": api_key }, "config": doc.to_string() })
+    build_codex_settings(Some(api_key), &doc.to_string())
 }
 
-fn universal_gemini_settings(base_url: &str, api_key: &str) -> Value {
-    serde_json::json!({
-        "env": {
-            "GOOGLE_GEMINI_BASE_URL": base_url,
-            "GEMINI_API_KEY": api_key,
-            "GEMINI_MODEL": ""
-        }
-    })
+fn universal_gemini_settings(base_url: &str, api_key: &str) -> String {
+    // 端点键 / 密钥键名引用 settings_codec 常量（不许裸写字面量——改键名只改
+    // codec 一处）。
+    build_gemini_settings(
+        [
+            (GOOGLE_GEMINI_BASE_URL_ENV.to_string(), base_url.to_string()),
+            (GEMINI_API_KEY_ENV.to_string(), api_key.to_string()),
+            ("GEMINI_MODEL".to_string(), String::new()),
+        ],
+        None,
+    )
 }
 
 /// 构造一个统一供应商展开的子 Provider。
@@ -385,7 +404,7 @@ fn universal_child(
     app: App,
     universal_id: &str,
     name: &str,
-    settings: Value,
+    settings_config: String,
     u: &UniversalProvider,
     now_iso: &str,
 ) -> Provider {
@@ -399,7 +418,7 @@ fn universal_child(
         icon_color: u.icon_color.clone().unwrap_or_default(),
         sort_index: 0,
         notes: String::new(),
-        settings_config: serde_json::to_string(&settings).unwrap_or_else(|_| "{}".into()),
+        settings_config,
         meta: "{}".into(),
         updated_at: now_iso.to_string(),
     }

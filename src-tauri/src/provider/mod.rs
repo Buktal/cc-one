@@ -12,13 +12,15 @@
 //! 回填共用，见本目录 `keys.rs`）、`snippet`（通用配置片段：手写片段 + 启用
 //! 开关，写盘时合并进受控字段，存本机 config.json 不同步）、`export_import`
 //! （全部供应商导出 / 导入一份 JSON 文档，手动迁移，不走 git 同步）、`import`
-//! （导入冲突规划 store 层 seam：归一化为 Provider 后按冲突键策略
+//! `import`（导入冲突规划 store 层 seam：归一化为 Provider 后按冲突键策略
 //! (app,id) / name / liveKey 去重落库——导出文档 / CC-Switch / live 三条
-//! 路径共用，见本目录 `import.rs`），以及 `model_fetch`（拉取供应商的模型
-//! 列表：OpenAI 兼容 `GET /v1/models`，候选 URL 构造是纯函数、失败错误串带
-//! 分桶标签——见本目录 `model_fetch.rs`）。`activation` 是激活编排（单激活
-//! 「切换」与附加模式「加入 live」的组合次序权威：「写盘成功才落激活态」，
-//! 命令层只留薄壳，见本目录 `activation.rs`）。
+//! 路径共用，见本目录 `import.rs`）、`settings_codec`（各 app settings_config
+//! 形状编解码单源：字段名 / 密钥键名常量 + typed 值 ⇄ 文本的 build / parse
+//! 双向，见本目录 `settings_codec.rs`）、以及 `model_fetch`（拉取供应商的
+//! 模型列表：OpenAI 兼容 `GET /v1/models`，候选 URL 构造是纯函数、失败错误串
+//! 带分桶标签——见本目录 `model_fetch.rs`）。`activation` 是激活编排（单激活
+//! 「切换」与附加模式「加入 / 移出 live」的组合次序权威：「写盘成功才落激活
+//! 态」，命令层只留薄壳，见本目录 `activation.rs`）。
 
 pub mod activation;
 pub mod export_import;
@@ -33,8 +35,12 @@ pub mod live_gemini;
 pub mod live_grok;
 pub mod live_opencode;
 pub mod model_fetch;
+pub mod settings_codec;
 pub mod snippet;
 pub mod sync;
+
+#[cfg(test)]
+pub(crate) mod testutil;
 
 // ------------------------------------------------------------ 安全 parity --
 //
@@ -61,12 +67,11 @@ mod security_parity {
             .collect()
     }
 
-    /// 从 Rust 权威组装期望值。live 文件名取自 `App::live_paths` 与
-    /// opencode 的存储路径函数——不是手抄第二份字面量。
+    /// 从 Rust 权威组装期望值。live 文件名取自 `App::live_paths`（单一事实
+    /// 来源，五个 app 同一条读取面）——不是手抄第二份字面量。
     fn authoritative_tables() -> serde_json::Value {
         let names = |app: App| -> Vec<String> {
-            let paths = app.live_paths().expect("home dir resolves in tests");
-            file_names(paths.expect("单激活 app 均有 live 路径"))
+            file_names(app.live_paths().expect("home dir resolves in tests"))
         };
         json!({
             "controlled_fields": CONTROLLED_FIELDS,
@@ -80,10 +85,7 @@ mod security_parity {
                 "codex": names(App::Codex),
                 "gemini": names(App::Gemini),
                 "grok": names(App::Grok),
-                "opencode": file_names(vec![
-                    super::live_opencode::opencode_config_path()
-                        .expect("home dir resolves"),
-                ]),
+                "opencode": names(App::OpenCode),
             },
         })
     }

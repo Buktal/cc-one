@@ -93,23 +93,9 @@ pub fn claude_settings_path() -> AppResult<PathBuf> {
 /// → `Err`（坏配置不能进用户 settings.json）。
 pub fn merge_live_settings(live: &str, target: &str) -> AppResult<String> {
     let mut merged = parse_live_or_empty(live)?;
-    let mut target_obj = parse_target_or_empty(target)?;
-
-    // 清洗目标：剥内部 meta 字段，防止它们被当作受控字段带进 live。
-    if let Some(obj) = target_obj.as_object_mut() {
-        strip_internal_keys(obj);
-    }
-
-    // 目标 `env` 必须是对象：env 是受控字段，写盘时整块替换 live 的 env——
-    // 非对象（手写/导入的坏配置）会被原样带进用户 settings.json。宁可报错
-    // 阻止写盘，与「目标非法 JSON 报错」同一原则：配置坏了就显式失败。
-    if let Some(env) = target_obj.get("env") {
-        if !env.is_object() {
-            return Err(AppError::Config(
-                "provider settingsConfig env is not a JSON object".into(),
-            ));
-        }
-    }
+    // 目标侧解析（校验 + 清洗）归 settings_codec 的 claude parse 半向：env
+    // 非对象 / 非法 JSON 在这里显式失败，绝不把坏配置带进用户 settings.json。
+    let target_obj = crate::provider::settings_codec::parse_claude_settings(target)?;
 
     // 受控合并：只从目标提取受控字段，其余一律忽略。
     let merged_obj = merged.as_object_mut().expect("merged is always an object");
@@ -184,19 +170,18 @@ pub(crate) fn atomic_write_file(path: &Path, content: &str) -> AppResult<()> {
     Ok(())
 }
 
-/// 按 app 读 live 文件文本：路径映射收口在 [`App::live_paths`]（单一事实来源
-/// ——写盘 / 快照 / 片段提取共用）。opencode 无单份 live 配置概念 → `None`。
-/// 片段提取（commands::snippet 的 T6 提取入口）与 live 导入域共用此读取面。
-/// 写盘的同等分派在 `provider::activation::resolve_paths` + [`App::write_live`]。
-pub fn read_app_live_texts(app: App) -> AppResult<Option<Vec<String>>> {
-    let Some(paths) = app.live_paths()? else {
-        return Ok(None);
-    };
+/// 按 app 读 live 文件文本（缺失文件读为空串——merge / 导入按空处理）：
+/// 路径映射收口在 [`App::live_paths`]（单一事实来源——写盘 / 片段提取 /
+/// 反向导入共用）。片段提取（commands::snippet 的 T6 提取入口）与 live 导入
+/// 域共用此读取面。写盘的同等分派在 `provider::activation::resolve_paths` +
+/// [`App::write_live`]。
+pub fn read_app_live_texts(app: App) -> AppResult<Vec<String>> {
+    let paths = app.live_paths()?;
     let mut texts = Vec::with_capacity(paths.len());
     for p in paths {
         texts.push(read_live_settings(&p)?);
     }
-    Ok(Some(texts))
+    Ok(texts)
 }
 
 /// 切换写盘全流程（薄壳，按序调用）：读 live → 受控合并（含清洗）→ 无变化
@@ -348,7 +333,8 @@ fn find_unfilled_template_var(text: &str) -> Option<String> {
 }
 
 /// 解析 live 输入：空串/纯空白 → `{}`；非空但非法 JSON 或非对象 → `Err`。
-/// `live_gemini` 复用同一条解析规则（现有 settings.json 缺失时视为 `{}`）。
+/// `live_gemini` 与 `settings_codec` 复用同一条解析规则（现有 settings.json
+/// 缺失时视为 `{}`）。
 pub(crate) fn parse_live_or_empty(live: &str) -> AppResult<serde_json::Value> {
     let trimmed = live.trim();
     if trimmed.is_empty() {
@@ -357,8 +343,8 @@ pub(crate) fn parse_live_or_empty(live: &str) -> AppResult<serde_json::Value> {
     parse_object(trimmed, "live settings.json")
 }
 
-/// 解析目标输入：空串 → `{}`；非法 JSON 或非对象 → `Err`。
-/// `live_gemini` 复用同一条解析规则（目标 settingsConfig 空串 = 空目标）。
+/// 解析目标输入：空串 → `{}`；非法 JSON 或非对象 → `Err`。`settings_codec`
+/// 的 claude / gemini parse 半向共用（目标 settingsConfig 空串 = 空目标）。
 pub(crate) fn parse_target_or_empty(target: &str) -> AppResult<serde_json::Value> {
     let trimmed = target.trim();
     if trimmed.is_empty() {
@@ -455,13 +441,17 @@ pub(crate) fn merge_controlled_fields_json(
 }
 
 /// 从已剥内部 meta 键的 settingsConfig 对象提取 `config` TOML 字符串（codex /
-/// grok 共用，两家的 settingsConfig 形状在此字段上同构）：缺失 → 空串（登录
-/// 态版 / 无受控内容）；非字符串 → `Err`（坏配置不能进用户 config.toml）。
+/// grok 共用，两家的 settingsConfig 形状在此字段上同构；字段名
+/// [`CONFIG_TOML_FIELD`] 归 settings_codec 单源）：缺失 → 空串（登录态版 /
+/// 无受控内容）；非字符串 → `Err`（坏配置不能进用户 config.toml）。
 pub(crate) fn config_toml_field(obj: &serde_json::Value) -> AppResult<String> {
-    match obj.get("config") {
+    use crate::provider::settings_codec::CONFIG_TOML_FIELD;
+    match obj.get(CONFIG_TOML_FIELD) {
         None => Ok(String::new()),
         Some(v) => v.as_str().map(str::to_string).ok_or_else(|| {
-            AppError::Config("provider settingsConfig config must be a TOML string".into())
+            AppError::Config(format!(
+                "provider settingsConfig {CONFIG_TOML_FIELD} must be a TOML string"
+            ))
         }),
     }
 }

@@ -35,13 +35,20 @@ use crate::error::{AppError, AppResult};
 /// every strip / restore function in this module, `Provider::redacted`, the
 /// sync merge (`provider::sync`) and the export path (`provider::export_import`)
 /// all route through it.
+///
+/// 键名拼写与形状分工：本清单是「密钥住哪」的清洗决策（跨 app 的位置清单），
+/// 不是形状声明——形状归 [`crate::provider::settings_codec`]。两份职责重叠处
+/// 只共享键名常量：codex / gemini 的密钥键名由 codec 单源（写盘 / 导入 / 清洗
+/// 三处消费者），这里引用同一常量；claude 的 `ANTHROPIC_*` 与 AWS_* 键名的
+/// 唯一消费者就是本清单，字面量住这里即单源。清单与形状的拼写若漂移，编译期
+/// 即红（codec 测试另有 build ⇄ strip 的往返断言）。
 pub const SECRET_ENV_KEYS: &[&str] = &[
     "ANTHROPIC_AUTH_TOKEN",
     "ANTHROPIC_API_KEY",
     "AWS_SECRET_ACCESS_KEY",
     "AWS_ACCESS_KEY_ID",
-    "OPENAI_API_KEY",
-    "GEMINI_API_KEY",
+    crate::provider::settings_codec::CODEX_AUTH_SECRET_KEY,
+    crate::provider::settings_codec::GEMINI_API_KEY_ENV,
 ];
 
 /// HTTP 认证头白名单（小写形式，匹配时大小写不敏感）：OpenCode 官方示例把

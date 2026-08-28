@@ -102,7 +102,7 @@ pub fn apply_import(
 mod tests {
     use super::*;
     use crate::db::testutil::mem;
-    use crate::model::{App, ProviderCategory};
+    use crate::model::App;
     use crate::provider::keys::SECRET_ENV_KEYS;
 
     /// 构造一份带 env 密钥的 settingsConfig 文本（含非密钥 env 键和顶层字段，
@@ -127,20 +127,7 @@ mod tests {
     }
 
     fn provider_with_meta(id: &str, name: &str, settings_config: &str, meta: &str) -> Provider {
-        Provider {
-            id: id.into(),
-            name: name.into(),
-            website_url: "https://example.com".into(),
-            category: ProviderCategory::Custom,
-            app: App::Claude,
-            icon: String::new(),
-            icon_color: String::new(),
-            sort_index: 0,
-            notes: String::new(),
-            settings_config: settings_config.into(),
-            meta: meta.into(),
-            updated_at: String::new(),
-        }
+        crate::provider::testutil::provider_with_meta(App::Claude, id, name, settings_config, meta)
     }
 
     fn parsed(s: &str) -> ProviderExportDocument {

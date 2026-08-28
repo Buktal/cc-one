@@ -53,11 +53,10 @@ pub async fn format_toml_cmd(text: String) -> AppResult<String> {
 
 /// 按 app 读 live 文件(s)，提取「可共享键」为片段内容（分派在
 /// `live_adapter` 的 [`App::extract_snippet`]；无可提取 → None）。opencode 无
-/// 片段概念 → None。gemini 只需 env（settings.json 的非受控键进片段零效果）。
+/// 片段概念 → None。gemini 只需 env（settings.json 的键不在片段名册，见
+/// ADR-0010）。
 fn read_live_snippet_extract(app: App) -> AppResult<Option<String>> {
-    let Some(texts) = live::read_app_live_texts(app)? else {
-        return Ok(None);
-    };
+    let texts = live::read_app_live_texts(app)?;
     Ok(app.extract_snippet(&texts))
 }
 

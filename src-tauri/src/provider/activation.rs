@@ -6,8 +6,12 @@
 //! [`App::write_live`] 的 paths 参数同一形状，编排可用内存库 +
 //! `ConfigStore::for_test` + 临时 live 目录直测（见本模块测试组）。
 //!
-//! 片段合并层的 per-app 分派（ADR-0010）收口在
-//! [`crate::provider::live_adapter`]；本模块是它们的组合次序权威。
+//! 附加模式「加入 live」与「移出 live」是同一编排的两半，都收在本模块
+//! （[`ensure_opencode_in_live`] / [`remove_from_live`]）——撤除半边曾散在
+//! commands 层两处（停用路径带 meta 半边、删除路径只撤文件），现在对称归位。
+//!
+//! 片段合并层的 per-app 分派（ADR-0010，含 settings_config 层的合并域）收口
+//! 在 [`crate::provider::live_adapter`]；本模块是它们的组合次序权威。
 
 use std::path::{Path, PathBuf};
 
@@ -23,7 +27,8 @@ use crate::provider::{live, live_opencode};
 /// `[0]`、副文件在 `[1]`）。
 pub(crate) struct ActivatePaths {
     /// 单激活应用的 live 文件路径集（[`App::live_paths`]：claude/grok 一份、
-    /// codex/gemini 两份）；附加模式忽略。
+    /// codex/gemini 两份）。附加模式的写盘不经 [`App::write_live`]，不用此字段
+    /// （live_paths 对附加模式也返回 opencode.json，供反向导入读，不进写盘）。
     pub(crate) single: Vec<PathBuf>,
     /// opencode.json 路径（附加模式的写入目标）；单激活忽略。
     pub(crate) opencode_config: PathBuf,
@@ -32,7 +37,7 @@ pub(crate) struct ActivatePaths {
 /// 解析真实的 live 路径集（生产入口一次解析、编排全程持有）。
 pub(crate) fn resolve_paths(app: App) -> AppResult<ActivatePaths> {
     Ok(ActivatePaths {
-        single: app.live_paths()?.unwrap_or_default(),
+        single: app.live_paths()?,
         opencode_config: live_opencode::opencode_config_path()?,
     })
 }
@@ -60,15 +65,17 @@ pub(crate) fn activate(
     // guard 随语句结束释放。
     let snippet_record = config.get().snippet_for(app);
     let write_provider = match app.snippet_layer() {
-        // settings_config 层（claude/gemini）：片段先并入供应商配置，再随受控
-        // 写盘落地。claude 的 settings.json 是字面量 JSON：${VAR} 占位符会原样
-        // 写进 live = 废配置，切换前拦下（gemini 的 .env 由 dotenv 展开 ${VAR}
-        // 是合法引用，不拦——见 App::validates_template_vars）。
-        SnippetLayer::SettingsConfig => {
+        // settings_config 层（claude/gemini）：片段按该 app 的合并域（受控区
+        // 形状，随层声明）并入供应商配置，再随受控写盘落地。claude 的
+        // settings.json 是字面量 JSON：${VAR} 占位符会原样写进 live = 废配置，
+        // 切换前拦下（gemini 的 .env 由 dotenv 展开 ${VAR} 是合法引用，不拦
+        // ——见 App::validates_template_vars）。
+        SnippetLayer::SettingsConfig(domain) => {
             let settings_config = crate::provider::snippet::apply_snippet(
                 &provider.settings_config,
                 &snippet_record.content,
                 snippet_record.enabled,
+                domain,
             )?;
             if app.validates_template_vars() {
                 crate::provider::live::validate_no_unfilled_template_vars(&settings_config)?;
@@ -114,6 +121,31 @@ pub(crate) fn ensure_opencode_in_live(
     store.save_provider(updated)
 }
 
+/// 附加模式移除半边（[`ensure_opencode_in_live`] 的对称物，停用与删除路径
+/// 共用同一入口）：已托管（`meta.liveManaged = true`）→ 从 live 配置移除该键；
+/// 随后 `meta.liveManaged = false` 落库。**liveKey 保留**——key 稳定才不弄断
+/// 用户顶层 `model: "<key>/<model>"` 引用，再加回来时沿用原 key。无 liveKey
+/// （从未写盘）→ 显式无操作、原样返回；重复移除幂等（未托管不碰文件，meta
+/// 值不变 → `save_provider` 判无结构变化、不刷新 `updated_at`）。路径由调用
+/// 方给定（生产 [`resolve_paths`]，测试注入临时目录）。
+pub(crate) fn remove_from_live(
+    store: &Store,
+    provider: Provider,
+    path: &Path,
+) -> AppResult<Provider> {
+    let Some(key) = live_opencode::meta_live_key(&provider.meta) else {
+        return Ok(provider);
+    };
+    if live_opencode::meta_live_managed(&provider.meta) == Some(true) {
+        live_opencode::remove_opencode_provider(path, &key)?;
+    }
+    let updated = Provider {
+        meta: live_opencode::with_meta_live_state(&provider.meta, &key, false)?,
+        ..provider
+    };
+    store.save_provider(updated)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -151,21 +183,14 @@ mod tests {
     }
 
     fn save(store: &Store, app: App, id: &str, name: &str, settings_config: &str) -> Provider {
-        let provider = Provider {
-            id: id.into(),
-            name: name.into(),
-            website_url: String::new(),
-            category: crate::model::ProviderCategory::Custom,
-            app,
-            icon: String::new(),
-            icon_color: String::new(),
-            sort_index: 0,
-            notes: String::new(),
-            settings_config: settings_config.into(),
-            meta: "{}".into(),
-            updated_at: String::new(),
-        };
-        store.save_provider(provider).unwrap()
+        store
+            .save_provider(crate::provider::testutil::provider(
+                app,
+                id,
+                name,
+                settings_config,
+            ))
+            .unwrap()
     }
 
     #[test]
@@ -319,6 +344,103 @@ mod tests {
             .meta
             .contains("\"liveKey\""));
         let _ = dir; // 保活
+    }
+
+    #[test]
+    fn remove_from_live_withdraws_entry_clears_managed_keeps_live_key() {
+        let dir = tempfile::tempdir().unwrap();
+        let opencode_json = dir.path().join("opencode.json");
+        std::fs::write(&opencode_json, r#"{"model":"x/y","provider":{"o":{"npm":"@ai-sdk/openai-compatible","options":{"apiKey":"sk-o"}}},"theme":"dark"}"#).unwrap();
+        let f = fixture(vec![], opencode_json.clone());
+        // 已托管的 provider：meta.liveKey = o、liveManaged = true。
+        let managed = crate::provider::testutil::provider_with_meta(
+            App::OpenCode,
+            "o1",
+            "O",
+            r#"{"options":{"apiKey":"sk-o"}}"#,
+            r#"{"liveKey":"o","liveManaged":true}"#,
+        );
+
+        let updated = remove_from_live(&f.store, managed, &opencode_json).unwrap();
+
+        // live 撤除：该键消失，其它 provider 条目与用户顶层字段语义保留。
+        let live_doc: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&opencode_json).unwrap()).unwrap();
+        assert!(
+            live_doc["provider"].get("o").is_none(),
+            "provider.<key> 移除"
+        );
+        assert_eq!(live_doc["model"], "x/y", "用户顶层字段保留");
+        // meta 半边：liveManaged=false、liveKey 保留（再加回来时 key 稳定）。
+        assert_eq!(
+            live_opencode::meta_live_key(&updated.meta).as_deref(),
+            Some("o"),
+            "liveKey 保留"
+        );
+        assert_eq!(live_opencode::meta_live_managed(&updated.meta), Some(false));
+        assert_eq!(
+            f.store
+                .get_provider(App::OpenCode, "o1")
+                .unwrap()
+                .unwrap()
+                .meta,
+            updated.meta,
+            "meta 半边落库"
+        );
+    }
+
+    #[test]
+    fn remove_from_live_unmanaged_is_idempotent_and_never_touches_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let opencode_json = dir.path().join("opencode.json");
+        std::fs::write(&opencode_json, r#"{"provider":{"o":{"npm":"x"}}}"#).unwrap();
+        let f = fixture(vec![], opencode_json.clone());
+        // 未托管（liveManaged=false 但有 liveKey）：第二次移除的形态。
+        let unmanaged = crate::provider::testutil::provider_with_meta(
+            App::OpenCode,
+            "o1",
+            "O",
+            r#"{"options":{}}"#,
+            r#"{"liveKey":"o","liveManaged":false}"#,
+        );
+        let before = std::fs::read_to_string(&opencode_json).unwrap();
+
+        let updated = remove_from_live(&f.store, unmanaged, &opencode_json).unwrap();
+
+        // 幂等：不碰文件（live 里本就没它）、meta 值不变。
+        assert_eq!(std::fs::read_to_string(&opencode_json).unwrap(), before);
+        assert_eq!(live_opencode::meta_live_managed(&updated.meta), Some(false));
+        assert!(
+            !dir.path().join("opencode.json.bak").exists(),
+            "无操作不备份"
+        );
+    }
+
+    #[test]
+    fn remove_from_live_without_live_key_is_an_explicit_noop() {
+        let dir = tempfile::tempdir().unwrap();
+        let opencode_json = dir.path().join("opencode.json");
+        std::fs::write(&opencode_json, r#"{"theme":"dark"}"#).unwrap();
+        let f = fixture(vec![], opencode_json.clone());
+        // 无 liveKey（从未写盘）：显式无操作，原样返回。
+        let fresh =
+            crate::provider::testutil::provider(App::OpenCode, "o1", "O", r#"{"options":{}}"#);
+
+        let updated = remove_from_live(&f.store, fresh, &opencode_json).unwrap();
+
+        assert_eq!(updated.meta, "{}", "无 liveKey → meta 不动");
+        assert_eq!(
+            std::fs::read_to_string(&opencode_json).unwrap(),
+            r#"{"theme":"dark"}"#,
+            "live 文件不碰"
+        );
+        assert!(
+            f.store
+                .list_providers_for(App::OpenCode)
+                .unwrap()
+                .is_empty(),
+            "无 liveKey → 不落库（无状态可改）"
+        );
     }
 
     // —— 小工具:统一走 activate 入口,错误信息带上下文 —— //

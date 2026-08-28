@@ -22,29 +22,20 @@
 //!   原语在 [`live`]）；settings 写失败回滚 .env——任何失败路径不产生半截
 //!   状态（与 codex 侧同一容错级别）。
 //!
-//! 纯函数（最高价值测试接缝，不碰文件系统）：`parse_gemini_settings`
-//! （settingsConfig 文本 → `{env, config}`，含校验与清洗）、
-//! `serialize_env_file`（键值对 → `.env` 文本，按键排序字节稳定）、
-//! `gemini_selected_type`（env → 认证标记）、`merge_gemini_settings_json`
-//! （现有 settings.json 文本 + 目标 → 合并文本）。文件 IO（读/备份/原子写/
-//! 双文件事务次序）是薄壳：`.env` 备份在本模块，其余收口在
-//! [`live::commit_two_files`]。
+//! 纯函数（最高价值测试接缝，不碰文件系统）：`serialize_env_file`（键值对 →
+//! `.env` 文本，按键排序字节稳定）、`gemini_selected_type`（env → 认证标记）、
+//! `merge_gemini_settings_json`（现有 settings.json 文本 + 目标 → 合并文本）。
+//! settingsConfig 的解析（`{"env", "config"}` 形状，typed 值
+//! [`GeminiSettings`]）与 env 键名归 [`crate::provider::settings_codec`]（per-app
+//! 形状单源）。文件 IO（读/备份/原子写/双文件事务次序）是薄壳：`.env` 备份在
+//! 本模块，其余收口在 [`live::commit_two_files`]。
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 use crate::error::{AppError, AppResult};
-use crate::provider::live::{
-    parse_live_or_empty, parse_target_or_empty, read_live_settings, strip_internal_keys,
-};
-
-/// `settings.json` 里 `security.auth.selectedType` 的 API Key 标记对应的
-/// env 键：env 含它 → API Key 版；不含 → 登录态版。
-pub const GEMINI_API_KEY_ENV: &str = "GEMINI_API_KEY";
-/// `.env` 的端点键 `GOOGLE_GEMINI_BASE_URL`。端点决定凭据发往何处——归供应
-/// 商接管，永不进共享片段（提取排除、片段校验拒绝、导入候选同判都引用本
-/// 常量；改键名只改这里，调用方不许裸写字面量）。
-pub const GOOGLE_GEMINI_BASE_URL_ENV: &str = "GOOGLE_GEMINI_BASE_URL";
+use crate::provider::live::{parse_live_or_empty, read_live_settings};
+use crate::provider::settings_codec::{parse_gemini_settings, GeminiSettings, GEMINI_API_KEY_ENV};
 /// `selectedType` 取值：API Key 版（env 含 `GEMINI_API_KEY`）。
 pub const SELECTED_TYPE_API_KEY: &str = "gemini-api-key";
 /// `selectedType` 取值：登录态版（env 无 `GEMINI_API_KEY`，保留 Google 登录）。
@@ -77,66 +68,6 @@ pub fn gemini_env_path() -> AppResult<PathBuf> {
 /// `~/.gemini/settings.json` 路径。
 pub fn gemini_settings_path() -> AppResult<PathBuf> {
     Ok(gemini_dir()?.join("settings.json"))
-}
-
-/// 解析后的 Gemini 目标配置：`env`（整块写 `.env`）与 `config`（settings.json
-/// 顶层受控区的声明——声明的顶层键整体替换；缺失或 `null` → `None`，即无
-/// 声明替换、未声明字段原地保留，身份键撤除清单仍生效）。
-#[derive(Debug, Clone, PartialEq)]
-pub struct GeminiSettings {
-    pub env: HashMap<String, String>,
-    pub config: Option<serde_json::Map<String, serde_json::Value>>,
-}
-
-/// 解析 + 校验 + 清洗（纯函数）：settingsConfig 文本 → [`GeminiSettings`]。
-///
-/// 边界：
-/// - settingsConfig 必须是 JSON 对象，否则 `Err`（坏配置不能进用户配置文件）。
-/// - `env` 必须缺失或是对象，且值必须是字符串（`.env` 只能表达键值）；
-///   非对象或非字符串值 → `Err`（静默丢键会让认证悄悄坏掉，宁可失败）。
-/// - `config` 必须缺失、是对象或 `null`（`null` 与缺失同义 → `None`）；
-///   其余类型 → `Err`。
-/// - 顶层剥掉内部 meta 字段（[`LIVE_INTERNAL_KEYS`]，与 claude 侧清洗同一
-///   语义——这些键只供应用内部读，不落 live 文件）。
-pub fn parse_gemini_settings(raw: &str) -> AppResult<GeminiSettings> {
-    let mut value = parse_target_or_empty(raw)?;
-    let obj = value
-        .as_object_mut()
-        .expect("parse_target_or_empty yields object");
-    strip_internal_keys(obj);
-
-    let env = match obj.remove("env") {
-        None => HashMap::new(),
-        Some(v) => {
-            let map = v.as_object().ok_or_else(|| {
-                AppError::Config("provider settingsConfig env is not a JSON object".into())
-            })?;
-            let mut out = HashMap::new();
-            for (key, value) in map {
-                let s = value.as_str().ok_or_else(|| {
-                    AppError::Config(format!(
-                        "provider settingsConfig env value for {key} is not a string"
-                    ))
-                })?;
-                out.insert(key.clone(), s.to_string());
-            }
-            out
-        }
-    };
-
-    let config = match obj.remove("config") {
-        None | Some(serde_json::Value::Null) => None,
-        Some(v) => {
-            let map = v.as_object().ok_or_else(|| {
-                AppError::Config(
-                    "provider settingsConfig config is not a JSON object or null".into(),
-                )
-            })?;
-            Some(map.clone())
-        }
-    };
-
-    Ok(GeminiSettings { env, config })
 }
 
 /// 键值对 → `.env` 文本（纯函数）：按键排序保证字节稳定，每行 `KEY=VALUE`，
@@ -332,81 +263,6 @@ mod tests {
         GeminiSettings {
             env: HashMap::new(),
             config: None,
-        }
-    }
-
-    // ---- parse ----
-
-    #[test]
-    fn parse_extracts_env_and_config() {
-        let s = parse_gemini_settings(
-            r#"{"env":{"GEMINI_API_KEY":"sk-x","GEMINI_MODEL":"m"},"config":{"model":"m"}}"#,
-        )
-        .unwrap();
-        assert_eq!(
-            s.env.get("GEMINI_API_KEY").map(String::as_str),
-            Some("sk-x")
-        );
-        assert_eq!(s.env.get("GEMINI_MODEL").map(String::as_str), Some("m"));
-        let config = s.config.expect("config parsed");
-        assert_eq!(config.get("model"), Some(&serde_json::json!("m")));
-    }
-
-    #[test]
-    fn parse_accepts_missing_env_and_null_config() {
-        let s = parse_gemini_settings(r#"{"config": null}"#).unwrap();
-        assert!(s.env.is_empty());
-        assert!(s.config.is_none());
-        let s2 = parse_gemini_settings(r#"{"env": {}}"#).unwrap();
-        assert!(s2.env.is_empty());
-        assert!(s2.config.is_none());
-        // 空串 → 空目标（写空 env + oauth 标记）。
-        let s3 = parse_gemini_settings("").unwrap();
-        assert!(s3.env.is_empty() && s3.config.is_none());
-    }
-
-    #[test]
-    fn parse_strips_internal_meta_keys_from_top_level() {
-        let s = parse_gemini_settings(
-            r#"{"api_format":"gemini","apiFormat":"gemini","openrouter_compat_mode":true,"env":{"GEMINI_API_KEY":"k"}}"#,
-        )
-        .unwrap();
-        assert_eq!(s.env.get("GEMINI_API_KEY").map(String::as_str), Some("k"));
-        // 内部键不进 config、不进 env——它们只供应用内部读。
-        assert!(s.config.is_none());
-    }
-
-    #[test]
-    fn parse_rejects_invalid_json_and_non_object() {
-        for bad in ["{oops", r#"[1,2,3]"#, r#""str""#] {
-            assert!(
-                parse_gemini_settings(bad).is_err(),
-                "非法/非对象 settingsConfig 必须失败: {bad}"
-            );
-        }
-    }
-
-    #[test]
-    fn parse_rejects_non_object_env_and_non_string_values() {
-        for bad in [r#"{"env":"garbage"}"#, r#"{"env":[1]}"#] {
-            assert!(
-                parse_gemini_settings(bad).is_err(),
-                "env 非对象必须失败: {bad}"
-            );
-        }
-        // 值非字符串（数字/对象）：.env 只能表达键值，静默丢键会让认证悄悄
-        // 坏掉，宁可失败。
-        assert!(parse_gemini_settings(r#"{"env":{"GEMINI_API_KEY":123}}"#).is_err());
-        assert!(parse_gemini_settings(r#"{"env":{"GEMINI_API_KEY":{"a":1}}}"#).is_err());
-    }
-
-    #[test]
-    fn parse_rejects_config_that_is_neither_object_nor_null() {
-        for bad in [r#"{"config":123}"#, r#"{"config":"x"}"#, r#"{"config":[]}"#] {
-            assert!(
-                parse_gemini_settings(bad).is_err(),
-                "config 非对象非 null 必须失败: {bad}"
-            );
         }
     }
 
@@ -847,7 +703,13 @@ mod tests {
         let provider_cfg =
             r#"{"env":{"GEMINI_API_KEY":"sk-x","GOOGLE_GEMINI_BASE_URL":"https://gen.dev"}}"#;
         let snippet = r#"{"env":{"GEMINI_MODEL":"gemini-2.5-flash"}}"#;
-        let merged = crate::provider::snippet::apply_snippet(provider_cfg, snippet, true).unwrap();
+        let merged = crate::provider::snippet::apply_snippet(
+            provider_cfg,
+            snippet,
+            true,
+            crate::provider::snippet::MergeDomain::WholeTopLevel,
+        )
+        .unwrap();
 
         write_gemini_live_at(&env_path, &settings_path, &merged).unwrap();
 
@@ -876,8 +738,13 @@ mod tests {
         let provider_cfg = r#"{"env":{"GEMINI_API_KEY":"sk-x"}}"#;
         let snippet = r#"{"env":{"GEMINI_MODEL":"gemini-2.5-flash"}}"#;
         // enabled=false → apply_snippet 不解析不合并，原样返回。
-        let passthrough =
-            crate::provider::snippet::apply_snippet(provider_cfg, snippet, false).unwrap();
+        let passthrough = crate::provider::snippet::apply_snippet(
+            provider_cfg,
+            snippet,
+            false,
+            crate::provider::snippet::MergeDomain::WholeTopLevel,
+        )
+        .unwrap();
         assert_eq!(passthrough, provider_cfg);
 
         write_gemini_live_at(&env_path, &settings_path, &passthrough).unwrap();

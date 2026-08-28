@@ -233,8 +233,9 @@ mod tests {
     use super::*;
     use crate::config::Paths;
     use crate::db::testutil::mem;
-    use crate::model::{App, ProviderCategory};
+    use crate::model::App;
     use crate::provider::keys::SECRET_ENV_KEYS;
+    use crate::provider::testutil;
     use std::path::PathBuf;
 
     fn provider(id: &str, name: &str, settings_config: &str, updated_at: &str) -> Provider {
@@ -249,18 +250,8 @@ mod tests {
         updated_at: &str,
     ) -> Provider {
         Provider {
-            id: id.into(),
-            name: name.into(),
-            website_url: "https://example.com".into(),
-            category: ProviderCategory::Custom,
-            app: App::Claude,
-            icon: String::new(),
-            icon_color: String::new(),
-            sort_index: 0,
-            notes: String::new(),
-            settings_config: settings_config.into(),
-            meta: meta.into(),
             updated_at: updated_at.into(),
+            ..testutil::provider_with_meta(App::Claude, id, name, settings_config, meta)
         }
     }
 
@@ -450,12 +441,17 @@ mod tests {
     #[test]
     fn write_own_providers_lands_pinned_wire_bytes() {
         let s = mem();
-        s.import_provider(&provider(
-            "aaaaaaaa",
-            "Kimi",
-            r#"{"env":{"ANTHROPIC_BASE_URL":"https://api.kimi.com"}}"#,
-            "2026-08-01T00:00:00.000Z",
-        ))
+        // website_url 覆盖为非空值：golden bytes 锁的是 wire 格式（字段序 /
+        // 转义形状），非空 URL 让格式断言覆盖到真实值的转义。
+        s.import_provider(&Provider {
+            website_url: "https://example.com".into(),
+            ..provider(
+                "aaaaaaaa",
+                "Kimi",
+                r#"{"env":{"ANTHROPIC_BASE_URL":"https://api.kimi.com"}}"#,
+                "2026-08-01T00:00:00.000Z",
+            )
+        })
         .unwrap();
         let tmp = tempfile::tempdir().unwrap();
         let paths = Paths::resolve(tmp.path());

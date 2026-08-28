@@ -3,19 +3,21 @@
 //! 受控字段。
 //!
 //! 合并语义（纯函数，测试直接覆盖）：
-//! - **片段只允许受控字段**（[`live::CONTROLLED_FIELDS`]）：片段里出现非受控
-//!   键（permissions / hooks / mcpServers / model 等）一律忽略——片段绝不
-//!   污染 live 的非受控字段。`merge_live_settings` 是第二道闸，这里是第一道。
+//! - **片段只落合并域声明受控的位置**（[`MergeDomain`]——per-app 受控区形状，
+//!   分派在 `live_adapter` 的 [`App::snippet_layer`]）：claude = env 子键 +
+//!   `CONTROLLED_FIELDS` 顶层开关（清单外顶层键一律忽略——片段绝不污染非受控
+//!   字段）；gemini = env 子键 + settings.json 顶层整体（声明即生效——机制
+//!   承载力，名册另由校验约束为 env-only，见 [`MergeDomain::WholeTopLevel`]）。
+//!   `merge_live_settings` 是第二道闸，这里是第一道。
 //! - **合并方向：片段是共享默认值，供应商显式配置优先**。
 //!   - `env` 键级深合并：供应商 env 已有的键保留供应商的值，片段 env 只补充
 //!     供应商缺失的键。
-//!   - 其余受控顶层开关（`includeCoAuthoredBy` / `attribution` / ...）：
-//!     供应商已配置则保留，未配置时片段的值补上。
+//!   - 顶层：供应商已配置则保留，未配置时片段的值补上（范围由合并域声明）。
 //! - `apply_snippet` 是写盘入口：片段未启用 → 原样返回（不解析、不合并）；
-//!   启用 → 合并。「取消勾选后下次写盘不再合并」这个验收不变量落在可测的
-//!   纯函数里，而不是命令薄壳里。
+//!   启用 → 按调用方给的合并域合并。「取消勾选后下次写盘不再合并」这个验收
+//!   不变量落在可测的纯函数里，而不是命令薄壳里。
 //!
-//! 存储：片段**按应用各一份**（claude / codex / gemini），存本机
+//! 存储：片段**按应用各一份**（claude / codex / gemini / grok），存本机
 //! config.json（`ConfigData::common_config_snippets`，存取走
 //! [`ConfigData::snippet_for`] / [`ConfigData::set_snippet`]；存量单条已迁移
 //! 到 claude 键），与激活状态同属本机配置——config.json 从不进 git、不随
@@ -33,7 +35,24 @@
 
 use crate::error::{AppError, AppResult};
 use crate::provider::live::{parse_object, CONTROLLED_FIELDS};
-use crate::provider::live_gemini::GOOGLE_GEMINI_BASE_URL_ENV;
+use crate::provider::settings_codec::{ENV_FIELD, GOOGLE_GEMINI_BASE_URL_ENV};
+
+/// 片段合并域（merge 的受控区形状入参——per-app，由 `live_adapter` 的
+/// [`App::snippet_layer`] 随 settings_config 层一起声明）：「片段允许落进
+/// 供应商 settings_config 的哪些位置」。两种域的 env 块同做键级补缺失；差异
+/// 在顶层。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum MergeDomain {
+    /// 白名单域（claude，ADR-0005 受控字段）：顶层只补 [`CONTROLLED_FIELDS`]
+    /// 内的开关（env 除外——env 恒走键级合并）；清单外顶层键一律忽略。
+    ControlledFields,
+    /// 顶层整体域（gemini，ADR-0010：受控区 = settings.json 顶层整体，声明即
+    /// 接管）：片段声明的顶层键补缺失进 settings_config。**这是机制承载力，
+    /// 不是名册**——片段校验（ADR-0010 名册决策「Gemini 片段 = JSON env 对象」）
+    /// 仍只放行 env 子对象，顶层键经 set 拦截根本进不了合并；「名册放宽 =
+    /// 改校验清单即生效」的能力就此存在，放宽与否另行决策。
+    WholeTopLevel,
+}
 
 /// TOML 片段整理（「整理」按钮）：用 taplo（保留注释的规范 formatter，VS Code
 /// Even Better TOML 同引擎）把压缩文本展开成多行。**保留注释与键序**——默认
@@ -43,17 +62,24 @@ pub fn format_toml(text: &str) -> String {
     taplo::formatter::format(text, taplo::formatter::Options::default())
 }
 
-/// 写盘入口（纯函数）：片段启用 → 把片段合并进 settingsConfig；未启用 →
-/// 原样返回（不解析片段——停用的片段没有任何效果）。
-pub fn apply_snippet(settings_config: &str, snippet: &str, enabled: bool) -> AppResult<String> {
+/// 写盘入口（纯函数）：片段启用 → 按 `domain`（该 app 的受控区形状）把片段
+/// 合并进 settingsConfig；未启用 → 原样返回（不解析片段——停用的片段没有
+/// 任何效果）。合并域由调用方按 app 给出（`live_adapter` 的
+/// [`App::snippet_layer`] 随 settings_config 层一起声明）。
+pub fn apply_snippet(
+    settings_config: &str,
+    snippet: &str,
+    enabled: bool,
+    domain: MergeDomain,
+) -> AppResult<String> {
     if !enabled {
         return Ok(settings_config.to_string());
     }
-    merge_snippet_into_settings(settings_config, snippet)
+    merge_snippet_into_settings(settings_config, snippet, domain)
 }
 
-/// 合并纯函数：把片段的**受控字段**合并进供应商 settingsConfig，不碰文件
-/// 系统。输出是合并后的 settingsConfig JSON 文本（2 空格缩进，与
+/// 合并纯函数：把片段落进 `domain` 声明的受控区（供应商显式配置优先），不碰
+/// 文件系统。输出是合并后的 settingsConfig JSON 文本（2 空格缩进，与
 /// [`live::merge_live_settings`] 的清洗输出一致）。
 ///
 /// 写盘层兜底：片段携带凭据键 → `Err`——claude/gemini 的凭据拦截不只在 set
@@ -64,18 +90,23 @@ pub fn apply_snippet(settings_config: &str, snippet: &str, enabled: bool) -> App
 /// 边界：`snippet` 为空串/纯空白 → 视为 `{}`（启用但没写内容 = 无操作）；
 /// `snippet` 非法 JSON 或非对象 → `Err`；`settings_config` 非法 JSON 或非对象
 /// → `Err`（合并需要解析它；非法的配置本来也过不了写盘）。
-pub fn merge_snippet_into_settings(settings_config: &str, snippet: &str) -> AppResult<String> {
+pub fn merge_snippet_into_settings(
+    settings_config: &str,
+    snippet: &str,
+    domain: MergeDomain,
+) -> AppResult<String> {
     let mut target = parse_object(settings_config, "provider settingsConfig")?;
     let snippet_obj = parse_snippet_or_empty(snippet)?;
     reject_sensitive_keys(&snippet_obj, "claude/gemini")?;
+    let snippet_map = snippet_obj.as_object();
 
     let target_obj = target.as_object_mut().expect("parsed object");
 
-    // env 键级深合并：供应商显式配置优先，片段只补缺失的键。片段 env 非对象
-    // （手写垃圾）→ 跳过合并，供应商 env 原样保留。
-    if let Some(snippet_env) = snippet_obj.get("env").and_then(|v| v.as_object()) {
+    // env 键级深合并（两种域同语义）：供应商显式配置优先，片段只补缺失的键。
+    // 片段 env 非对象（手写垃圾）→ 跳过合并，供应商 env 原样保留。
+    if let Some(snippet_env) = snippet_obj.get(ENV_FIELD).and_then(|v| v.as_object()) {
         let target_env = target_obj
-            .entry("env".to_string())
+            .entry(ENV_FIELD.to_string())
             .or_insert_with(|| serde_json::json!({}));
         if let Some(target_env_obj) = target_env.as_object_mut() {
             for (key, value) in snippet_env {
@@ -86,15 +117,35 @@ pub fn merge_snippet_into_settings(settings_config: &str, snippet: &str) -> AppR
         }
     }
 
-    // 其余受控顶层开关：供应商已配置 → 保留；缺失 → 片段补上。非受控键
-    // 根本不在 CONTROLLED_FIELDS 里，天然被忽略。
-    for key in CONTROLLED_FIELDS {
-        if *key == "env" {
-            continue;
+    // 顶层按合并域补缺失：供应商已配置 → 保留；缺失 → 片段补上。env 已按
+    // 键级合并，整键跳过（片段 env 不得整块覆盖供应商 env）。
+    match domain {
+        MergeDomain::ControlledFields => {
+            // 白名单域：非受控键根本不在 CONTROLLED_FIELDS 里，天然被忽略。
+            for key in CONTROLLED_FIELDS {
+                if *key == ENV_FIELD {
+                    continue;
+                }
+                if !target_obj.contains_key(*key) {
+                    if let Some(value) = snippet_obj.get(*key) {
+                        target_obj.insert((*key).to_string(), value.clone());
+                    }
+                }
+            }
         }
-        if !target_obj.contains_key(*key) {
-            if let Some(value) = snippet_obj.get(*key) {
-                target_obj.insert((*key).to_string(), value.clone());
+        MergeDomain::WholeTopLevel => {
+            // 顶层整体域：片段声明的一切顶层键声明即生效（ADR-0010 gemini
+            // 受控区）。当前名册下片段只可能是 env 子对象（校验拦截其余），
+            // 故生产行为与「只认 env」等价——这里是机制承载力。
+            if let Some(map) = snippet_map {
+                for (key, value) in map {
+                    if key == ENV_FIELD {
+                        continue;
+                    }
+                    if !target_obj.contains_key(key) {
+                        target_obj.insert(key.clone(), value.clone());
+                    }
+                }
             }
         }
     }
@@ -111,19 +162,19 @@ pub(crate) fn validate_claude_snippet(snippet: &str) -> AppResult<()> {
 }
 
 /// gemini 片段校验（set 命令经 `live_adapter` seam 调用）：只认 `env` 子对象
-/// （其余顶层键/扁平键合并时零效果，明确拒绝而非静默通过）、拒凭据键与端点键
-/// `GOOGLE_GEMINI_BASE_URL`、要求 env 值为非空字符串。
+/// （名册决策——ADR-0010「Gemini 片段 = JSON env 对象」；合并域虽能承载顶层
+/// 键，名册放宽另行决策）、拒凭据键与端点键
+/// [`GOOGLE_GEMINI_BASE_URL_ENV`]、要求 env 值为非空字符串。
 pub(crate) fn validate_gemini_snippet(snippet: &str) -> AppResult<()> {
     let obj = parse_snippet_or_empty(snippet)?;
-    // gemini 片段只认 env 子对象：合并层只把片段 env 补进
-    // settingsConfig.env（再整块写 .env），其余顶层键既不进 .env 也不
-    // 进 settings.json——扁平键（如 {"GEMINI_MODEL":"m"}）静默通过 =
-    // 用户以为配好了实际零效果，明确拒绝并指因。
+    // gemini 片段只认 env 子对象：这是名册决策而非机制约束（合并域 = 顶层
+    // 整体，机制能承载顶层键）——但在名册收紧的前提下，放行顶层键 = 用户
+    // 以为配好了实际不进片段语义，明确拒绝并指因。
     if let Some(map) = obj.as_object() {
         for key in map.keys() {
-            if key != "env" {
+            if key != ENV_FIELD {
                 return Err(AppError::Config(format!(
-                    "gemini 通用片段只认 env 子对象，顶层键 `{key}` 不会生效（请写进 {{\"env\":{{...}}}}）"
+                    "gemini 通用片段只认 env 子对象，顶层键 `{key}` 不在片段名册（请写进 {{\"env\":{{...}}}}）"
                 )));
             }
         }
@@ -261,6 +312,7 @@ mod tests {
     use super::*;
     use crate::error::AppError;
     use crate::provider::live::merge_live_settings;
+    use MergeDomain::{ControlledFields, WholeTopLevel};
 
     fn parsed(s: &str) -> serde_json::Value {
         serde_json::from_str(s).unwrap()
@@ -281,7 +333,7 @@ mod tests {
     fn snippet_env_fills_missing_keys_and_provider_wins() {
         let cfg = r#"{"env": {"ANTHROPIC_MODEL": "m1", "KEEP_ME": "1"}}"#;
         let snippet = r#"{"env": {"ANTHROPIC_MODEL": "snippet-wins?", "ANTHROPIC_BASE_URL": "https://x.dev"}}"#;
-        let out = parsed(&merge_snippet_into_settings(cfg, snippet).unwrap());
+        let out = parsed(&merge_snippet_into_settings(cfg, snippet, ControlledFields).unwrap());
         assert_eq!(
             out["env"],
             serde_json::json!({
@@ -295,7 +347,9 @@ mod tests {
 
     #[test]
     fn snippet_env_added_when_provider_has_no_env() {
-        let out = parsed(&merge_snippet_into_settings("{}", r#"{"env":{"A":"1"}}"#).unwrap());
+        let out = parsed(
+            &merge_snippet_into_settings("{}", r#"{"env":{"A":"1"}}"#, ControlledFields).unwrap(),
+        );
         assert_eq!(out["env"], serde_json::json!({"A": "1"}));
     }
 
@@ -305,6 +359,7 @@ mod tests {
             &merge_snippet_into_settings(
                 r#"{"env":{}}"#,
                 r#"{"includeCoAuthoredBy": false, "attribution": "default"}"#,
+                ControlledFields,
             )
             .unwrap(),
         );
@@ -316,7 +371,7 @@ mod tests {
     fn provider_explicit_value_wins_over_snippet_switch() {
         let cfg = r#"{"includeCoAuthoredBy": true}"#;
         let snippet = r#"{"includeCoAuthoredBy": false}"#;
-        let out = parsed(&merge_snippet_into_settings(cfg, snippet).unwrap());
+        let out = parsed(&merge_snippet_into_settings(cfg, snippet, ControlledFields).unwrap());
         assert_eq!(
             out["includeCoAuthoredBy"],
             serde_json::json!(true),
@@ -326,7 +381,7 @@ mod tests {
 
     #[test]
     fn snippet_non_controlled_keys_are_ignored() {
-        // 片段里塞了非受控键——必须被忽略，绝不进入合并结果。
+        // 白名单域：片段里塞了非受控键——必须被忽略，绝不进入合并结果。
         let snippet = r#"{
             "includeCoAuthoredBy": false,
             "permissions": {"deny": ["Bash"]},
@@ -336,7 +391,9 @@ mod tests {
             "enableAllProjectMcpServers": true,
             "statusLine": {"type": "command", "command": "echo hi"}
         }"#;
-        let out = parsed(&merge_snippet_into_settings(r#"{"env":{}}"#, snippet).unwrap());
+        let out = parsed(
+            &merge_snippet_into_settings(r#"{"env":{}}"#, snippet, ControlledFields).unwrap(),
+        );
         assert_eq!(out["includeCoAuthoredBy"], serde_json::json!(false));
         assert!(out.get("permissions").is_none(), "permissions 被忽略");
         assert!(out.get("hooks").is_none(), "hooks 被忽略");
@@ -351,8 +408,14 @@ mod tests {
 
     #[test]
     fn snippet_non_object_env_is_ignored() {
-        let out =
-            parsed(&merge_snippet_into_settings(r#"{"env":{}}"#, r#"{"env": "garbage"}"#).unwrap());
+        let out = parsed(
+            &merge_snippet_into_settings(
+                r#"{"env":{}}"#,
+                r#"{"env": "garbage"}"#,
+                ControlledFields,
+            )
+            .unwrap(),
+        );
         assert_eq!(out["env"], serde_json::json!({}), "垃圾 env 不合并");
     }
 
@@ -360,7 +423,7 @@ mod tests {
     fn empty_snippet_is_a_noop() {
         let cfg = r#"{"env": {"A": "1"}, "includeCoAuthoredBy": false}"#;
         for empty in ["", "   ", "\n"] {
-            let out = parsed(&merge_snippet_into_settings(cfg, empty).unwrap());
+            let out = parsed(&merge_snippet_into_settings(cfg, empty, ControlledFields).unwrap());
             assert_eq!(out["env"], serde_json::json!({"A": "1"}));
             assert_eq!(out["includeCoAuthoredBy"], serde_json::json!(false));
         }
@@ -368,14 +431,14 @@ mod tests {
 
     #[test]
     fn invalid_snippet_json_is_an_error() {
-        let r = merge_snippet_into_settings(r#"{"env":{}}"#, "{nope");
+        let r = merge_snippet_into_settings(r#"{"env":{}}"#, "{nope", ControlledFields);
         assert!(matches!(r, Err(AppError::Config(_))));
     }
 
     #[test]
     fn non_object_snippet_is_an_error() {
         for snippet in [r#"[1,2,3]"#, r#""just a string""#] {
-            let r = merge_snippet_into_settings(r#"{"env":{}}"#, snippet);
+            let r = merge_snippet_into_settings(r#"{"env":{}}"#, snippet, ControlledFields);
             assert!(
                 matches!(r, Err(AppError::Config(_))),
                 "非对象片段必须失败: {snippet}"
@@ -385,7 +448,7 @@ mod tests {
 
     #[test]
     fn invalid_settings_config_is_an_error() {
-        let r = merge_snippet_into_settings("{nope", r#"{"env":{}}"#);
+        let r = merge_snippet_into_settings("{nope", r#"{"env":{}}"#, ControlledFields);
         assert!(matches!(r, Err(AppError::Config(_))));
     }
 
@@ -394,7 +457,7 @@ mod tests {
         // 未启用：不解析不合并，原样返回——停用的片段（哪怕是垃圾文本）不
         // 能影响写盘内容。
         let cfg = r#"{"env": {"A": "1"}}"#;
-        let out = apply_snippet(cfg, "totally {not json", false).unwrap();
+        let out = apply_snippet(cfg, "totally {not json", false, ControlledFields).unwrap();
         assert_eq!(out, cfg);
     }
 
@@ -404,11 +467,61 @@ mod tests {
             r#"{"env": {"A": "1"}}"#,
             r#"{"env": {"B": "2"}, "includeCoAuthoredBy": false}"#,
             true,
+            ControlledFields,
         )
         .unwrap();
         let v = parsed(&out);
         assert_eq!(v["env"], serde_json::json!({"A": "1", "B": "2"}));
         assert_eq!(v["includeCoAuthoredBy"], serde_json::json!(false));
+    }
+
+    /// gemini 的顶层整体域与 claude 白名单域在 env-only 片段下行为等价
+    /// （红线：参数化不改变 gemini 现状行为——当前名册下片段只可能是 env
+    /// 子对象）。
+    #[test]
+    fn gemini_whole_top_level_env_only_behavior_equals_claude_domain() {
+        let cfg = r#"{"env":{"GEMINI_MODEL":"mine"}}"#;
+        let snippet = r#"{"env":{"GEMINI_MODEL":"snippet?","GEMINI_EXTRA":"y"}}"#;
+        let as_gemini = merge_snippet_into_settings(cfg, snippet, WholeTopLevel).unwrap();
+        let as_claude = merge_snippet_into_settings(cfg, snippet, ControlledFields).unwrap();
+        assert_eq!(
+            parsed(&as_gemini),
+            parsed(&as_claude),
+            "env-only 片段两域等价"
+        );
+        let v = parsed(&as_gemini);
+        assert_eq!(v["env"]["GEMINI_MODEL"], "mine", "供应商赢");
+        assert_eq!(v["env"]["GEMINI_EXTRA"], "y", "缺失键补上");
+    }
+
+    /// gemini 顶层整体域的机制承载力：片段顶层键补缺失进 settingsConfig
+    /// （「声明即生效」的能力存在；供应商已声明的顶层键仍供应商赢）。但名册
+    /// （validate_gemini_snippet，ADR-0010「Gemini 片段 = JSON env 对象」）仍
+    /// 只放行 env 子对象——顶层键经 set 拦截根本进不了合并；名册放宽另行
+    /// 决策，本测只锁机制能力本身。
+    #[test]
+    fn gemini_whole_top_level_domain_fills_top_level_keys() {
+        let cfg = r#"{"env":{},"selectedTheme":"dark","model":"vendor-model"}"#;
+        let snippet = r#"{"env":{"GEMINI_MODEL":"m"},"mcpServers":{"fs":{"command":"npx"}},"selectedTheme":"auto"}"#;
+        let out = parsed(&merge_snippet_into_settings(cfg, snippet, WholeTopLevel).unwrap());
+        assert_eq!(
+            out["mcpServers"]["fs"]["command"],
+            serde_json::json!("npx"),
+            "顶层新键声明即生效"
+        );
+        assert_eq!(
+            out["selectedTheme"], "dark",
+            "供应商已声明的顶层键保留（供应商赢）"
+        );
+        assert_eq!(
+            out["model"], "vendor-model",
+            "供应商显式配置优先（片段是共享默认值）"
+        );
+        assert_eq!(out["env"]["GEMINI_MODEL"], "m", "env 键级补缺失两域同语义");
+        // 同一片段在 claude 白名单域下：非受控顶层键被忽略（对照）。
+        let claude_out =
+            parsed(&merge_snippet_into_settings(cfg, snippet, ControlledFields).unwrap());
+        assert!(claude_out.get("mcpServers").is_none());
     }
 
     #[test]
@@ -421,6 +534,7 @@ mod tests {
         let snippet_cfg = merge_snippet_into_settings(
             r#"{"env": {"ANTHROPIC_BASE_URL": "https://x.dev"}}"#,
             r#"{"env": {"ANTHROPIC_SMALL_FAST_MODEL": "haiku"}, "includeCoAuthoredBy": false}"#,
+            ControlledFields,
         )
         .unwrap();
         let out = parsed(&merge_live_settings(&live, &snippet_cfg).unwrap());
@@ -444,22 +558,26 @@ mod tests {
     }
 
     /// 写盘层兜底：凭据拦截不只在 set（App::validate_snippet），绕过 set 直接
-    /// 合并的路径也拒（与 codex/grok 的 merge_*_snippet 双层同构）。
+    /// 合并的路径也拒（与 codex/grok 的 merge_*_snippet 双层同构）。两个域
+    /// 同一凭据拦截（域只管键落点，不管凭据）。
     #[test]
     fn write_layer_rejects_credential_keys_outside_set_path() {
-        let r = merge_snippet_into_settings(
-            r#"{"env":{}}"#,
-            r#"{"env": {"ANTHROPIC_AUTH_TOKEN": "sk-x"}}"#,
-        );
-        assert!(
-            matches!(r, Err(AppError::Config(_))),
-            "合并纯函数必须拒绝凭据键（写盘层兜底）"
-        );
-        let r2 = apply_snippet(r#"{"env":{}}"#, r#"{"apiKey": "x"}"#, true);
-        assert!(
-            matches!(r2, Err(AppError::Config(_))),
-            "apply_snippet 写盘入口同样拒绝顶层凭据键"
-        );
+        for domain in [ControlledFields, WholeTopLevel] {
+            let r = merge_snippet_into_settings(
+                r#"{"env":{}}"#,
+                r#"{"env": {"ANTHROPIC_AUTH_TOKEN": "sk-x"}}"#,
+                domain,
+            );
+            assert!(
+                matches!(r, Err(AppError::Config(_))),
+                "合并纯函数必须拒绝凭据键（写盘层兜底，域 {domain:?}）"
+            );
+            let r2 = apply_snippet(r#"{"env":{}}"#, r#"{"apiKey": "x"}"#, true, domain);
+            assert!(
+                matches!(r2, Err(AppError::Config(_))),
+                "apply_snippet 写盘入口同样拒绝顶层凭据键（域 {domain:?}）"
+            );
+        }
     }
 
     #[test]

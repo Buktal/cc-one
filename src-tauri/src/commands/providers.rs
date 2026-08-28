@@ -11,7 +11,6 @@ use crate::model::{App, Provider};
 use crate::provider::activation;
 use crate::provider::import::ProviderImportMode;
 use crate::provider::import::ProviderImportReport;
-use crate::provider::live_opencode;
 
 /// 列出一个应用池的供应商（app 必填——前端传当前分段 tab，后端按池过滤）。
 #[tauri::command]
@@ -45,14 +44,16 @@ pub async fn delete_provider_cmd(
 ) -> AppResult<()> {
     let store = state.store.clone();
     tauri::async_runtime::spawn_blocking(move || -> AppResult<()> {
-        // 附加模式：provider 若已写进 live，先从 live 移除再删 DB，避免配置文件
-        // 残留 orphan 条目；单激活直接删 DB（其 live 由切换覆盖，无残留概念）。
-        // 撤除序列（managed 判定 + key 读取 + 移除写盘）收口在
-        // live_opencode::remove_from_live_if_managed，与停用路径（live_import）
-        // 共用同一份。
+        // 附加模式：provider 若已写进 live，先走对称的移除半边（live 撤除 +
+        // meta.liveManaged=false + 落库）再删 DB——与停用路径共用
+        // activation::remove_from_live 同一入口。meta 半边对即将删除的行是一
+        // 次幂等落库：若删除中途失败，行（managed=false）与 live 文件（条目
+        // 已撤）状态仍然一致；单激活直接删 DB（其 live 由切换覆盖，无残留
+        // 概念）。
         if app.is_additive_mode() {
             if let Some(provider) = store.get_provider(app, &id)? {
-                live_opencode::remove_from_live_if_managed(&provider)?;
+                let paths = activation::resolve_paths(app)?;
+                activation::remove_from_live(&store, provider, &paths.opencode_config)?;
             }
         }
         store.delete_provider(app, &id)?;

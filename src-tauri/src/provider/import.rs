@@ -224,25 +224,13 @@ pub fn import_providers(
 mod tests {
     use super::*;
     use crate::db::testutil::mem;
-    use crate::model::{App, ProviderCategory};
+    use crate::model::App;
     use crate::provider::import_ccswitch::{collect_ccswitch_imports, CcSwitchProvider};
+    use crate::provider::testutil;
     use serde_json::json;
 
     fn provider(id: &str, name: &str, settings_config: &str) -> Provider {
-        Provider {
-            id: id.into(),
-            name: name.into(),
-            website_url: "https://example.com".into(),
-            category: ProviderCategory::Custom,
-            app: App::Claude,
-            icon: String::new(),
-            icon_color: String::new(),
-            sort_index: 0,
-            notes: String::new(),
-            settings_config: settings_config.into(),
-            meta: "{}".into(),
-            updated_at: String::new(),
-        }
+        testutil::provider(App::Claude, id, name, settings_config)
     }
 
     // ---------------- AppId（导出文档 / CC-Switch 导入）----------------
@@ -346,7 +334,11 @@ mod tests {
     /// name / settings_config（updated_at 由 save_provider 按结构变化刷新）。
     #[test]
     fn plan_name_conflict_updates_name_and_settings_keeps_rest() {
-        let existing = [provider("p1", "moonshot", "old")];
+        // 已有行带非默认展示字段——断言「展示字段保留」才有判别力。
+        let existing = [Provider {
+            website_url: "https://example.com".into(),
+            ..provider("p1", "moonshot", "old")
+        }];
         let incoming = [Provider {
             id: String::new(),
             name: "moonshot".into(),

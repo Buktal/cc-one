@@ -29,6 +29,7 @@ use std::path::{Path, PathBuf};
 use toml_edit::{DocumentMut, Item, Table};
 
 use crate::error::{AppError, AppResult};
+use crate::provider::settings_codec::parse_grok_settings;
 
 /// profile 块表名：`[model.<profile>]`。注意与 [`MODELS_TABLE`]（default 指针
 /// 表）是两个不同的顶层表，别混淆。`pub(crate)`：写盘（本模块）与导入反向
@@ -54,19 +55,6 @@ pub fn grok_config_dir() -> AppResult<PathBuf> {
 /// `~/.grok/config.toml` 路径。
 pub fn grok_config_path() -> AppResult<PathBuf> {
     Ok(grok_config_dir()?.join("config.toml"))
-}
-
-/// 解析供应商 settingsConfig（`{"config": "<TOML>"}` JSON 对象）为写盘目标
-/// TOML 文本（内部 meta 字段已在公共解析层 `parse_and_strip_settings` 剥除），
-/// 提取 `config`。
-///
-/// 边界：空串/纯空白 → 空目标（登录态版）；非对象 settingsConfig、非字符串
-/// `config` → `Err`（坏配置不能进用户 config.toml）。
-pub fn parse_grok_settings(settings_config: &str) -> AppResult<String> {
-    let Some(obj) = crate::provider::live::parse_and_strip_settings(settings_config)? else {
-        return Ok(String::new());
-    };
-    crate::provider::live::config_toml_field(&obj)
 }
 
 /// TOML 受控合并纯函数（最高价值测试接缝）：目标（供应商快照）里出现的
@@ -411,38 +399,6 @@ model   =   "grok-3"
             matches!(r, Err(AppError::Config(_))),
             "目标非法 TOML 必须失败——坏配置不能进用户 config.toml"
         );
-    }
-
-    #[test]
-    fn parse_settings_extracts_config() {
-        let s = parse_grok_settings(r#"{"config":"[model.cc-one]\nmodel = \"m\""}"#).unwrap();
-        assert!(s.contains("[model.cc-one]"));
-        assert!(s.contains(r#"model = "m""#));
-    }
-
-    #[test]
-    fn parse_settings_strips_internal_meta_keys() {
-        let s = parse_grok_settings(
-            r#"{"api_format":"openai","apiFormat":"openai","openrouter_compat_mode":true,"config":"[model.cc-one]\nmodel = \"m\""}"#,
-        )
-        .unwrap();
-        assert!(s.contains("[model.cc-one]"));
-    }
-
-    #[test]
-    fn parse_settings_rejects_bad_shapes() {
-        assert!(parse_grok_settings("[1,2]").is_err());
-        assert!(parse_grok_settings(r#""just a string""#).is_err());
-        assert!(parse_grok_settings(r#"{"config":123}"#).is_err());
-    }
-
-    #[test]
-    fn empty_settings_is_empty_target() {
-        for raw in ["", "   "] {
-            assert_eq!(parse_grok_settings(raw).unwrap(), "");
-        }
-        // 无 config 字段也视为空目标。
-        assert_eq!(parse_grok_settings("{}").unwrap(), "");
     }
 
     /// 临时目录里放好 config.toml（模拟用户 live 配置）。
