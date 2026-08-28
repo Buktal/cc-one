@@ -143,10 +143,13 @@ pub(crate) struct ArtifactDirSig {
 /// read on the next pull, because its non-empty signature differs.
 ///
 /// The gate is deliberately coarse (mtime + length, no content hash): a file
-/// rewritten within the filesystem's mtime granularity with an unchanged
-/// length could be missed until its next rewrite. Under the byte-stable
-/// rewrite contract that means identical bytes (harmless); a real content
-/// change always rewrites the file, refreshing its mtime.
+/// rewritten within the filesystem's mtime granularity tick with an unchanged
+/// length could be missed until its next rewrite (observed on Windows: rapid
+/// rewrites can keep the same mtime; a real content change nearly always
+/// changes the length — rows only grow or get corrected — which the signature
+/// catches). The residual miss window is narrow and accepted for a coarse
+/// gate; whatever IS re-read is still backstopped by the `(uuid, device_id)`
+/// primary key.
 pub(crate) fn artifact_dir_sig(paths: &Paths, device_id: &str) -> AppResult<ArtifactDirSig> {
     let dir = paths.device_data_dir(device_id);
     if !dir.exists() {
@@ -365,9 +368,14 @@ mod tests {
     }
 
     /// The pull-side coarse gate's signature: an absent dir is empty; files
-    /// land under their name with mtime+len; a rewrite (even byte-identical —
-    /// push rewrites the file, refreshing its mtime) changes it; an unchanged
-    /// dir yields the same signature again (the gate's skip condition).
+    /// land under their name with mtime+len; a content-changing rewrite (a
+    /// peer's new row) changes the signature — the gate re-reads. An unchanged
+    /// dir yields the same signature again (the gate's skip condition). NOTE:
+    /// a rewrite can land inside the filesystem's mtime-granularity tick
+    /// (observed: identical mtime for rapid rewrites on Windows), so the test
+    /// drives the change through LENGTH, never through a presumed mtime
+    /// refresh — the residual same-len-same-mtime race is documented on
+    /// [`artifact_dir_sig`].
     #[test]
     fn artifact_dir_sig_tracks_names_mtime_and_len() {
         let tmp = tempfile::tempdir().unwrap();
@@ -387,11 +395,11 @@ mod tests {
         assert_eq!(s1.files.len(), 1, "only artifact files are tracked");
         assert_eq!(s1.files["usage-2026-07-13.jsonl"].1, 14, "length captured");
 
-        // A byte-identical rewrite (what a settled day's recompute does) still
-        // bumps the mtime component — the gate re-reads, the PK dedups.
-        std::fs::write(&file, "{\"uuid\":\"u1\"}\n").unwrap();
+        // A content-changing rewrite (a peer's new row) must change the
+        // signature — the gate re-reads.
+        std::fs::write(&file, "{\"uuid\":\"u1\"}\n{\"uuid\":\"u2\"}\n").unwrap();
         let s2 = artifact_dir_sig(&paths, dev).unwrap();
-        assert_ne!(s1, s2, "rewrite refreshes the mtime component");
+        assert_ne!(s1, s2, "content change changes the signature");
 
         // Unchanged dir ⇒ identical signature (the gate skips the re-read).
         let s3 = artifact_dir_sig(&paths, dev).unwrap();

@@ -343,15 +343,17 @@ mod tests {
             .unwrap();
         assert_eq!(stats.request_count, 1);
 
-        // Re-pulling is a no-op. Simulate a peer rewrite (a pull checkout
-        // refreshes the file's mtime, which would make the coarse gate re-read
-        // the dir): the (uuid, device_id) primary key still dedups the
-        // re-import to zero.
+        // Re-pulling is a no-op. Simulate a peer's re-push that still carries
+        // an already-imported row: append a duplicate of the file's own line —
+        // the length change makes the coarse gate re-read the dir (mtime alone
+        // is not reliable within the filesystem's granularity tick), and the
+        // (uuid, device_id) primary key must dedup the re-import to zero.
         let pulled_file = paths_b
             .device_data_dir("aabbccddeeff")
             .join("usage-2026-07-13.jsonl");
-        let bytes = std::fs::read(&pulled_file).unwrap();
-        std::fs::write(&pulled_file, bytes).unwrap();
+        let mut text = std::fs::read_to_string(&pulled_file).unwrap();
+        text.push_str(&text.clone());
+        std::fs::write(&pulled_file, text).unwrap();
         let n2 = pull_and_import(&store, &paths_b, &cfg_b).unwrap();
         assert_eq!(n2, 0, "re-pull dedups via the store's primary key");
     }
