@@ -22,16 +22,41 @@ use crate::error::AppResult;
 use crate::model::{SessionMessage, SessionMessageRole};
 
 use super::line_fold::{for_accepted_lines, LineFoldPolicy};
+use super::transcript::{MessageSpec, MessageUuid, RawMessage, TextKeys, TOOL_INPUT_MAX};
 use super::{
     collect_jsonl_incremental, discover_files, fresh_token_counts, is_jsonl_file, truncate,
     CollectResult, DirectoryShape, FileParseOutcome, RawUsage, ScanProgress, ScanProgressDelta,
-    SessionExtras, SessionMetaAcc, SourceParser, TRIM_LIMIT,
+    SessionExtras, SessionIdentity, SessionMetaAcc, SourceParser,
 };
 
 /// Stable source tag — becomes `RawUsage.source` / `RawSession.source` and the
 /// DB source column; the single literal behind `name()`, usage, and session
 /// construction.
 const SOURCE_TAG: &str = "codex_cli";
+
+/// Codex 的会话身份源声明（rollout 文件头首个 `session_meta` 的线程 id → 文件名
+/// 尾随 UUID → stem；链的取值实现是 [`session_id_from`]）——trait 声明与 seen
+/// 集共用这一份；fold 直接调 `session_id_from`（它已持有预扫出的线程 id，避免
+/// 二次预扫），同一链函数保证 fold 与 seen 不漂移。
+const SESSION_IDENTITY: SessionIdentity = SessionIdentity::HeadSessionMeta;
+
+/// Codex 的 transcript 提取声明（content key 表 + role 词典 + uuid 规则）——
+/// transcript 提取与标题候选路径共用同一份；骨架与统一空文本决策见
+/// [`super::transcript`]。
+static MESSAGES: MessageSpec = MessageSpec {
+    text_keys: TextKeys {
+        block_type: None,
+        keys: &["text", "input_text", "output_text"],
+    },
+    roles: &[
+        ("user", SessionMessageRole::User),
+        ("assistant", SessionMessageRole::Assistant),
+    ],
+    uuid_rule: MessageUuid::SourceIdElseLine {
+        prefix: "",
+        line_sep: ":L",
+    },
+};
 
 /// Codex (`~/.codex`) session-log parser.
 ///
@@ -110,19 +135,12 @@ impl SourceParser for CodexSourceParser {
     }
 
     /// Codex session ids are NOT file stems — the thread id lives in the file's
-    /// `session_meta` (with the rollout-filename UUID as fallback). Must read
-    /// the head to reconcile: the stem default would mis-delete real sessions.
-    fn session_ids_seen(&self, files: &[std::path::PathBuf]) -> Vec<String> {
-        files
-            .iter()
-            .map(|f| {
-                // 有界头读（session_meta 在文件顶部）；失败回退文件名解析——
-                // 回退只会多保留一行、绝不误删真实会话（见 read_head_utf8）。
-                let head = super::read_head_utf8(f);
-                let identity = prescan_codex_text(&head).0;
-                resolve_session_id(f, identity.as_ref())
-            })
-            .collect()
+    /// `session_meta` (with the rollout-filename UUID as fallback). The chain is
+    /// declared as [`SessionIdentity::HeadSessionMeta`]; the shared seen
+    /// skeleton does the bounded head read and hands the head text to the same
+    /// `session_id_from` chain the fold uses.
+    fn session_identity(&self) -> SessionIdentity {
+        SESSION_IDENTITY
     }
 }
 
@@ -266,7 +284,9 @@ fn fold_codex_file(file: &Path, text: &str, start_line: i64) -> FileParseOutcome
     let is_subagent = identity
         .as_ref()
         .is_some_and(|i| i.carries_history_snapshot);
-    let session_id = resolve_session_id(file, identity.as_ref());
+    // 会话身份走声明链（[`SESSION_IDENTITY`] 的取值实现）：线程 id 已随预扫
+    // 在手，直接喂 `session_id_from`——与 seen 集同一条链，不二次预扫。
+    let session_id = session_id_from(file, identity.as_ref().map(|i| i.thread_id.as_str()));
 
     let mut state = CodexFileState {
         thread_id: identity.map(|i| i.thread_id),
@@ -327,7 +347,7 @@ fn fold_codex_file(file: &Path, text: &str, start_line: i64) -> FileParseOutcome
                         && payload.get("role").and_then(|r| r.as_str()) == Some("user")
                     {
                         if let Some(content) = payload.get("content") {
-                            let text = extract_codex_message_text(content);
+                            let text = MESSAGES.text_keys.flatten(Some(content));
                             if let Some(candidate) = title_candidate_from_user_message(&text) {
                                 meta.offer_user_title(&candidate);
                             }
@@ -568,15 +588,13 @@ fn learn_model(
 
 // ---- Session id resolution (session_meta id → filename UUID fallback) ----
 
-/// Resolve the session id: prefer `session_meta.payload.id`, fall back to the
-/// UUID embedded in the rollout filename (`rollout-<ts>-<uuid>.jsonl`), then
-/// the file stem. CC-Switch does the same via a UUID regex; we validate the
-/// trailing `8-4-4-4-12` hex shape by hand to avoid pulling in the regex crate.
-fn resolve_session_id(file: &Path, identity: Option<&CodexSessionIdentity>) -> String {
-    if let Some(id) = identity
-        .map(|i| i.thread_id.as_str())
-        .filter(|s| !s.is_empty())
-    {
+/// `SessionIdentity::HeadSessionMeta` 的取值实现——fold 与 seen 集共用的唯一一
+/// 份身份链：线程 id（`session_meta`，预扫得出；seen 路径由 `prescan_thread_id`
+/// 现取）→ rollout 文件名里的尾随 UUID（`rollout-<ts>-<uuid>.jsonl`）→ 文件
+/// stem → "unknown"。CC-Switch 用 UUID 正则做同款回退；这里手工校验尾部
+/// `8-4-4-4-12` 的 hex 形状，避免引入 regex crate。
+pub(super) fn session_id_from(file: &Path, thread_id: Option<&str>) -> String {
+    if let Some(id) = thread_id.filter(|s| !s.is_empty()) {
         return id.to_string();
     }
     infer_session_id_from_filename(file).unwrap_or_else(|| {
@@ -585,6 +603,13 @@ fn resolve_session_id(file: &Path, identity: Option<&CodexSessionIdentity>) -> S
             .unwrap_or("unknown")
             .to_string()
     })
+}
+
+/// seen 路径的文本半边：从（有界头读的）文本解析首个 `session_meta` 的线程
+/// id。与 fold 共用 [`prescan_codex_text`] 这一份解析，只是丢弃 boundary/
+/// subagent 维度。
+pub(super) fn prescan_thread_id(text: &str) -> Option<String> {
+    prescan_codex_text(text).0.map(|i| i.thread_id)
 }
 
 /// Extract a trailing UUID (`8-4-4-4-12` hex) from a filename's stem, e.g.
@@ -627,55 +652,41 @@ fn is_uuid_format(s: &str) -> bool {
 // the call, and outputs are often verbose (claude.rs drops user-role
 // tool_results for the same reason: keep the transcript lean).
 
-/// Extract transcript message lines from one `response_item` payload. Each
-/// emitted line gets a stable uuid — the payload's `id` when present, else
-/// `session_id:L<line_no>` — so re-collects append idempotently.
+/// Extract transcript message lines from one `response_item` payload. The
+/// scaffold (flatten / empty-skip / truncation / uuid synthesis / role
+/// dictionary) is the shared [`MESSAGES`] declaration; what stays here is
+/// codex's payload shape: `message` payloads route through the role dictionary
+/// (developer is not listed → dropped), `function_call` payloads emit one Tool
+/// line with the tool name (arguments are a JSON string, capped at the shared
+/// [`TOOL_INPUT_MAX`], like claude's tool_use input cap). Each emitted line
+/// gets a stable uuid — the payload's `id` when present, else
+/// `session_id:L<line_no>` (the declared legacy format) — so re-collects append
+/// idempotently.
 fn extract_codex_messages(
     payload: &serde_json::Value,
     session_id: &str,
     ts: &str,
     line_no: i64,
 ) -> Vec<SessionMessage> {
-    let payload_type = payload.get("type").and_then(|t| t.as_str()).unwrap_or("");
-    let uuid = payload
+    let source_id = payload
         .get("id")
         .and_then(|v| v.as_str())
-        .filter(|s| !s.is_empty())
-        .map(str::to_string)
-        .unwrap_or_else(|| format!("{session_id}:L{line_no}"));
-    let mk =
-        |role: SessionMessageRole, model: Option<String>, name: Option<String>, content: String| {
-            SessionMessage {
-                uuid: uuid.clone(),
-                session_id: session_id.to_string(),
-                role,
-                ts: ts.to_string(),
-                model,
-                name,
-                content,
-            }
-        };
-
-    let mut out = Vec::new();
-    match payload_type {
-        "message" => {
-            let role = payload.get("role").and_then(|r| r.as_str()).unwrap_or("");
-            let mapped = match role {
-                "user" => Some(SessionMessageRole::User),
-                "assistant" => Some(SessionMessageRole::Assistant),
-                // developer messages are injected instructions (e.g. permissions
-                // preamble); they are not user dialog, so drop them.
-                _ => None,
-            };
-            if let Some(role) = mapped {
-                if let Some(content) = payload.get("content") {
-                    let text = truncate(&extract_codex_message_text(content), TRIM_LIMIT);
-                    if !text.is_empty() {
-                        out.push(mk(role, None, None, text));
-                    }
-                }
-            }
-        }
+        .filter(|s| !s.is_empty());
+    match payload.get("type").and_then(|t| t.as_str()).unwrap_or("") {
+        "message" => MESSAGES
+            .emit(RawMessage {
+                session_id,
+                role_str: payload.get("role").and_then(|r| r.as_str()).unwrap_or(""),
+                content: payload.get("content"),
+                ts,
+                model: None,
+                name: None,
+                source_id,
+                line_no,
+                uuid_suffix: "",
+            })
+            .into_iter()
+            .collect(),
         "function_call" => {
             let name = payload
                 .get("name")
@@ -687,35 +698,29 @@ fn extract_codex_messages(
             let args = payload
                 .get("arguments")
                 .and_then(|v| v.as_str())
-                .map(|s| truncate(s, 1024))
+                .map(|s| truncate(s, TOOL_INPUT_MAX))
                 .unwrap_or_default();
-            out.push(mk(SessionMessageRole::Tool, None, Some(name), args));
+            let args_text = serde_json::Value::String(args);
+            MESSAGES
+                .emit_as(
+                    SessionMessageRole::Tool,
+                    RawMessage {
+                        session_id,
+                        role_str: "",
+                        content: Some(&args_text),
+                        ts,
+                        model: None,
+                        name: Some(name),
+                        source_id,
+                        line_no,
+                        uuid_suffix: "",
+                    },
+                )
+                .into_iter()
+                .collect()
         }
         // function_call_output / unknown payload types → drop (see note above).
-        _ => {}
-    }
-    out
-}
-
-/// Flatten a Codex message `content` field into plain text. The value is either
-/// a string (plain user text) or an array of items whose text lives under one
-/// of the `text` / `input_text` / `output_text` keys (Codex's content-block
-/// shape, distinct from Claude's `{"type":"text","text":…}` arrays).
-fn extract_codex_message_text(content: &serde_json::Value) -> String {
-    match content {
-        serde_json::Value::String(s) => s.clone(),
-        serde_json::Value::Array(items) => items
-            .iter()
-            .filter_map(|item| {
-                ["text", "input_text", "output_text"]
-                    .iter()
-                    .find_map(|key| item.get(key).and_then(|v| v.as_str()))
-                    .map(str::to_string)
-                    .filter(|s| !s.trim().is_empty())
-            })
-            .collect::<Vec<_>>()
-            .join("\n"),
-        _ => String::new(),
+        _ => Vec::new(),
     }
 }
 
@@ -1887,20 +1892,100 @@ mod tests {
         );
     }
 
+    /// The content flatten runs through the shared declaration (key table
+    /// `text` / `input_text` / `output_text`, no type gate) — same contract the
+    /// old hand copy pinned: string content passes through, keys tried per
+    /// item, unknown shapes contribute nothing.
     #[test]
-    fn codex_extract_message_text_handles_string_and_array() {
-        assert_eq!(
-            extract_codex_message_text(&serde_json::json!("plain")),
-            "plain"
-        );
+    fn codex_content_flatten_via_declaration_handles_string_and_array() {
+        let flatten = |v| MESSAGES.text_keys.flatten(Some(&v));
+        assert_eq!(flatten(serde_json::json!("plain")), "plain");
         let arr = serde_json::json!([
             { "type": "output_text", "text": "Hello" },
             { "type": "input_text", "text": "World" }
         ]);
-        assert_eq!(extract_codex_message_text(&arr), "Hello\nWorld");
+        assert_eq!(flatten(arr), "Hello\nWorld");
         // Unknown item shapes contribute nothing.
         let mixed = serde_json::json!([{ "type": "tool_use", "name": "x" }, { "text": "kept" }]);
-        assert_eq!(extract_codex_message_text(&mixed), "kept");
-        assert_eq!(extract_codex_message_text(&serde_json::Value::Null), "");
+        assert_eq!(flatten(mixed), "kept");
+        assert_eq!(flatten(serde_json::Value::Null), "");
+    }
+
+    // ---- session identity declaration: seen set vs fold (mis-delete guard) ----
+
+    /// The seen set must report the THREAD id, not the file stem — reconcile
+    /// deletes every stored id absent from the seen set, so a stem-based seen
+    /// set would wipe real sessions whose id lives in `session_meta`. This is
+    /// the direct test of the mis-delete guard.
+    #[test]
+    fn codex_seen_set_reports_thread_id_not_stem() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("sessions").join("stem-name.jsonl");
+        std::fs::create_dir_all(file.parent().unwrap()).unwrap();
+        write_jsonl(&file, &[codex_session_meta_cwd("thread-abc", "/tmp")]);
+        let p = CodexSourceParser::with_dir(dir.path().to_path_buf());
+        let files = p.discover().unwrap();
+        assert_eq!(p.session_identity().seen(&files), vec!["thread-abc"]);
+    }
+
+    /// Fallback chain, seen side: no thread id in the head → the trailing
+    /// rollout-filename UUID; neither → the stem. The head read failing (e.g.
+    /// non-UTF-8 junk) must degrade down the same chain, never delete.
+    #[test]
+    fn codex_seen_set_falls_back_through_filename_uuid_to_stem() {
+        let dir = tempfile::tempdir().unwrap();
+        let rollout = dir
+            .path()
+            .join("sessions")
+            .join("rollout-2026-03-06T21-50-12-019cc369-bd7c-7891-b371-7b20b4fe0b18.jsonl");
+        std::fs::create_dir_all(rollout.parent().unwrap()).unwrap();
+        // session_meta without `id` → filename UUID wins.
+        std::fs::write(
+            &rollout,
+            serde_json::json!({
+                "timestamp": "2026-03-06T21:50:12Z",
+                "type": "session_meta",
+                "payload": { "cwd": "/tmp/project", "source": "cli" }
+            })
+            .to_string(),
+        )
+        .unwrap();
+        // No session_meta at all → stem.
+        let bare = dir.path().join("sessions").join("no-meta.jsonl");
+        std::fs::write(&bare, "{\"type\":\"response_item\",\"payload\":{}}\n").unwrap();
+        let p = CodexSourceParser::with_dir(dir.path().to_path_buf());
+        let files = p.discover().unwrap();
+        assert_eq!(
+            p.session_identity().seen(&files),
+            vec![
+                "019cc369-bd7c-7891-b371-7b20b4fe0b18".to_string(),
+                "no-meta".to_string()
+            ]
+        );
+    }
+
+    /// Consistency by construction, pinned: the fold's session id and the seen
+    /// set's id for the same file agree — the drift this declaration exists to
+    /// make impossible (seen reports one id, the store row carries another ⇒
+    /// reconcile deletes the real session).
+    #[test]
+    fn codex_fold_session_id_matches_seen_set() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("sessions").join("s.jsonl");
+        std::fs::create_dir_all(file.parent().unwrap()).unwrap();
+        write_jsonl(
+            &file,
+            &[
+                codex_session_meta_cwd("thread-xyz", "/tmp"),
+                codex_token_count(100, 50, 10),
+            ],
+        );
+        let p = CodexSourceParser::with_dir(dir.path().to_path_buf());
+        let files = p.discover().unwrap();
+        let result = p.parse_full(&files).unwrap();
+        assert_eq!(result.sessions.len(), 1);
+        assert_eq!(result.sessions[0].id, "thread-xyz");
+        assert_eq!(result.events[0].session_id, "thread-xyz");
+        assert_eq!(p.session_identity().seen(&files), vec!["thread-xyz"]);
     }
 }

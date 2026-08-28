@@ -6,16 +6,37 @@ use crate::error::AppResult;
 use crate::model::{ServerToolUse, SessionMessage, SessionMessageRole, TokenCounts};
 
 use super::line_fold::{for_accepted_lines, LineFoldPolicy};
+use super::transcript::{tool_input_text, MessageSpec, MessageUuid, RawMessage, TextKeys};
 use super::{
-    collect_jsonl_incremental, discover_files, is_jsonl_file, truncate, CollectResult,
-    DirectoryShape, RawTurnDuration, RawUsage, ScanProgress, ScanProgressDelta, SessionExtras,
-    SessionMetaAcc, SourceParser, TRIM_LIMIT,
+    collect_jsonl_incremental, discover_files, is_jsonl_file, CollectResult, DirectoryShape,
+    RawTurnDuration, RawUsage, ScanProgress, ScanProgressDelta, SessionExtras, SessionIdentity,
+    SessionMetaAcc, SourceParser,
 };
 
 /// Stable source tag — becomes `RawUsage.source` / `RawSession.source` and the
 /// DB source column; the single literal behind `name()`, usage, and session
 /// construction.
 const SOURCE_TAG: &str = "claude_code";
+
+/// Claude 的会话身份源声明（一会话一 jsonl，id 即文件 stem）——trait 声明与
+/// fold 取值共用这一份（见 [`SessionIdentity`]：两处各写一份提取逻辑的话，
+/// 漂移即 reconcile 误删）。
+const SESSION_IDENTITY: SessionIdentity = SessionIdentity::Stem;
+
+/// Claude 的 transcript 提取声明（content key 表 + role 词典 + uuid 规则）——
+/// transcript 提取与标题候选路径共用同一份；骨架与统一空文本决策见
+/// [`super::transcript`]。
+static MESSAGES: MessageSpec = MessageSpec {
+    text_keys: TextKeys {
+        block_type: Some("text"),
+        keys: &["text"],
+    },
+    roles: &[
+        ("user", SessionMessageRole::User),
+        ("assistant", SessionMessageRole::Assistant),
+    ],
+    uuid_rule: MessageUuid::EventUuid,
+};
 
 /// Claude Code session-log parser.
 ///
@@ -69,11 +90,8 @@ impl ClaudeCodeSourceParser {
     /// the dedup key (the message id) — re-keying stored rows to the message id
     /// would mass-duplicate on first run. The message id is the map key only.
     fn fold_file(file: &Path, text: &str, start_line: i64) -> super::FileParseOutcome {
-        let session_id = file
-            .file_stem()
-            .and_then(|s| s.to_str())
-            .unwrap_or("unknown")
-            .to_string();
+        // 会话身份走声明（Stem）——与 trait 声明、seen 集同一条链取值。
+        let session_id = SESSION_IDENTITY.resolve(file, "");
         // Subagent sidechain sessions (agent-*.jsonl) carry a sidecar
         // `<stem>.meta.json` with the agent type + task description; both
         // become session metadata (type tag + title source). A missing sidecar
@@ -163,7 +181,7 @@ impl ClaudeCodeSourceParser {
                 }
                 if let Some(m) = &ev.message {
                     if m.role.as_deref() == Some("user") {
-                        if let Some(t) = first_text_of(m) {
+                        if let Some(t) = MESSAGES.text_keys.first_text(m.content.as_ref()) {
                             // Skip Claude Code command/caveat noise so the
                             // title is the first real prompt, not `/clear`.
                             let t = t.trim();
@@ -274,6 +292,11 @@ impl ClaudeCodeSourceParser {
 impl SourceParser for ClaudeCodeSourceParser {
     fn name(&self) -> &'static str {
         SOURCE_TAG
+    }
+
+    /// 会话身份 = 文件 stem（一会话一 jsonl）。
+    fn session_identity(&self) -> SessionIdentity {
+        SESSION_IDENTITY
     }
 
     fn discover(&self) -> AppResult<Vec<PathBuf>> {
@@ -476,149 +499,93 @@ impl SessionEvent {
 // ---- Transcript message extraction (trimming) ----
 //
 // Keep text content + tool_use name only; drop thinking blocks' full text and
-// base64 images; truncate oversized content at TRIM_LIMIT. One assistant event
-// may carry several content blocks → it can emit multiple SessionMessage lines
-// (one assistant text message + one tool line per tool_use block).
-
-// The soft cap (TRIM_LIMIT = 32 KiB), the original-title max (TITLE_MAX = 80),
-// and the `truncate` helper all live in [`super`] as shared parser helpers,
-// so the truncation rule cannot drift between Claude and Codex.
-
-/// First text block of a message's content (string content or the first `text`
-/// block of an array). Used for the original-title fallback (first user msg).
-fn first_text_of(msg: &ClaudeMessageData) -> Option<String> {
-    let content = msg.content.as_ref()?;
-    match content {
-        serde_json::Value::String(s) => Some(s.clone()),
-        serde_json::Value::Array(blocks) => blocks.iter().find_map(|b| {
-            if b.get("type").and_then(|v| v.as_str()) == Some("text") {
-                b.get("text").and_then(|v| v.as_str()).map(str::to_string)
-            } else {
-                None
-            }
-        }),
-        _ => None,
-    }
-}
+// base64 images. The scaffold (flatten / empty-skip / TRIM_LIMIT truncation /
+// uuid synthesis) lives in [`super::transcript`]; what stays here is claude's
+// fan-out shape: ONE assistant event can emit several lines — one Tool line per
+// tool_use block (uuid suffix `#tool{i}`), the text blocks collapsed into one
+// Assistant line. Line order keeps the long-standing convention: tool lines in
+// block order first, the text line last.
 
 /// Extract transcript message lines from one event's message block, stamping
 /// `session_id`. Trimming: text content + tool_use name are kept; thinking
 /// blocks and image blocks are dropped; long text/tool_result is truncated at
-/// [`TRIM_LIMIT`]. Each emitted line gets a stable synthetic uuid (event uuid +
-/// block index) so the JSONL append is idempotent across re-collects.
+/// [`super::TRIM_LIMIT`]. Each emitted line gets a stable synthetic uuid (event
+/// uuid + block index) so the JSONL append is idempotent across re-collects.
 fn extract_messages(
     msg: &ClaudeMessageData,
     event_uuid: &Option<String>,
     session_id: &str,
     ts: &str,
 ) -> Vec<SessionMessage> {
-    let uuid = match event_uuid {
-        Some(u) if !u.is_empty() => u.clone(),
-        _ => return Vec::new(),
+    let Some(uuid) = event_uuid.as_deref().filter(|u| !u.is_empty()) else {
+        return Vec::new();
     };
-    let content = match msg.content.as_ref() {
-        Some(c) => c,
-        None => return Vec::new(),
-    };
-    let role = match msg.role.as_deref() {
-        Some(r) => r,
-        None => return Vec::new(),
-    };
-    let mk = |role: SessionMessageRole,
-              suffix: &str,
-              model: Option<String>,
-              name: Option<String>,
-              content: String| SessionMessage {
-        uuid: format!("{uuid}{suffix}"),
-        session_id: session_id.to_string(),
-        role,
-        ts: ts.to_string(),
-        model,
-        name,
-        content,
-    };
-    let mut out = Vec::new();
-    match role {
-        "user" => {
-            let texts = collect_text(content);
-            let joined = truncate(&texts.join("\n"), TRIM_LIMIT);
-            if !joined.is_empty() {
-                out.push(mk(SessionMessageRole::User, "", None, None, joined));
-            }
-        }
-        "assistant" => {
-            // text blocks → one assistant message; tool_use → per-tool lines.
-            let mut text_parts: Vec<String> = Vec::new();
-            if let serde_json::Value::Array(blocks) = content {
-                for (i, b) in blocks.iter().enumerate() {
-                    let t = b.get("type").and_then(|v| v.as_str()).unwrap_or("");
-                    match t {
-                        "text" => {
-                            if let Some(txt) = b.get("text").and_then(|v| v.as_str()) {
-                                text_parts.push(txt.to_string());
-                            }
-                        }
-                        "tool_use" => {
-                            let name = b
-                                .get("name")
-                                .and_then(|v| v.as_str())
-                                .unwrap_or("tool")
-                                .to_string();
-                            let input = b
-                                .get("input")
-                                .map(|v| truncate(&v.to_string(), 1024))
-                                .unwrap_or_default();
-                            out.push(mk(
-                                SessionMessageRole::Tool,
-                                &format!("#tool{i}"),
-                                None,
-                                Some(name),
-                                input,
-                            ));
-                        }
-                        // thinking / image / unknown → drop (trim noise + bulk).
-                        _ => {}
+    let role_str = msg.role.as_deref().unwrap_or("");
+    match MESSAGES.map_role(role_str) {
+        Some(SessionMessageRole::User) => MESSAGES
+            .emit(RawMessage {
+                session_id,
+                role_str,
+                content: msg.content.as_ref(),
+                ts,
+                model: None,
+                name: None,
+                source_id: Some(uuid),
+                line_no: 0,
+                uuid_suffix: "",
+            })
+            .into_iter()
+            .collect(),
+        Some(SessionMessageRole::Assistant) => {
+            let mut out = Vec::new();
+            // tool_use 块 → 每块一条 Tool 行：入参 JSON 串按共享
+            // TOOL_INPUT_MAX 截断（此前的内联 1024 魔数收进共享常量）。
+            if let Some(serde_json::Value::Array(blocks)) = msg.content.as_ref() {
+                for (i, block) in blocks.iter().enumerate() {
+                    if block.get("type").and_then(|v| v.as_str()) != Some("tool_use") {
+                        continue;
                     }
-                }
-            } else if let serde_json::Value::String(s) = content {
-                text_parts.push(s.clone());
-            }
-            let joined = truncate(&text_parts.join("\n"), TRIM_LIMIT);
-            if !joined.is_empty() {
-                out.push(mk(
-                    SessionMessageRole::Assistant,
-                    "",
-                    msg.model.clone(),
-                    None,
-                    joined,
-                ));
-            }
-        }
-        _ => {}
-    }
-    out
-}
-
-/// Collect every `text` block's text from a content value (string or array).
-/// `tool_result` content is ignored here (user-role tool_results are dropped to
-/// keep the transcript lean; the assistant tool_use line already records the
-/// call).
-fn collect_text(content: &serde_json::Value) -> Vec<String> {
-    let mut out = Vec::new();
-    match content {
-        serde_json::Value::String(s) => out.push(s.clone()),
-        serde_json::Value::Array(blocks) => {
-            for b in blocks {
-                if b.get("type").and_then(|v| v.as_str()) == Some("text") {
-                    if let Some(t) = b.get("text").and_then(|v| v.as_str()) {
-                        out.push(t.to_string());
-                    }
+                    let name = block
+                        .get("name")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("tool")
+                        .to_string();
+                    let suffix = format!("#tool{i}");
+                    let input = block.get("input").map(tool_input_text).unwrap_or_default();
+                    let input_text = serde_json::Value::String(input);
+                    out.extend(MESSAGES.emit_as(
+                        SessionMessageRole::Tool,
+                        RawMessage {
+                            session_id,
+                            role_str: "",
+                            content: Some(&input_text),
+                            ts,
+                            model: None,
+                            name: Some(name),
+                            source_id: Some(uuid),
+                            line_no: 0,
+                            uuid_suffix: &suffix,
+                        },
+                    ));
                 }
             }
+            // 文本块（或纯字符串 content）合一条 Assistant 行。
+            out.extend(MESSAGES.emit(RawMessage {
+                session_id,
+                role_str,
+                content: msg.content.as_ref(),
+                ts,
+                model: msg.model.clone(),
+                name: None,
+                source_id: Some(uuid),
+                line_no: 0,
+                uuid_suffix: "",
+            }));
+            out
         }
-        _ => {}
+        // 词典未列出的源角色（system 等）整条丢弃；词典穷尽匹配的兜底。
+        _ => Vec::new(),
     }
-    out
 }
 
 /// Message-id dedup winner policy: prefer the snapshot with a non-empty
@@ -1242,10 +1209,8 @@ mod tests {
         let files = p.discover().unwrap();
         assert_eq!(files.len(), 2, "discover includes agent files");
         // discover 的 walkdir 顺序平台依赖（Linux ext4 与 Windows 不同），seen
-        // 集合只论成员资格——排序后断言，与生产路径 collect 对 session_ids 的
-        // 排序同精神。
-        let mut seen = p.session_ids_seen(&files);
-        seen.sort_unstable();
+        // 集合只论成员资格——身份声明的 seen 已排序去重，直接断言。
+        let seen = p.session_identity().seen(&files);
         assert_eq!(
             seen,
             vec!["249e8e6b".to_string(), "agent-a10c476b".to_string()],

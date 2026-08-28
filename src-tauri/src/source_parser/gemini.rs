@@ -5,16 +5,37 @@ use std::path::{Path, PathBuf};
 use crate::error::AppResult;
 use crate::model::{RawSession, SessionMessage, SessionMessageRole};
 
+use super::transcript::{MessageSpec, MessageUuid, RawMessage, TextKeys};
 use super::{
-    collect_jsonl_incremental, discover_files, fresh_token_counts, truncate, CollectResult,
-    DirectoryShape, FileParseOutcome, GateMode, RawUsage, ScanProgress, ScanProgressDelta,
-    SourceParser, TITLE_MAX, TRIM_LIMIT,
+    collect_jsonl_incremental, discover_files, fresh_token_counts, CollectResult, DirectoryShape,
+    FileParseOutcome, GateMode, RawUsage, ScanProgress, ScanProgressDelta, SessionIdentity,
+    SourceParser, TitleChain,
 };
 
 /// Stable source tag — becomes `RawUsage.source` / `RawSession.source` and the
 /// DB source column; the single literal behind `name()`, usage, and session
 /// construction.
 const SOURCE_TAG: &str = "gemini_cli";
+
+/// Gemini 的会话身份源声明（单 JSON 顶层的 `sessionId`；缺失/空白回退文件
+/// stem）——trait 声明与 fold 取值共用这一份（fold 手里已有整文件 JSON，走
+/// `resolve_value` 免二次解析；链与 seen 集同一条）。
+const SESSION_IDENTITY: SessionIdentity = SessionIdentity::HeadJsonField { key: "sessionId" };
+
+/// Gemini 的 transcript 提取声明（content key 表 + role 词典 + uuid 规则）——
+/// transcript 提取与标题候选路径共用同一份；骨架与统一空文本决策见
+/// [`super::transcript`]。
+static MESSAGES: MessageSpec = MessageSpec {
+    text_keys: TextKeys {
+        block_type: None,
+        keys: &["text"],
+    },
+    roles: &[
+        ("user", SessionMessageRole::User),
+        ("gemini", SessionMessageRole::Assistant),
+    ],
+    uuid_rule: MessageUuid::RequiredSourceId,
+};
 
 /// Gemini CLI (`~/.gemini`) session-log parser.
 ///
@@ -66,25 +87,12 @@ impl SourceParser for GeminiCliSourceParser {
     }
 
     /// Gemini session ids live in the file's JSON `sessionId`, not the stem —
-    /// reconcile needs the real ids or it would mis-delete sessions. Bounded
-    /// head read; on any failure fall back to the stem (a fallback can only
-    /// KEEP an extra row, never delete a real session).
-    fn session_ids_seen(&self, files: &[std::path::PathBuf]) -> Vec<String> {
-        files
-            .iter()
-            .map(|f| {
-                let head = super::read_head_utf8(f);
-                serde_json::from_str::<serde_json::Value>(&head)
-                    .ok()
-                    .and_then(|v| {
-                        v.get("sessionId")
-                            .and_then(|v| v.as_str())
-                            .map(str::to_string)
-                    })
-                    .or_else(|| f.file_stem().and_then(|s| s.to_str()).map(str::to_string))
-                    .unwrap_or_else(|| "unknown".to_string())
-            })
-            .collect()
+    /// reconcile needs the real ids or it would mis-delete sessions. Declared
+    /// as [`SessionIdentity::HeadJsonField`]; the shared seen skeleton does the
+    /// bounded head read and falls back to the stem on any failure (a fallback
+    /// can only KEEP an extra row, never delete a real session).
+    fn session_identity(&self) -> SessionIdentity {
+        SESSION_IDENTITY
     }
 
     /// Incremental collect: a Gemini session file is a single JSON object, so
@@ -173,11 +181,11 @@ fn fold_file(file: &Path, text: &str) -> FileParseOutcome {
             skipped: 1,
         };
     };
-    let session_id = value
-        .get("sessionId")
-        .and_then(|v| v.as_str())
-        .unwrap_or("unknown")
-        .to_string();
+    // 会话身份走声明（sessionId → stem 回退）——与 trait 声明、seen 集同一条
+    // 链取值；整文件 JSON 已在手，走 `resolve_value` 免二次解析。（旧 fold 在
+    // sessionId 缺失时填 "unknown"，与 seen 集的 stem 回退分叉——那条分叉会让
+    // 对账把该会话行当 ghost 误删，收口后两处必然一致。）
+    let session_id = SESSION_IDENTITY.resolve_value(file, &value);
     let project_dir = read_project_root(file);
     let started_at = value
         .get("startTime")
@@ -192,20 +200,19 @@ fn fold_file(file: &Path, text: &str) -> FileParseOutcome {
 
     let mut events = Vec::new();
     let mut messages: Vec<SessionMessage> = Vec::new();
-    let mut title_orig = String::new();
+    // 标题链纯值：gemini 只有「首条真实 user 消息」一层（无 summary 层、无
+    // basename 兜底——project_dir 来自旁置 .project_root 文件，不作标题）。
+    let mut title = TitleChain::default();
 
     if let Some(msgs) = value.get("messages").and_then(|v| v.as_array()) {
         for msg in msgs {
             let typ = msg.get("type").and_then(|t| t.as_str());
 
-            // Original title: first user message's content (string or first
-            // text block), truncated at TITLE_MAX.
-            if title_orig.is_empty() && typ == Some("user") {
-                if let Some(t) = first_content_text(msg.get("content")) {
-                    let t = t.trim();
-                    if !t.is_empty() {
-                        title_orig = truncate(t, TITLE_MAX);
-                    }
+            // Original title candidate: first user message's content (string
+            // or first text block). 首胜与空白判定归标题链。
+            if typ == Some("user") {
+                if let Some(t) = MESSAGES.text_keys.first_text(msg.get("content")) {
+                    title.offer(&t);
                 }
             }
 
@@ -216,43 +223,27 @@ fn fold_file(file: &Path, text: &str) -> FileParseOutcome {
                 }
             }
 
-            // Transcript message (user/gemini only; info/error/unknown skipped).
-            let role = match typ {
-                Some("user") => Some(SessionMessageRole::User),
-                Some("gemini") => Some(SessionMessageRole::Assistant),
-                _ => None, // info / error / unknown → skip
-            };
-            if let Some(role) = role {
-                let Some(uuid) = msg
-                    .get("id")
-                    .and_then(|v| v.as_str())
-                    .filter(|s| !s.is_empty())
-                else {
-                    continue;
-                };
-                let content = truncate(&join_content(msg.get("content")), TRIM_LIMIT);
-                if content.is_empty() {
-                    continue;
-                }
-                messages.push(SessionMessage {
-                    uuid: uuid.to_string(),
-                    session_id: session_id.clone(),
-                    role,
-                    ts: msg
-                        .get("timestamp")
+            // Transcript message — the shared scaffold: role dictionary drops
+            // info/error/unknown, RequiredSourceId skips id-less lines, and the
+            // empty-content policy lives in the declaration.
+            if let Some(m) = MESSAGES.emit(RawMessage {
+                session_id: &session_id,
+                role_str: typ.unwrap_or(""),
+                content: msg.get("content"),
+                ts: msg.get("timestamp").and_then(|v| v.as_str()).unwrap_or(""),
+                model: if typ == Some("gemini") {
+                    msg.get("model")
                         .and_then(|v| v.as_str())
-                        .unwrap_or("")
-                        .to_string(),
-                    model: if typ == Some("gemini") {
-                        msg.get("model")
-                            .and_then(|v| v.as_str())
-                            .map(str::to_string)
-                    } else {
-                        None
-                    },
-                    name: first_tool_name(msg),
-                    content,
-                });
+                        .map(str::to_string)
+                } else {
+                    None
+                },
+                name: first_tool_name(msg),
+                source_id: msg.get("id").and_then(|v| v.as_str()),
+                line_no: 0,
+                uuid_suffix: "",
+            }) {
+                messages.push(m);
             }
         }
     }
@@ -265,7 +256,7 @@ fn fold_file(file: &Path, text: &str) -> FileParseOutcome {
             id: session_id,
             source: SOURCE_TAG.to_string(),
             project_dir,
-            title_orig,
+            title_orig: title.finish(&[], None),
             started_at,
             last_active_at,
             agent_type: String::new(),
@@ -331,39 +322,6 @@ fn read_project_root(file: &Path) -> String {
         .unwrap_or_default()
 }
 
-/// Join a message's `content` into a single string. Gemini content is either a
-/// plain string or an array of `{"text": …}` blocks (joined with `\n`).
-/// Returns an empty string when absent or shaped differently.
-fn join_content(content: Option<&serde_json::Value>) -> String {
-    let Some(content) = content else {
-        return String::new();
-    };
-    match content {
-        serde_json::Value::String(s) => s.clone(),
-        serde_json::Value::Array(items) => items
-            .iter()
-            .filter_map(|item| item.get("text").and_then(|v| v.as_str()))
-            .collect::<Vec<_>>()
-            .join("\n"),
-        _ => String::new(),
-    }
-}
-
-/// First text of a message's `content`: the string itself, or the first
-/// `{"text": …}` block. Used for the original-title fallback (first user msg).
-fn first_content_text(content: Option<&serde_json::Value>) -> Option<String> {
-    let content = content?;
-    match content {
-        serde_json::Value::String(s) => Some(s.clone()),
-        serde_json::Value::Array(items) => items.iter().find_map(|item| {
-            item.get("text")
-                .and_then(|v| v.as_str())
-                .map(str::to_string)
-        }),
-        _ => None,
-    }
-}
-
 /// First tool-call name from a message's optional `toolCalls` array. Used to
 /// populate the `name` field on assistant transcript messages.
 fn first_tool_name(msg: &serde_json::Value) -> Option<String> {
@@ -394,6 +352,7 @@ impl GeminiCliSourceParser {
 mod tests {
     use super::*;
     use crate::model::{SessionMessage, SessionMessageRole};
+    use crate::source_parser::TRIM_LIMIT;
     use std::collections::HashMap;
     use std::path::{Path, PathBuf};
 
@@ -683,5 +642,64 @@ mod tests {
         assert_eq!(result.messages.len(), 1);
         assert_eq!(result.messages[0].uuid, "ok");
         assert_eq!(result.messages[0].content, "kept");
+    }
+
+    // ---- session identity declaration: seen set vs fold (mis-delete guard) ----
+
+    /// The seen set reports the JSON `sessionId` (not the stem) — reconcile
+    /// deletes stored ids absent from the seen set, so a stem-based seen set
+    /// would wipe real gemini sessions.
+    #[test]
+    fn gemini_seen_set_reports_session_id_not_stem() {
+        let dir = tempfile::tempdir().unwrap();
+        write_gemini_session(
+            dir.path(),
+            "hashA",
+            "session-1.json",
+            r#"{"sessionId":"sess-real","messages":[{"id":"m1","type":"user","timestamp":"2026-08-01T10:00:00Z","content":"hi"}]}"#,
+        );
+        let p = GeminiCliSourceParser::with_dir(dir.path().to_path_buf());
+        let files = p.discover().unwrap();
+        assert_eq!(p.session_identity().seen(&files), vec!["sess-real"]);
+    }
+
+    /// Fallback chain, seen side: a file without `sessionId` (or with an empty
+    /// one) falls back to the stem — a fallback can only KEEP a row, never
+    /// delete a real session.
+    #[test]
+    fn gemini_seen_set_falls_back_to_stem_without_session_id() {
+        let dir = tempfile::tempdir().unwrap();
+        write_gemini_session(
+            dir.path(),
+            "hashA",
+            "session-1.json",
+            r#"{"messages":[{"id":"m1","type":"user","timestamp":"2026-08-01T10:00:00Z","content":"hi"}]}"#,
+        );
+        let p = GeminiCliSourceParser::with_dir(dir.path().to_path_buf());
+        let files = p.discover().unwrap();
+        assert_eq!(p.session_identity().seen(&files), vec!["session-1"]);
+    }
+
+    /// Consistency by construction, pinned: fold's session id (on the session
+    /// row, the usage row, and every message) and the seen set's id agree even
+    /// when `sessionId` is missing — the fold used to fill "unknown" here while
+    /// the seen set reported the stem, a drift that would let reconcile delete
+    /// the session row as a ghost.
+    #[test]
+    fn gemini_fold_session_id_matches_seen_set_even_without_session_id() {
+        let dir = tempfile::tempdir().unwrap();
+        let json = r#"{"messages":[
+            {"id":"u1","type":"user","timestamp":"2026-08-01T10:00:00Z","content":"hi"},
+            {"id":"g1","type":"gemini","timestamp":"2026-08-01T10:01:00Z","model":"gemini-2.5-pro","tokens":{"input":100,"output":10,"cached":0,"thoughts":0}}
+        ]}"#;
+        write_gemini_session(dir.path(), "hashA", "session-1.json", json);
+        let p = GeminiCliSourceParser::with_dir(dir.path().to_path_buf());
+        let files = p.discover().unwrap();
+        let result = p.parse_full(&files).unwrap();
+        assert_eq!(result.sessions.len(), 1);
+        assert_eq!(result.sessions[0].id, "session-1", "stem fallback");
+        assert!(result.events.iter().all(|e| e.session_id == "session-1"));
+        assert!(result.messages.iter().all(|m| m.session_id == "session-1"));
+        assert_eq!(p.session_identity().seen(&files), vec!["session-1"]);
     }
 }

@@ -225,6 +225,10 @@ mod tests {
             self.inner.discover()
         }
 
+        fn session_identity(&self) -> crate::source_parser::SessionIdentity {
+            self.inner.session_identity()
+        }
+
         fn collect_incremental(
             &self,
             progress: &ScanProgress,

@@ -6,15 +6,34 @@ use crate::error::{AppError, AppResult};
 use crate::model::{RawSession, SessionMessage, SessionMessageRole, TokenCounts};
 use crate::time::epoch_millis_to_iso;
 
+use super::transcript::{MessageSpec, MessageUuid, RawMessage, TextKeys};
 use super::{
-    metadata_modified_nanos, truncate, CollectResult, FileCursor, GateMode, RawUsage, ScanProgress,
-    ScanProgressDelta, SourceParser, TRIM_LIMIT,
+    metadata_modified_nanos, CollectResult, FileCursor, GateMode, RawUsage, ScanProgress,
+    ScanProgressDelta, SessionIdentity, SourceParser,
 };
 
 /// Stable source tag — becomes `RawUsage.source` / `RawSession.source` and the
 /// DB source column; the single literal behind `name()`, usage, and session
 /// construction.
 const SOURCE_TAG: &str = "opencode";
+
+/// OpenCode 的 transcript 提取声明（content key 表 + role 词典 + uuid 规则）。
+/// 行 uuid = 源 message id（必答）；part 表的 text 半边与词典里 text 规则同形
+/// （`{"type":"text","text":…}`），tool part 的「工具名既进 content 又上
+/// name」是 opencode 特有形状，留在调用方。骨架与统一空文本决策见
+/// [`super::transcript`]。
+static MESSAGES: MessageSpec = MessageSpec {
+    text_keys: TextKeys {
+        block_type: Some("text"),
+        keys: &["text"],
+    },
+    roles: &[
+        ("user", SessionMessageRole::User),
+        ("assistant", SessionMessageRole::Assistant),
+        ("tool", SessionMessageRole::Tool),
+    ],
+    uuid_rule: MessageUuid::RequiredSourceId,
+};
 
 /// OpenCode (`~/.local/share/opencode/opencode.db`) session-log parser.
 ///
@@ -178,6 +197,14 @@ impl SourceParser for OpenCodeSourceParser {
     /// declaration pins the strategy where a future driver change can see it.
     fn gate_mode(&self, _file: &Path) -> GateMode {
         GateMode::SessionWatermark
+    }
+
+    /// 无文件身份：会话表在 SQLite 里自管（身份 = 行 id），file-backed 对账
+    /// 不适用——声明为 [`SessionIdentity::SelfManaged`]，seen 集恒空即对账
+    /// 整体停用（与 `collect_incremental` 里 `session_ids: Vec::new()` 同一
+    /// 语义的声明出处）。
+    fn session_identity(&self) -> SessionIdentity {
+        SessionIdentity::SelfManaged
     }
 }
 
@@ -383,10 +410,6 @@ fn query_transcript_messages(
             let Ok(value) = serde_json::from_str::<serde_json::Value>(&data_json) else {
                 continue;
             };
-            let role_str = value.get("role").and_then(|v| v.as_str()).unwrap_or("");
-            let Some(role) = map_role(role_str) else {
-                continue;
-            };
             let model = value
                 .get("modelID")
                 .and_then(|v| v.as_str())
@@ -395,62 +418,53 @@ fn query_transcript_messages(
             let empty = Vec::new();
             let part_values = parts_by_msg.get(&id).unwrap_or(&empty);
             let (content, name) = build_content_and_name(part_values);
-            if content.trim().is_empty() {
-                continue;
-            }
-            out.push(SessionMessage {
-                uuid: id,
-                session_id: session_id.to_string(),
-                role,
-                ts: epoch_millis_to_iso(time_created_ms),
+            let ts = epoch_millis_to_iso(time_created_ms);
+            let content_text = serde_json::Value::String(content);
+            // The shared scaffold: role dictionary (system/unknown drop),
+            // empty-content skip, TRIM_LIMIT truncation, uuid = message id.
+            if let Some(m) = MESSAGES.emit(RawMessage {
+                session_id,
+                role_str: value.get("role").and_then(|v| v.as_str()).unwrap_or(""),
+                content: Some(&content_text),
+                ts: &ts,
                 model,
                 name,
-                content: truncate(&content, TRIM_LIMIT),
-            });
+                source_id: Some(&id),
+                line_no: 0,
+                uuid_suffix: "",
+            }) {
+                out.push(m);
+            }
         }
     }
     Ok(out)
 }
 
-/// Map an OpenCode `data.role` string to a [`SessionMessageRole`]. Unknown
-/// values map to `None` so the caller skips the message rather than emitting a
-/// mis-classified line.
-fn map_role(role: &str) -> Option<SessionMessageRole> {
-    match role {
-        "user" => Some(SessionMessageRole::User),
-        "assistant" => Some(SessionMessageRole::Assistant),
-        "tool" => Some(SessionMessageRole::Tool),
-        _ => None,
-    }
-}
-
 /// Build `(content, name)` from a message's part JSON values (in order):
-/// - `text` part → its text appended to `content`;
-/// - `tool` part → the tool name appended to `content` AND captured as `name`;
+/// - `text` part → its text appended to `content` (per the declared text rule —
+///   opencode's text part is exactly the `{"type":"text","text":…}` block);
+/// - `tool` part → the tool name appended to `content` AND captured as `name`
+///   (opencode 特有：part 表把工具名当作内容的一段)；
 /// - any other part type → skipped.
 fn build_content_and_name(parts: &[serde_json::Value]) -> (String, Option<String>) {
     let mut pieces: Vec<String> = Vec::new();
     let mut tool_name: Option<String> = None;
     for v in parts {
-        match v.get("type").and_then(|t| t.as_str()) {
-            Some("text") => {
-                if let Some(t) = v.get("text").and_then(|x| x.as_str()) {
-                    if !t.trim().is_empty() {
-                        pieces.push(t.to_string());
-                    }
-                }
+        if let Some(t) = MESSAGES.text_keys.block_text(v) {
+            if !t.trim().is_empty() {
+                pieces.push(t);
             }
-            Some("tool") => {
-                if let Some(name) = v.get("tool").and_then(|x| x.as_str()) {
-                    if !name.is_empty() {
-                        pieces.push(name.to_string());
-                        if tool_name.is_none() {
-                            tool_name = Some(name.to_string());
-                        }
-                    }
-                }
+            continue;
+        }
+        if let Some(name) = v
+            .get("tool")
+            .and_then(|x| x.as_str())
+            .filter(|s| !s.is_empty())
+        {
+            pieces.push(name.to_string());
+            if tool_name.is_none() {
+                tool_name = Some(name.to_string());
             }
-            _ => {}
         }
     }
     (pieces.join("\n"), tool_name)
