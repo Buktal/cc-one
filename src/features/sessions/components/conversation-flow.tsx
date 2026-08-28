@@ -30,14 +30,13 @@ import {
   User as UserIcon,
   Wrench,
 } from "lucide-react"
-import {
-  type KeyboardEvent as ReactKeyboardEvent,
-  type ReactNode,
-  type RefObject,
-  useMemo,
-} from "react"
+import { type ReactNode, type RefObject, useMemo } from "react"
 import { useTranslation } from "react-i18next"
 import { Virtuoso, type VirtuosoHandle } from "react-virtuoso"
+import {
+  CollapseTrigger,
+  collapseTriggerProps,
+} from "@/components/collapse-trigger"
 import { CopyButton } from "@/components/copy-button"
 import { EmptyState } from "@/components/empty-state"
 import { Badge } from "@/components/ui/badge"
@@ -207,7 +206,8 @@ function FlowRow({
         {group.map((tool) => (
           <ToolRow
             key={tool.uuid}
-            message={tool}
+            tool={tool}
+            variant="loose"
             open={isOpen(tool.uuid, tool.role)}
             onToggle={() => onToggle(tool.uuid)}
           />
@@ -345,9 +345,10 @@ function AssistantRow({
             // 内缩工具列表：左缘细线 + 缩进，视觉上「该 AI 消息做的事」。
             <div className="border-border/70 mt-2 space-y-1.5 border-l-2 pl-2.5">
               {tools.map((tool) => (
-                <ToolBlock
+                <ToolRow
                   key={tool.uuid}
                   tool={tool}
+                  variant="attached"
                   open={isToolOpen(tool.uuid, tool.role)}
                   onToggle={() => onToolToggle(tool.uuid)}
                 />
@@ -360,89 +361,37 @@ function AssistantRow({
   )
 }
 
-/** One attached tool call — the `Write · path` title row with the arguments
- *  behind a click. Collapsed by default (the xor rule in transcript.ts: tool
- *  rows default collapsed); the expanded body pretty-prints the JSON input. */
-function ToolBlock({
+/** One tool call — the `Write · path` title row with the arguments behind a
+ *  click. Collapsed by default (the xor rule in transcript.ts: tool rows
+ *  default collapsed); the expanded body pretty-prints the JSON input.
+ *  两个形态合一（此前 ToolBlock / ToolRow 双胞胎各抄一份）：attached 挂在
+ *  助手卡内（紧凑内距、名称只回退 tool），loose 是无助手行的轮的独立行
+ *  （全宽内距、名称回退首行文本）。 */
+function ToolRow({
   tool,
+  variant,
   open,
   onToggle,
 }: {
   tool: SessionMessage
+  variant: "attached" | "loose"
   open: boolean
   onToggle: () => void
 }) {
   const summary = toolSummary(tool.content)
+  const name =
+    tool.name ||
+    (variant === "loose" ? firstLine(tool.content) || "tool" : "tool")
   return (
-    <div className="bg-muted group rounded-md border border-dashed px-2.5 py-1.5 text-xs">
-      {/* biome-ignore lint/a11y/useSemanticElements: collapse trigger must not
-        be a <button> — the title row embeds the copy <button>, and nested
-        buttons are invalid HTML; div keeps the same keyboard contract. */}
-      <div
-        role="button"
-        tabIndex={0}
-        onClick={onToggle}
-        onKeyDown={(e) => {
-          if (e.key === "Enter" || e.key === " ") {
-            e.preventDefault()
-            onToggle()
-          }
-        }}
-        aria-expanded={open}
-        className="hover:text-foreground text-muted-foreground flex w-full cursor-pointer items-center gap-1.5 text-left"
-      >
-        <Wrench className="size-3 shrink-0" />
-        <span className="shrink-0 font-mono">{tool.name || "tool"}</span>
-        {summary ? (
-          <>
-            <span className="text-muted-foreground/50">·</span>
-            <span className="min-w-0 flex-1 truncate font-mono">{summary}</span>
-          </>
-        ) : (
-          <span className="min-w-0 flex-1" />
-        )}
-        <ChevronRight
-          className={cn(
-            "size-3 shrink-0 transition-transform",
-            open && "rotate-90",
-          )}
-        />
-        <MessageCopyButton text={tool.content} />
-      </div>
-      {open ? <ToolContent text={tool.content} /> : null}
-    </div>
-  )
-}
-
-/** A standalone tool row — the fallback for turns with no AI text row to
- *  attach to. Same shape as the attached ToolBlock, full-width. */
-function ToolRow({
-  message: m,
-  open,
-  onToggle,
-}: {
-  message: SessionMessage
-  open: boolean
-  onToggle: () => void
-}) {
-  const summary = toolSummary(m.content)
-  const name = m.name || firstLine(m.content) || "tool"
-  return (
-    <div className="bg-muted group rounded-md border border-dashed px-3 py-2 text-xs">
-      {/* biome-ignore lint/a11y/useSemanticElements: collapse trigger must not
-        be a <button> — the header embeds the copy <button>, and nested buttons
-        are invalid HTML; div keeps the same keyboard contract. */}
-      <div
-        role="button"
-        tabIndex={0}
-        onClick={onToggle}
-        onKeyDown={(e) => {
-          if (e.key === "Enter" || e.key === " ") {
-            e.preventDefault()
-            onToggle()
-          }
-        }}
-        aria-expanded={open}
+    <div
+      className={cn(
+        "bg-muted group rounded-md border border-dashed text-xs",
+        variant === "attached" ? "px-2.5 py-1.5" : "px-3 py-2",
+      )}
+    >
+      <CollapseTrigger
+        expanded={open}
+        onToggle={onToggle}
         className="hover:text-foreground text-muted-foreground flex w-full cursor-pointer items-center gap-1.5 text-left"
       >
         <Wrench className="size-3 shrink-0" />
@@ -453,7 +402,11 @@ function ToolRow({
             <span className="min-w-0 flex-1 truncate font-mono">{summary}</span>
           </>
         ) : (
-          <span className="min-w-0 flex-1 truncate" />
+          /* attached 的空 summary 位不 truncate（原本就无内容可截）；
+              loose 保持 truncate——与旧行为逐字节一致。 */
+          <span
+            className={cn("min-w-0 flex-1", variant === "loose" && "truncate")}
+          />
         )}
         <ChevronRight
           className={cn(
@@ -461,9 +414,9 @@ function ToolRow({
             open && "rotate-90",
           )}
         />
-        <MessageCopyButton text={m.content} />
-      </div>
-      {open ? <ToolContent text={m.content} /> : null}
+        <MessageCopyButton text={tool.content} />
+      </CollapseTrigger>
+      {open ? <ToolContent text={tool.content} /> : null}
     </div>
   )
 }
@@ -521,22 +474,12 @@ function BaseRow({
         ? "ml-auto max-w-[min(72ch,80%)] rounded-lg rounded-br-sm bg-accent-tint"
         : "bg-transparent"
   return (
-    // 折叠触发器不能是 <button>：头部内嵌复制 <button>，HTML 不允许按钮嵌
-    // 套；div 承担同一键盘契约（collapsible 分支动态挂载触发属性）。
+    // 折叠触发器不能是 <button>（头部内嵌复制 <button>，HTML 不允许按钮嵌
+    // 套）；键盘契约由 collapseTriggerProps 工厂统一给出（collapsible 分支
+    // 动态挂载——契约本身在 components/collapse-trigger）。
     <div
       {...(collapsible
-        ? {
-            role: "button",
-            tabIndex: 0,
-            onClick: onToggle,
-            onKeyDown: (e: ReactKeyboardEvent<HTMLDivElement>) => {
-              if (e.key === "Enter" || e.key === " ") {
-                e.preventDefault()
-                onToggle?.()
-              }
-            },
-            "aria-expanded": open,
-          }
+        ? collapseTriggerProps({ expanded: open, onToggle: () => onToggle?.() })
         : {})}
       className={cn(
         "group flex px-3 py-2 text-left text-sm",

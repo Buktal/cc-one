@@ -79,7 +79,10 @@ export function providerFromPreset(
     icon: preset.icon,
     iconColor: preset.iconColor,
     sortIndex: 0,
-    notes: preset.notes ?? "",
+    // notes 是 Provider 的入库契约（Rust 模型 + DB 列 + 同步工件都有它），
+    // 前端类型必须保留；预设源不再携带 notes（死数据，全仓无 UI 读端），
+    // 草稿一律落空串。
+    notes: "",
     settingsConfig: preset.settingsConfig,
     meta: "{}",
     updatedAt: "",

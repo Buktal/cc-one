@@ -14,6 +14,8 @@ import {
   groupConversation,
   ownsFlowRow,
   toolSummary,
+  toolTurnCount,
+  userTurnCount,
 } from "./conversation"
 
 let seq = 0
@@ -157,6 +159,47 @@ describe("groupConversation", () => {
     ])
     expect(turns[0].nodes[0].tools.map((t) => t.uuid)).toEqual(["t1", "t2"])
     expect(turns[0].nodes[1].tools).toEqual([])
+  })
+})
+
+describe("userTurnCount / toolTurnCount（活动卡的两个轮次读端）", () => {
+  it("轮数 = 用户轮（number ≥ 1），prelude 不计入", () => {
+    const turns = groupConversation([
+      row("system", "sys", "context"),
+      row("user", "u1", "q1"),
+      row("assistant", "a1", "r1"),
+      row("user", "u2", "q2"),
+      row("assistant", "a2", "r2"),
+    ])
+    expect(userTurnCount(turns)).toBe(2)
+  })
+
+  it("含工具轮数 = 任一节点挂工具块的轮数（含 loose 组）", () => {
+    const turns = groupConversation([
+      row("user", "u1", "q1"),
+      row("assistant", "a1", "r1"), // 无工具轮
+      row("user", "u2", "q2"),
+      row("assistant", "a2", "r2"),
+      row("tool", "t1", '{"command":"ls"}', "Bash"), // 挂到 a2 → 含工具轮
+      row("user", "u3", "q3"),
+      row("tool", "t2", '{"command":"pwd"}', "Bash"), // 无助手行 → loose 组也算含工具轮
+    ])
+    expect(toolTurnCount(turns)).toBe(2)
+  })
+
+  it("一次切片喂两个读端：轮数与含工具轮数互不污染", () => {
+    const turns = groupConversation([
+      row("user", "u1", "q"),
+      row("assistant", "a1", "r"),
+      row("tool", "t1", "{}", "Bash"),
+    ])
+    expect(userTurnCount(turns)).toBe(1)
+    expect(toolTurnCount(turns)).toBe(1)
+  })
+
+  it("空转录（无任何轮）→ 两个计数都为 0", () => {
+    expect(userTurnCount(groupConversation([]))).toBe(0)
+    expect(toolTurnCount(groupConversation([]))).toBe(0)
   })
 })
 

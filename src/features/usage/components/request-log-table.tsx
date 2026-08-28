@@ -10,13 +10,17 @@
 // density); the bar disables while a page refetches. Empty state offers an
 // inline 采集 CTA so the user isn't bounced to the command bar to seed the
 // first rows.
+//
+// Pure rendering only — queries / paging / expanded-row state / collect action
+// live in useRequestLogBrowser (../use-request-log-browser)，与家族形态对齐
+// （视图 = 纯渲染 + use-*-browser hook）。
 
 import { FileText } from "lucide-react"
-import { Fragment, type ReactNode, useState } from "react"
+import { Fragment, type ReactNode } from "react"
 import { useTranslation } from "react-i18next"
 
-import { useCountQuery, useLogsQuery } from "@/app/store/api"
 import type { FilterState } from "@/app/store/slices/filterSlice"
+import { collapseTriggerProps } from "@/components/collapse-trigger"
 import { CopyButton } from "@/components/copy-button"
 import { PaginationBar } from "@/components/pagination-bar"
 import { QueryState } from "@/components/query-state"
@@ -39,13 +43,8 @@ import {
   costIsNotable,
   groupRowsByDay,
 } from "@/features/usage/derive"
-import { collectLabelKey, useCollectAction } from "@/hooks/use-collect-action"
-import { usePagedBrowser } from "@/hooks/use-paged-browser"
-import {
-  deviceLabelOf,
-  useDeviceLabelMap,
-  useDeviceOptions,
-} from "@/lib/device-labels"
+import { collectLabelKey } from "@/hooks/use-collect-action"
+import { deviceLabelOf, useDeviceLabelMap } from "@/lib/device-labels"
 import {
   formatCost,
   formatCostPrecise,
@@ -54,60 +53,26 @@ import {
   formatTime,
   formatTokens,
 } from "@/lib/format"
-import { DEFAULT_PAGE_SIZE, PAGE_SIZES } from "@/lib/pagination"
-import { usePersistedState } from "@/lib/persistence"
 import { totalTokensOf } from "@/lib/token-buckets"
 import { cn } from "@/lib/utils"
 import type { UsageLogRow } from "@/types/generated/bindings"
 import { sourceLabel } from "../source-labels"
+import { useRequestLogBrowser } from "../use-request-log-browser"
 import { SessionLink } from "./session-link"
-
-// 每页条数密度跨重启记忆，键名沿用 sessions-page-size 的约定。
-const PAGE_SIZE_KEY = "cc-one:request-log-page-size"
 
 export function RequestLogTable({ filter }: { filter: FilterState }) {
   const { t } = useTranslation()
   const deviceLabel = useDeviceLabelMap()
-  const [expandedId, setExpandedId] = useState<string | null>(null)
-  const [pageSize, setPageSize] = usePersistedState<number>(
-    PAGE_SIZE_KEY,
-    DEFAULT_PAGE_SIZE,
-  )
-  const { data: total = 0 } = useCountQuery(filter)
-  // 分页控制器（架构扫描候选⑧）：offset / 翻页单一归属；filter 身份变化 →
-  // 回第 1 页并收起展开行（行所在页可能已不存在）——与 offset 重置同一触发
-  // 点。pageSize 折进 scope：换密度也是维度变化，回第 1 页由控制器结构触发。
-  const browser = usePagedBrowser({
-    scope: { filter, pageSize },
-    pageSize,
-    total,
-    onScopeReset: () => setExpandedId(null),
-  })
-  const {
-    data: rows = [],
-    isLoading,
-    isFetching,
-    error,
-  } = useLogsQuery({
-    filter,
-    limit: pageSize,
-    offset: browser.offset,
-  })
-  // 空状态 CTA 复用 sidebar 同一份采集动作 (useCollectAction) —— 不再在此
-  // 手写 mutation + toast, 避免分叉 (上一份手写副本就漏了数据新鲜度戳记
-  // markCollected/markSynced). multiDevice 决定成功 toast 措辞, 与 shell 一致.
-  const multiDevice = useDeviceOptions().length > 0
-  const { onCollect, collecting } = useCollectAction(multiDevice)
-
-  const dayGroups = groupRowsByDay(rows)
+  const b = useRequestLogBrowser(filter)
+  const dayGroups = groupRowsByDay(b.rows)
 
   return (
     <Card className="min-h-0 flex-1">
       <CardContent className="flex min-h-0 flex-1 flex-col">
         <QueryState
-          isLoading={isLoading}
-          error={error}
-          isEmpty={!isLoading && rows.length === 0}
+          isLoading={b.isLoading}
+          error={b.error}
+          isEmpty={!b.isLoading && b.rows.length === 0}
           emptyIcon={FileText}
           emptyLabel={t("usage.logs.empty")}
           emptyAction={{
@@ -115,13 +80,13 @@ export function RequestLogTable({ filter }: { filter: FilterState }) {
             // 共用）；空闲态注入空态 CTA 自己的「采集本地日志」引导首次入库。
             label: t(
               collectLabelKey(
-                collecting,
-                multiDevice,
+                b.collecting,
+                b.multiDevice,
                 "usage.collect.collectLocal",
               ),
             ),
-            onClick: onCollect,
-            disabled: collecting,
+            onClick: b.onCollect,
+            disabled: b.collecting,
           }}
         >
           <div className="min-h-0 flex-1 -mr-2.5 overflow-auto pr-2.5">
@@ -159,12 +124,10 @@ export function RequestLogTable({ filter }: { filter: FilterState }) {
                         <LogRow
                           r={r}
                           deviceLabel={deviceLabel}
-                          expanded={expandedId === r.uuid}
-                          onToggle={() =>
-                            setExpandedId(expandedId === r.uuid ? null : r.uuid)
-                          }
+                          expanded={b.expandedId === r.uuid}
+                          onToggle={() => b.toggleRow(r.uuid)}
                         />
-                        {expandedId === r.uuid ? <DetailRow r={r} /> : null}
+                        {b.expandedId === r.uuid ? <DetailRow r={r} /> : null}
                       </Fragment>
                     ))}
                   </Fragment>
@@ -175,16 +138,12 @@ export function RequestLogTable({ filter }: { filter: FilterState }) {
         </QueryState>
 
         <PaginationBar
-          page={browser.page}
-          totalPages={browser.totalPages}
-          total={total}
-          loading={isFetching}
-          onPageChange={browser.goToPage}
-          pageSize={{
-            value: pageSize,
-            options: PAGE_SIZES,
-            onChange: setPageSize,
-          }}
+          page={b.page}
+          totalPages={b.totalPages}
+          total={b.total}
+          loading={b.isFetching}
+          onPageChange={b.goToPage}
+          density={b.density}
         />
       </CardContent>
     </Card>
@@ -204,17 +163,12 @@ function LogRow({
 }) {
   const notable = costIsNotable(r.total_cost_usd)
   return (
+    // 整行是折叠触发器（点行展开明细）：键盘契约由 collapseTriggerProps 工
+    // 厂给出（Enter/Space 切换 + aria-expanded）——tbody 里触发器只能是 tr
+    // 本身，故用工厂展开而非 <CollapseTrigger> div。
     <TableRow
+      {...collapseTriggerProps({ expanded, onToggle })}
       className={cn("cursor-pointer", expanded && "bg-hover")}
-      onClick={onToggle}
-      aria-expanded={expanded}
-      tabIndex={0}
-      onKeyDown={(e) => {
-        if (e.key === "Enter" || e.key === " ") {
-          e.preventDefault()
-          onToggle()
-        }
-      }}
     >
       <TableCell className="tabular-nums whitespace-nowrap">
         {formatTime(r.timestamp)}

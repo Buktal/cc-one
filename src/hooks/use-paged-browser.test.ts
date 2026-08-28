@@ -9,6 +9,7 @@ import { describe, expect, it } from "vitest"
 import {
   type PagedBrowserState,
   pagedBrowserNext,
+  pagedScopeKey,
   scopeKeyOf,
 } from "./use-paged-browser"
 
@@ -61,6 +62,28 @@ describe("scope 身份变化 → 回第 1 页（结构性规则）", () => {
     const a = scopeKeyOf({ search: "abc", model: "gpt", device: "" })
     const b = scopeKeyOf({ search: "abc", model: "gpt", device: "" })
     expect(a).toBe(b)
+  })
+})
+
+describe("密度折进维度身份（pagedScopeKey——persistKey 托管后的单一实现）", () => {
+  it("换每页条数即维度变化 → 身份变（回第 1 页的规则命中）", () => {
+    // 此前由各调用点把 pageSize 手塞进 scope 对象（四份手抄同一不变量）；
+    // 现在由 hook 统一折入——同 scope 不同密度必须不同身份。
+    expect(pagedScopeKey({ filter: "a" }, 20)).not.toBe(
+      pagedScopeKey({ filter: "a" }, 50),
+    )
+  })
+
+  it("密度不变 + scope 不变 → 身份稳定（不产生伪重置）", () => {
+    expect(pagedScopeKey({ filter: "a" }, 20)).toBe(
+      pagedScopeKey({ filter: "a" }, 20),
+    )
+  })
+
+  it("密度相同 + scope 变化 → 身份仍变（原有维度规则不被折入吞掉）", () => {
+    expect(pagedScopeKey({ filter: "a" }, 20)).not.toBe(
+      pagedScopeKey({ filter: "b" }, 20),
+    )
   })
 })
 

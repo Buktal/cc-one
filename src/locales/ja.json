@@ -635,6 +635,7 @@
   "sessions.stats.idAgent": "帰属",
   "sessions.stats.idAgentValue": "サブエージェント · {{type}} · 使用量は本プロジェクトに計上",
   "sessions.stats.idSubagents": "{{n}} 件 · 使用量は本プロジェクトに計上",
+  "sessions.stats.subagent": "サブエージェント",
   "sessions.stats.subSessions": "サブエージェント {{n}} 件含む",
   "sessions.batch.selected": "{{n}} 件選択",
   "sessions.batch.favorite": "お気に入り",

@@ -1,80 +1,61 @@
-// Sessions browser state + actions, extracted from SessionsView so the
-// component shrinks to pure rendering. Owns: the track / search / sidebar-group
-// selection, the per-page size, the session list + groups + devices queries,
-// the transcript query for the open detail sheet, optimistic favorite
-// toggling, the two-track group CRUD (local = immediate, synced = async git
-// push → optimistic + loading), and the derived sidebar buckets /
-// visible-session list.
+// Sessions browser 组合根（架构审查Ⅴ拆分后）：只做三件事——公共状态与读数
+// （track / search / 共享筛选 / 会话列表与统计查询 / 分页控制器 / 收藏乐观覆
+// 盖）、三个子域 hook 的装配（分组域 useSessionGroups / 批量域
+// useSessionBatch / 详情+邻步域 useSessionDetail）、以及跨域依赖的显式参数
+// 注入。视图组件仍从本出口取全部键（形状与拆分前兼容，见 return 清单）。
+//
+// 跨域依赖只有三处，全部以显式参数表达（不再有 hook 间互读）：
+// - selectProject / selectGroup / selectAll 复位详情（detail.setPreview(null)）；
+// - 批量归组按轨道取 mutation（groups.groupMutations(effectiveTrack) 经
+//   runSetGroup 参数注入 batch 域）；
+// - 邻步的页缘翻页借用分页控制器（detail 域经 shiftPages 参数拿到
+//   browser.shiftPages）。
 //
 // vitest runs in a node-only environment (no DOM — see vitest.config.ts), so
 // renderHook is out of scope; the companion test guards that this module
 // imports cleanly in node (it pulls the tauri-specta API + RTK Query hooks).
 
-import { useEffect, useMemo, useRef, useState } from "react"
-import { useTranslation } from "react-i18next"
-import { toast } from "sonner"
+import { useEffect, useMemo, useState } from "react"
 import {
   useAppInfoQuery,
-  useCreateLocalGroupMutation,
-  useCreateSyncedGroupMutation,
-  useDeleteLocalGroupMutation,
-  useDeleteSessionsMutation,
-  useDeleteSyncedGroupMutation,
-  useListGroupsQuery,
   useListSessionsQuery,
-  useRenameLocalGroupMutation,
-  useRenameSyncedGroupMutation,
-  useReorderLocalGroupsMutation,
-  useReorderSyncedGroupsMutation,
   useSessionCountsQuery,
   useSessionStatsQuery,
-  useSessionTranscriptQuery,
   useSetSessionFavoritedMutation,
-  useSetSessionLocalGroupMutation,
-  useSetSessionSyncedGroupMutation,
 } from "@/app/store/api"
 import { useAppDispatch, useAppSelector } from "@/app/store/hooks"
 import { patchFilter } from "@/app/store/slices/filterSlice"
-import { setView } from "@/app/store/slices/viewSlice"
 import { useDebouncedValue } from "@/hooks/use-debounced-value"
 import { usePagedBrowser } from "@/hooks/use-paged-browser"
 import { useMutateWithToast } from "@/hooks/use-toast-mutation"
 import { useDeviceLabels, useDeviceOptions } from "@/lib/device-labels"
-import { DEFAULT_PAGE_SIZE } from "@/lib/pagination"
 import { usePersistedState } from "@/lib/persistence"
 import { useProjectCandidates } from "@/lib/project-candidates"
-import type {
-  SessionGroup,
-  SessionRow,
-  SessionStatsRow,
-} from "@/types/generated/bindings"
+import type { SessionRow } from "@/types/generated/bindings"
 import {
   ALL_GROUPS,
   aggregateStats,
-  applyGroupOrder,
-  canCreateSyncedGroup,
   containerStatsRows,
   effectiveFavorite,
   favKey,
   type GroupTrack,
   groupedRows,
   identityOfProjectFilter,
-  neighborNav,
   nestSubagents,
   nextFavValue,
-  type PendingNeighborStep,
-  planNeighborStep,
   projectFilterOfIdentity,
   projectNodes,
   resolveContainer,
   type SessionScopeSpec,
-  settleNeighborStep,
   type TreeTrack,
   trackUniverseTab,
   withFavOverride,
   withoutFavOverride,
 } from "./derive"
 import { useSessionJumpConsumer } from "./session-jump"
+import { useSessionBatch } from "./use-session-batch"
+import { useSessionDetail } from "./use-session-detail"
+import { useSessionGroups } from "./use-session-groups"
 
 /** Persisted-track key — the tree track (项目 / 分组 / 收藏) survives
  *  restarts. Replaces the old Local/Favorites tab key: the track IS the
@@ -82,11 +63,11 @@ import { useSessionJumpConsumer } from "./session-jump"
 const TRACK_KEY = "cc-one:sessions-track"
 
 /** Persisted page-size key — the center list's per-page density (三栏定稿：
- *  每页 20/50/100) survives restarts. */
+ *  每页 20/50/100) survives restarts. Owned by usePagedBrowser (persistKey),
+ *  这里只剩键名声明。 */
 const PAGE_SIZE_KEY = "cc-one:sessions-page-size"
 
 export function useSessionsBrowser() {
-  const { t } = useTranslation()
   const dispatch = useAppDispatch()
   // 树轨道（项目/分组/收藏）是页面的宇宙开关：前两轨读本机会话，收藏轨读
   // 跨设备收藏——tab（local/favorites）由轨道派生，仍是后端 scope 的语言。
@@ -95,10 +76,6 @@ export function useSessionsBrowser() {
     "projects",
   )
   const tab = trackUniverseTab(track)
-  const [pageSize, setPageSize] = usePersistedState<number>(
-    PAGE_SIZE_KEY,
-    DEFAULT_PAGE_SIZE,
-  )
   const [search, setSearch] = useState("")
   // Search is backend-side (the page query filters the whole set, not just
   // the loaded page), so keystrokes debounce before they hit the db.
@@ -118,29 +95,6 @@ export function useSessionsBrowser() {
   // 选中（= 筛选维度）跨轨存续——切轨只复位分组选中。
   const [selectedGroupId, setSelectedGroupId] = useState<string>(ALL_GROUPS)
   const [favOverrides, setFavOverrides] = useState<Record<string, boolean>>({})
-  const [pendingGroup, setPendingGroup] = useState<string | null>(null)
-  const [busyGroupId, setBusyGroupId] = useState<string | null>(null)
-  // Detail target stored as a composite key (device_id, id), not a row
-  // snapshot. A snapshot goes stale the moment a favorite toggle's refetch
-  // clears the optimistic override map — effectiveFavorite would then fall
-  // back to the snapshot's old `favorited`, making the sheet's star flicker
-  // back to its pre-toggle state. The derived `preview` (below) resolves this
-  // key against the live sessions array every render, so it always carries the
-  // freshest row.
-  const [previewKey, setPreviewKey] = useState<{
-    id: string
-    device_id: string
-  } | null>(null)
-  // Last row seen for the open preview — fallback when the session leaves the
-  // current slice (tab switch / filter change) so the sheet stays open instead
-  // of snapping shut. Refreshed whenever the live lookup hits.
-  const lastKnownRef = useRef<SessionRow | null>(null)
-  const [createGroupOpen, setCreateGroupOpen] = useState(false)
-  // 批量操作：勾选键 = favKey（device/id 复合键），值保留行的定位信息——
-  // 勾选可跨页留存，批量动作不依赖「行恰好在当前页」。
-  const [checked, setChecked] = useState<
-    Map<string, { id: string; device_id: string }>
-  >(() => new Map())
 
   // The tree selection is track-scoped (local vs synced group ids are disjoint
   // spaces), so a track switch must drop a stale group selection. The project
@@ -203,31 +157,31 @@ export function useSessionsBrowser() {
   })
   const statsRows = statsQuery.data ?? []
 
-  // 分页控制器（架构扫描候选⑧）：offset / 页统计 / 翻页单一归属。scope 身份
-  // 变化 → 回第 1 页——结构性规则，scope 里新增维度自动参与，不再手列依赖
-  // 清单（此前 4 组互不相同的手列数组各自编码同一不变量）。pageSize 挂在
-  // browser 的 scope 里：每页条数切换即「维度变化」，同一规则负责回第 1 页
-  // （offset 在不同页大小下不同义，不能沿用）。
+  // 分页控制器（架构扫描候选⑧ + Ⅴ）：offset / 页统计 / 翻页 / 密度持久化
+  // 单一归属。scope 身份变化 → 回第 1 页——结构性规则，scope 里新增维度自
+  // 动参与；密度（persistKey 托管）在控制器内折进身份，换页大小即维度变化，
+  // 同一规则负责回第 1 页（offset 在不同页大小下不同义，不能沿用）。
   const browser = usePagedBrowser({
-    scope: { ...scope, pageSize },
-    pageSize,
+    scope,
+    persistKey: PAGE_SIZE_KEY,
     total: viewCounts.total,
   })
+
+  // ---- 分组域（子 hook）：双轨分组 CRUD + 分派表随迁；跨域参数 = 轨道 /
+  // git 开关 / 选中组复位。 ----
+  const groups = useSessionGroups({
+    effectiveTrack,
+    synced,
+    selectedGroupId,
+    onSelectedGroupDeleted: () => setSelectedGroupId(ALL_GROUPS),
+  })
+
   // Paged session list (mirrors the request-log table). Skipped until
   // selfDeviceId resolves so the local tab never queries with an empty
   // device_scope.
   const sessionsQuery = useListSessionsQuery(
-    { ...scope, limit: pageSize, offset: browser.offset },
+    { ...scope, limit: browser.pageSize, offset: browser.offset },
     { skip: !selfDeviceId },
-  )
-
-  const groupsQuery = useListGroupsQuery()
-  const groups = groupsQuery.data ?? []
-  const transcriptQuery = useSessionTranscriptQuery(
-    previewKey
-      ? { id: previewKey.id, deviceId: previewKey.device_id }
-      : { id: "", deviceId: "" },
-    { skip: !previewKey },
   )
 
   // Drop optimistic overrides the moment fresh list data lands — the write's
@@ -238,46 +192,10 @@ export function useSessionsBrowser() {
     setFavOverrides({})
   }, [sessionsData])
 
-  // Same pattern for the group-drag override: cleared when the reorder's
-  // invalidation delivers the real order.
-  const [groupOrderOverride, setGroupOrderOverride] = useState<string[] | null>(
-    null,
-  )
-  // biome-ignore lint/correctness/useExhaustiveDependencies: intentional — clear overrides when fresh query data arrives; the body needs no groupsData value
-  useEffect(() => {
-    setGroupOrderOverride(null)
-  }, [groupsQuery.data])
-
   const [favoritedMut] = useSetSessionFavoritedMutation()
-  const [deleteSessionsMut] = useDeleteSessionsMutation()
-  const [setLocalGroupMut] = useSetSessionLocalGroupMutation()
-  const [setSyncedGroupMut] = useSetSessionSyncedGroupMutation()
-  const [createLocalMut] = useCreateLocalGroupMutation()
-  const [renameLocalMut] = useRenameLocalGroupMutation()
-  const [deleteLocalMut] = useDeleteLocalGroupMutation()
-  const [createSyncedMut] = useCreateSyncedGroupMutation()
-  const [renameSyncedMut] = useRenameSyncedGroupMutation()
-  const [deleteSyncedMut] = useDeleteSyncedGroupMutation()
-  const [reorderLocalMut] = useReorderLocalGroupsMutation()
-  const [reorderSyncedMut] = useReorderSyncedGroupsMutation()
   const runWithToast = useMutateWithToast()
 
   // ---- derived read model (pure functions from ./derive) ----
-  // Natural order comes sorted from the backend; the override re-sorts it
-  // optimistically while a drag's write is in flight.
-  const trackGroups = useMemo(
-    () =>
-      applyGroupOrder(
-        groups.filter((g) => g.kind === effectiveTrack),
-        groupOrderOverride,
-      ),
-    [groups, effectiveTrack, groupOrderOverride],
-  )
-  // knownGroupIds：分组桶的已知组集合——空串与陈旧 id（组已删）都归未分组。
-  const knownGroupIds = useMemo(
-    () => new Set(trackGroups.map((g) => g.id)),
-    [trackGroups],
-  )
   // The visible list is the backend's current page — already narrowed by the
   // track-universe/toolbar/search AND the tree's container selection (group or
   // project), time-desc ordered — then NESTED (#90): subagent rows carrying an
@@ -295,6 +213,10 @@ export function useSessionsBrowser() {
   // 项目轨：projectNodes 已按桶最近活跃排序；分组/收藏轨：knownIds 之外的
   // 组 id（含空串）落入未分组桶。
   const projectBuckets = useMemo(() => projectNodes(statsRows), [statsRows])
+  const knownGroupIds = useMemo(
+    () => new Set(groups.trackGroups.map((g) => g.id)),
+    [groups.trackGroups],
+  )
   const groupBuckets = useMemo(
     () =>
       groupedRows(
@@ -308,42 +230,20 @@ export function useSessionsBrowser() {
   // stats row lookup by the same composite key the list uses — the right
   // rail's「按会话」卡 resolves the selected session against it.
   const statsByKey = useMemo(() => {
-    const m = new Map<string, SessionStatsRow>()
+    const m = new Map<string, (typeof statsRows)[number]>()
     for (const r of statsRows) m.set(favKey(r), r)
     return m
   }, [statsRows])
-  // 右栏「按项目」聚合对象：项目选中 = 该项目桶（identity "" = 无启动目录
-  // 桶，哨兵映射后）；分组选中 = 该组行；未选中 = 全量。一次聚合，三种容器
-  // 同一口径。（架构审查候选⑤：切片规则与视图侧口径对象共用 ./derive 的
-  // containerStatsRows / resolveContainer，不再有第二份手写 if 链。）
 
-  // sessions lookup by composite key — O(1) resolve for the derived preview.
-  // Reuses the favKey shape ("device_id/id") so favorite + preview agree on
-  // identity (a session is uniquely (device_id, id)). Only the current page
-  // is in memory; a preview whose row left the slice falls back to the
-  // last-known row below so the sheet stays open across page turns.
-  const sessionsByKey = useMemo(() => {
-    const m = new Map<string, SessionRow>()
-    for (const s of visibleSessions) m.set(favKey(s), s)
-    return m
-  }, [visibleSessions])
-
-  // Derived preview: resolve the open key against the live sessions array
-  // every render. After a favorite toggle's refetch this picks up the fresh
-  // row immediately, so effectiveFavorite(preview) reflects the new value
-  // instead of flickering back to a stale snapshot. Falls back to the
-  // last-known row when the session has left the current slice (tab switch /
-  // filter) so the detail sheet stays open.
-  const livePreview = useMemo<SessionRow | null>(() => {
-    if (!previewKey) return null
-    return sessionsByKey.get(favKey(previewKey)) ?? null
-  }, [previewKey, sessionsByKey])
-  // Refresh the fallback only on a live hit; when the row leaves the slice the
-  // fallback keeps the previous row so the sheet does not snap shut.
-  useEffect(() => {
-    if (livePreview) lastKnownRef.current = livePreview
-  }, [livePreview])
-  const preview = previewKey ? (livePreview ?? lastKnownRef.current) : null
+  // ---- 详情+邻步域（子 hook）：详情目标复合键 / transcript 读数 / 邻步；
+  // 跨域参数 = 当前页列表 + 分页控制器的 offset/pageSize/total/shiftPages。 ----
+  const detail = useSessionDetail({
+    visibleSessions,
+    offset: browser.offset,
+    pageSize: browser.pageSize,
+    total: viewCounts.total,
+    shiftPages: browser.shiftPages,
+  })
 
   // ---- 容器选中（架构审查候选⑤）：「当前在看谁」的唯一编码在 ./derive 的
   // resolveContainer——会话 > 项目 > 分组 > 未分组 > 全部的阶梯由其分支次序
@@ -351,8 +251,8 @@ export function useSessionsBrowser() {
   // 切片（containerStatsRows）随之收敛：三种容器一次聚合。会话态切片 = 整份
   // 宇宙读数，见 containerStatsRows 注释。
   const container = useMemo(
-    () => resolveContainer(preview, selectedProject, selectedGroupId),
-    [preview, selectedProject, selectedGroupId],
+    () => resolveContainer(detail.preview, selectedProject, selectedGroupId),
+    [detail.preview, selectedProject, selectedGroupId],
   )
   const selectionStatsRows = useMemo(
     () => containerStatsRows(container, statsRows, groupBuckets),
@@ -362,20 +262,6 @@ export function useSessionsBrowser() {
     () => aggregateStats(selectionStatsRows),
     [selectionStatsRows],
   )
-
-  // setPreview keeps the caller contract (SessionRow | null) but stores only
-  // the composite key — so the transcript query and title/favorite lookups
-  // keep working even after a tab switch or filter change removes the row
-  // from the visible list.
-  function setPreview(s: SessionRow | null): void {
-    if (s) {
-      lastKnownRef.current = s
-      setPreviewKey({ id: s.id, device_id: s.device_id })
-    } else {
-      lastKnownRef.current = null
-      setPreviewKey(null)
-    }
-  }
 
   // ---- 树选中动作：容器选中即让出会话态（右栏口径随之回到容器态——口径
   // 由「是否打开会话」派生，不再手设）。项目选中写共享筛选维度（与工具栏
@@ -389,80 +275,28 @@ export function useSessionsBrowser() {
       }),
     )
     if (project) setTreeTrack("projects")
-    setPreviewKey(null)
+    detail.setPreview(null)
   }
   function selectGroup(groupId: string): void {
     setSelectedGroupId(groupId)
-    setPreviewKey(null)
+    detail.setPreview(null)
   }
   function selectAll(): void {
     setSelectedGroupId(ALL_GROUPS)
     // 「全部」清的是容器选中：分组 + 项目维度（项目即筛选，与其它维度同态
     // ——其它维度的「全部」也是清除）。
     dispatch(patchFilter({ project: "" }))
-    setPreviewKey(null)
+    detail.setPreview(null)
   }
 
   // 跨域跳转落地（usage 请求日志→会话，features/sessions/session-jump.ts）：
-  // target 到达时取回会话行并经 setPreview 打开——与列表行点击同一条通道。
-  useSessionJumpConsumer(setPreview)
+  // target 到达时取回会话行并经 detail.setPreview 打开——与列表行点击同一
+  // 条通道。
+  useSessionJumpConsumer(detail.setPreview)
 
-  // ---- detail sheet: prev / next session navigation ----
-  // Walks the currently visible page (±1 row); at a page edge it pages into
-  // the adjacent page and opens its target row once the new page's data
-  // lands. The decisions live in ./derive (planNeighborStep /
-  // settleNeighborStep — the stepping invariants are unit-tested there); this
-  // hook only registers the pending step, shifts pages, and consumes the
-  // settlement when the list data changes.
-  const pendingNeighbor = useRef<PendingNeighborStep | null>(null)
-  const neighbor = useMemo(
-    () =>
-      neighborNav(
-        visibleSessions,
-        previewKey ? favKey(previewKey) : null,
-        browser.offset,
-        pageSize,
-        viewCounts.total,
-      ),
-    [visibleSessions, previewKey, browser.offset, pageSize, viewCounts.total],
-  )
-
-  function openNeighbor(delta: 1 | -1): void {
-    const step = planNeighborStep(
-      visibleSessions,
-      previewKey ? favKey(previewKey) : null,
-      delta,
-      browser.offset,
-      pageSize,
-      viewCounts.total,
-    )
-    if (step.kind === "in-page") {
-      setPreview(step.target)
-    } else if (step.kind === "page-edge") {
-      pendingNeighbor.current = step.pending
-      browser.shiftPages(delta)
-    }
-  }
-
-  // Consume the pending page-edge step when the new page's data lands (the
-  // open / drop / wait rules live in settleNeighborStep).
-  // biome-ignore lint/correctness/useExhaustiveDependencies: intentional — setPreview is stable (reads refs only); adding it would re-run the effect every render
-  useEffect(() => {
-    const p = pendingNeighbor.current
-    if (!p) return
-    const settled = settleNeighborStep(
-      p,
-      previewKey ? favKey(previewKey) : null,
-      visibleSessions,
-    )
-    if (settled.kind === "wait") return
-    pendingNeighbor.current = null
-    if (settled.kind === "open") setPreview(settled.target)
-  }, [visibleSessions, previewKey])
-
-  // 设备标签面（架构审查候选⑥）：标签与选项表来自共享 lib/device-labels，本域
-  // 不再手抄同一套 label 派生（is_self 有无的漂移即出自旧手抄版）。选项表自带
-  // 「≤1 台返回 []」策略——设备列随之只在多设备的收藏轨出现。
+  // ---- 设备标签面（架构审查候选⑥）：标签与选项表来自共享 lib/device-labels，
+  // 本域不再手抄同一套 label 派生（is_self 有无的漂移即出自旧手抄版）。选项
+  // 表自带「≤1 台返回 []」策略——设备列随之只在多设备的收藏轨出现。
   const deviceLabels = useDeviceLabels()
   const deviceOptions = useDeviceOptions()
   const showDeviceColumn = tab === "favorites" && deviceOptions.length > 0
@@ -491,203 +325,15 @@ export function useSessionsBrowser() {
     }
   }
 
-  // ---- 批量操作（定稿 §6：勾选后批量收藏 / 归组 / 删除）----
-  // 勾选键 = favKey，值保留 (id, device_id) 定位——批量动作不依赖行还在
-  // 当前页（勾选可跨页留存）。收藏/归组对全部勾选行并发执行，结束一条
-  // 汇总 toast（逐行 toast 会在大勾选下刷屏）；删除走单条批量命令。
-  function toggleCheck(s: SessionRow): void {
-    setChecked((prev) => {
-      const next = new Map(prev)
-      const key = favKey(s)
-      if (next.has(key)) next.delete(key)
-      else next.set(key, { id: s.id, device_id: s.device_id })
-      return next
-    })
-  }
-  function clearChecked(): void {
-    setChecked(new Map())
-  }
-  function isChecked(s: SessionRow): boolean {
-    return checked.has(favKey(s))
-  }
-  async function runBatch(
-    run: (target: { id: string; device_id: string }) => Promise<unknown>,
-    successKey: string,
-  ): Promise<void> {
-    const targets = [...checked.values()]
-    const results = await Promise.allSettled(targets.map((t) => run(t)))
-    const failed = results.filter((r) => r.status === "rejected").length
-    if (failed === 0) {
-      toast.success(t(successKey, { n: targets.length }))
-    } else {
-      toast.warning(t("sessions.toast.batchPartial", { n: failed }))
-    }
-    clearChecked()
-  }
-  async function batchFavorite(): Promise<void> {
-    await runBatch(
-      (t) => favoritedMut({ id: t.id, deviceId: t.device_id, favorited: true }),
-      "sessions.toast.batchFavorited",
-    )
-  }
-  async function batchSetGroup(groupId: string | null): Promise<void> {
-    const mut = groupMutations(effectiveTrack).setGroup
-    await runBatch(
-      (t) => mut({ id: t.id, deviceId: t.device_id, groupId }),
-      "sessions.toast.batchGrouped",
-    )
-  }
-  // 批量删除（#91）：一次命令带全部勾选键（后端批量软删除——排除标记随
-  // 采集/拉取稳定，源文件不动）；确认对话在工具条（BatchBar）里，动作
-  // 只在被确认后到达这里。返回值（实际命中行数）驱动成功 toast。
-  async function batchDelete(): Promise<void> {
-    const targets = [...checked.values()]
-    if (targets.length === 0) return
-    await runWithToast(deleteSessionsMut, targets, {
-      success: {
-        message: (n) => t("sessions.toast.batchDeleted", { n }),
-      },
-      failed: { key: "sessions.toast.failed" },
-    })
-    clearChecked()
-  }
-
-  /** group 双轨 mutation 选择（架构扫描候选⑨b）：local（SQLite 直写）vs
-   *  synced（git 往返）——四个 group mutation 的成对关系收敛在此，调用方只
-   *  选轨道：操作当前标签的组（setSessionGroup / reorderGroups）传
-   *  effectiveTrack；操作指定组（renameGroup / deleteGroup）传该组的 kind。
-   *  create 不在表里：其返回类型两轨不同（LocalGroup vs SyncedGroup），
-   *  union trigger 无法喂给 runWithToast 的泛型推断，createGroup 保留手动
-   *  分支。新增 group mutation 时成对关系必须进这张表。 */
-  function groupMutations(track: GroupTrack) {
-    return track === "local"
-      ? {
-          setGroup: setLocalGroupMut,
-          rename: renameLocalMut,
-          delete: deleteLocalMut,
-          reorder: reorderLocalMut,
-        }
-      : {
-          setGroup: setSyncedGroupMut,
-          rename: renameSyncedMut,
-          delete: deleteSyncedMut,
-          reorder: reorderSyncedMut,
-        }
-  }
-
-  async function setSessionGroup(
-    s: SessionRow,
-    groupId: string | null,
-  ): Promise<void> {
-    const mut = groupMutations(effectiveTrack).setGroup
-    await runWithToast(
-      mut,
-      { id: s.id, deviceId: s.device_id, groupId },
-      {
-        success: { key: "sessions.toast.groupAssigned" },
-        failed: { key: "sessions.toast.failed" },
-      },
-    )
-  }
-
-  // ---- group CRUD ----
-  // Local groups are immediate (SQLite); synced groups round-trip through git
-  // push, so the UI shows an optimistic pending row + spinner until the write
-  // resolves (ADR 0002).
-  //
-  // Synced (Favorites-tab) groups need a bound Git repo — without one the
-  // create would silently fail or hang. openCreateGroup is the UX guard (toast
-  // + a one-hop to Settings, never opens the dialog); createGroup re-checks
-  // defensively in case a caller bypasses the opener.
-  function notifyGitRequired(): void {
-    toast.warning(t("sessions.group.gitRequiredTitle"), {
-      description: t("sessions.group.gitRequiredDesc"),
-      action: {
-        label: t("sessions.group.gitRequiredAction"),
-        onClick: () => dispatch(setView("settings")),
-      },
-    })
-  }
-  function openCreateGroup(): void {
-    if (!canCreateSyncedGroup(effectiveTrack, synced)) {
-      notifyGitRequired()
-      return
-    }
-    setCreateGroupOpen(true)
-  }
-  async function createGroup(name: string): Promise<boolean> {
-    const trimmed = name.trim()
-    if (!trimmed) return false
-    if (!canCreateSyncedGroup(effectiveTrack, synced)) {
-      notifyGitRequired()
-      return false
-    }
-    // create 的返回类型两轨不同（LocalGroup vs SyncedGroup），union trigger
-    // 无法喂给 runWithToast 的泛型推断（TS 逆变的 trigger 参数不接受联合），
-    // 分支保留在此（groupMutations 表里无 create 条目，见其注释）。
-    setPendingGroup(trimmed)
-    const ok =
-      effectiveTrack === "local"
-        ? await runWithToast(createLocalMut, trimmed, {
-            success: { key: "sessions.toast.groupCreated" },
-            failed: { key: "sessions.toast.failed" },
-          })
-        : await runWithToast(createSyncedMut, trimmed, {
-            success: { key: "sessions.toast.groupCreated" },
-            failed: { key: "sessions.toast.failed" },
-          })
-    setPendingGroup(null)
-    if (ok) setCreateGroupOpen(false)
-    return ok
-  }
-
-  async function renameGroup(g: SessionGroup, name: string): Promise<void> {
-    const trimmed = name.trim()
-    if (!trimmed || trimmed === g.name) return
-    setBusyGroupId(g.id)
-    try {
-      // 组自身的轨道决定走哪套 mutation（groups.json 里来的 synced 组与本地
-      // 组共存于同一侧栏）。
-      const mut = groupMutations(g.kind === "local" ? "local" : "synced").rename
-      await runWithToast(
-        mut,
-        { id: g.id, name: trimmed },
-        {
-          success: { key: "sessions.toast.groupRenamed" },
-          failed: { key: "sessions.toast.failed" },
-        },
-      )
-    } finally {
-      setBusyGroupId(null)
-    }
-  }
-
-  async function deleteGroup(g: SessionGroup): Promise<void> {
-    setBusyGroupId(g.id)
-    try {
-      const mut = groupMutations(g.kind === "local" ? "local" : "synced").delete
-      const ok = await runWithToast(mut, g.id, {
-        success: { key: "sessions.toast.groupDeleted" },
-        failed: { key: "sessions.toast.failed" },
-      })
-      if (ok && selectedGroupId === g.id) setSelectedGroupId(ALL_GROUPS)
-    } finally {
-      setBusyGroupId(null)
-    }
-  }
-
-  // Group drag-reorder: optimistic stamp → mutate → snap back on failure. A
-  // drag must not visibly snap while the write is in flight (synced reorders
-  // round-trip through git), and the outcome is already visible to the user —
-  // no success toast.
-  async function reorderGroups(orderedIds: string[]): Promise<void> {
-    setGroupOrderOverride(orderedIds)
-    const mut = groupMutations(effectiveTrack).reorder
-    const ok = await runWithToast(mut, orderedIds, {
-      failed: { key: "sessions.toast.failed" },
-    })
-    if (!ok) setGroupOrderOverride(null)
-  }
+  // ---- 批量域（子 hook）：勾选集 + 批量收藏/归组/删除。跨域参数 = 归组动
+  // 作（组合根按 effectiveTrack 查分组域的分派表后注入——batch 域不持有任
+  // 何轨道知识）。 ----
+  const batch = useSessionBatch({
+    runSetGroup: (target, groupId) =>
+      groups
+        .groupMutations(effectiveTrack)
+        .setGroup({ id: target.id, deviceId: target.device_id, groupId }),
+  })
 
   return {
     // track (tree rail) / search / selection。source / model 维度（含候选下拉）
@@ -713,7 +359,7 @@ export function useSessionsBrowser() {
     isLoading: sessionsQuery.isLoading,
     isFetching: sessionsQuery.isFetching,
     error: sessionsQuery.error,
-    trackGroups,
+    trackGroups: groups.trackGroups,
     visibleSessions,
     // #90 缩进展示：被挂到父行下的子行 favKey 集合（表行渲染缩进的依据）。
     nestedSessionKeys: nested.nestedKeys,
@@ -731,43 +377,45 @@ export function useSessionsBrowser() {
     page: browser.page,
     totalPages: browser.totalPages,
     goToPage: browser.goToPage,
-    pageSize,
-    setPageSize,
+    pageSize: browser.pageSize,
+    setPageSize: browser.density.onChange,
+    // PaginationBar 密度选择器直连（usePagedBrowser 直出，视图不再拼 8 键）。
+    density: browser.density,
     // device labels (favorites universe)
     deviceLabels,
     showDeviceColumn,
     // session row actions
     effectiveFavorite: (s: SessionRow) => effectiveFavorite(s, favOverrides),
     toggleFavorite,
-    setSessionGroup,
+    setSessionGroup: groups.setSessionGroup,
     // batch operations
-    checkedCount: checked.size,
-    isChecked,
-    toggleCheck,
-    clearChecked,
-    batchFavorite,
-    batchSetGroup,
-    batchDelete,
+    checkedCount: batch.checkedCount,
+    isChecked: batch.isChecked,
+    toggleCheck: batch.toggleCheck,
+    clearChecked: batch.clearChecked,
+    batchFavorite: batch.batchFavorite,
+    batchSetGroup: batch.batchSetGroup,
+    batchDelete: batch.batchDelete,
     // detail (选中会话)
-    preview,
-    setPreview,
-    openNeighbor,
-    canPrev: neighbor.canPrev,
-    canNext: neighbor.canNext,
-    transcript: transcriptQuery.data ?? [],
-    transcriptLoading: transcriptQuery.isLoading,
-    transcriptError: transcriptQuery.error,
-    refetchTranscript: transcriptQuery.refetch,
+    preview: detail.preview,
+    setPreview: detail.setPreview,
+    openNeighbor: detail.openNeighbor,
+    canPrev: detail.canPrev,
+    canNext: detail.canNext,
+    transcript: detail.transcript,
+    transcriptLoading: detail.transcriptLoading,
+    transcriptError: detail.transcriptError,
+    refetchTranscript: detail.refetchTranscript,
     // group CRUD
-    createGroupOpen,
-    setCreateGroupOpen,
-    openCreateGroup,
-    createGroup,
-    renameGroup,
-    deleteGroup,
-    reorderGroups,
-    pendingGroup,
-    busyGroupId,
+    createGroupOpen: groups.createGroupOpen,
+    setCreateGroupOpen: groups.setCreateGroupOpen,
+    openCreateGroup: groups.openCreateGroup,
+    createGroup: groups.createGroup,
+    renameGroup: groups.renameGroup,
+    deleteGroup: groups.deleteGroup,
+    reorderGroups: groups.reorderGroups,
+    pendingGroup: groups.pendingGroup,
+    busyGroupId: groups.busyGroupId,
   }
 }
 

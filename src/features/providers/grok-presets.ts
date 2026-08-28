@@ -59,7 +59,6 @@ export const GROK_PROVIDER_PRESETS: ProviderPreset[] = [
     websiteUrl: "https://x.ai/grok",
     icon: "grok",
     iconColor: "#1f1f1f",
-    notes: "xAI 官方：走 Grok CLI 自带的 xAI OAuth 订阅登录，无需 API Key。",
     settingsConfig: grokSnapshot(""),
   },
   {
@@ -68,7 +67,6 @@ export const GROK_PROVIDER_PRESETS: ProviderPreset[] = [
     websiteUrl: "https://x.ai/api",
     icon: "grok",
     iconColor: "#1f1f1f",
-    notes: "xAI 官方端点（API Key 版）：直连 api.x.ai。",
     settingsConfig: grokSnapshot(grokProfile("xAI", "https://api.x.ai/v1")),
   },
 

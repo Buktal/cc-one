@@ -14,10 +14,14 @@
 // - modelFetch   拉模型列表的参数提取；null = 该应用无此入口（codex / grok）。
 //                per-app 差异只在这一层——错误分桶与结果填充走共用路径。
 // - newDraftText 新建空草稿的 settingsConfig 形状（emptyProvider 用）
+// - formPartition 表单分区组件（form-partition.ts 的契约）：provider-form-sheet
+//                骨架一次查表渲染，不再持有任何 app 名字。
 //
 // 纪律：组件不再写 app === "xxx" 来表达这些事实，一律查表——加应用时补齐
 // 本表一行即完成全部能力声明。依赖保持单向（本表 ← codecs/snippet/presets/
-// model-fetch；derive 消费本表，本表绝不反向 import derive）。
+// model-fetch；derive 消费本表，本表绝不反向 import derive）。formPartition
+// 引用的分区组件只 import codecs/* 与 form-partition 类型、绝不 import 本表
+// 或 derive 聚合桶——否则 derive → 本表 → 分区 → derive 成环。
 
 import {
   configApiKey,
@@ -28,6 +32,12 @@ import {
   openCodeApiKey,
   openCodeBaseUrl,
 } from "@/features/providers/codecs/opencode"
+import { ClaudeFormFields } from "@/features/providers/components/claude-form-fields"
+import { CodexFormFields } from "@/features/providers/components/codex-form-fields"
+import { GeminiFormFields } from "@/features/providers/components/gemini-form-fields"
+import { GrokFormFields } from "@/features/providers/components/grok-form-fields"
+import { OpenCodeFormFields } from "@/features/providers/components/opencode-form-fields"
+import type { FormPartition } from "@/features/providers/form-partition"
 import {
   type FetchArgsResult,
   presetModelsUrl,
@@ -64,6 +74,10 @@ export interface AppProfile {
   readonly snippet: SnippetSupport
   readonly modelFetch: ((configText: string) => FetchArgsResult) | null
   readonly newDraftText: string
+  /** 表单分区：该应用的字段区组件（claude 的模板变量/模型映射、opencode 的
+   *  headers/models 编辑器、其余应用的直写字段……），从表单态出 props 的
+   *  契约见 form-partition.ts。 */
+  readonly formPartition: FormPartition
 }
 
 /** 单激活 OpenAI 兼容形状共用的「端点 + key 均必填」参数提取（claude 额外带
@@ -114,6 +128,7 @@ export const APP_PROFILES: Record<App, AppProfile> = {
         : result
     },
     newDraftText: '{\n  "env": {}\n}',
+    formPartition: ClaudeFormFields,
   },
   codex: {
     additive: false,
@@ -121,6 +136,7 @@ export const APP_PROFILES: Record<App, AppProfile> = {
     snippet: { kind: "write-layer" },
     modelFetch: null,
     newDraftText: "{}",
+    formPartition: CodexFormFields,
   },
   gemini: {
     additive: false,
@@ -149,6 +165,7 @@ export const APP_PROFILES: Record<App, AppProfile> = {
       }
     },
     newDraftText: "{}",
+    formPartition: GeminiFormFields,
   },
   grok: {
     additive: false,
@@ -156,6 +173,7 @@ export const APP_PROFILES: Record<App, AppProfile> = {
     snippet: { kind: "write-layer" },
     modelFetch: null,
     newDraftText: "{}",
+    formPartition: GrokFormFields,
   },
   opencode: {
     additive: true,
@@ -171,5 +189,6 @@ export const APP_PROFILES: Record<App, AppProfile> = {
       )
     },
     newDraftText: "{}",
+    formPartition: OpenCodeFormFields,
   },
 }

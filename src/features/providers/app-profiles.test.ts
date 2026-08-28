@@ -1,5 +1,11 @@
 import { describe, expect, it } from "vitest"
+import type { App } from "@/types/generated/bindings"
 import { APP_PROFILES, snippetSupportLanguage } from "./app-profiles"
+import { ClaudeFormFields } from "./components/claude-form-fields"
+import { CodexFormFields } from "./components/codex-form-fields"
+import { GeminiFormFields } from "./components/gemini-form-fields"
+import { GrokFormFields } from "./components/grok-form-fields"
+import { OpenCodeFormFields } from "./components/opencode-form-fields"
 import { PROVIDER_PRESETS } from "./presets"
 
 describe("APP_PROFILES", () => {
@@ -57,6 +63,27 @@ describe("APP_PROFILES", () => {
     for (const app of ["codex", "gemini", "grok", "opencode"] as const) {
       expect(APP_PROFILES[app].newDraftText).toBe("{}")
     }
+  })
+})
+
+describe("formPartition 表单分区能力", () => {
+  it("每个应用都有分区组件（Record 穷尽，加 app 漏配 = 编译错）", () => {
+    for (const app of Object.keys(APP_PROFILES) as App[]) {
+      expect(typeof APP_PROFILES[app].formPartition).toBe("function")
+    }
+  })
+
+  it("五个应用的分区各归其位（既有提取组件不上表外的第二份映射）", () => {
+    expect(APP_PROFILES.claude.formPartition).toBe(ClaudeFormFields)
+    expect(APP_PROFILES.codex.formPartition).toBe(CodexFormFields)
+    expect(APP_PROFILES.gemini.formPartition).toBe(GeminiFormFields)
+    expect(APP_PROFILES.grok.formPartition).toBe(GrokFormFields)
+    expect(APP_PROFILES.opencode.formPartition).toBe(OpenCodeFormFields)
+  })
+
+  it("分区互不共享同一组件（一个 app 一行，无跨行借用）", () => {
+    const partitions = Object.values(APP_PROFILES).map((p) => p.formPartition)
+    expect(new Set(partitions).size).toBe(partitions.length)
   })
 })
 

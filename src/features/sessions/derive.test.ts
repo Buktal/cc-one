@@ -17,6 +17,7 @@ import {
   ALL_GROUPS,
   aggregateStats,
   applyGroupOrder,
+  batchFailedCount,
   type ContainerSelection,
   canCreateSyncedGroup,
   containerLabel,
@@ -37,12 +38,14 @@ import {
   resolveContainer,
   type SessionScopeSpec,
   sessionSpecId,
+  sessionStartedAt,
   sessionTabFilter,
   settleNeighborStep,
   type TreeSelectAction,
   tokensHitRate,
   treeSelectValue,
   UNGROUPED,
+  withCheckedToggle,
   withFavOverride,
   withoutFavOverride,
 } from "./derive"
@@ -345,6 +348,74 @@ describe("applyGroupOrder", () => {
     // "c" was deleted mid-flight — it still renders, at the end.
     const out = applyGroupOrder(groups(["a", "b", "c"]), ["b", "a"])
     expect(out.map((g) => g.id)).toEqual(["b", "a", "c"])
+  })
+})
+
+// ------------------------------------------------------------ batch select --
+
+describe("withCheckedToggle", () => {
+  it("toggle：未勾选 → 加入（值保留行定位信息）", () => {
+    const next = withCheckedToggle(new Map(), row({ id: "a" }))
+    expect(next.get(favKey({ device_id: "dev-self", id: "a" }))).toEqual({
+      id: "a",
+      device_id: "dev-self",
+    })
+  })
+
+  it("toggle：已勾选 → 移除", () => {
+    const s = row({ id: "a" })
+    const checked = withCheckedToggle(new Map(), s)
+    expect(withCheckedToggle(checked, s).size).toBe(0)
+  })
+
+  it("返回新 Map，不动入参（React 更新纯度）", () => {
+    const prev = new Map<string, { id: string; device_id: string }>()
+    const next = withCheckedToggle(prev, row({ id: "a" }))
+    expect(prev.size).toBe(0)
+    expect(next.size).toBe(1)
+    expect(prev).not.toBe(next)
+  })
+})
+
+describe("batchFailedCount", () => {
+  it("全成功 → 0（成功 toast 的判定）", () => {
+    const results = [
+      { status: "fulfilled" },
+      { status: "fulfilled" },
+    ] as PromiseSettledResult<unknown>[]
+    expect(batchFailedCount(results)).toBe(0)
+  })
+
+  it("部分失败 → 失败数（部分失败警告的判定）", () => {
+    const results = [
+      { status: "fulfilled" },
+      { status: "rejected", reason: new Error("x") },
+      { status: "rejected", reason: new Error("y") },
+    ] as PromiseSettledResult<unknown>[]
+    expect(batchFailedCount(results)).toBe(2)
+  })
+})
+
+// ------------------------------------------------------ session startedAt --
+
+describe("sessionStartedAt", () => {
+  const transcript = [{ ts: "2026-08-10T10:05:00Z" }]
+
+  it("started_at 在 → 原样（不兜底）", () => {
+    expect(
+      sessionStartedAt({ started_at: "2026-08-10T10:00:00Z" }, transcript),
+    ).toBe("2026-08-10T10:00:00Z")
+  })
+
+  it("started_at 缺采 → 首条消息时间兜底", () => {
+    expect(sessionStartedAt({ started_at: "" }, transcript)).toBe(
+      "2026-08-10T10:05:00Z",
+    )
+  })
+
+  it("两者都缺 → null（调用方渲染占位）", () => {
+    expect(sessionStartedAt({ started_at: "" }, [])).toBeNull()
+    expect(sessionStartedAt({ started_at: "" }, [{ ts: "" }])).toBeNull()
   })
 })
 

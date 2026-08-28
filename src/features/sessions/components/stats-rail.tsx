@@ -61,13 +61,17 @@ import type {
   SessionRow,
   SessionStatsRow,
 } from "@/types/generated/bindings"
-import { groupConversation } from "../conversation"
+import {
+  groupConversation,
+  toolTurnCount,
+  userTurnCount,
+} from "../conversation"
 import {
   type ModelShare,
   projectBasename,
   type StatsAggregate,
+  sessionStartedAt,
 } from "../derive"
-import { turnAnchors } from "../turn-nav"
 
 /** 口径 tag 的文案键——按项目/按会话/按分组（原口径 tab 的文字留作 tag）。 */
 const TAG_KEYS = {
@@ -278,18 +282,17 @@ function SessionCards({
         cost: aggregate.cost,
         models: aggregate.models,
       }
-  // 轮次结构（#86 的生产派生）：轮数 = 用户消息锚点数；含工具轮数 = 任一
-  // 节点挂工具块的轮数。加载中显示占位。
-  const turns = useMemo(() => turnAnchors(transcript).length, [transcript])
-  const toolTurns = useMemo(
-    () =>
-      groupConversation(transcript).filter((turn) =>
-        turn.nodes.some((n) => n.tools.length > 0),
-      ).length,
-    [transcript],
+  // 轮次结构（#86 的生产派生）：两个计数都是 conversation.ts 的已测规则，
+  // 一次 groupConversation 切片喂两个读端。加载中显示占位。
+  const turns = useMemo(() => groupConversation(transcript), [transcript])
+  const turnCount = useMemo(() => userTurnCount(turns), [turns])
+  const toolTurns = useMemo(() => toolTurnCount(turns), [turns])
+  // 会话起点：started_at 缺采时用首条消息时间兜底（sessionStartedAt——口径
+  // 归属 derive，不再靠注释声明「与详情一致」）。
+  const started = useMemo(
+    () => sessionStartedAt(s, transcript),
+    [s, transcript],
   )
-  // 会话时长：started_at 缺失时用首条消息时间兜底（与详情口径一致）。
-  const started = s.started_at || transcript[0]?.ts || null
   const span = spanParts(
     started && s.last_active_at
       ? dayjs(s.last_active_at).diff(dayjs(started))
@@ -305,7 +308,7 @@ function SessionCards({
         <ActGrid
           cells={[
             [
-              transcriptLoading ? "—" : formatCount(turns),
+              transcriptLoading ? "—" : formatCount(turnCount),
               t("sessions.stats.turns", {
                 n: formatCount(transcriptLoading ? 0 : toolTurns),
               }),
@@ -704,7 +707,7 @@ function ProjectIdentityCard({
             </TooltipContent>
           </Tooltip>
         </KvRow>
-        <KvRow label="subagent">
+        <KvRow label={t("sessions.stats.subagent")}>
           {t("sessions.stats.idSubagents", { n: formatCount(subagents) })}
         </KvRow>
         <KvRow label={t("sessions.detail.lastActive")}>

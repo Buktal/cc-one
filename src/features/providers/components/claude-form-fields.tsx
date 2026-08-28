@@ -1,11 +1,13 @@
-// Claude 供应商表单字段（独立组件）：模板变量输入区 + 基本信息（名称 / 端点 /
-// 认证键）+ 模型映射（自动应用开关、拉模型列表、一键设置、五角色表）。真相源
-// 是 configText（settingsConfig JSON 文本）：字段读直 derive（configEndpoint /
-// configApiKey / configAuthField / configRoleFields，无镜像 state），写回经父
-// 组件传入的守卫 onChange（仅当 JSON 合法时写——半截 JSON 不被吞，见
-// lib/json 的 guardedRewrite）。auth 字段的显示条件与模板变量区同属本分区
-// （云厂商预设认证走模板变量，不显示 key 输入框）。fetch 候选与错误分桶由
-// 父组件注入（与 gemini / opencode 共用同一份 runFetchModels，避免分叉漂移）。
+// Claude 供应商表单分区（AppProfile.formPartition 的 claude 行）：模板变量
+// 输入区 + 基本信息（名称 / 端点 / 认证键）+ 模型映射（自动应用开关、拉模
+// 型列表、一键设置、五角色表）。真相源是 configText（settingsConfig JSON
+// 文本）：字段读直 derive（configEndpoint / configApiKey / configAuthField /
+// configRoleFields，无镜像 state），写回经父组件传入的守卫 onChange（仅当
+// JSON 合法时写——半截 JSON 不被吞，见 lib/json 的 guardedRewrite）。auth
+// 字段的显示条件与模板变量区同属本分区（云厂商预设认证走模板变量，不显示
+// key 输入框）。拉模型管线由父组件注入（与 gemini / opencode 共用同一份
+// runFetchModels，避免分叉漂移）；表单态经 form 组进分区（契约见
+// form-partition.ts）。
 
 import { RefreshCw, Wand2 } from "lucide-react"
 import { Fragment, useMemo } from "react"
@@ -24,17 +26,15 @@ import {
   SelectValue,
 } from "@/components/ui/select"
 import { Switch } from "@/components/ui/switch"
-import { BasicSection } from "@/features/providers/components/form-fields"
-import { ModelPickSelect } from "@/features/providers/components/model-pick-select"
-import type { AuthField, ModelRoleId } from "@/features/providers/derive"
 import {
+  type AuthField,
   authFieldKey,
   configApiKey,
   configAuthField,
   configEndpoint,
   configRoleFields,
-  extractTemplateVars,
   MODEL_ROLES,
+  type ModelRoleId,
   stripOneM,
   switchAuthField,
   withAllRolesFromFirstInText,
@@ -43,43 +43,31 @@ import {
   withRoleModelInText,
   withRoleNameInText,
   withRoleOneMInText,
-} from "@/features/providers/derive"
+} from "@/features/providers/codecs/claude"
+import { BasicSection } from "@/features/providers/components/form-fields"
+import { ModelPickSelect } from "@/features/providers/components/model-pick-select"
+import type { FormPartitionProps } from "@/features/providers/form-partition"
+import { extractTemplateVars } from "@/features/providers/template-vars"
 import { parseJsonObject } from "@/lib/json"
 import { cn } from "@/lib/utils"
 
 export function ClaudeFormFields({
   configText,
   onChange,
-  fetching,
-  fetchedModels,
-  onFetchModels,
-  onEndpointEdited,
-  name,
-  onNameChange,
-  templateValues,
-  onTemplateVarChange,
-  autoSync,
-  onAutoSyncChange,
-  category,
-}: {
-  configText: string
-  /** 守卫写回（父组件的 guardedWrite）：仅当 JSON 合法时写，返回是否真的
-   *  写了（调用方据此决定 toast 等副作用）。 */
-  onChange: (update: (prev: string) => string) => boolean
-  fetching: boolean
-  fetchedModels: string[]
-  onFetchModels: () => void
-  /** 端点被编辑时父组件清空上次拉到的模型列表（旧端点拉到的候选不可靠）。 */
-  onEndpointEdited: () => void
-  name: string
-  onNameChange: (value: string) => void
-  templateValues: Record<string, string>
-  onTemplateVarChange: (name: string, value: string) => void
-  autoSync: boolean
-  onAutoSyncChange: (checked: boolean) => void
-  category: string
-}) {
+  form,
+  models,
+}: FormPartitionProps) {
   const { t } = useTranslation()
+  const {
+    name,
+    onNameChange,
+    templateValues,
+    onTemplateVarChange,
+    autoSync,
+    onAutoSyncChange,
+    category,
+  } = form
+  const { fetching, fetchedModels, onFetchModels, onEndpointEdited } = models
 
   // The five model roles are derived straight from the snapshot text (no
   // mirrored state to keep in sync): reads are pure, and every write goes

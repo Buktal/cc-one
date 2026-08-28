@@ -22,7 +22,6 @@ export type ProviderPreset = {
   websiteUrl: string
   icon: string
   iconColor: string
-  notes?: string
   /** 预填的 settings.json 快照（JSON 文本），含 env 块：baseURL、认证字段占位、模型映射等。 */
   settingsConfig: string
   /** 模型列表端点覆写：默认端点拼不出正确的 OpenAI 兼容候选时（如
@@ -47,7 +46,6 @@ export const PROVIDER_PRESETS: ProviderPreset[] = [
     websiteUrl: "https://www.anthropic.com/claude-code",
     icon: "anthropic",
     iconColor: "#D4915D",
-    notes: "Anthropic 官方端点：留空即走默认，无需填写端点或模型。",
     settingsConfig: snapshot({}),
   },
   {
@@ -56,8 +54,6 @@ export const PROVIDER_PRESETS: ProviderPreset[] = [
     websiteUrl: "https://aws.amazon.com/bedrock/",
     icon: "aws",
     iconColor: "#FF9900",
-    notes:
-      "走 AWS 访问密钥认证；AWS_REGION / AK / SK 为模板变量，保存前需填写。",
     settingsConfig: snapshot({
       ANTHROPIC_BASE_URL: "https://bedrock-runtime.${AWS_REGION}.amazonaws.com",
       AWS_ACCESS_KEY_ID: "${AWS_ACCESS_KEY_ID}",
@@ -77,7 +73,6 @@ export const PROVIDER_PRESETS: ProviderPreset[] = [
     websiteUrl: "https://aws.amazon.com/bedrock/",
     icon: "aws",
     iconColor: "#FF9900",
-    notes: "以 API Key 走 Bedrock；AWS_REGION 为模板变量，保存前需填写。",
     settingsConfig: snapshot({
       ANTHROPIC_BASE_URL: "https://bedrock-runtime.${AWS_REGION}.amazonaws.com",
       AWS_REGION: "${AWS_REGION}",
@@ -112,7 +107,6 @@ export const PROVIDER_PRESETS: ProviderPreset[] = [
     websiteUrl: "https://www.kimi.com/code/",
     icon: "kimi",
     iconColor: "#6366F1",
-    notes: "双键钉 256K 上下文压缩窗口；模型走路由端点别名 kimi-for-coding。",
     settingsConfig: snapshot({
       ANTHROPIC_BASE_URL: "https://api.kimi.com/coding/",
       ANTHROPIC_AUTH_TOKEN: "",

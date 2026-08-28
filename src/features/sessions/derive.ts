@@ -235,6 +235,20 @@ export function sessionSpecId(spec: SessionScopeSpec): string {
   ].join("|")
 }
 
+/**
+ * 会话的展示起点：`started_at` 缺采（部分源的日志不写起始时间）时用首条
+ * 消息时间兜底——时长不因 started_at 缺失整体消失。两者都缺 → null（调用方
+ * 渲染占位符）。此前这条兜底内联在 stats-rail、由注释声明「与详情口径一致」
+ * ——跨文件不变量由注释持有即会漂移，现在规则本身就是唯一事实来源。
+ */
+export function sessionStartedAt(
+  row: { started_at: string },
+  transcript: ReadonlyArray<{ ts: string }>,
+): string | null {
+  if (row.started_at) return row.started_at
+  return transcript[0]?.ts || null
+}
+
 // --------------------------------------------- project dimension mapping ----
 
 /**
@@ -439,6 +453,40 @@ export function withoutFavOverride(
   const next = { ...overrides }
   delete next[favKey(s)]
   return next
+}
+
+// -------------------------------------------------------- batch selection --
+
+/**
+ * 批量勾选的定位值：勾选键 = favKey（device/id 复合键），值保留 (id,
+ * device_id)——勾选可跨页留存，批量动作不依赖「行恰好在当前页」。
+ */
+export type BatchTarget = { id: string; device_id: string }
+
+/**
+ * 批量勾选集的纯迁移：toggle = 有则删、无则加（可注入的 state+action→state，
+ * 批量域的 effect 只剩 setState）。返回新 Map——React 状态更新必须纯（与
+ * withFavOverride 同一纪律）。
+ */
+export function withCheckedToggle(
+  checked: ReadonlyMap<string, BatchTarget>,
+  s: { device_id: string; id: string },
+): Map<string, BatchTarget> {
+  const next = new Map(checked)
+  const key = favKey(s)
+  if (next.has(key)) next.delete(key)
+  else next.set(key, { id: s.id, device_id: s.device_id })
+  return next
+}
+
+/**
+ * 并发批量动作的结算 → 汇总口径：失败数。0 = 一条成功 toast；否则部分失败
+ * 警告（逐行 toast 会在大勾选下刷屏）。判定单一归属，批量域动作共用。
+ */
+export function batchFailedCount(
+  results: readonly PromiseSettledResult<unknown>[],
+): number {
+  return results.filter((r) => r.status === "rejected").length
 }
 
 /**

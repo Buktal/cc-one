@@ -50,13 +50,12 @@ export const CODEX_PROVIDER_PRESETS: ProviderPreset[] = [
   {
     // 同为 OpenAI 官方端点的两个预设靠括注认证方式区分（对齐 Claude 侧
     // "AWS Bedrock (AKSK)/(API Key)" 的既有命名式）：ChatGPT 登录态版 vs
-    // API Key 直连版，列表里不看 notes 即可分辨。
+    // API Key 直连版，列表里看名称括注即可分辨。
     name: "OpenAI (ChatGPT 登录)",
     category: "official",
     websiteUrl: "https://chatgpt.com/codex",
     icon: "openai",
     iconColor: "#00A67E",
-    notes: "OpenAI 官方端点：走 ChatGPT 登录态，无需 API Key。",
     settingsConfig: codexSnapshot(""),
   },
   {
@@ -65,7 +64,6 @@ export const CODEX_PROVIDER_PRESETS: ProviderPreset[] = [
     websiteUrl: "https://platform.openai.com",
     icon: "openai",
     iconColor: "#00A67E",
-    notes: "OpenAI 官方端点（API Key 版）：直连 api.openai.com。",
     settingsConfig: codexSnapshot(
       thirdPartyConfig("openai", "https://api.openai.com/v1", "gpt-5.6-sol"),
       true,
@@ -90,7 +88,6 @@ export const CODEX_PROVIDER_PRESETS: ProviderPreset[] = [
     websiteUrl: "https://www.kimi.com/code/",
     icon: "kimi",
     iconColor: "#6366F1",
-    notes: "模型走路由端点别名 kimi-for-coding。",
     settingsConfig: codexSnapshot(
       thirdPartyConfig(
         "kimi_coding",

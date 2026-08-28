@@ -49,7 +49,6 @@ import {
   formatMetricSeg,
   formatTokens,
 } from "@/lib/format"
-import { PAGE_SIZES } from "@/lib/pagination"
 import { cn } from "@/lib/utils"
 import type { SessionRow } from "@/types/generated/bindings"
 import {
@@ -470,8 +469,7 @@ function ListPane({
   page,
   totalPages,
   goToPage,
-  pageSize,
-  setPageSize,
+  density,
   headTitle,
   headDesc,
   statsSlot,
@@ -497,8 +495,7 @@ function ListPane({
   | "page"
   | "totalPages"
   | "goToPage"
-  | "pageSize"
-  | "setPageSize"
+  | "density"
 > & {
   headTitle: string
   headDesc: string
@@ -574,11 +571,7 @@ function ListPane({
           total={viewTotal}
           loading={isFetching}
           onPageChange={goToPage}
-          pageSize={{
-            value: pageSize,
-            options: PAGE_SIZES,
-            onChange: setPageSize,
-          }}
+          density={density}
         />
       </CardContent>
     </Card>

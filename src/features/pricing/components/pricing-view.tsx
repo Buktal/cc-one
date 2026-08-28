@@ -50,7 +50,6 @@ import { usePricingTable } from "@/features/pricing/use-pricing-table"
 import { useConfirmAction } from "@/hooks/use-confirm-action"
 import { useMutateWithToast } from "@/hooks/use-toast-mutation"
 import { formatCostAmount } from "@/lib/format"
-import { PAGE_SIZES } from "@/lib/pagination"
 
 import type { PricingEntry } from "@/types/generated/bindings"
 import { EntryEditorDialog, emptyEntry } from "./entry-editor-dialog"
@@ -76,8 +75,7 @@ export function PricingView() {
     totalPages,
     paged,
     goToPage,
-    pageSize,
-    setPageSize,
+    density,
   } = usePricingTable()
 
   const [editing, setEditing] = useState<PricingEntry | null>(null)
@@ -355,11 +353,7 @@ export function PricingView() {
             totalPages={totalPages}
             total={total}
             onPageChange={goToPage}
-            pageSize={{
-              value: pageSize,
-              options: PAGE_SIZES,
-              onChange: setPageSize,
-            }}
+            density={density}
           />
         </CardContent>
       </Card>

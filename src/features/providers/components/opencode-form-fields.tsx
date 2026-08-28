@@ -1,10 +1,10 @@
-// OpenCode 供应商表单字段（独立组件）：npm 包下拉 + baseURL + apiKey + headers
-// 键值编辑器 + models 编辑器 + 获取模型按钮。字段差异大——headers 键值编辑器与
-// models map 编辑器是其它应用没有的 UI，塞进 ProviderFormSheet 会让它臃肿，故
-// 独立成组件。
+// OpenCode 供应商表单分区（AppProfile.formPartition 的 opencode 行）：基本
+// 信息（名称）+ npm 包下拉 + baseURL + apiKey + headers 键值编辑器 + models
+// 编辑器 + 获取模型按钮。headers 键值编辑器与 models map 编辑器是其它应用
+// 没有的 UI。
 //
 // 真相源是 configText（settingsConfig = opencode.json 的 `provider.<key>` 子树
-// 内容）。npm / baseURL / apiKey 直写 configText（经 derive 的 withOpenCode*），
+// 内容）。npm / baseURL / apiKey 直写 configText（经 codecs 的 withOpenCode*），
 // 与 codex / gemini 的「字段直写 configText」同一模式。headers / models 因要增删
 // 行、且空键行需保留到用户填完，维护本地行 state，再经 withOpenCode* 把非空行
 // 写回 configText；外部 configText 变化（JSON 编辑器手改 / 预设切换）用
@@ -25,7 +25,6 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select"
-import { ModelPickSelect } from "@/features/providers/components/model-pick-select"
 import {
   openCodeApiKey,
   openCodeBaseUrl,
@@ -37,7 +36,10 @@ import {
   withOpenCodeHeaders,
   withOpenCodeModels,
   withOpenCodeNpm,
-} from "@/features/providers/derive"
+} from "@/features/providers/codecs/opencode"
+import { BasicSection } from "@/features/providers/components/form-fields"
+import { ModelPickSelect } from "@/features/providers/components/model-pick-select"
+import type { FormPartitionProps } from "@/features/providers/form-partition"
 import { cn } from "@/lib/utils"
 
 /** npm 包候选：OpenCode AI SDK 的 5 个包（spec §4.4），label 是人话描述，value 是
@@ -66,17 +68,12 @@ function nextRowId(): number {
 export function OpenCodeFormFields({
   configText,
   onChange,
-  fetching,
-  fetchedModels,
-  onFetchModels,
-}: {
-  configText: string
-  onChange: (next: string) => void
-  fetching: boolean
-  fetchedModels: string[]
-  onFetchModels: () => void
-}) {
+  form,
+  models,
+}: FormPartitionProps) {
   const { t } = useTranslation()
+  const { name, onNameChange } = form
+  const { fetching, fetchedModels, onFetchModels } = models
   /** 上一次本组件写回的 configText——外部 configText 变化与之相等时跳过同步，
    *  避免回环（本地写回 → configText 变 → 又重置本地行 → 丢空键行）。 */
   const lastEmitted = useRef(configText)
@@ -94,10 +91,11 @@ export function OpenCodeFormFields({
     setModelRows(toModelRows(openCodeModels(configText)))
   }, [configText])
 
-  /** 写回 configText 并记下本次发出的值（供 useEffect 防回环判定）。 */
+  /** 写回 configText 并记下本次发出的值（供 useEffect 防回环判定）。onChange
+   *  是守卫写回契约（update 函数），全量替换即 `() => next`。 */
   function emit(next: string) {
     lastEmitted.current = next
-    onChange(next)
+    onChange(() => next)
   }
 
   // npm / baseURL / apiKey：无增删行、无空值问题，直写 configText。
@@ -173,6 +171,7 @@ export function OpenCodeFormFields({
 
   return (
     <>
+      <BasicSection name={name} onNameChange={onNameChange} />
       <Field label={t("providers.form.openCodeNpm")}>
         <Select value={npm} onValueChange={(v) => v && onNpmChange(v)}>
           <SelectTrigger

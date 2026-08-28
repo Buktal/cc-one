@@ -12,14 +12,27 @@
 //   caller passes to its query); a scope identity change resets to page 1.
 //   Adding a dimension to the scope object participates automatically — the
 //   four hand-maintained reset-dependency arrays are gone.
+// - the per-page density: owned HERE via `persistKey` (usePersistedState,
+//   跨重启记忆)，and folded into the scope identity (`pagedScopeKey`) —
+//   换密度即维度变化 → 回第 1 页，一个实现，不再由各调用点把 pageSize 手塞
+//   进 scope 对象（四份手抄的同一不变量）。`density` 把 PaginationBar 的
+//   密度选择器 props（value / options / onChange）从 hook 直出，四份 8 键
+//   转接随之删除。
 //
 // The transition logic is `pagedBrowserNext`, a pure state machine — vitest
 // runs in a node-only environment (no renderHook, see vitest.config.ts), so
 // the rules are asserted on the exact code the hook runs (architecture.md:
 // "测试必须跑生产路径").
 
-import { useEffect, useRef, useState } from "react"
-import { lastPageStart, pageOffset, paginate } from "@/lib/pagination"
+import { useEffect, useMemo, useRef, useState } from "react"
+import {
+  DEFAULT_PAGE_SIZE,
+  lastPageStart,
+  PAGE_SIZES,
+  pageOffset,
+  paginate,
+} from "@/lib/pagination"
+import { usePersistedState } from "@/lib/persistence"
 
 /** Controller state: the row offset plus the last-synced scope identity
  *  (serialized). `scopeKey: null` = never synced (mount). */
@@ -40,6 +53,13 @@ export type PagedBrowserAction =
  *  serialized cache keys). */
 export function scopeKeyOf(scope: unknown): string {
   return JSON.stringify(scope)
+}
+
+/** 密度折进维度身份：换每页条数 = 维度变化 → 回第 1 页（offset 在不同页大
+ *  小下不同义，不能沿用）。此前四份调用点各自把 pageSize 塞进 scope 对象
+ *  ——同一不变量的四份手抄，收编为单一实现。 */
+export function pagedScopeKey(scope: unknown, pageSize: number): string {
+  return JSON.stringify({ scope, pageSize })
 }
 
 /** Pure transition function — the controller's single test surface. One branch
@@ -75,11 +95,15 @@ export function pagedBrowserNext(
 }
 
 export interface PagedBrowserOptions {
-  /** 维度集合（筛选 / 搜索 / 导航…，通常就是查询参数对象）。身份变化 → 回
-   *  第 1 页：结构性规则，往 scope 里新增维度自动参与，不需要手列依赖清单。
-   *  需可 JSON 序列化（RTK Query 缓存键本来就是序列化参数）。 */
+  /** 维度集合（筛选 / 搜索 / 导航…，通常就是查询参数对象；不含密度——密度
+   *  由本 hook 折进身份）。身份变化 → 回第 1 页：结构性规则，往 scope 里新
+   *  增维度自动参与，不需要手列依赖清单。需可 JSON 序列化（RTK Query 缓存
+   *  键本来就是序列化参数）。 */
   scope: unknown
-  pageSize: number
+  /** 每页密度的持久化键（`cc-one:<view>-page-size` 约定）：hook 内部
+   *  usePersistedState 托管，跨重启记忆；候选档与默认档用 lib/pagination
+   *  的 PAGE_SIZES / DEFAULT_PAGE_SIZE（与 PaginationBar 同一份名册）。 */
+  persistKey: string
   /** 过滤后的总行数（后端 count / 客户端 filtered.length）。 */
   total: number
   /** scope 变化触发回第 1 页时的回调，与 offset 重置同一触发点（如
@@ -101,19 +125,33 @@ export interface PagedBrowser {
   clamp: (total: number) => void
   /** 客户端分页变体：把本地列表切到当前页。 */
   pageItems: <T>(items: readonly T[]) => T[]
+  /** 当前每页条数（persistKey 托管、跨重启记忆）。 */
+  pageSize: number
+  /** PaginationBar 密度选择器的直连 props——调用点不再手写 8 键转接。 */
+  density: {
+    value: number
+    options: readonly number[]
+    onChange: (n: number) => void
+  }
 }
 
 export function usePagedBrowser({
   scope,
-  pageSize,
+  persistKey,
   total,
   onScopeReset,
 }: PagedBrowserOptions): PagedBrowser {
+  // 密度状态归本 hook（persistKey 即身份）；初始值从盘上懒读，换档即走
+  // pagedScopeKey 的维度身份规则。
+  const [pageSize, setPageSize] = usePersistedState(
+    persistKey,
+    DEFAULT_PAGE_SIZE,
+  )
   const [state, setState] = useState<PagedBrowserState>({
     offset: 0,
     scopeKey: null,
   })
-  const scopeKey = scopeKeyOf(scope)
+  const scopeKey = pagedScopeKey(scope, pageSize)
 
   // 结构性重置：scope 身份变化 → 回第 1 页。ref 只作「上次同步身份」的记忆
   // ——同步更新，StrictMode 双跑 effect 不会重复触发；判定与迁移都走
@@ -154,5 +192,20 @@ export function usePagedBrowser({
     return items.slice(offset, offset + pageSize)
   }
 
-  return { offset, page, totalPages, goToPage, shiftPages, clamp, pageItems }
+  const density = useMemo(
+    () => ({ value: pageSize, options: PAGE_SIZES, onChange: setPageSize }),
+    [pageSize, setPageSize],
+  )
+
+  return {
+    offset,
+    page,
+    totalPages,
+    goToPage,
+    shiftPages,
+    clamp,
+    pageItems,
+    pageSize,
+    density,
+  }
 }

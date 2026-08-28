@@ -635,6 +635,7 @@
   "sessions.stats.idAgent": "归属",
   "sessions.stats.idAgentValue": "subagent · {{type}} · 用量计入本项目",
   "sessions.stats.idSubagents": "{{n}} 个 · 用量计入本项目",
+  "sessions.stats.subagent": "subagent",
   "sessions.stats.subSessions": "含 {{n}} 个 subagent",
   "sessions.batch.selected": "已选 {{n}}",
   "sessions.batch.favorite": "收藏",

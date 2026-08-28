@@ -29,7 +29,6 @@ export const GEMINI_PROVIDER_PRESETS: ProviderPreset[] = [
     websiteUrl: "https://ai.google.dev/",
     icon: "gemini",
     iconColor: "#4285F4",
-    notes: "Google 官方 Gemini：走 OAuth 登录态，无需 API Key。",
     settingsConfig: geminiSnapshot({}),
   },
   {
@@ -38,8 +37,6 @@ export const GEMINI_PROVIDER_PRESETS: ProviderPreset[] = [
     websiteUrl: "https://ai.google.dev/",
     icon: "gemini",
     iconColor: "#4285F4",
-    notes:
-      "Google 官方 Gemini（API Key 版）：直连 generativelanguage.googleapis.com。",
     settingsConfig: geminiSnapshot({
       GEMINI_API_KEY: "",
       GOOGLE_GEMINI_BASE_URL: "https://generativelanguage.googleapis.com",

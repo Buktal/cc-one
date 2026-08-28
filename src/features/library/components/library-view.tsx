@@ -22,6 +22,7 @@ import {
   X,
 } from "lucide-react"
 import { useTranslation } from "react-i18next"
+import { collapseTriggerProps } from "@/components/collapse-trigger"
 import { ConfirmDialog } from "@/components/confirm-dialog"
 import { EmptyState } from "@/components/empty-state"
 import { FilterSelect } from "@/components/filter-select"
@@ -47,7 +48,6 @@ import {
 import { useConfirmAction } from "@/hooks/use-confirm-action"
 import { deviceOptionLabel } from "@/lib/device-labels"
 import { formatSize } from "@/lib/format"
-import { PAGE_SIZES } from "@/lib/pagination"
 import { cn } from "@/lib/utils"
 import type { LibraryEntry } from "@/types/generated/bindings"
 import { kindIcon } from "../kind-icon"
@@ -63,8 +63,7 @@ export function LibraryView() {
     page,
     totalPages,
     goToPage,
-    pageSize,
-    setPageSize,
+    density,
     isLoading,
     scanError,
     refetchScan,
@@ -272,25 +271,20 @@ export function LibraryView() {
                         <TableRow
                           key={e.rel_path}
                           // 整行可点：目录钻入 / 文件预览（与名称按钮同一动
-                          // 作）。行内挂着重命名编辑器时整行不触发——点击输
-                          // 入框不该误开预览/钻入。
-                          className={cn(!isRenaming && "cursor-pointer")}
-                          onClick={() => {
-                            if (isRenaming) return
-                            if (e.kind === "dir") drill(e)
-                            else setPreview(e)
-                          }}
-                          onKeyDown={(ev) => {
-                            // target 守卫：行内按钮/输入框的 Enter 不带出行动作
-                            if (isRenaming || ev.target !== ev.currentTarget)
-                              return
-                            if (ev.key === "Enter" || ev.key === " ") {
-                              ev.preventDefault()
+                          // 作）。行内挂着重命名编辑器时整份触发契约卸下
+                          // （enabled=false：无焦点位、点击键盘都不响应）——
+                          // 点击输入框不该误开预览/钻入。target 守卫
+                          // （selfTargetOnly）让行内按钮/输入框的 Enter 不带
+                          // 出行动作。契约由 collapseTriggerProps 工厂给出。
+                          {...collapseTriggerProps({
+                            onToggle: () => {
                               if (e.kind === "dir") drill(e)
                               else setPreview(e)
-                            }
-                          }}
-                          tabIndex={isRenaming ? undefined : 0}
+                            },
+                            selfTargetOnly: true,
+                            enabled: !isRenaming,
+                          })}
+                          className={cn(!isRenaming && "cursor-pointer")}
                         >
                           <TableCell>
                             {isRenaming ? (
@@ -497,11 +491,7 @@ export function LibraryView() {
             totalPages={totalPages}
             total={totalCount}
             onPageChange={goToPage}
-            pageSize={{
-              value: pageSize,
-              options: PAGE_SIZES,
-              onChange: setPageSize,
-            }}
+            density={density}
           />
         </CardContent>
       </Card>

@@ -1,10 +1,10 @@
 // Shared pager footer for the paginated tables (request log / sessions /
 // pricing / library). Left: "第 X / Y 页 · 共 N 条". Right: prev/next buttons
 // plus a numbered page bar with ellipsis gaps (pageNumbers — the single
-// sequence implementation), and — when the caller passes `pageSize` — a
-// per-page size selector (四个分页视图共用 lib/pagination 的 PAGE_SIZES).
-// `loading` disables the controls while a page refetches so a page flip never
-// goes feedback-less.
+// sequence implementation), and — when the caller passes `density` — a
+// per-page size selector（usePagedBrowser 的 density 直连，候选档即
+// lib/pagination 的 PAGE_SIZES）. `loading` disables the controls while a
+// page refetches so a page flip never goes feedback-less.
 //
 // total === 0 renders nothing — the「0 条 + 两个禁用按钮」strip under a
 // centered empty state reads as broken（判断归这里，调用方不再各自复制
@@ -42,7 +42,7 @@ export function PaginationBar({
   total,
   onPageChange,
   loading = false,
-  pageSize,
+  density,
 }: {
   /** 1-based current page. */
   page: number
@@ -53,8 +53,9 @@ export function PaginationBar({
   onPageChange: (page: number) => void
   /** True while the next page refetches — disables every control. */
   loading?: boolean
-  /** 每页条数选择器（缺省不渲染）：当前值 / 候选 / 回调。 */
-  pageSize?: {
+  /** 每页条数选择器（缺省不渲染）：usePagedBrowser 的 density 直连——
+   *  value / options（lib/pagination 的 PAGE_SIZES）/ onChange。 */
+  density?: {
     value: number
     options: readonly number[]
     onChange: (n: number) => void
@@ -135,7 +136,7 @@ export function PaginationBar({
             </PaginationItem>
           </PaginationContent>
         </Pagination>
-        {pageSize ? (
+        {density ? (
           <div className="flex shrink-0 items-center gap-1.5">
             {/* 「每页」label needs a 28rem container — below that only the
               number + chevron remain (still self-explanatory next to the
@@ -144,9 +145,9 @@ export function PaginationBar({
               {t("pagination.perPage")}
             </span>
             <Select
-              value={String(pageSize.value)}
+              value={String(density.value)}
               onValueChange={(v) => {
-                if (v != null) pageSize.onChange(Number(v))
+                if (v != null) density.onChange(Number(v))
               }}
             >
               {/* 宽度自适应（trigger 本体 w-fit）：写死 w-15 会被 px-3 内距 +
@@ -155,7 +156,7 @@ export function PaginationBar({
                 <SelectValue />
               </SelectTrigger>
               <SelectContent align="end">
-                {pageSize.options.map((n) => (
+                {density.options.map((n) => (
                   <SelectItem key={n} value={String(n)}>
                     {n}
                   </SelectItem>

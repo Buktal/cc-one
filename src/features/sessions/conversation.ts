@@ -104,6 +104,22 @@ export function groupConversation(
   return turns
 }
 
+/**
+ * 轮次计数的两个读端（右栏活动卡的「轮 · 含工具 N 轮」，此前内联组件里、
+ * 不可单测）：轮数 = 用户轮数（number ≥ 1 的轮——序号来自 turnAnchors 的
+ * 同一条「用户消息开轮」规则，prelude 恒为 0）；含工具轮数 = 任一节点挂了
+ * 工具块的轮数。两个计数共用一次 groupConversation 切片，不再各自遍历。
+ */
+export function userTurnCount(turns: readonly ConversationTurn[]): number {
+  return turns.filter((turn) => turn.number > 0).length
+}
+
+export function toolTurnCount(turns: readonly ConversationTurn[]): number {
+  return turns.filter((turn) =>
+    turn.nodes.some((node) => node.tools.length > 0),
+  ).length
+}
+
 /** The rendered-row lookup for one transcript: which turn each message sits in
  *  (for the divider), and for tool rows — the assistant row whose card renders
  *  them (attached), or the standalone-tools group that renders them (loose).

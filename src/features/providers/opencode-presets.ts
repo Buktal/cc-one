@@ -42,7 +42,6 @@ export const OPENCODE_PROVIDER_PRESETS: ProviderPreset[] = [
     websiteUrl: "https://platform.openai.com",
     icon: "openai",
     iconColor: "#00A67E",
-    notes: "OpenAI 官方端点（@ai-sdk/openai）：直连 api.openai.com。",
     settingsConfig: openCodeEntry(
       "@ai-sdk/openai",
       "https://api.openai.com/v1",
@@ -55,7 +54,6 @@ export const OPENCODE_PROVIDER_PRESETS: ProviderPreset[] = [
     websiteUrl: "https://www.anthropic.com",
     icon: "anthropic",
     iconColor: "#D4915D",
-    notes: "Anthropic 官方端点（@ai-sdk/anthropic）：直连 api.anthropic.com。",
     settingsConfig: openCodeEntry(
       "@ai-sdk/anthropic",
       "https://api.anthropic.com/v1",
@@ -68,7 +66,6 @@ export const OPENCODE_PROVIDER_PRESETS: ProviderPreset[] = [
     websiteUrl: "https://ai.google.dev",
     icon: "google",
     iconColor: "#1A73E8",
-    notes: "Google Gemini 官方端点（@ai-sdk/google）：走 generativelanguage。",
     settingsConfig: openCodeEntry(
       "@ai-sdk/google",
       "https://generativelanguage.googleapis.com/v1beta",
@@ -110,8 +107,9 @@ export const OPENCODE_PROVIDER_PRESETS: ProviderPreset[] = [
     websiteUrl: "https://open.bigmodel.cn",
     icon: "zhipu",
     iconColor: "#0F62FE",
-    notes:
-      "OpenCode 专用 coding 端点（/api/coding/paas/v4），非 anthropic 端点。",
+    // OpenCode 专用 coding 端点（/api/coding/paas/v4），非 anthropic 端点
+    // ——此前这条口径写在预设 notes 里，死数据删除后收进注释（维护者需要，
+    // 用户不需要）。
     settingsConfig: openCodeEntry(
       "@ai-sdk/openai-compatible",
       "https://open.bigmodel.cn/api/coding/paas/v4",
@@ -124,7 +122,6 @@ export const OPENCODE_PROVIDER_PRESETS: ProviderPreset[] = [
     websiteUrl: "https://bailian.console.aliyun.com",
     icon: "bailian",
     iconColor: "#624AFF",
-    notes: "阿里 DashScope OpenAI 兼容端点；模型用「获取模型」按钮拉取。",
     settingsConfig: openCodeEntry(
       "@ai-sdk/openai-compatible",
       "https://dashscope.aliyuncs.com/compatible-mode/v1",
@@ -162,7 +159,6 @@ export const OPENCODE_PROVIDER_PRESETS: ProviderPreset[] = [
     websiteUrl: "https://openrouter.ai",
     icon: "openrouter",
     iconColor: "#6566F1",
-    notes: "聚合众多模型；模型用「获取模型」按钮拉取。",
     settingsConfig: openCodeEntry(
       "@ai-sdk/openai-compatible",
       "https://openrouter.ai/api/v1",
@@ -185,7 +181,6 @@ export const OPENCODE_PROVIDER_PRESETS: ProviderPreset[] = [
     websiteUrl: "https://aihubmix.com",
     icon: "aihubmix",
     iconColor: "#1A1A1A",
-    notes: "聚合众多模型；走 @ai-sdk/anthropic 包。",
     settingsConfig: openCodeEntry(
       "@ai-sdk/anthropic",
       "https://aihubmix.com/v1",
