@@ -29,12 +29,15 @@ pub fn root_dir() -> AppResult<PathBuf> {
 /// cc one keeps its data. Skipped when the new root already exists; a failed
 /// rename (e.g. the legacy dir locked by a still-running old version) only
 /// logs a warning — the app boots fresh rather than crash.
+///
+/// Legacy 路径由 root 派生（`root.parent()/vaultone`）而非再查一次 home——
+/// root 恒为 `~/.config/cc-one`，旧目录与其同级；这样
+/// [`ConfigStore::load_at`] 的 bootstrap 主路径可参数化直测。
 fn migrate_legacy_dir(root: &Path) {
     if root.exists() {
         return;
     }
-    let Some(home) = dirs::home_dir() else { return };
-    let legacy = home.join(".config").join("vaultone");
+    let legacy = root.parent().unwrap_or(root).join("vaultone");
     if legacy.exists() {
         if let Err(e) = fs::rename(&legacy, root) {
             eprintln!("[cc-one] legacy config migration skipped: {e}");
@@ -297,8 +300,9 @@ pub struct ConfigData {
 
 impl Default for ConfigData {
     fn default() -> Self {
-        // A real deviceId is generated on first start (see `ensure_config`);
-        // this default is only a fallback if config.json lacks the field.
+        // A real deviceId is generated on first start (see [`ConfigStore::load`]
+        // bootstrap); this default is only a fallback if config.json lacks the
+        // field.
         Self {
             device_id: String::new(),
             display_name: "CC One".to_string(),
@@ -403,11 +407,18 @@ impl ConfigStore {
     /// layout exists. Idempotent.
     pub fn load() -> AppResult<Self> {
         let root = root_dir()?;
-        let paths = Paths::resolve(&root);
+        Self::load_at(&root)
+    }
+
+    /// Bootstrap 主路径（root 参数化，测试直测）：解析路径 → 迁移 legacy 目录
+    /// → 建全目录 → 读 config（损坏回退默认）→ 必要时重写。`load()` 解析真实
+    /// home 后委托这里。
+    fn load_at(root: &Path) -> AppResult<Self> {
+        let paths = Paths::resolve(root);
 
         // Renamed CC One → cc one: move the old config tree over on first
         // launch so existing users keep their settings, DB, and sync repo.
-        migrate_legacy_dir(&root);
+        migrate_legacy_dir(root);
 
         // Full directory layout up front.
         for dir in [
@@ -814,5 +825,93 @@ mod tests {
         );
         migrate_legacy_fields(&mut c2);
         assert_eq!(c2.snippet_for(App::Claude).content, "{}");
+    }
+
+    // ---- bootstrap 主路径（load_at 参数化直测）----
+
+    /// 新建默认行为：目录全建、config.json 落盘、deviceId 有效且持久化。
+    #[test]
+    fn load_at_bootstraps_fresh_root() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path().join(".config").join("cc-one");
+        let store = ConfigStore::load_at(&root).unwrap();
+        let data = store.get();
+        assert!(is_valid_device_id(&data.device_id));
+        assert_eq!(data.display_name, default_display_name(&data.device_id));
+        assert_eq!(data.mode(), RunMode::Standalone);
+        for dir in ["repo", "repo/config", "repo/data", "logs", "repo/library"] {
+            assert!(root.join(dir).exists(), "{dir} 应已创建");
+        }
+        let on_disk: ConfigData =
+            serde_json::from_str(&fs::read_to_string(root.join("config.json")).unwrap()).unwrap();
+        assert_eq!(on_disk.device_id, data.device_id, "deviceId 应落盘持久化");
+    }
+
+    /// legacy 目录迁移：旧 `~/.config/vaultone` 有 config → 整树迁到新 root，
+    /// deviceId 原样保留（不重新生成）。
+    #[test]
+    fn load_at_migrates_legacy_dir() {
+        let tmp = tempfile::tempdir().unwrap();
+        let legacy = tmp.path().join(".config").join("vaultone");
+        let root = tmp.path().join(".config").join("cc-one");
+        fs::create_dir_all(&legacy).unwrap();
+        fs::write(
+            legacy.join("config.json"),
+            r#"{"device_id":"abc123def456","display_name":"V"}"#,
+        )
+        .unwrap();
+        let store = ConfigStore::load_at(&root).unwrap();
+        assert!(!legacy.exists(), "legacy 目录应被迁移走");
+        let data = store.get();
+        assert_eq!(data.device_id, "abc123def456", "迁移保留原 deviceId");
+        assert_eq!(data.display_name, "V");
+    }
+
+    /// 新 root 已存在（legacy 也在）→ 不动 legacy，新 root 优先。
+    #[test]
+    fn load_at_keeps_legacy_when_root_already_exists() {
+        let tmp = tempfile::tempdir().unwrap();
+        let legacy = tmp.path().join(".config").join("vaultone");
+        let root = tmp.path().join(".config").join("cc-one");
+        fs::create_dir_all(&legacy).unwrap();
+        fs::write(
+            legacy.join("config.json"),
+            r#"{"device_id":"abc123def456","display_name":"V"}"#,
+        )
+        .unwrap();
+        fs::create_dir_all(&root).unwrap();
+        fs::write(
+            root.join("config.json"),
+            r#"{"device_id":"0123456789ab","display_name":"N"}"#,
+        )
+        .unwrap();
+        let store = ConfigStore::load_at(&root).unwrap();
+        assert!(legacy.exists(), "新 root 已存在 → legacy 保留不动");
+        assert_eq!(store.get().device_id, "0123456789ab");
+    }
+
+    /// 损坏 config：不崩溃，回退默认重新 bootstrap（新 deviceId 避开已有设备
+    /// 目录），损坏文件被重写为合法 JSON，已有设备数据目录不被触碰。
+    #[test]
+    fn load_at_falls_back_on_corrupt_config() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path().join(".config").join("cc-one");
+        let seeded = "aabbccddeeff";
+        fs::create_dir_all(root.join("repo").join("data").join(seeded)).unwrap();
+        fs::write(root.join("config.json"), b"not json {").unwrap();
+        let store = ConfigStore::load_at(&root).unwrap();
+        let data = store.get();
+        assert!(is_valid_device_id(&data.device_id));
+        assert_ne!(data.device_id, seeded, "新 deviceId 避开已有设备目录");
+        assert!(
+            root.join("repo").join("data").join(seeded).exists(),
+            "已有设备数据目录不受回退影响"
+        );
+        let on_disk: ConfigData =
+            serde_json::from_str(&fs::read_to_string(root.join("config.json")).unwrap()).unwrap();
+        assert_eq!(
+            on_disk.device_id, data.device_id,
+            "损坏文件被重写为合法 config"
+        );
     }
 }
