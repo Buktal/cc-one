@@ -11,11 +11,13 @@ export const commands = {
 	 *  Configure the sync repo + PAT, upgrading Standalone → Synced, then
 	 *  immediately run one sync round (pull peers + push self) so peer devices show
 	 *  up and this device's existing data reaches the repo without a restart (the
-	 *  startup sync only fires on next launch). Routed through `collect::sync_round`
-	 *  — the same primitive the scheduler runs each push interval — but WITHOUT the
-	 *  retry wrapping that `align` (the manual collect/sync buttons) applies: a
-	 *  failure here is logged and left for the next startup sync to retry, not
-	 *  retried in place. Best-effort: a sync failure doesn't undo the bind.
+	 *  startup sync only fires on next launch). The round comes from
+	 *  `collect::run_sync_round` under the
+	 *  [`collect::SyncRoundPosture::OnceLogged`] posture — the same round the
+	 *  scheduler runs each push interval, but WITHOUT the retry wrapping that
+	 *  `align` (the manual collect/sync buttons) applies: a failure here is logged
+	 *  by the posture and left for the next startup sync to retry, not retried in
+	 *  place. Best-effort: a sync failure doesn't undo the bind.
 	 */
 	setSyncRepo: (repoUrl: string, githubToken: string) => typedError<RunMode, AppError>(__TAURI_INVOKE("set_sync_repo", { repoUrl, githubToken })),
 	/**
@@ -41,17 +43,15 @@ export const commands = {
 	 */
 	forgetDevice: (deviceId: string, libraryAction: LibraryForgetAction) => typedError<null, AppError>(__TAURI_INVOKE("forget_device", { deviceId, libraryAction })),
 	/**
-	 *  Manual「采集 / 同步」: collect now, then (Synced only) pull + push with a
-	 *  bounded retry. The dashboard button's single action — Standalone ⇒ collect;
-	 *  Synced ⇒ collect + sync. The run mode decides what it means, not the UI.
-	 *  Heavy disk/git work → offloaded to a thread.
+	 *  Manual「采集 / 同步」from the dashboard button: collect now, then (Synced
+	 *  only) pull + push with a bounded retry. The run mode decides what it means,
+	 *  not the UI.
 	 */
 	collectNow: () => typedError<AlignReport, AppError>(__TAURI_INVOKE("collect_now")),
 	/**
-	 *  Manual「立即同步」: the Settings entry — same `align` as the dashboard button
-	 *  (collect + sync). Kept as a distinct command so the Settings card has its
-	 *  own trigger next to the repo binding, but the work is identical. Standalone
-	 *  ⇒ collect only (sync degrades to a local refresh).
+	 *  Manual「立即同步」from the Settings entry — the same action as the dashboard
+	 *  button. Kept as a distinct command so the Settings card has its own trigger
+	 *  next to the repo binding; the work is identical.
 	 */
 	syncNow: () => typedError<AlignReport, AppError>(__TAURI_INVOKE("sync_now")),
 	/**  Rebill zero-cost rows whose model now has a price (top-up). */

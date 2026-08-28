@@ -10,11 +10,13 @@ use crate::sync::VerifyReport;
 /// Configure the sync repo + PAT, upgrading Standalone → Synced, then
 /// immediately run one sync round (pull peers + push self) so peer devices show
 /// up and this device's existing data reaches the repo without a restart (the
-/// startup sync only fires on next launch). Routed through `collect::sync_round`
-/// — the same primitive the scheduler runs each push interval — but WITHOUT the
-/// retry wrapping that `align` (the manual collect/sync buttons) applies: a
-/// failure here is logged and left for the next startup sync to retry, not
-/// retried in place. Best-effort: a sync failure doesn't undo the bind.
+/// startup sync only fires on next launch). The round comes from
+/// `collect::run_sync_round` under the
+/// [`collect::SyncRoundPosture::OnceLogged`] posture — the same round the
+/// scheduler runs each push interval, but WITHOUT the retry wrapping that
+/// `align` (the manual collect/sync buttons) applies: a failure here is logged
+/// by the posture and left for the next startup sync to retry, not retried in
+/// place. Best-effort: a sync failure doesn't undo the bind.
 #[tauri::command]
 #[specta::specta]
 pub async fn set_sync_repo(
@@ -38,19 +40,13 @@ pub async fn set_sync_repo(
             };
         })?;
         if cfg.is_synced() {
-            let outcome = crate::collect::sync_round(&store, &config);
-            if outcome.imported > 0 {
-                eprintln!(
-                    "[cc-one] set_sync_repo imported {} row(s)",
-                    outcome.imported
-                );
-            }
-            if outcome.pushed {
-                eprintln!("[cc-one] set_sync_repo pushed local changes");
-            }
-            for e in &outcome.errors {
-                eprintln!("[cc-one] set_sync_repo sync error: {e}");
-            }
+            // 绑定后立刻跑一轮 pull+push（只跑一轮、outcome 就地记日志）；
+            // 失败留给下次启动同步重试，不在原地重试。
+            crate::collect::run_sync_round(
+                &store,
+                &config,
+                crate::collect::SyncRoundPosture::OnceLogged("set_sync_repo"),
+            );
         }
         Ok(cfg.mode())
     })

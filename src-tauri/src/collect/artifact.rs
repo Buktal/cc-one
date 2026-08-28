@@ -5,10 +5,12 @@
 //! collect only writes SQLite (+ marks days dirty); the **push** path rewrites
 //! each dirty day's file from the store ([`recompute_usage_day`] /
 //! [`recompute_turns_day`]), and **pull** reads peers' files back into the store
-//! ([`read_all_artifacts`] / [`read_all_turn_artifacts`]). Only the row type,
-//! file-name prefix, and day accessor differ — captured by [`ArtifactGrain`] so
-//! the policy lives in one place.
+//! ([`read_device_artifacts`] / [`read_device_turn_artifacts`], one device dir
+//! at a time — the pull-side coarse gate decides WHICH dirs to re-read via
+//! [`artifact_dir_sig`]). Only the row type, file-name prefix, and day accessor
+//! differ — captured by [`ArtifactGrain`] so the policy lives in one place.
 
+use std::collections::BTreeMap;
 use std::path::Path;
 
 #[cfg(test)]
@@ -111,24 +113,67 @@ fn read_device_artifacts_of<A: ArtifactGrain>(
     Ok(out)
 }
 
-/// Read every device's `<prefix>-*.jsonl` Artifacts (all known devices).
-fn read_all_artifacts_of<A: ArtifactGrain>(paths: &Paths) -> AppResult<Vec<A::Row>> {
-    let mut out = Vec::new();
-    for name in crate::devices::iter_data_device_ids(paths)? {
-        out.extend(read_device_artifacts_of::<A>(paths, &name)?);
+/// One device's usage Artifacts (production — the pull path imports one
+/// device dir at a time, gated by [`artifact_dir_sig`]).
+pub(crate) fn read_device_artifacts(paths: &Paths, device_id: &str) -> AppResult<Vec<UsageRecord>> {
+    read_device_artifacts_of::<UsageGrain>(paths, device_id)
+}
+
+/// One device's turn-duration Artifacts (the `turns-<day>.jsonl` grain of
+/// [`read_device_artifacts`]).
+pub(crate) fn read_device_turn_artifacts(
+    paths: &Paths,
+    device_id: &str,
+) -> AppResult<Vec<TurnDuration>> {
+    read_device_artifacts_of::<TurnGrain>(paths, device_id)
+}
+
+/// One device artifact dir's signature — the pull-side coarse gate's state.
+/// `filename → (mtime_nanos, len)` for every `<usage|turns>-*.jsonl` file in
+/// the dir; empty for an absent dir. Computed from `read_dir` + metadata
+/// only — no file content is read, so an unchanged dir costs a directory
+/// listing, not a JSONL re-parse.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub(crate) struct ArtifactDirSig {
+    files: BTreeMap<String, (u128, u64)>,
+}
+
+/// Compute a device dir's [`ArtifactDirSig`]. An absent dir yields the empty
+/// signature — caching it makes a LATER-appearing dir (a peer's first push)
+/// read on the next pull, because its non-empty signature differs.
+///
+/// The gate is deliberately coarse (mtime + length, no content hash): a file
+/// rewritten within the filesystem's mtime granularity with an unchanged
+/// length could be missed until its next rewrite. Under the byte-stable
+/// rewrite contract that means identical bytes (harmless); a real content
+/// change always rewrites the file, refreshing its mtime.
+pub(crate) fn artifact_dir_sig(paths: &Paths, device_id: &str) -> AppResult<ArtifactDirSig> {
+    let dir = paths.device_data_dir(device_id);
+    if !dir.exists() {
+        return Ok(ArtifactDirSig::default());
     }
-    Ok(out)
-}
-
-/// Read every device's usage artifacts (production — pull imports peers'
-/// Artifacts through this).
-pub fn read_all_artifacts(paths: &Paths) -> AppResult<Vec<UsageRecord>> {
-    read_all_artifacts_of::<UsageGrain>(paths)
-}
-
-/// Read every device's turn-duration artifacts.
-pub fn read_all_turn_artifacts(paths: &Paths) -> AppResult<Vec<TurnDuration>> {
-    read_all_artifacts_of::<TurnGrain>(paths)
+    let mut files = BTreeMap::new();
+    for entry in std::fs::read_dir(&dir)? {
+        let entry = entry?;
+        let path = entry.path();
+        if !(is_artifact_of::<UsageGrain>(&path) || is_artifact_of::<TurnGrain>(&path)) {
+            continue;
+        }
+        let meta = entry.metadata()?;
+        let mtime = meta
+            .modified()
+            .ok()
+            .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+            .map(|d| d.as_nanos())
+            .unwrap_or(0);
+        let name = path
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or_default()
+            .to_string();
+        files.insert(name, (mtime, meta.len()));
+    }
+    Ok(ArtifactDirSig { files })
 }
 
 /// Stand up a device's usage Artifact for the sync round-trip tests — group the
@@ -317,5 +362,39 @@ mod tests {
         // No rows in the store for this day/device ⇒ recompute clears the file.
         recompute_usage_day(&store, &paths, dev, "2026-07-13").unwrap();
         assert!(!day_file.exists(), "empty day ⇒ stale file removed");
+    }
+
+    /// The pull-side coarse gate's signature: an absent dir is empty; files
+    /// land under their name with mtime+len; a rewrite (even byte-identical —
+    /// push rewrites the file, refreshing its mtime) changes it; an unchanged
+    /// dir yields the same signature again (the gate's skip condition).
+    #[test]
+    fn artifact_dir_sig_tracks_names_mtime_and_len() {
+        let tmp = tempfile::tempdir().unwrap();
+        let paths = Paths::resolve(tmp.path());
+        let dev = "0123456789ab";
+        assert_eq!(
+            artifact_dir_sig(&paths, dev).unwrap(),
+            ArtifactDirSig::default(),
+            "absent dir ⇒ empty signature"
+        );
+
+        let dir = paths.device_data_dir(dev);
+        std::fs::create_dir_all(&dir).unwrap();
+        let file = dir.join("usage-2026-07-13.jsonl");
+        std::fs::write(&file, "{\"uuid\":\"u1\"}\n").unwrap();
+        let s1 = artifact_dir_sig(&paths, dev).unwrap();
+        assert_eq!(s1.files.len(), 1, "only artifact files are tracked");
+        assert_eq!(s1.files["usage-2026-07-13.jsonl"].1, 14, "length captured");
+
+        // A byte-identical rewrite (what a settled day's recompute does) still
+        // bumps the mtime component — the gate re-reads, the PK dedups.
+        std::fs::write(&file, "{\"uuid\":\"u1\"}\n").unwrap();
+        let s2 = artifact_dir_sig(&paths, dev).unwrap();
+        assert_ne!(s1, s2, "rewrite refreshes the mtime component");
+
+        // Unchanged dir ⇒ identical signature (the gate skips the re-read).
+        let s3 = artifact_dir_sig(&paths, dev).unwrap();
+        assert_eq!(s2, s3, "unchanged dir ⇒ stable signature");
     }
 }

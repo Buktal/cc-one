@@ -173,13 +173,39 @@ pub fn usage_materialize(
 /// store, deduped by the `(uuid, device_id)` primary key. Imported rows are
 /// already on git, so their days are NOT marked dirty (the pull/collect split
 /// `Store::ingest` vs `Store::ingest_marking_dirty` encodes). Returns the
-/// number of newly inserted usage records. The table's uniform signature
-/// carries `self_device_id`, but usage ignores it — this domain reads EVERY
-/// device's artifacts, self's included (the uuid key dedupes self's rows).
+/// number of newly inserted usage records — the store's rows-inserted return
+/// (`Store::ingest` knows exactly which rows landed), NOT the number of
+/// records read, so unchanged dirs can be skipped without losing count.
+///
+/// 粗门（COARSE GATE）：每设备目录按「文件名集合 + 每文件 mtime/长度」签名
+/// 判定增量（[`crate::collect::artifact::artifact_dir_sig`]），签名未变的
+/// 目录不重读——文件按天增长、每设备每天 2 个、调度器每 push 间隔一轮 pull，
+/// 没变的目录重读纯属浪费。签名缓存挂在本 Store 上（内存态，重启即失：首轮
+/// pull 全量重读，PK 去重兜底；决策记录：不加 SQLite 持久化——缓存只是优化，
+/// 丢了无害）。门只省读、不改语义：`(uuid, device_id)` PK 去重仍是正确性
+/// 兜底；对端文件被删（设备遗忘、快照消失→取消收藏）由 git 检出的文件
+/// 消失 + sessions 域 / `reload_devices_into_store` 处理，本门不参与（目录
+/// 消失即不枚举，回灌时检出重写文件、mtime 变化，门自然放行）。残余风险见
+/// `artifact_dir_sig` 文档（mtime 粒度内的等长改写可能漏读一次——字节稳定
+/// 重算下等同内容，无害）。The table's uniform signature carries
+/// `self_device_id`, but usage ignores it — this domain reads EVERY device's
+/// artifacts, self's included (the uuid key dedupes self's rows).
 pub fn usage_import(store: &Store, paths: &Paths, _self_device_id: &str) -> AppResult<u32> {
-    let records = crate::collect::artifact::read_all_artifacts(paths)?;
+    let mut gate = store.artifact_dir_sigs.lock().expect("artifact gate poisoned");
+    let mut records = Vec::new();
+    let mut turns = Vec::new();
+    for device in crate::devices::iter_data_device_ids(paths)? {
+        let dir = paths.device_data_dir(&device);
+        let sig = crate::collect::artifact::artifact_dir_sig(paths, &device)?;
+        if gate.get(&dir) == Some(&sig) {
+            continue; // unchanged since the last read — no file content read
+        }
+        records.extend(crate::collect::artifact::read_device_artifacts(paths, &device)?);
+        turns.extend(crate::collect::artifact::read_device_turn_artifacts(paths, &device)?);
+        gate.insert(dir, sig);
+    }
+    drop(gate);
     let inserted = store.ingest(&records)?;
-    let turns = crate::collect::artifact::read_all_turn_artifacts(paths)?;
     store.ingest_turn_durations(&turns)?;
     Ok(inserted.len() as u32)
 }
@@ -508,11 +534,13 @@ mod tests {
     /// 遗忘 ≠ 数据丢失，但遗忘一个仍在仓库里的对端并不持久（架构审查Ⅲ候选③，
     /// pull 回灌语义固化）：跨设备数据由 git 快照承载，本机删行不是数据丢失；
     /// 对端的快照 / 用量 / 名字工件只要还在仓库里，下一次 pull 的导入半程就
-    /// 全量重放，把它的一切原样回灌。这里重放的正是 `flow::pull_and_import`
+    /// 原样回灌，把它的一切带回来。这里重放的正是 `flow::pull_and_import`
     /// 的导入序列（usage / sessions / devices 三步 import）；git 只在检出层
     /// 决定哪些文件进工作树（ff 强制检出会把远端仍有的文件带回来），与本重放
-    /// 正交。边界：回灌恢复的是快照承载的数据（系统字段 + favorited +
-    /// synced_group_id 来自对端），本机对该设备的私有用户数据
+    /// 正交——usage 域的粗门（目录签名未变不重读）也不挡住回灌：检出把文件
+    /// 重写回工作树、mtime 全变，签名必变、门必放行（本测试用「原样重写工件
+    /// 文件」模拟这一检出）。边界：回灌恢复的是快照承载的数据（系统字段 +
+    /// favorited + synced_group_id 来自对端），本机对该设备的私有用户数据
     /// （custom_title / local_group_id / excluded）随行删除、不复活。遗忘真正
     /// 落地 = 下一次 commit_all 把工作树删除提交并推上远端。
     #[test]
@@ -584,6 +612,16 @@ mod tests {
             paths.session_snapshot_path(peer, "sx").exists(),
             "前提：对端快照仍在仓库工作树"
         );
+        // 生产上这一步是 pull 检出把对端工件重写回工作树（mtime 全变，usage
+        // 粗门必放行）；本测试没有真实检出，用「原样重写工件文件」模拟——
+        // 内容不变，mtime 刷新，签名变化。
+        for entry in std::fs::read_dir(paths.device_data_dir(peer)).unwrap().flatten() {
+            let p = entry.path();
+            if p.is_file() {
+                let bytes = std::fs::read(&p).unwrap();
+                std::fs::write(&p, bytes).unwrap();
+            }
+        }
         usage_import(&ours, &paths, self_id).unwrap();
         sessions_import(&ours, &paths, self_id).unwrap();
         crate::devices::reload_devices_into_store(&ours, &paths, self_id).unwrap();

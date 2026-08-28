@@ -3,12 +3,15 @@
 //!
 //! `collect_into` is the single ingest path shared by the manual actions and
 //! the background scheduler. `align` is the full manual action (collect, then
-//! pull+push in Synced mode); `sync_round` is one pull+push pass, shared by
-//! `align` (which retries it) and the background scheduler (which runs it once
-//! per push interval). Collect and sync are DECOUPLED at the scheduler —
-//! collect is a short seconds-level local cadence, sync is a longer
-//! minutes-level Git cadence (Synced only), so the scheduler triggers them on
-//! independent deadlines rather than chaining them.
+//! pull+push in Synced mode). One pull+push pass is [`sync_round`], wrapped by
+//! [`run_sync_round`] — the single entry every caller takes its posture from
+//! ([`SyncRoundPosture`]: retry-with-backoff for the manual action, once for
+//! the scheduler, once + outcome logging for the `set_sync_repo` bind), so the
+//! round's policy lives in one place and the command layer only binds. Collect
+//! and sync are DECOUPLED at the scheduler — collect is a short seconds-level
+//! local cadence, sync is a longer minutes-level Git cadence (Synced only), so
+//! the scheduler triggers them on independent deadlines rather than chaining
+//! them.
 
 pub mod artifact;
 pub mod ingest;
@@ -23,9 +26,9 @@ use crate::error::AppResult;
 use crate::source_parser::SourceParser;
 use crate::sync;
 
-/// Parse Source → Local Store (+ JSONL Artifact). No network.
-/// Shared by the manual `collect_now` command and the background scheduler so
-/// both follow the exact same ingest path.
+/// Parse Source → Local Store. No network. Shared by the manual `collect_now`
+/// command and the background scheduler so both follow the exact same ingest
+/// path.
 ///
 /// Iterates every enabled parser. The per-file cursor table is loaded once
 /// and shared (keys are file paths, disjoint across parsers); each parser's
@@ -111,13 +114,35 @@ pub(crate) struct SyncRoundOutcome {
     pub(crate) errors: Vec<String>,
 }
 
+/// The step whose failure an [`AlignReport`] error entry describes — the wire
+/// prefix protocol of `AlignReport.errors` (`collect:` / `pull:` / `push:`),
+/// single home of the step names. A new step joins by adding an arm here, not
+/// by string-pasting a prefix at a call site.
+#[derive(Debug, Clone, Copy)]
+enum AlignStep {
+    Collect,
+    Pull,
+    Push,
+}
+
+impl AlignStep {
+    /// Format one step failure as an `AlignReport.errors` entry.
+    fn error(self, e: &impl std::fmt::Display) -> String {
+        let prefix = match self {
+            AlignStep::Collect => "collect",
+            AlignStep::Pull => "pull",
+            AlignStep::Push => "push",
+        };
+        format!("{prefix}: {e}")
+    }
+}
+
 /// One best-effort sync round: pull peer devices' Artifacts, then push this
 /// device's. Both steps run independently — a pull failure does NOT skip push
 /// (a failed pull usually means nothing new to push, but push may still succeed
 /// on a flaky network). Errors land in `errors` rather than aborting the round.
-/// Shared by the manual [`align`] (which retries it) and the background
-/// scheduler (which runs it once per push interval — the cadence IS the retry).
-/// Synced only; a no-op (zeroed outcome) in Standalone.
+/// The plain round — callers pick the posture (once / once+log / retry) via
+/// [`run_sync_round`]. Synced only; a no-op (zeroed outcome) in Standalone.
 pub(crate) fn sync_round(store: &Store, config: &ConfigStore) -> SyncRoundOutcome {
     let mut out = SyncRoundOutcome::default();
     let cfg = config.get();
@@ -127,11 +152,57 @@ pub(crate) fn sync_round(store: &Store, config: &ConfigStore) -> SyncRoundOutcom
     let paths = config.paths();
     match sync::pull_and_import(store, &paths, &cfg) {
         Ok(n) => out.imported = n,
-        Err(e) => out.errors.push(format!("pull: {e}")),
+        Err(e) => out.errors.push(AlignStep::Pull.error(&e)),
     }
     match sync::push_usage(store, &paths, &cfg) {
         Ok(p) => out.pushed = p,
-        Err(e) => out.errors.push(format!("push: {e}")),
+        Err(e) => out.errors.push(AlignStep::Push.error(&e)),
+    }
+    out
+}
+
+/// How one sync round is run — the posture. Every caller of a sync round (the
+/// manual `align`, the background scheduler, the `set_sync_repo` bind) picks
+/// ONE posture here, so the round's policy (retry? outcome logging?) lives in
+/// one place instead of being re-decided per call site.
+#[derive(Debug, Clone, Copy)]
+pub(crate) enum SyncRoundPosture {
+    /// Run exactly once; the outcome is returned for the caller to handle.
+    /// The background scheduler's choice — the push cadence IS the retry.
+    Once,
+    /// Run exactly once, then log the outcome under `label` (diagnostic
+    /// prefix). `set_sync_repo`'s choice: the bind-time round's result goes
+    /// only to the log — a failure is left for the next startup sync to
+    /// retry, not retried in place.
+    OnceLogged(&'static str),
+    /// Run up to 3 attempts with a short backoff (1 s, 2 s); `imported`
+    /// aggregates across attempts. The manual「采集 / 同步」choice (`align`).
+    Retry,
+}
+
+/// Run one sync round under the given posture — the single entry for "a round
+/// of pull+push". The retry policy and the [`SyncRoundPosture::OnceLogged`]
+/// outcome logging live here; every caller gets back the same
+/// [`SyncRoundOutcome`] regardless of posture.
+pub(crate) fn run_sync_round(
+    store: &Store,
+    config: &ConfigStore,
+    posture: SyncRoundPosture,
+) -> SyncRoundOutcome {
+    let out = match posture {
+        SyncRoundPosture::Once | SyncRoundPosture::OnceLogged(_) => sync_round(store, config),
+        SyncRoundPosture::Retry => retry_rounds(|| sync_round(store, config), 3, std::thread::sleep),
+    };
+    if let SyncRoundPosture::OnceLogged(label) = posture {
+        if out.imported > 0 {
+            eprintln!("[cc-one] {label} imported {} row(s)", out.imported);
+        }
+        if out.pushed {
+            eprintln!("[cc-one] {label} pushed local changes");
+        }
+        for e in &out.errors {
+            eprintln!("[cc-one] {label} sync error: {e}");
+        }
     }
     out
 }
@@ -171,11 +242,13 @@ where
     last
 }
 
-/// Full manual「同步 / 采集」: collect locally, then (Synced only) run
-/// [`sync_round`] with a bounded retry — up to 3 attempts with a short backoff
-/// (1 s, 2 s). Retry covers only the network steps (pull/push); collect runs
-/// once (a local disk failure won't fix itself on retry). Best-effort: every
-/// step's outcome is reported independently in `errors`, none aborts the others.
+/// Full manual「同步 / 采集」: collect locally, then (Synced only) run a sync
+/// round under the [`SyncRoundPosture::Retry`] posture — up to 3 attempts with
+/// a short backoff (1 s, 2 s; the retry loop + no-op sleeper live in
+/// `retry_rounds`, unit-tested). Retry covers only the network steps
+/// (pull/push); collect runs once (a local disk failure won't fix itself on
+/// retry). Best-effort: every step's outcome is reported independently in
+/// `errors`, none aborts the others.
 ///
 /// Shared by the dashboard button and the Settings「立即同步」entry — the run
 /// mode decides what it means (Standalone ⇒ collect only; Synced ⇒ collect +
@@ -184,12 +257,10 @@ pub fn align(store: &Store, config: &ConfigStore) -> AlignReport {
     let mut report = AlignReport::default();
     match collect_into(store, config) {
         Ok(r) => report.collected = r,
-        Err(e) => report.errors.push(format!("collect: {e}")),
+        Err(e) => report.errors.push(AlignStep::Collect.error(&e)),
     }
     if config.get().is_synced() {
-        // The retry loop + backoff lives in `retry_rounds` (testable with a
-        // no-op sleeper); production passes the real `sync_round` + sleep.
-        let outcome = retry_rounds(|| sync_round(store, config), 3, std::thread::sleep);
+        let outcome = run_sync_round(store, config, SyncRoundPosture::Retry);
         report.imported = outcome.imported;
         report.pushed = outcome.pushed;
         report.errors.extend(outcome.errors);
@@ -199,7 +270,7 @@ pub fn align(store: &Store, config: &ConfigStore) -> AlignReport {
 
 #[cfg(test)]
 mod tests {
-    use super::{collect_into_with, retry_rounds, SyncRoundOutcome};
+    use super::{collect_into_with, retry_rounds, run_sync_round, SyncRoundOutcome, SyncRoundPosture};
     use std::cell::{Cell, RefCell};
     use std::path::{Path, PathBuf};
     use std::rc::Rc;
@@ -417,5 +488,24 @@ mod tests {
             vec![Duration::from_secs(1), Duration::from_secs(2)],
             "backoff doubles (1s, 2s); nothing after the last attempt"
         );
+    }
+
+    /// The posture entry's Standalone guard: every posture is a zeroed no-op
+    /// without a Synced config — no network, no errors, no retry attempts.
+    #[test]
+    fn run_sync_round_is_zeroed_noop_in_standalone_for_every_posture() {
+        let tmp = tempfile::tempdir().unwrap();
+        let store = Store::open(Path::new(":memory:")).unwrap();
+        let config = ConfigStore::for_test(Paths::resolve(tmp.path()), ConfigData::default());
+        for posture in [
+            SyncRoundPosture::Once,
+            SyncRoundPosture::OnceLogged("test"),
+            SyncRoundPosture::Retry,
+        ] {
+            let out = run_sync_round(&store, &config, posture);
+            assert_eq!(out.imported, 0, "{posture:?}: no network in Standalone");
+            assert!(!out.pushed, "{posture:?}: nothing pushed");
+            assert!(out.errors.is_empty(), "{posture:?}: no errors");
+        }
     }
 }

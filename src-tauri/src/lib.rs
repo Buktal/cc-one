@@ -211,13 +211,15 @@ fn export_bindings(builder: &Builder<tauri::Wry>) {
 }
 
 /// One scheduler action returned by [`plan_tick`]. The list order IS the
-/// execution order — `Collect` always precedes `Sync` (see [`plan_tick`]).
+/// execution order — when both fire in a tick, `Collect` runs first (a
+/// latency preference, not a load-bearing invariant — see [`plan_tick`]).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum TickAction {
-    /// Parse Sources → Local Store (+ JSONL Artifact). No network.
+    /// Parse Sources → Local Store. No network.
     Collect,
-    /// One pull+push round (Synced only). The cadence is the retry — no
-    /// per-tick retry here.
+    /// One pull+push round (Synced only), run under the
+    /// [`collect::SyncRoundPosture::Once`] posture. The cadence is the retry —
+    /// no per-tick retry here.
     Sync,
 }
 
@@ -225,16 +227,18 @@ enum TickAction {
 /// time, the two deadlines, and the live config, return the actions to run
 /// this tick (in order) plus the updated deadlines.
 ///
-/// **Encodes the collect-before-sync invariant.** When both deadlines fire in
-/// the same tick, `Collect` is always placed before `Sync` in the returned
-/// `Vec`: collect's JSONL `writeln!` has fully flushed by the time it returns,
-/// so the subsequent `git add` snapshots complete lines only (no half-line
-/// race) — safe only because the scheduler runs them serially on one thread.
-/// This ordering used to live only in a prose comment next to the spawn; it is
-/// now a table-testable `Vec` ordering.
+/// **Ordering.** When both deadlines fire in the same tick, `Collect` is
+/// placed before `Sync` in the returned `Vec`. NOT a correctness invariant —
+/// collect writes only the store (SQLite + dirty flags) and sync reads the
+/// store, so either order is safe; collect-first merely lets a same-tick sync
+/// ship the just-collected rows immediately instead of one push interval
+/// later. (The old justification — collect's JSONL `writeln!` must fully flush
+/// before the subsequent `git add` snapshots the files — died with the
+/// JSONL-append architecture: collect is store-only, and the Artifact is
+/// written exclusively by the push-side recompute.)
 ///
 /// Pure: no IO, no global state, no clock — `now` is a parameter, so the full
-/// decision surface (independent intervals, collect-before-sync, `is_synced`
+/// decision surface (independent intervals, both-due ordering, `is_synced`
 /// gate, interval clamping) is covered by `tests::plan_tick_table`.
 ///
 /// A deadline that does not fire is returned unchanged, so in Standalone
@@ -252,8 +256,9 @@ fn plan_tick(
     let mut actions = Vec::new();
     let mut new_collect = next_collect;
     let mut new_push = next_push;
-    // Collect is evaluated and pushed first, so when both deadlines fire the
-    // JSONL has flushed before git add runs. The invariant is this Vec order.
+    // Collect is evaluated and pushed first: when both deadlines fire, a
+    // same-tick sync can ship the just-collected rows (a latency preference —
+    // the order is not load-bearing; see the fn doc).
     if now >= next_collect {
         actions.push(TickAction::Collect);
         new_collect = now + Duration::from_secs(collect_secs);
@@ -423,12 +428,11 @@ pub fn run() {
             // re-reads the config snapshot and hands it to [`plan_tick`], so
             // Settings changes apply without restart.
             //
-            // The collect-before-sync invariant — when BOTH deadlines fire in a
-            // tick, collect's JSONL `writeln!` has fully flushed before the
-            // subsequent `git add` runs (no half-line race), safe only because
-            // execution is serial on this single thread — is encoded and tested
-            // in [`plan_tick`]: `Collect` always precedes `Sync` in the returned
-            // action list, and this closure just walks that list in order.
+            // When both deadlines fire in a tick, `Collect` runs first — the
+            // order is encoded and tested in [`plan_tick`] (a latency
+            // preference, not a correctness invariant: collect writes only the
+            // store, sync reads the store, so either order is safe). This
+            // closure just walks the returned action list in order.
             //
             // Startup strategy: first collect fires immediately (next_collect =
             // start — dashboard is fresh on open); first sync is delayed one
@@ -460,8 +464,8 @@ pub fn run() {
                         plan_tick(now, next_collect, next_push, &cfg);
                     next_collect = new_collect;
                     next_push = new_push;
-                    // Execute in returned order: Collect before Sync when both
-                    // fire (the collect-before-sync invariant — Vec order, not prose).
+                    // Execute in the returned order (collect before sync when
+                    // both fire — [`plan_tick`]'s ordering).
                     for action in actions {
                         match action {
                             TickAction::Collect => {
@@ -471,11 +475,16 @@ pub fn run() {
                                 let _ = app_handle.emit("usage_changed", ());
                             }
                             TickAction::Sync => {
-                                // One pull+push round (best-effort; the cadence
-                                // is the retry — no explicit retry here). Pull
-                                // lands peer devices' usage here, push sends
-                                // this device's up.
-                                let sr = collect::sync_round(&store, &config);
+                                // One pull+push round under the Once posture
+                                // (best-effort; the cadence is the retry — no
+                                // explicit retry here). Pull lands peer
+                                // devices' usage here, push sends this
+                                // device's up.
+                                let sr = collect::run_sync_round(
+                                    &store,
+                                    &config,
+                                    collect::SyncRoundPosture::Once,
+                                );
                                 for e in &sr.errors {
                                     eprintln!("[cc-one] scheduled sync error: {e}");
                                 }
@@ -524,7 +533,7 @@ mod tests {
     }
 
     /// `plan_tick` table: every decision the scheduler makes per wake must be
-    /// covered here — independent intervals, collect-before-sync ordering,
+    /// covered here — independent intervals, both-due ordering (collect first),
     /// `is_synced` gate, and unchanged-when-not-due deadlines.
     #[test]
     fn plan_tick_table() {
@@ -566,9 +575,10 @@ mod tests {
                 expect_collect: t0 + Duration::from_secs(300),
                 expect_push: t0 + Duration::from_secs(200) + push_after,
             },
-            // 3. BOTH due (synced) → Collect BEFORE Sync (the invariant), both advance.
+            // 3. BOTH due (synced) → Collect before Sync (the implementation
+            //    order — a latency preference, not an invariant), both advance.
             Case {
-                name: "both due (synced) — collect-before-sync",
+                name: "both due (synced) — both actions, collect first",
                 now: t0 + Duration::from_secs(500),
                 next_collect: t0 + Duration::from_secs(100),
                 next_push: t0 + Duration::from_secs(200),

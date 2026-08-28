@@ -44,10 +44,13 @@ pub use store_dirty_days::DaySnapshot;
 pub use store_reads::DistinctColumn;
 pub use store_sessions_writes::SessionCounts;
 
+use std::collections::HashMap;
+use std::path::PathBuf;
 use std::sync::Mutex;
 
 use rusqlite::{params, params_from_iter, types::Value as SqlValue, Connection, OptionalExtension};
 
+use crate::collect::artifact::ArtifactDirSig;
 use crate::error::{AppError, AppResult};
 use crate::model::{
     project_identity, DeviceUsageRow, GroupTrack, LocalGroup, LogCostBreakdown, LogsQuery,
@@ -73,6 +76,12 @@ pub(crate) fn page_limit(limit: u32) -> i64 {
 /// Thread-safe wrapper over a single SQLite connection.
 pub struct Store {
     conn: Mutex<Connection>,
+    /// Pull-side coarse gate: per-device artifact-dir signatures as of the
+    /// last read (in-memory — a restart just re-reads once and the
+    /// `(uuid, device_id)` primary key dedup absorbs it). Owned by
+    /// `sync::domains::usage_import` (see its gate doc); kept here because the
+    /// Store is the shared, thread-safe object every pull path already holds.
+    pub(crate) artifact_dir_sigs: Mutex<HashMap<PathBuf, ArtifactDirSig>>,
 }
 
 impl Store {
@@ -91,6 +100,7 @@ impl Store {
         conn.execute_batch(&schema::schema_indexes_sql())?;
         let store = Self {
             conn: Mutex::new(conn),
+            artifact_dir_sigs: Mutex::new(HashMap::new()),
         };
         store.ensure_pricing_seed()?;
         Ok(store)
