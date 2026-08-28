@@ -191,7 +191,10 @@ pub fn usage_materialize(
 /// `self_device_id`, but usage ignores it — this domain reads EVERY device's
 /// artifacts, self's included (the uuid key dedupes self's rows).
 pub fn usage_import(store: &Store, paths: &Paths, _self_device_id: &str) -> AppResult<u32> {
-    let mut gate = store.artifact_dir_sigs.lock().expect("artifact gate poisoned");
+    let mut gate = store
+        .artifact_dir_sigs
+        .lock()
+        .expect("artifact gate poisoned");
     let mut records = Vec::new();
     let mut turns = Vec::new();
     for device in crate::devices::iter_data_device_ids(paths)? {
@@ -200,8 +203,12 @@ pub fn usage_import(store: &Store, paths: &Paths, _self_device_id: &str) -> AppR
         if gate.get(&dir) == Some(&sig) {
             continue; // unchanged since the last read — no file content read
         }
-        records.extend(crate::collect::artifact::read_device_artifacts(paths, &device)?);
-        turns.extend(crate::collect::artifact::read_device_turn_artifacts(paths, &device)?);
+        records.extend(crate::collect::artifact::read_device_artifacts(
+            paths, &device,
+        )?);
+        turns.extend(crate::collect::artifact::read_device_turn_artifacts(
+            paths, &device,
+        )?);
         gate.insert(dir, sig);
     }
     drop(gate);
@@ -616,7 +623,10 @@ mod tests {
         // 刷新，usage 粗门必放行）；本测试没有真实检出，用「给工件文件追加
         // 空行」模拟——容错读取跳过空行、解析内容不变，但长度必变、签名必变
         // （同字节重写可能落在文件系统 mtime 粒度内，不能依赖 mtime 刷新）。
-        for entry in std::fs::read_dir(paths.device_data_dir(peer)).unwrap().flatten() {
+        for entry in std::fs::read_dir(paths.device_data_dir(peer))
+            .unwrap()
+            .flatten()
+        {
             let p = entry.path();
             if p.is_file() {
                 let mut text = std::fs::read_to_string(&p).unwrap();

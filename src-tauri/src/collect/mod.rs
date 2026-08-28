@@ -191,7 +191,9 @@ pub(crate) fn run_sync_round(
 ) -> SyncRoundOutcome {
     let out = match posture {
         SyncRoundPosture::Once | SyncRoundPosture::OnceLogged(_) => sync_round(store, config),
-        SyncRoundPosture::Retry => retry_rounds(|| sync_round(store, config), 3, std::thread::sleep),
+        SyncRoundPosture::Retry => {
+            retry_rounds(|| sync_round(store, config), 3, std::thread::sleep)
+        }
     };
     if let SyncRoundPosture::OnceLogged(label) = posture {
         if out.imported > 0 {
@@ -270,7 +272,9 @@ pub fn align(store: &Store, config: &ConfigStore) -> AlignReport {
 
 #[cfg(test)]
 mod tests {
-    use super::{collect_into_with, retry_rounds, run_sync_round, SyncRoundOutcome, SyncRoundPosture};
+    use super::{
+        collect_into_with, retry_rounds, run_sync_round, SyncRoundOutcome, SyncRoundPosture,
+    };
     use std::cell::{Cell, RefCell};
     use std::path::{Path, PathBuf};
     use std::rc::Rc;
