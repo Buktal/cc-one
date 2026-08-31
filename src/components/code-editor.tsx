@@ -24,12 +24,13 @@ import { Compartment, EditorState } from "@codemirror/state"
 import { oneDark } from "@codemirror/theme-one-dark"
 import { placeholder } from "@codemirror/view"
 import { basicSetup, EditorView } from "codemirror"
-import { AlertCircle, Wand2 } from "lucide-react"
+import { Wand2 } from "lucide-react"
 import { useTheme } from "next-themes"
 import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { useTranslation } from "react-i18next"
 
 import { useFormatTomlMutation } from "@/app/store/api"
+import { InlineBanner } from "@/components/inline-banner"
 import { Button } from "@/components/ui/button"
 import {
   Tooltip,
@@ -388,10 +389,7 @@ export function CodeEditor({
         className="min-h-24 min-w-0 flex-1 overflow-hidden"
       />
       {validationError ? (
-        <p className="bg-destructive/10 text-destructive flex items-start gap-1.5 rounded-md px-2.5 py-1.5 text-xs">
-          <AlertCircle className="mt-0.5 size-3.5 shrink-0" />
-          <span>{validationError}</span>
-        </p>
+        <InlineBanner tone="error">{validationError}</InlineBanner>
       ) : null}
       <div className="flex items-center gap-2">
         <Tooltip>

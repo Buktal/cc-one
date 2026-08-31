@@ -34,6 +34,7 @@ import {
   useSetPushIntervalMutation,
   useSetSkinMutation,
 } from "@/app/store/api"
+import { InlineBanner } from "@/components/inline-banner"
 import { Button } from "@/components/ui/button"
 import {
   Select,
@@ -132,11 +133,11 @@ export function GeneralCard() {
   return (
     <div className="flex flex-col">
       {prefsError ? (
-        <p className="border-destructive/40 bg-destructive/5 text-destructive mb-2 rounded-md border p-2 text-xs leading-relaxed">
+        <InlineBanner tone="error" className="mb-2">
           {t("settings.general.readError", {
             detail: describeError(prefsError, t) || t("common.unknownReason"),
           })}
-        </p>
+        </InlineBanner>
       ) : null}
 
       <div className="grid min-[1240px]:grid-cols-2 min-[1240px]:gap-0">

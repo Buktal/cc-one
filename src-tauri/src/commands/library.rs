@@ -3,12 +3,10 @@
 //! 不碰）；资料库域不发事件总线失效信号——前端在 mutation 成功处自己失效
 //! Library tag。
 
-use std::path::Path;
-
 use tauri::State;
 
 use super::{run_blocking, AppState, Emit};
-use crate::error::{AppError, AppResult};
+use crate::error::AppResult;
 use crate::library::{self, DeviceLibrarySummary, LibraryEntry, UploadItem};
 
 #[tauri::command]
@@ -104,7 +102,9 @@ pub async fn read_library_text(
 }
 
 /// File/folder counts for one device's library subtree — used by the
-/// forget-device dialog to show what would be migrated or deleted.
+/// forget-device dialog to show what would be migrated or deleted. Path
+/// safety lives in [`library::device_summary`] (the `device_subdir` gate);
+/// this command stays a thin typed shell over it.
 #[tauri::command]
 #[specta::specta]
 pub async fn library_device_summary(
@@ -113,17 +113,7 @@ pub async fn library_device_summary(
 ) -> AppResult<DeviceLibrarySummary> {
     let config = state.config.clone();
     run_blocking("library_summary", Emit::None, move || {
-        // device_id 是前端直通的命令参数，直接 `join` 进 library root——先过
-        // 词法包含谓词（与 library 域其它路径参数同一份，见
-        // `library::device_subdir`）：`..` 原地穿越、绝对前缀整体替换 base，
-        // 都必须在 join 之前拒绝，读向不越出 library root。
-        if !library::has_only_plain_components(Path::new(&device_id)) {
-            return Err(AppError::Config(format!(
-                "library path escapes the root: {device_id}"
-            )));
-        }
-        let paths = config.paths();
-        Ok(library::count_subtree(&paths.library.join(&device_id)))
+        library::device_summary(&config.paths(), &device_id)
     })
     .await
 }

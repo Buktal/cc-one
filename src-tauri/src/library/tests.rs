@@ -1,5 +1,6 @@
 //! library 域测试：路径边界谓词（写路径直测 Standalone 不触网）、scan /
-//! upload / delete / rename / read_text、对端遗忘的 migrate / delete。
+//! upload / delete / rename / read_text、设备子树摘要 device_summary、对端
+//! 遗忘的 migrate / delete——读向入口与写向入口一样必须过闸。
 
 use super::forget::migrate_folder_name;
 use super::*;
@@ -469,6 +470,76 @@ fn forget_is_noop_when_peer_has_no_library() {
     .unwrap();
     // Migrate must not spuriously create the self root on a no-op.
     assert!(!paths.library.join(&cfg.device_id).exists());
+}
+
+#[test]
+fn forget_rejects_escaping_peer_id() {
+    let tmp = tempfile::tempdir().unwrap();
+    let paths = Paths::resolve(tmp.path());
+    let cfg = self_cfg();
+
+    // `..` 穿越的 peer_id：拒绝，remove_dir_all / rename 都不发生。
+    let err = forget_device_library(
+        &paths,
+        &cfg,
+        "../outside",
+        LibraryForgetAction::Delete,
+        "MacBook",
+    )
+    .unwrap_err();
+    assert!(err.to_string().contains("escapes"), "{err}");
+
+    // 绝对前缀整体替换 base——同样拒绝（`/` 根分量跨平台都非普通分量），
+    // migrate 换到库外也不行。
+    let err = forget_device_library(
+        &paths,
+        &cfg,
+        "/cc-one-escape",
+        LibraryForgetAction::Migrate,
+        "MacBook",
+    )
+    .unwrap_err();
+    assert!(err.to_string().contains("escapes"), "{err}");
+
+    assert!(!tmp.path().join("outside").exists());
+    assert!(!paths.library.join("cc-one-escape").exists());
+}
+
+#[test]
+fn device_summary_counts_device_subtree_through_the_gate() {
+    let tmp = tempfile::tempdir().unwrap();
+    let paths = Paths::resolve(tmp.path());
+    let dev_dir = paths.library.join("112233445566");
+    std::fs::create_dir_all(dev_dir.join("d1")).unwrap();
+    write_file(&dev_dir.join("a.txt"), "a");
+    write_file(&dev_dir.join("d1").join("b.txt"), "b");
+
+    let s = device_summary(&paths, "112233445566").unwrap();
+    assert_eq!(s.files, 2.0); // a.txt + d1/b.txt
+    assert_eq!(s.dirs, 1.0); // d1
+
+    // 缺失子树读作零（读语义，不是 not found）。
+    let s = device_summary(&paths, "nonexistent").unwrap();
+    assert_eq!((s.files, s.dirs), (0.0, 0.0));
+}
+
+#[test]
+fn device_summary_rejects_escaping_device_id() {
+    let tmp = tempfile::tempdir().unwrap();
+    let paths = Paths::resolve(tmp.path());
+
+    // `..` 原地穿越：拒绝，读不到 library root 之外。
+    let err = device_summary(&paths, "../outside").unwrap_err();
+    assert!(err.to_string().contains("escapes"), "{err}");
+
+    // 绝对前缀会让 join 整体替换 base——必须拒绝；`/` 根分量跨平台非法，
+    // 盘符前缀仅在 Windows 上是绝对路径。
+    for bad in ["/cc-one-escape", "C:/cc-one-escape"] {
+        let err = device_summary(&paths, bad).unwrap_err();
+        assert!(err.to_string().contains("escapes"), "{bad}: {err}");
+    }
+    assert!(!tmp.path().join("outside").exists());
+    assert!(!paths.library.join("cc-one-escape").exists());
 }
 
 #[test]

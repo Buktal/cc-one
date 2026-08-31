@@ -12,17 +12,15 @@
 
 import {
   Calculator,
-  CheckCircle2,
   CloudUpload,
-  Loader2,
   PlugZap,
   RefreshCw,
   Unplug,
-  XCircle,
 } from "lucide-react"
 import { useTranslation } from "react-i18next"
 import { useRebillMutation, useSetDisplayNameMutation } from "@/app/store/api"
 import { CopyButton } from "@/components/copy-button"
+import { InlineBanner } from "@/components/inline-banner"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent } from "@/components/ui/card"
@@ -344,7 +342,9 @@ function Row({
 }
 
 /** 测试连接结果 banner（诊断型操作，结果需持久可见，故用 inline 而非 toast）。
- *  `result.message` 来自 Rust 后端，保持英文不本地化。 */
+ *  `result.message` 来自 Rust 后端，保持英文不本地化。本组件只做状态 → tone
+ *  的分派（验证中 = busy / 成功 = success / 失败 = error），视觉配方归
+ *  InlineBanner；ok 的附注行（只读权限说明）是此处独有的第二行内容。 */
 function VerifyBanner({
   verifying,
   result,
@@ -355,30 +355,21 @@ function VerifyBanner({
   const { t } = useTranslation()
   if (verifying) {
     return (
-      <div className="bg-muted/50 text-muted-foreground flex items-center gap-2 rounded-md border border-dashed p-2 text-xs">
-        <Loader2 className="size-3.5 animate-spin" />
+      <InlineBanner tone="busy">
         {t("settings.sync.verifyingBanner")}
-      </div>
+      </InlineBanner>
     )
   }
   if (!result) return null
   if (result.ok) {
     return (
-      <div className="border-emerald-500/40 bg-emerald-500/5 text-emerald-600 dark:text-emerald-400 flex flex-col gap-0.5 rounded-md border p-2 text-xs leading-relaxed">
-        <span className="flex items-start gap-2">
-          <CheckCircle2 className="mt-0.5 size-3.5 shrink-0" />
-          {result.message}
-        </span>
-        <span className="text-muted-foreground pl-5">
+      <InlineBanner tone="success">
+        <span className="block">{result.message}</span>
+        <span className="text-muted-foreground block pl-5">
           {t("settings.sync.verifyReadPermNote")}
         </span>
-      </div>
+      </InlineBanner>
     )
   }
-  return (
-    <div className="border-destructive/40 bg-destructive/5 text-destructive flex items-start gap-2 rounded-md border p-2 text-xs leading-relaxed">
-      <XCircle className="mt-0.5 size-3.5 shrink-0" />
-      <span>{result.message}</span>
-    </div>
-  )
+  return <InlineBanner tone="error">{result.message}</InlineBanner>
 }

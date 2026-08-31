@@ -533,23 +533,26 @@ fn parse_grok_chat_history(file: &Path, text: &str, start_line: i64) -> FilePars
 // ---- shared timestamp parse (epoch sec / epoch ms / RFC3339) ----
 
 /// Parse a Grok timestamp value (epoch seconds, epoch milliseconds if large, or
-/// an RFC3339 string) into an ISO8601 UTC string. Returns `None` if absent or
-/// unparseable. Shared across updates.jsonl / summary.json / chat_history.jsonl
-/// so every Grok timestamp format funnels through one normalizer.
+/// an RFC3339 string) into the canonical ISO8601 UTC form. Grok carries all
+/// three shapes, so this function owns only the value→shape mapping (including
+/// the defensive >1e11 milliseconds threshold, mirroring CC-Switch); the
+/// conversion itself funnels through the shared
+/// [`crate::time::source_timestamp_to_iso`] like every other source. Returns
+/// `None` if absent or unparseable. Shared across updates.jsonl / summary.json
+/// / chat_history.jsonl.
 fn parse_grok_timestamp(value: Option<&serde_json::Value>) -> Option<String> {
     let value = value?;
-    if let Some(n) = value.as_i64() {
+    let ts = if let Some(n) = value.as_i64() {
         // >1e11 ⇒ milliseconds (defensive, mirrors CC-Switch's threshold).
-        let secs = if n > 100_000_000_000 { n / 1000 } else { n };
-        return Some(crate::time::epoch_to_iso(secs));
-    }
-    value
-        .as_str()
-        .and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok())
-        .map(|dt| {
-            dt.with_timezone(&chrono::Utc)
-                .to_rfc3339_opts(chrono::SecondsFormat::Millis, true)
-        })
+        if n > 100_000_000_000 {
+            crate::time::SourceTimestamp::Millis(n)
+        } else {
+            crate::time::SourceTimestamp::Secs(n)
+        }
+    } else {
+        crate::time::SourceTimestamp::Rfc3339(value.as_str()?)
+    };
+    crate::time::source_timestamp_to_iso(ts)
 }
 
 // ---------------------------------------------------------- 测试全量扫面 --
@@ -939,7 +942,9 @@ mod tests {
         );
     }
 
-    /// Timestamp fields accept epoch-seconds, epoch-millis, and RFC3339 strings.
+    /// Timestamp fields accept epoch-seconds, epoch-millis, and RFC3339
+    /// strings; every spelling (including `+00:00`-offset strings) normalizes
+    /// to the one canonical Millis+Z form.
     #[test]
     fn grok_timestamp_field_accepts_iso_epoch_seconds_and_millis() {
         let dir = tempfile::tempdir().unwrap();
@@ -956,6 +961,7 @@ mod tests {
         mk("ts-sec", "1700000000"); // epoch seconds
         mk("ts-ms", "1700000000000"); // epoch milliseconds
         mk("ts-iso", r#""2023-11-14T22:13:20Z""#); // RFC3339 string
+        mk("ts-iso-offset", r#""2023-11-14T23:13:20+01:00""#); // RFC3339, non-UTC offset
         let p = GrokSourceParser::with_dir(dir.path().to_path_buf());
         let result = p.parse_full(&p.discover().unwrap()).unwrap();
         let by_id: std::collections::HashMap<&str, &RawSession> =
@@ -963,6 +969,10 @@ mod tests {
         assert_eq!(by_id["ts-sec"].started_at, "2023-11-14T22:13:20.000Z");
         assert_eq!(by_id["ts-ms"].started_at, "2023-11-14T22:13:20.000Z");
         assert_eq!(by_id["ts-iso"].started_at, "2023-11-14T22:13:20.000Z");
+        assert_eq!(
+            by_id["ts-iso-offset"].started_at,
+            "2023-11-14T22:13:20.000Z"
+        );
     }
 
     /// Malformed summary.json degrades to a directory-name id with empty meta —

@@ -18,15 +18,7 @@
 // 密钥不进预览载荷：条目只有 hasSecret 布尔，密钥值永不跨边界（Rust 侧有防泄漏
 // 回归测试锁着）。
 
-import {
-  AlertCircle,
-  CheckCircle2,
-  FileJson,
-  FileQuestion,
-  Loader2,
-  Pencil,
-  Upload,
-} from "lucide-react"
+import { FileJson, FileQuestion, Loader2, Pencil, Upload } from "lucide-react"
 import { useEffect, useRef, useState } from "react"
 import { useTranslation } from "react-i18next"
 import { toast } from "sonner"
@@ -37,6 +29,7 @@ import {
   usePreviewLiveImportMutation,
 } from "@/app/store/api"
 import { EmptyState } from "@/components/empty-state"
+import { InlineBanner } from "@/components/inline-banner"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import {
@@ -192,10 +185,7 @@ export function LiveImportDialog({
             </span>
           </p>
         ) : phase.kind === "error" ? (
-          <p className="bg-destructive/10 text-destructive flex items-start gap-1.5 rounded-md px-3 py-2 text-xs">
-            <AlertCircle className="mt-0.5 size-3.5 shrink-0" />
-            <span>{phase.message}</span>
-          </p>
+          <InlineBanner tone="error">{phase.message}</InlineBanner>
         ) : phase.kind === "ready" && phase.entries.length === 0 ? (
           <EmptyState
             icon={FileJson}
@@ -217,14 +207,11 @@ export function LiveImportDialog({
           </div>
         ) : (
           <div className="flex flex-col gap-3">
-            <div className="border-emerald-500/40 bg-emerald-500/5 text-emerald-600 dark:text-emerald-400 flex items-start gap-2 rounded-md border p-2.5 text-sm">
-              <CheckCircle2 className="mt-0.5 size-4 shrink-0" />
-              <span>
-                {t("providers.liveImport.report.imported", {
-                  count: phase.imported,
-                })}
-              </span>
-            </div>
+            <InlineBanner tone="success">
+              {t("providers.liveImport.report.imported", {
+                count: phase.imported,
+              })}
+            </InlineBanner>
             <ImportPreviewList
               entries={phase.entries}
               preview={false}

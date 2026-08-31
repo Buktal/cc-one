@@ -3,10 +3,11 @@
 // 步骤、要展示跳过明细报告）。自包含：内部调 importFromCcSwitch mutation、
 // 展示报告（导入数 / 合并跳过 / 代理跳过名称列表）与「未找到 CC-Switch」错误。
 
-import { AlertCircle, CheckCircle2, Loader2, Upload } from "lucide-react"
+import { Loader2, Upload } from "lucide-react"
 import { useState } from "react"
 import { useTranslation } from "react-i18next"
 import { useImportFromCcSwitchMutation } from "@/app/store/api"
+import { InlineBanner } from "@/components/inline-banner"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import {
@@ -85,19 +86,16 @@ export function CcSwitchImportDialog({
         </DialogHeader>
 
         {report ? (
-          // 结果视图：成功 = emerald 色块（与 settings 的同步验证同一套
-          // 「成功」语言）；跳过明细 = 分隔线列表，行内名字 + 原因徽标，
+          // 结果视图：成功回执走 InlineBanner（持久结果面，不用 toast）；
+          // 跳过明细 = 分隔线列表，行内名字 + 原因徽标，
           // 标题不再复述原因（每项自标，原「跳过 1 个（需代理/OAuth 或不
           // 支持的应用）：」的括弧概括既绕又和明细重复）。
           <div className="flex flex-col gap-3">
-            <div className="border-emerald-500/40 bg-emerald-500/5 text-emerald-600 dark:text-emerald-400 flex items-start gap-2 rounded-md border p-2.5 text-sm">
-              <CheckCircle2 className="mt-0.5 size-4 shrink-0" />
-              <span>
-                {t("providers.ccswitch.report.imported", {
-                  count: report.imported,
-                })}
-              </span>
-            </div>
+            <InlineBanner tone="success">
+              {t("providers.ccswitch.report.imported", {
+                count: report.imported,
+              })}
+            </InlineBanner>
             {report.mergeSkipped > 0 ? (
               <p className="text-muted-foreground text-xs">
                 {t("providers.ccswitch.report.mergeSkipped", {
@@ -159,11 +157,8 @@ export function CcSwitchImportDialog({
               </p>
             </div>
             {error ? (
-              // 错误用色块 + 图标与上面的 hint 区分，一眼可辨是出错了。
-              <p className="bg-destructive/10 text-destructive flex items-start gap-1.5 rounded-md px-3 py-2 text-xs">
-                <AlertCircle className="mt-0.5 size-3.5 shrink-0" />
-                <span>{error}</span>
-              </p>
+              // 错误横幅与上面的 hint 区分，一眼可辨是出错了。
+              <InlineBanner tone="error">{error}</InlineBanner>
             ) : null}
           </div>
         )}

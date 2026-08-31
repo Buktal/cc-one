@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 
 use crate::error::{AppError, AppResult};
 use crate::model::{RawSession, SessionMessage, SessionMessageRole, TokenCounts};
-use crate::time::epoch_millis_to_iso;
+use crate::time::{epoch_millis_to_iso, source_timestamp_to_iso, SourceTimestamp};
 
 use super::transcript::{MessageSpec, MessageUuid, RawMessage, TextKeys};
 use super::{
@@ -615,8 +615,12 @@ fn parse_opencode_message_data(value: &serde_json::Value) -> Option<OpenCodeMess
 }
 
 fn opencode_raw_usage(session_id: &str, message_id: &str, msg: &OpenCodeMessageData) -> RawUsage {
+    // `time.created` 缺席以 0 哨兵落地（解析处 `unwrap_or(0)`）——0 不是历法
+    // 时刻而是「无」，交给 `fallback_timestamp` 回填采集时刻。有值则必须经
+    // 共享入口落 canonical Millis+Z，与同模块 session / transcript 的
+    // `epoch_millis_to_iso` 同形（这列是跨源 TEXT 排序键，拼写必须唯一）。
     let parsed_ts = if msg.timestamp_ms > 0 {
-        chrono::DateTime::from_timestamp_millis(msg.timestamp_ms).map(|dt| dt.to_rfc3339())
+        source_timestamp_to_iso(SourceTimestamp::Millis(msg.timestamp_ms))
     } else {
         None
     };
@@ -735,6 +739,42 @@ mod tests {
             "modelID": "t", "time": { "created": 1, "completed": 2 }
         });
         assert!(parse_opencode_message_data(&zero).is_none());
+    }
+
+    /// 用量行的 timestamp 必须与其它四源同一拼写在同一 TEXT 列里：canonical
+    /// Millis+Z（这条路径曾绕开共享入口裸写 `to_rfc3339()`，产出 `+00:00`
+    /// 偏移后缀的拼写，混进跨源排序键）。`time.created` 缺席的 0 哨兵走采集
+    /// 时刻回填，绝不落成 1970 的 epoch-0 时刻。
+    #[test]
+    fn opencode_usage_timestamp_is_canonical_millis_z() {
+        let mk = |timestamp_ms: i64| OpenCodeMessageData {
+            tokens: TokenCounts {
+                input: 100,
+                ..TokenCounts::default()
+            },
+            model_id: "glm-5.2".to_string(),
+            timestamp_ms,
+        };
+        let raw = opencode_raw_usage("s1", "m1", &mk(1_779_755_333_700));
+        assert_eq!(raw.timestamp, "2026-05-26T00:28:53.700Z");
+        assert_eq!(
+            raw.timestamp,
+            epoch_millis_to_iso(1_779_755_333_700),
+            "usage ts shares the session paths' canonical form"
+        );
+        // `time.created` 缺席的 0 哨兵走采集时刻回填，绝不落成源值 0 的
+        // epoch-0 时刻。参照物取调用前的 `now_iso` 读数而非某个字面时刻：
+        // 单调性保证回填值严格晚于它，而对墙上时钟取值的假设（比如「不该是
+        // 1970」）在时钟被冻结/回拨的测试环境里站不住。
+        let before = crate::time::now_iso();
+        let raw = opencode_raw_usage("s1", "m2", &mk(0));
+        chrono::DateTime::parse_from_rfc3339(&raw.timestamp).unwrap();
+        assert!(
+            raw.timestamp > before,
+            "0 sentinel backfills from the collection clock, never the epoch-0 \
+             source value (got {}, reference {before})",
+            raw.timestamp
+        );
     }
 
     /// The emit gate judges the FOLDED end-state: any single source bucket

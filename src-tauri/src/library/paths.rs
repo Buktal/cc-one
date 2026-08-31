@@ -7,8 +7,10 @@
 //! - 规范化半边 [`within_library_root`]：对已存在的路径 canonicalize 后过
 //!   `starts_with` library root，暴露已存在段里的符号链接。
 //!
-//! 全部接受前端路径参数的入口（scan / upload 直呼，export / delete / rename /
-//! read_text 经根模块的 `resolve_rel`）都从 [`device_subdir`] 这一个函数定位。
+//! 全部接受前端路径参数的入口（scan / upload / device_summary /
+//! forget_device_library 直呼，export / delete / rename / read_text 经根模块的
+//! `resolve_rel`）都从 [`device_subdir`] 这一个函数定位。越界一律以
+//! `library path escapes the root` 拒绝——话术单源在闸口，调用方不再手抄。
 
 use std::path::{Component, Path, PathBuf};
 
@@ -19,8 +21,9 @@ use crate::error::{AppError, AppResult};
 /// （Windows `C:\`、UNC）这些非 `Normal` 分量会让 `Path::join` 逃出预期目录
 /// （`..` 原地穿越、绝对前缀整体替换 base），必须在进 join 之前拒绝——这是
 /// 「写盘只发生在 library root 内」的词法半边；规范化半边见
-/// [`within_library_root`]。
-pub(crate) fn has_only_plain_components(p: &Path) -> bool {
+/// [`within_library_root`]。域内私有：域外入口一律走 [`device_subdir`]，
+/// 不自带词法校验（那会裂出第二份边界判断）。
+fn has_only_plain_components(p: &Path) -> bool {
     p.components().all(|c| matches!(c, Component::Normal(_)))
 }
 
@@ -41,9 +44,10 @@ fn subpath_rel(subpath: &str) -> AppResult<PathBuf> {
 }
 
 /// 解析 library 内 `<deviceId>` 设备子树下的 `subpath` 目录，返回可用于 fs
-/// 操作的路径。全部接受前端路径参数的入口（scan / upload 直呼，export /
-/// delete / rename / read_text 经 [`super::resolve_rel`]）都从这一个函数定位，
-/// 「写盘只发生在 library root 内」的不变量在这里收口。
+/// 操作的路径。全部接受前端路径参数的入口（scan / upload / 根模块的
+/// `device_summary` / [`super::forget_device_library`] 直呼，export /
+/// delete / rename / read_text 经 [`super::resolve_rel`]）都从这一个函数
+/// 定位，「写盘只发生在 library root 内」的不变量在这里收口。
 ///
 /// 包含性谓词与 `resolve_rel` 相同（canonicalize + `starts_with` library
 /// root），但目标允许尚不存在（upload 要创建、scan 里别的设备可能没有该

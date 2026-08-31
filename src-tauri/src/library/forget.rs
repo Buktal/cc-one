@@ -6,8 +6,9 @@
 use std::path::Path;
 
 use crate::config::{ConfigData, Paths};
-use crate::error::{AppError, AppResult};
+use crate::error::AppResult;
 
+use super::paths::device_subdir;
 use super::LibraryForgetAction;
 
 /// Sanitise a peer display name into a safe `from-<name>` folder label,
@@ -45,14 +46,11 @@ pub fn forget_device_library(
     action: LibraryForgetAction,
     peer_name: &str,
 ) -> AppResult<()> {
-    // peer_id 与其它入口的路径参数同源（前端命令参数），必须过同一词法
-    // 谓词——`..` 会让下面的 remove_dir_all / rename 作用到 library root 之外。
-    if !super::has_only_plain_components(Path::new(peer_id)) {
-        return Err(AppError::Config(format!(
-            "library path escapes the root: {peer_id}"
-        )));
-    }
-    let peer_dir = paths.library.join(peer_id);
+    // peer_id 与其它入口的路径参数同源（前端命令参数）：子树根从
+    // `device_subdir` 闸口定位——词法 + 规范化两半都在那里收口（`..` 原地
+    // 穿越、绝对前缀整体替换 base、已存在段里的外指符号链接都在此拒绝），
+    // remove_dir_all / rename 才不可能落到 library root 之外。
+    let peer_dir = device_subdir(paths, peer_id, "")?;
     if !peer_dir.exists() {
         return Ok(());
     }
@@ -77,8 +75,9 @@ pub fn forget_device_library(
 }
 
 /// Recursively count files (excl. `.gitkeep`) and folders under a device's
-/// library subtree; `{0, 0}` when it does not exist.
-pub(crate) fn count_subtree(dir: &Path) -> super::DeviceLibrarySummary {
+/// library subtree; `{0, 0}` when it does not exist. 域内私有：域外取计数走
+/// 根模块的 [`super::device_summary`]（含闸口定位）。
+pub(super) fn count_subtree(dir: &Path) -> super::DeviceLibrarySummary {
     fn walk(dir: &Path, files: &mut f64, dirs: &mut f64) {
         let Ok(rd) = std::fs::read_dir(dir) else {
             return;

@@ -9,9 +9,12 @@
 //! file and a directory, and the delete-then-create it would need is
 //! destructive). Per-device subtrees never collide across devices.
 //!
-//! 前端传入的路径参数（subpath / rel_path / device_scope / peer_id）一律经
-//! [`device_subdir`] 的包含性谓词定位：写盘只发生在 library root 内。
-//! 谓词本身在 [`paths`]，对端遗忘的 library 副作用在 [`forget`]。
+//! 前端传入的路径参数（device_scope / subpath / rel_path / device_id /
+//! peer_id）一律经 [`device_subdir`] 的包含性谓词定位：写盘只发生在 library
+//! root 内，scan / upload / export / delete / rename / read_text /
+//! device_summary / forget_device_library 八个领域入口全部过闸——命令层是
+//! 纯薄壳，不持第二份路径校验。谓词本身在 [`paths`]，对端遗忘的 library
+//! 副作用在 [`forget`]。
 
 use std::path::{Path, PathBuf};
 
@@ -24,9 +27,8 @@ mod paths;
 #[cfg(test)]
 mod tests;
 
-pub(crate) use forget::count_subtree;
+use forget::count_subtree;
 pub use forget::forget_device_library;
-pub(crate) use paths::has_only_plain_components;
 use paths::{device_subdir, is_plain_entry_name};
 
 /// A Library entry is either a single file or a directory tree.
@@ -409,4 +411,22 @@ pub(crate) fn read_text_entry(
         Ok(text) => Ok(Some(text)),
         Err(_) => Ok(None),
     }
+}
+
+// ---------------------------------------------------------------------------
+// device subtree summary (forget-device dialog)
+// ---------------------------------------------------------------------------
+
+/// File/folder counts for one device's library subtree — what the
+/// forget-device dialog previews as "to be migrated / deleted". A missing
+/// subtree counts as zero (a read, not a lookup). The subtree root is located
+/// through the [`device_subdir`] gate like every other front-end path
+/// parameter: an escaping `device_id` (`..`, absolute / drive-letter prefix)
+/// is rejected before anything is read.
+pub fn device_summary(
+    paths: &crate::config::Paths,
+    device_id: &str,
+) -> AppResult<DeviceLibrarySummary> {
+    let dir = device_subdir(paths, device_id, "")?;
+    Ok(count_subtree(&dir))
 }
