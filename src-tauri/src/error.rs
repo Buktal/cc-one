@@ -6,9 +6,10 @@
 
 /// The single error type crossing the Rust→JS boundary.
 ///
-/// Variants are kept coarse and serializable-friendly: low-level causes
-/// (io / rusqlite / git2) are stringified into `Internal` rather than leaked
-/// across the boundary, so the contract stays stable and specta-friendly.
+/// Variants are kept coarse and serializable-friendly: low-level causes are
+/// stringified into the matching coarse variant (`Io` / `Db` / `Sync`) rather
+/// than leaked across the boundary, so the contract stays stable and
+/// specta-friendly.
 #[derive(Debug, thiserror::Error, serde::Serialize, specta::Type)]
 #[serde(tag = "type", content = "data")]
 pub enum AppError {
@@ -18,6 +19,15 @@ pub enum AppError {
     /// SQLite Local Store error.
     #[error("db error: {0}")]
     Db(String),
+    /// A filesystem / std-io failure (read / write / create / rename / delete)
+    /// on an ordinary data file: library file ops, pricing-file writes,
+    /// exported-provider writes, snapshot reads, … Kept separate from
+    /// [`AppError::Config`] because the frontend keys the user-facing message
+    /// off the variant name — an unplugged USB drive during an export is not a
+    /// "configuration error". `Config` keeps meaning bad config *content* or
+    /// unresolvable config identity, not a failing disk operation.
+    #[error("io error: {0}")]
+    Io(String),
     /// A parser failed to discover/parse Source logs.
     #[error("parser error: {0}")]
     SourceParser(String),
@@ -40,7 +50,7 @@ pub enum AppError {
 
 impl From<std::io::Error> for AppError {
     fn from(e: std::io::Error) -> Self {
-        Self::Config(e.to_string())
+        Self::Io(e.to_string())
     }
 }
 

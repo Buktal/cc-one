@@ -107,12 +107,9 @@ fn write_own_synced_groups(
 
 /// Generate a globally-unique synced-group id: `<deviceId>-<8hex>`. The device
 /// prefix is the ownership marker (only this device edits the group), so a peer
-/// never collides.
+/// never collides. Hex 段走中性原语 [`crate::model::generate_short_hex_id`]。
 fn generate_synced_group_id(device_id: &str) -> String {
-    use rand::Rng;
-    let bytes: [u8; 4] = rand::thread_rng().gen();
-    let hex: String = bytes.iter().map(|b| format!("{b:02x}")).collect();
-    format!("{device_id}-{hex}")
+    format!("{device_id}-{}", crate::model::generate_short_hex_id())
 }
 
 /// The subset of synced groups THIS device owns (id prefix matches device_id).
@@ -263,10 +260,11 @@ pub(crate) fn list_groups_dto(
 
 /// Local group id: 8 hex chars. Device-private, so no prefix is needed (unlike
 /// synced groups, which carry a device prefix for cross-device uniqueness).
+/// 生成走 model 层的中性原语 [`crate::model::generate_short_hex_id`]（与用户
+/// 自建供应商 id 同一设备本地 id 空间）——原语不再住本模块，避免 model 侧
+/// 为词法复用 up-call sessions。命令层继续经此入口取 id。
 pub(crate) fn generate_local_group_id() -> String {
-    use rand::Rng;
-    let bytes: [u8; 4] = rand::thread_rng().gen();
-    bytes.iter().map(|b| format!("{b:02x}")).collect()
+    crate::model::generate_short_hex_id()
 }
 
 #[cfg(test)]

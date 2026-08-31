@@ -10,7 +10,6 @@
 // single-device setups render no pick — nothing to switch to, the same caliber
 // as DeviceScopeControl.
 
-import dayjs from "dayjs"
 import { useTranslation } from "react-i18next"
 import { useDevicesQuery, useDeviceUsageQuery } from "@/app/store/api"
 import { useAppDispatch, useAppSelector } from "@/app/store/hooks"
@@ -24,6 +23,7 @@ import {
   formatMetricLine,
   formatMetricSeg,
   formatPct,
+  formatRelative,
   formatSegValue,
   formatTokens,
 } from "@/lib/format"
@@ -96,7 +96,7 @@ export function DeviceSection({ filter }: { filter: FilterState }) {
                     m?.is_self
                       ? t("usage.devices.lastActive")
                       : t("usage.devices.lastSync"),
-                    dayjs(r.last_active_at).fromNow(),
+                    formatRelative(r.last_active_at),
                   ),
                 ])}
                 selected={selected === r.device_id}

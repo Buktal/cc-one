@@ -90,6 +90,13 @@ export const {
     // ---- preferences ----
     // Go through the generated `commands.*` so tauri-specta's `typedError`
     // wrapping matches what `run` expects. Raw `invoke` skips that wrapping.
+    //
+    // 失效约定（config 轨）：preferences 写命令只落本机 config.json，不走
+    // Tauri 事件总线（没有 preferences_changed）——写后失效靠每个 mutation
+    // 手写 `invalidatesTags: ["App"]` 补偿（appInfo / preferences 两个读都
+    // provide "App"）。事件方案（Rust 统一 emit + 全局监听）评估过：为纯
+    // 本机写引入一条新事件比这八个字面量更重，未采用。新增 preferences 写
+    // 命令必须带同样的 invalidatesTags: ["App"]，漏写即 UI 显示旧值。
     preferences: b.query<Preferences_Serialize, void>({
       queryFn: async () => run(commands.getPreferences()),
       providesTags: ["App"],

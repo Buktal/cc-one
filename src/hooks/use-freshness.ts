@@ -10,9 +10,9 @@
 // only from the in-memory map (never re-parses localStorage) so the reference
 // stays stable across renders when nothing changed.
 
-import { listen } from "@tauri-apps/api/event"
 import { useEffect, useSyncExternalStore } from "react"
 
+import { listenAppEvent, USAGE_CHANGED } from "@/app/app-events"
 import { useAppInfoQuery } from "@/app/store/api"
 import { debouncedLocalStorageWrite } from "@/lib/persistence"
 
@@ -96,9 +96,11 @@ export function useFreshness() {
     if (!deviceId) return
     ensure(deviceId)
     let unlisten: (() => void) | null = null
-    listen("usage_changed", () => mark(deviceId, "lastCollectAt")).then((u) => {
-      unlisten = u
-    })
+    listenAppEvent(USAGE_CHANGED, () => mark(deviceId, "lastCollectAt")).then(
+      (u) => {
+        unlisten = u
+      },
+    )
     return () => {
       unlisten?.()
     }

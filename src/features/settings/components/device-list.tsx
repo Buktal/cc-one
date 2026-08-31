@@ -15,6 +15,7 @@ import {
   useLibraryDeviceSummaryQuery,
   useSetDeviceDisplayNameMutation,
 } from "@/app/store/api"
+import { InlineTextEdit } from "@/components/inline-text-edit"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import {
@@ -25,15 +26,18 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog"
-import { Input } from "@/components/ui/input"
 import {
   Tooltip,
   TooltipContent,
   TooltipTrigger,
 } from "@/components/ui/tooltip"
+import { useInlineEdit } from "@/hooks/use-inline-edit"
 import { useMutateWithToast } from "@/hooks/use-toast-mutation"
 import { cn } from "@/lib/utils"
-import type { LibraryForgetAction } from "@/types/generated/bindings"
+import type {
+  DeviceInfo,
+  LibraryForgetAction,
+} from "@/types/generated/bindings"
 
 /** The two choices shown when a device has library files. Order = UI order;
  *  the first (migrate) is the default selection. */
@@ -57,11 +61,23 @@ const FORGET_CHOICES: Array<{
 export function DeviceList() {
   const { t } = useTranslation()
   const { data: devices = [] } = useDevicesQuery()
-  const [setName, { isLoading }] = useSetDeviceDisplayNameMutation()
+  const [setName] = useSetDeviceDisplayNameMutation()
   const [forget, { isLoading: forgetting }] = useForgetDeviceMutation()
   const runWithToast = useMutateWithToast()
-  const [editing, setEditing] = useState<string | null>(null)
-  const [draft, setDraft] = useState("")
+  // 设备改名编辑器：draft/open/busy 机器归 useInlineEdit，呈现归
+  // InlineTextEdit（✓/✕ 内嵌输入框；Enter 提交 / Escape / 失焦收起的契约
+  // 在组件里）。target 存 begin 时抓的设备对象，按 device_id 比对。
+  const rename = useInlineEdit<DeviceInfo>({
+    commit: (device, draft) =>
+      runWithToast(
+        setName,
+        { deviceId: device.device_id, displayName: draft.trim() },
+        {
+          success: { key: "settings.toast.displayNameUpdated" },
+          failed: { key: "settings.toast.renameFailed" },
+        },
+      ),
+  })
   const [removing, setRemoving] = useState<string | null>(null)
   const [libAction, setLibAction] = useState<LibraryForgetAction>("migrate")
   // Pre-flight: does this peer have library files? Drives the migrate-vs-delete
@@ -119,57 +135,24 @@ export function DeviceList() {
                 {d.device_id}
               </span>
             </div>
-            {d.is_self ? null : editing === d.device_id ? (
-              <div className="flex items-center gap-2">
-                <Input
-                  className="h-8 w-32"
-                  placeholder={t("devices.displayNamePlaceholder")}
-                  value={draft}
-                  onChange={(e) => setDraft(e.target.value)}
-                />
-                <Button
-                  size="sm"
-                  disabled={isLoading || !draft.trim()}
-                  onClick={async () => {
-                    const ok = await runWithToast(
-                      setName,
-                      {
-                        deviceId: d.device_id,
-                        displayName: draft.trim(),
-                      },
-                      {
-                        success: { key: "settings.toast.displayNameUpdated" },
-                        failed: { key: "settings.toast.renameFailed" },
-                      },
-                    )
-                    if (ok) {
-                      setEditing(null)
-                      setDraft("")
-                    }
-                  }}
-                >
-                  {t("common.save")}
-                </Button>
-                <Button
-                  size="sm"
-                  variant="ghost"
-                  onClick={() => {
-                    setEditing(null)
-                    setDraft("")
-                  }}
-                >
-                  {t("common.cancel")}
-                </Button>
-              </div>
+            {d.is_self ? null : rename.target?.device_id === d.device_id ? (
+              <InlineTextEdit
+                className="w-44"
+                value={rename.draft}
+                onValueChange={rename.setDraft}
+                busy={rename.busy}
+                onCommit={() => void rename.commit()}
+                onCancel={rename.cancel}
+                placeholder={t("devices.displayNamePlaceholder")}
+                ariaLabel={t("devices.rename")}
+                autoFocus
+              />
             ) : (
               <div className="flex items-center gap-1">
                 <Button
                   size="sm"
                   variant="outline"
-                  onClick={() => {
-                    setEditing(d.device_id)
-                    setDraft(d.display_name ?? "")
-                  }}
+                  onClick={() => rename.begin(d, d.display_name ?? "")}
                 >
                   {t("devices.rename")}
                 </Button>

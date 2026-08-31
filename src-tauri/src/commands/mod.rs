@@ -42,19 +42,51 @@ pub use usage::*;
 
 use std::sync::Arc;
 
-use tauri::{Emitter, State};
+use tauri::State;
 
 use crate::config::ConfigStore;
 use crate::db::Store;
-use crate::error::AppResult;
+use crate::error::{AppError, AppResult};
+use crate::events;
 use crate::model::RunMode;
 
-/// Emit `providers_changed` so the frontend's provider queries invalidate.
-/// 纯 Tauri 事件总线，与具体业务域无关——providers / live-import / CC-Switch
-/// 写库命令共用同一失效信号（架构审查候选③：从 providers.rs 上收至此，
-/// 解除兄弟模块对 providers 的业务外依赖）。
-pub(crate) fn emit_providers_changed(app_handle: &tauri::AppHandle) {
-    let _ = app_handle.emit("providers_changed", ());
+/// 写后通知轨（执行轨在 [`run_blocking`]）：blocking 工作成功后要发哪条失效
+/// 事件。发事件的变体持有 `AppHandle`——要 emit 就必须先把 handle 交出来，
+/// 于是「漏发」的形态从「少了一行没人注意的代码」变成「review 一眼可见的
+/// `Emit::None`」；事件名与 TS 消费名单的单源见 [`crate::events`]。
+#[derive(Clone, Copy)]
+pub(crate) enum Emit<'a> {
+    /// 只读工作，或写后不经事件总线失效（前端在 mutation 成功处自己失效）。
+    None,
+    /// Store 整体写（采集 / 同步）→ `usage_changed`。
+    Usage(&'a tauri::AppHandle),
+    /// 会话域写 → `sessions_changed`。
+    Sessions(&'a tauri::AppHandle),
+    /// 供应商域写 → `providers_changed`。
+    Providers(&'a tauri::AppHandle),
+}
+
+/// 命令层重活唯一入口：执行轨（blocking 执行 + join 失败 label 化）与通知轨
+/// （emit 配对）都钉在这一处。闭包跑进 blocking 线程池——async runtime 的
+/// 线程不做磁盘 / git / 网络 IO，主线程不碰重活（UI 不冻结）；join 失败统一
+/// 按 `label` 归因成 `AppError::Internal`；工作成功后才发 `Emit` 声明的失效
+/// 事件（失败不发——前端缓存不被半成品写污染）。新写命令不得再手抄
+/// `spawn_blocking` + map_err，更不得绕过本入口在别处 emit。
+pub(crate) async fn run_blocking<T, F>(label: &str, emit: Emit<'_>, f: F) -> AppResult<T>
+where
+    T: Send + 'static,
+    F: FnOnce() -> AppResult<T> + Send + 'static,
+{
+    let out = tauri::async_runtime::spawn_blocking(f)
+        .await
+        .map_err(|e| AppError::Internal(format!("{label} task failed: {e}")))??;
+    match emit {
+        Emit::None => {}
+        Emit::Usage(handle) => events::emit_usage_changed(handle),
+        Emit::Sessions(handle) => events::emit_sessions_changed(handle),
+        Emit::Providers(handle) => events::emit_providers_changed(handle),
+    }
+    Ok(out)
 }
 
 /// App-wide managed state: the Local Store + local config, wrapped

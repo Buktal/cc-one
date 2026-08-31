@@ -1,8 +1,15 @@
-// Pure navigation derivations for the library browser: splitting an entry's
-// rel_path into device + subpath, resolving a "go up" click to its target, and
-// building the breadcrumb trail. Extracted from the view so the navigation
-// rules are testable in isolation (architecture.md: "关键不变量用代码表达") —
-// the hook wires these to React state, these own the math.
+// Pure derivations for the library browser. Two families live here:
+//
+// - navigation math — splitting an entry's rel_path into device + subpath,
+//   resolving a "go up" click to its target, and building the breadcrumb
+//   trail. Extracted from the view so the rules are testable in isolation
+//   (architecture.md: "关键不变量用代码表达") — the hook wires these to React
+//   state, these own the math.
+// - filename classification — the extension parse (extOf) plus the image /
+//   theme-text predicates and the preview's JSON pretty-print. Every
+//   "route by extension" decision (preview rendering, row icons, the kind
+//   column, the upload dialog's folder guess) parses through the same extOf —
+//   five call sites used to hand-roll it with drifting case handling.
 
 /** One row in the device scope picker. Built in the hook (labels need i18n)
  *  and consumed by buildBreadcrumb to label the device crumb. */
@@ -27,16 +34,52 @@ export interface BreadcrumbCrumb {
  *  native iframe. */
 const THEME_TEXT_EXTS = new Set(["json", "md", "markdown", "txt", "log"])
 
+/** Image extensions rendered as <img> (preview) / ImageIcon (icons) — one
+ *  table behind both decisions so they can't disagree about a name. */
+const IMAGE_EXTS = new Set(["png", "jpg", "jpeg", "gif", "webp", "svg", "bmp"])
+
+/**
+ * The file name's extension, lowercased, without the leading dot; an
+ * extensionless name ("LICENSE", "Makefile") yields "". This is the single
+ * parse every extension-routed decision goes through. Semantics follow the
+ * lastIndexOf form this module always used: the dot must exist somewhere, so
+ * a leading dot counts as a separator (".gitkeep" → "gitkeep") — the
+ * split(".").pop() copies elsewhere returned the bare name instead, one of
+ * the drifts that motivated this function.
+ */
+export function extOf(name: string): string {
+  const dot = name.lastIndexOf(".")
+  if (dot < 0) return ""
+  return name.slice(dot + 1).toLowerCase()
+}
+
+/**
+ * Whether a library file is an image: the preview renders these natively
+ * (<img> + Ctrl+wheel zoom) and the icon mapping picks ImageIcon.
+ */
+export function isImageName(name: string): boolean {
+  return IMAGE_EXTS.has(extOf(name))
+}
+
 /**
  * Whether a library file should render as theme-styled text (pre) instead of
  * an iframe. JSON / Markdown / plain text / logs — the browser's native
  * rendering of these is white-on-black-inverted-agnostic and breaks dark mode.
  */
 export function shouldThemeRender(name: string): boolean {
-  const dot = name.lastIndexOf(".")
-  if (dot < 0) return false
-  const ext = name.slice(dot + 1).toLowerCase()
-  return THEME_TEXT_EXTS.has(ext)
+  return THEME_TEXT_EXTS.has(extOf(name))
+}
+
+/**
+ * Pretty-print JSON with 2-space indent; any parse failure falls back to the
+ * raw text (a .json file can be a JSONL stream or a non-JSON body).
+ */
+export function maybePrettyJson(text: string): string {
+  try {
+    return JSON.stringify(JSON.parse(text), null, 2)
+  } catch {
+    return text
+  }
 }
 
 /**

@@ -13,9 +13,12 @@
 // 「运行」两栏（竖分隔线 + 眉题），以下退回单栏行布局（窄窗行为与现状
 // 一致）。Row-based layout: each preference is a SettingRow — label +
 // hint on the left, control on the right, hairline between rows — so the card
-// stays scannable as more options land. Trigger labels are derived from the
-// value via a SelectValue render function; without it Base UI shows the raw
-// value ("10" / "300" / "zh"), not the localized "10 秒" / "5 分钟" / "中文".
+// stays scannable as more options land. 秒/分级预设三行（autoTuck /
+// collect / push）塌缩为 PresetSelect + 常量表：触发器与选项列表共用同一个
+// formatLabel（内走 formatDurationLabel 的秒/分/时分档），档位文案只写
+// 一次——选项显示与触发器显示不可能再分裂（曾内联 4 份「0=off / <60 秒 /
+// 否则分钟」，加小时档要改 4 个点）。无 render 函数时 Base UI 显示裸值
+// ("10" / "300" / "zh")，不是本地化的 "10 秒" / "5 分钟" / "中文"。
 // 版本与更新行移至「关于」区（#109 承接自 shell）。
 
 import { Check } from "lucide-react"
@@ -48,6 +51,7 @@ import { SettingRow } from "@/features/settings/components/setting-row"
 import { useMutateWithToast } from "@/hooks/use-toast-mutation"
 import { LANGUAGES } from "@/i18n/languages"
 import { describeError } from "@/lib/error"
+import { formatDurationLabel } from "@/lib/format"
 import { cn } from "@/lib/utils"
 import type {
   CloseBehavior,
@@ -242,40 +246,21 @@ export function GeneralCard() {
             label={t("settings.general.autoTuck")}
             hint={t("settings.general.autoTuckHint")}
           >
-            <Select
-              value={
-                prefs ? String(prefs.lightweight_auto_tuck_secs) : undefined
+            <PresetSelect
+              value={prefs?.lightweight_auto_tuck_secs}
+              options={AUTO_TUCK_OPTIONS}
+              disabled={savingAutoTuck}
+              formatLabel={(s) =>
+                formatDurationLabel(s, t, {
+                  zeroKey: "settings.general.autoTuckOff",
+                })
               }
-              onValueChange={async (v) => {
-                await runWithToast(setAutoTuck, Number(v), {
+              onChange={(v) =>
+                runWithToast(setAutoTuck, v, {
                   failed: { key: "settings.toast.saveFailed" },
                 })
-              }}
-            >
-              <SelectTrigger className="w-36" disabled={savingAutoTuck}>
-                <SelectValue placeholder="—">
-                  {(v: string) => {
-                    const secs = Number(v)
-                    return secs === 0
-                      ? t("settings.general.autoTuckOff")
-                      : secs < 60
-                        ? t("common.seconds", { n: secs })
-                        : t("common.minutes", { n: secs / 60 })
-                  }}
-                </SelectValue>
-              </SelectTrigger>
-              <SelectContent>
-                {AUTO_TUCK_OPTIONS.map((v) => (
-                  <SelectItem key={v} value={String(v)}>
-                    {v === 0
-                      ? t("settings.general.autoTuckOff")
-                      : v < 60
-                        ? t("common.seconds", { n: v })
-                        : t("common.minutes", { n: v / 60 })}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
+              }
+            />
           </SettingRow>
         </div>
 
@@ -287,54 +272,34 @@ export function GeneralCard() {
             label={t("settings.general.collectInterval")}
             hint={t("settings.general.collectIntervalHint")}
           >
-            <Select
-              value={prefs ? String(prefs.collect_interval_secs) : undefined}
-              onValueChange={async (v) => {
-                await runWithToast(setCollectInterval, Number(v), {
+            <PresetSelect
+              value={prefs?.collect_interval_secs}
+              options={COLLECT_OPTIONS}
+              disabled={savingCollect}
+              formatLabel={(s) => formatDurationLabel(s, t)}
+              onChange={(v) =>
+                runWithToast(setCollectInterval, v, {
                   failed: { key: "settings.toast.saveFailed" },
                 })
-              }}
-            >
-              <SelectTrigger className="w-36" disabled={savingCollect}>
-                <SelectValue placeholder="—">
-                  {(v: string) => t("common.seconds", { n: Number(v) })}
-                </SelectValue>
-              </SelectTrigger>
-              <SelectContent>
-                {COLLECT_OPTIONS.map((v) => (
-                  <SelectItem key={v} value={String(v)}>
-                    {t("common.seconds", { n: v })}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
+              }
+            />
           </SettingRow>
           <SettingRow
             label={t("settings.general.pushInterval")}
             hint={t("settings.general.pushIntervalHint")}
           >
             {synced ? (
-              <Select
-                value={prefs ? String(prefs.push_interval_secs) : undefined}
-                onValueChange={async (v) => {
-                  await runWithToast(setPushInterval, Number(v), {
+              <PresetSelect
+                value={prefs?.push_interval_secs}
+                options={PUSH_OPTIONS}
+                disabled={savingPush}
+                formatLabel={(s) => formatDurationLabel(s, t)}
+                onChange={(v) =>
+                  runWithToast(setPushInterval, v, {
                     failed: { key: "settings.toast.saveFailed" },
                   })
-                }}
-              >
-                <SelectTrigger className="w-36" disabled={savingPush}>
-                  <SelectValue placeholder="—">
-                    {(v: string) => t("common.minutes", { n: Number(v) / 60 })}
-                  </SelectValue>
-                </SelectTrigger>
-                <SelectContent>
-                  {PUSH_OPTIONS.map((v) => (
-                    <SelectItem key={v} value={String(v)}>
-                      {t("common.minutes", { n: v / 60 })}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
+                }
+              />
             ) : (
               /* 指向「同步」卡的提示 — 可点击滚到目标卡，而不是只指路 */
               <button
@@ -386,5 +351,49 @@ function GroupCap({ children }: { children: React.ReactNode }) {
     <h4 className="text-muted-foreground/70 mb-1 text-[10.5px] font-semibold tracking-[0.12em]">
       {children}
     </h4>
+  )
+}
+
+/**
+ * 秒/分级离散预设的 Select——autoTuck / collect / push 三个逐字同构块的
+ * 塌缩（架构审查Ⅵ候选⑧a）。触发器文案与选项列表共用同一个 formatLabel：
+ * 档位文案只写一次，触发器显示什么、列表就显示什么，不可能再分裂。秒数
+ * 是这里的通用货币（value / options / onChange 全走秒），字符串化只发生在
+ * Select 的边界内；文案分档统一在 formatDurationLabel（lib/format），本
+ * 组件不自己写秒/分换算。
+ */
+function PresetSelect({
+  value,
+  options,
+  formatLabel,
+  onChange,
+  disabled,
+}: {
+  /** 当前选中的秒数；undefined（偏好未读到）交给 placeholder。 */
+  value: number | undefined
+  options: ReadonlyArray<number>
+  /** 秒数 → 展示文案（触发器与选项共用同一实现）。 */
+  formatLabel: (secs: number) => string
+  onChange: (secs: number) => unknown
+  disabled?: boolean
+}) {
+  return (
+    <Select
+      value={value === undefined ? undefined : String(value)}
+      onValueChange={(v) => onChange(Number(v))}
+    >
+      <SelectTrigger className="w-36" disabled={disabled}>
+        <SelectValue placeholder="—">
+          {(v: string) => formatLabel(Number(v))}
+        </SelectValue>
+      </SelectTrigger>
+      <SelectContent>
+        {options.map((v) => (
+          <SelectItem key={v} value={String(v)}>
+            {formatLabel(v)}
+          </SelectItem>
+        ))}
+      </SelectContent>
+    </Select>
   )
 }

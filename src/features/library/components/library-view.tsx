@@ -4,13 +4,15 @@
 // preview a file in the webview; export to a path you choose. cc one never
 // writes into an AI tool's own config dir.
 //
-// Pure rendering only — all state, queries, mutations and navigation live in
-// useLibraryBrowser (./use-library-browser). This component owns JSX, styles,
-// i18n, and the pure display helper (kindIcon).
+// Presentation + the inline rename editor's wiring: browser state comes from
+// useLibraryBrowser as clusters (query / nav / upload / actions / preview),
+// the rename editor's draft/open/busy machine is useInlineEdit paired with
+// InlineTextEdit (the Enter / Escape / blur / button contract lives there).
+// This component owns JSX, styles, i18n, and the pure display helper
+// (kindIcon).
 
 import {
   ArrowUp,
-  Check,
   ChevronRight,
   Download,
   FilePlus,
@@ -19,13 +21,13 @@ import {
   Pencil,
   Search,
   Trash2,
-  X,
 } from "lucide-react"
 import { useTranslation } from "react-i18next"
 import { collapseTriggerProps } from "@/components/collapse-trigger"
 import { ConfirmDialog } from "@/components/confirm-dialog"
 import { EmptyState } from "@/components/empty-state"
 import { FilterSelect } from "@/components/filter-select"
+import { InlineTextEdit } from "@/components/inline-text-edit"
 import { PaginationBar } from "@/components/pagination-bar"
 import { QueryState } from "@/components/query-state"
 import { RelativeTime } from "@/components/relative-time"
@@ -46,10 +48,12 @@ import {
   TooltipTrigger,
 } from "@/components/ui/tooltip"
 import { useConfirmAction } from "@/hooks/use-confirm-action"
+import { useInlineEdit } from "@/hooks/use-inline-edit"
 import { deviceOptionLabel } from "@/lib/device-labels"
 import { formatSize } from "@/lib/format"
 import { cn } from "@/lib/utils"
 import type { LibraryEntry } from "@/types/generated/bindings"
+import { extOf } from "../derive"
 import { kindIcon } from "../kind-icon"
 import { useLibraryBrowser } from "../use-library-browser"
 import { PreviewSheet } from "./preview-sheet"
@@ -57,50 +61,21 @@ import { UploadDialog } from "./upload-dialog"
 
 export function LibraryView() {
   const { t } = useTranslation()
-  const {
-    entries,
-    totalCount,
-    page,
-    totalPages,
-    goToPage,
-    density,
-    isLoading,
-    scanError,
-    refetchScan,
-    deviceOptions,
-    deviceScope,
-    setDeviceScope,
-    subpath,
-    atRoot,
-    showDevice,
-    breadcrumb,
-    search,
-    setSearch,
-    dragging,
-    pendingPaths,
-    clearPendingPaths,
-    onAddFiles,
-    renaming,
-    renameVal,
-    setRenameVal,
-    cancelRename,
-    busyRelPath,
-    drill,
-    goUp,
-    onExport,
-    onDelete: deleteEntry,
-    startRename,
-    commitRename,
-    preview,
-    setPreview,
-  } = useLibraryBrowser()
+  const { query, nav, upload, actions, preview } = useLibraryBrowser()
+  // 预览的 entry 拆成局部 const：JSX 守卫的收窄能带进回调（属性访问
+  // preview.entry 带不进去）。
+  const { entry: previewed, open: openPreview, close: closePreview } = preview
+  // 行内重命名编辑器：draft/open/busy 机器归 useInlineEdit，业务动作归
+  // browser.actions.rename。target 存 begin 时抓的 entry，按 rel_path 比对
+  // ——扫描重取换了对象引用也不丢编辑态。
+  const rename = useInlineEdit<LibraryEntry>({ commit: actions.rename })
 
   // 删除确认（busy / 关闭时序收敛在 useConfirmAction）。先关再删：行内已有
   // busyRelPath spinner，closeFirst 模式确认后立刻关框、由行级 busy 接管。
   const confirmDelete = useConfirmAction<LibraryEntry>({
     holdOpen: false,
     onAction: async (entry) => {
-      await deleteEntry(entry)
+      await actions.remove(entry)
       return true
     },
   })
@@ -112,7 +87,7 @@ export function LibraryView() {
         on a narrow container the group drops to its own right-aligned line
         instead of scattering between the breadcrumb crumbs. */}
       <div className="@container flex shrink-0 flex-wrap items-center gap-2">
-        {!atRoot ? (
+        {!nav.atRoot ? (
           <Tooltip>
             <TooltipTrigger
               render={
@@ -120,7 +95,7 @@ export function LibraryView() {
                   variant="outline"
                   size="icon-sm"
                   aria-label={t("library.up")}
-                  onClick={goUp}
+                  onClick={nav.goUp}
                 />
               }
             >
@@ -130,27 +105,27 @@ export function LibraryView() {
           </Tooltip>
         ) : null}
 
-        {atRoot ? (
+        {nav.atRoot ? (
           /* 宽度策略（自适应 + 上限）收敛在 FilterSelect 本体；长设备名由
             SelectValue 的 line-clamp-1 截断。 */
           <FilterSelect
             ariaLabel={t("library.scope.all")}
             allLabel={t("library.scope.all")}
-            options={deviceOptions.map((o) => ({
+            options={nav.deviceOptions.map((o) => ({
               value: o.id,
               label: o.label,
             }))}
-            value={deviceScope}
-            onChange={setDeviceScope}
+            value={nav.deviceScope}
+            onChange={nav.pickDevice}
           />
         ) : null}
 
-        {!atRoot ? (
+        {!nav.atRoot ? (
           /* Breadcrumb shares the back-button row — flex-1 pushes the
              right-hand group to the row end; each crumb truncates so a deep
              path can't overflow the row. */
           <div className="text-muted-foreground flex min-w-0 flex-1 items-center gap-1 text-xs">
-            {breadcrumb.map((c, i) => (
+            {nav.breadcrumb.map((c, i) => (
               <span key={c.key} className="flex min-w-0 items-center gap-1">
                 {i > 0 ? <ChevronRight className="size-3 shrink-0" /> : null}
                 <button
@@ -172,15 +147,15 @@ export function LibraryView() {
           <div className="relative w-56">
             <Search className="text-muted-foreground absolute top-1/2 left-2 size-3.5 -translate-y-1/2" />
             <Input
-              value={search}
-              onChange={(e) => setSearch(e.target.value)}
+              value={query.search}
+              onChange={(e) => query.onSearch(e.target.value)}
               placeholder={t("library.searchPlaceholder")}
               aria-label={t("library.searchAria")}
               className="h-8 pl-7"
             />
           </div>
 
-          <Button size="sm" onClick={onAddFiles}>
+          <Button size="sm" onClick={upload.addFiles}>
             <FilePlus />
             {t("library.add")}
           </Button>
@@ -190,7 +165,7 @@ export function LibraryView() {
       <Card
         className={cn(
           "flex min-h-0 flex-1 flex-col transition-colors",
-          dragging && "border-accent-brand bg-accent-tint",
+          upload.dragging && "border-accent-brand bg-accent-tint",
         )}
       >
         <CardContent className="flex min-h-0 flex-1 flex-col">
@@ -199,16 +174,16 @@ export function LibraryView() {
               空态——错误与真空目录是两种状态两种出路。空态/表格作为 children：
               未 loading、未 error 时由 QueryState 原样渲染。 */}
           <QueryState
-            isLoading={isLoading}
-            error={scanError}
+            isLoading={query.isLoading}
+            error={query.scanError}
             isEmpty={false}
             errorAction={{
               label: t("common.retry"),
-              onClick: () => void refetchScan(),
+              onClick: () => void query.refetchScan(),
             }}
           >
-            {totalCount === 0 ? (
-              search.trim() ? (
+            {query.totalCount === 0 ? (
+              query.search.trim() ? (
                 /* Searched but nothing matched — a lighter state than the
                  empty-folder invite, so "no matches" ≠ "add files". */
                 <div className="text-muted-foreground flex flex-1 items-center justify-center py-12 text-sm">
@@ -244,7 +219,7 @@ export function LibraryView() {
                         {t("library.col.size")}
                       </TableHead>
                       <TableHead className="w-40">
-                        {showDevice
+                        {nav.showDevice
                           ? t("library.col.device")
                           : t("library.col.modified")}
                       </TableHead>
@@ -254,14 +229,14 @@ export function LibraryView() {
                     </TableRow>
                   </TableHeader>
                   <TableBody>
-                    {entries.map((e) => {
+                    {query.entries.map((e) => {
                       const Icon = kindIcon(e.name, e.kind === "dir")
-                      const isRenaming = renaming === e.rel_path
-                      const busy = busyRelPath === e.rel_path
+                      const isRenaming = rename.target?.rel_path === e.rel_path
+                      const busy = actions.busyRelPath === e.rel_path
                       const kindLabel =
                         e.kind === "dir"
                           ? t("library.kind.dir")
-                          : e.name.split(".").pop()?.toUpperCase() ||
+                          : extOf(e.name).toUpperCase() ||
                             t("library.kind.file")
                       const deviceLabel = deviceOptionLabel(
                         { is_self: e.is_self, display_name: e.device_name },
@@ -278,8 +253,8 @@ export function LibraryView() {
                           // 出行动作。契约由 collapseTriggerProps 工厂给出。
                           {...collapseTriggerProps({
                             onToggle: () => {
-                              if (e.kind === "dir") drill(e)
-                              else setPreview(e)
+                              if (e.kind === "dir") nav.drill(e)
+                              else openPreview(e)
                             },
                             selfTargetOnly: true,
                             enabled: !isRenaming,
@@ -288,57 +263,20 @@ export function LibraryView() {
                         >
                           <TableCell>
                             {isRenaming ? (
-                              /* w-full tracks the fixed table-fixed column, so
-                               the editor can't widen the name column (under
-                               auto layout the input's intrinsic width would
-                               stretch it and shift every row sideways).
-                               Confirm/cancel float inside the input so they
-                               take no layout width.
-                               Blur = commit: clicking away saves instead of
-                               leaving a stray editor open. The two inner
-                               buttons preventDefault on mousedown so the blur
-                               never fires for them — the confirm button would
-                               otherwise double-submit (blur commit + click
-                               commit) and the cancel button would commit
-                               before canceling. */
-                              <div className="relative w-full">
-                                <Input
-                                  value={renameVal}
-                                  onChange={(ev) =>
-                                    setRenameVal(ev.target.value)
-                                  }
-                                  className="h-7 w-full pr-16"
-                                  onKeyDown={(ev) => {
-                                    if (ev.key === "Enter") commitRename(e)
-                                    if (ev.key === "Escape") cancelRename()
-                                  }}
-                                  onBlur={() => commitRename(e)}
-                                  autoFocus
-                                />
-                                <div className="absolute top-1/2 right-1 flex -translate-y-1/2 gap-0.5">
-                                  <Button
-                                    variant="ghost"
-                                    size="icon-sm"
-                                    disabled={busy}
-                                    onMouseDown={(ev) => ev.preventDefault()}
-                                    onClick={() => commitRename(e)}
-                                  >
-                                    {busy ? (
-                                      <Loader2 className="animate-spin" />
-                                    ) : (
-                                      <Check />
-                                    )}
-                                  </Button>
-                                  <Button
-                                    variant="ghost"
-                                    size="icon-sm"
-                                    onMouseDown={(ev) => ev.preventDefault()}
-                                    onClick={cancelRename}
-                                  >
-                                    <X />
-                                  </Button>
-                                </div>
-                              </div>
+                              /* 编辑器收进 InlineTextEdit，w-full 跟住
+                                 table-fixed 的列宽（编辑态不撑宽名字列）；
+                                 Enter 提交 / Escape 取消 / 失焦提交（空草稿
+                                 视为放弃）、✓/✕ mousedown preventDefault
+                                 不夺焦点——契约单一归属（见组件文件头）。 */
+                              <InlineTextEdit
+                                className="w-full"
+                                value={rename.draft}
+                                onValueChange={rename.setDraft}
+                                busy={busy}
+                                onCommit={() => void rename.commit()}
+                                onCancel={rename.cancel}
+                                autoFocus
+                              />
                             ) : (
                               <button
                                 type="button"
@@ -358,8 +296,8 @@ export function LibraryView() {
                                   // drill/preview 被行处理器再触发一次
                                   // （drill 两次会压两层导航历史）。
                                   ev.stopPropagation()
-                                  if (e.kind === "dir") drill(e)
-                                  else setPreview(e)
+                                  if (e.kind === "dir") nav.drill(e)
+                                  else openPreview(e)
                                 }}
                               >
                                 <Icon className="size-4 shrink-0" />
@@ -385,7 +323,7 @@ export function LibraryView() {
                           {/* Tooltip keeps the clipped device name readable —
                             the column is fixed at w-40 under table-fixed. */}
                           <TableCell className="text-muted-foreground text-xs truncate">
-                            {showDevice ? (
+                            {nav.showDevice ? (
                               e.is_self ? (
                                 deviceLabel
                               ) : (
@@ -412,7 +350,7 @@ export function LibraryView() {
                                       disabled={busy}
                                       onClick={(ev) => {
                                         ev.stopPropagation()
-                                        onExport(e)
+                                        void actions.export(e)
                                       }}
                                     />
                                   }
@@ -437,7 +375,7 @@ export function LibraryView() {
                                       disabled={busy}
                                       onClick={(ev) => {
                                         ev.stopPropagation()
-                                        startRename(e)
+                                        rename.begin(e, e.name)
                                       }}
                                     />
                                   }
@@ -487,46 +425,46 @@ export function LibraryView() {
           {/* Paged footer — the shared PaginationBar (page info left, numbered
             pages with ellipsis jumps + per-page density right). */}
           <PaginationBar
-            page={page}
-            totalPages={totalPages}
-            total={totalCount}
-            onPageChange={goToPage}
-            density={density}
+            page={query.page}
+            totalPages={query.totalPages}
+            total={query.totalCount}
+            onPageChange={query.goToPage}
+            density={query.density}
           />
         </CardContent>
       </Card>
 
-      {dragging ? (
+      {upload.dragging ? (
         <div className="pointer-events-none fixed inset-0 z-30 flex items-center justify-center">
           <div className="border-accent-brand bg-accent-tint text-accent-brand-strong rounded-xl border-2 border-dashed px-8 py-6 text-sm font-medium">
             {/* Name the drop target so a stray drop lands somewhere visible,
                 not the directory you happened to be browsing. */}
-            {subpath
-              ? t("library.drop.target", { path: subpath })
+            {nav.subpath
+              ? t("library.drop.target", { path: nav.subpath })
               : t("library.drop.active")}
           </div>
         </div>
       ) : null}
 
-      {pendingPaths ? (
+      {upload.pendingPaths ? (
         <UploadDialog
-          paths={pendingPaths}
-          subpath={subpath}
-          onClose={clearPendingPaths}
+          paths={upload.pendingPaths}
+          subpath={nav.subpath}
+          onClose={upload.close}
         />
       ) : null}
 
-      {preview ? (
+      {previewed ? (
         <PreviewSheet
-          entry={preview}
-          busy={busyRelPath === preview.rel_path}
-          onClose={() => setPreview(null)}
-          onExport={() => onExport(preview)}
+          entry={previewed}
+          busy={actions.busyRelPath === previewed.rel_path}
+          onClose={closePreview}
+          onExport={() => void actions.export(previewed)}
           /* Rename hands back to the row's inline editor (one rename UI, not
              a second copy inside the sheet). */
           onRename={() => {
-            setPreview(null)
-            startRename(preview)
+            closePreview()
+            rename.begin(previewed, previewed.name)
           }}
         />
       ) : null}

@@ -485,7 +485,7 @@ pub fn head_tree_device_ids(repo_path: &Path) -> Option<HashSet<String>> {
     let tree = repo.head().ok()?.peel_to_tree().ok()?;
     let mut ids: HashSet<String> = HashSet::new();
     let mut insert_if_valid = |id: &str| {
-        if crate::config::is_valid_device_id(id) {
+        if crate::devices::is_valid_device_id(id) {
             ids.insert(id.to_string());
         }
     };

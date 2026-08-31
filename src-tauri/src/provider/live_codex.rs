@@ -33,6 +33,7 @@ use std::path::{Path, PathBuf};
 use toml_edit::DocumentMut;
 
 use crate::error::{AppError, AppResult};
+use crate::model::App;
 use crate::provider::settings_codec::{parse_codex_settings, CODEX_AUTH_SECRET_KEY};
 
 /// Codex 受控键清单（与 claude 的 `CONTROLLED_FIELDS` 并列，各自是所属
@@ -55,11 +56,10 @@ pub const CODEX_CONTROLLED_FIELDS: &[&str] = &[
     "wire_api",
 ];
 
-/// `~/.codex` 目录（跨平台统一走 home）。
+/// `~/.codex` 目录（跨平台统一走 home；家目录映射归
+/// [`App::app_config_dir`]，单一声明处）。
 pub fn codex_config_dir() -> AppResult<PathBuf> {
-    let home =
-        dirs::home_dir().ok_or_else(|| AppError::Config("cannot resolve home dir".into()))?;
-    Ok(home.join(".codex"))
+    App::Codex.app_config_dir()
 }
 
 /// `~/.codex/config.toml` 路径。
@@ -211,30 +211,9 @@ pub fn switch_codex_live(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::provider::testutil;
     use std::fs;
     use toml_edit::DocumentMut;
-
-    /// 一份带用户手动配置（非受控字段）的 live config.toml：注释、自定义
-    /// 间距、mcp_servers、web_search 都要原样保留。
-    fn live_with_uncontrolled() -> String {
-        r#"# 用户手动的配置：非受控字段
-model = "gpt-5.6"
-model_reasoning_effort = "high"
-
-[model_providers.custom]
-name = "Old"
-base_url = "https://old.dev"
-wire_api = "responses"
-
-[mcp_servers.filesystem]
-command = "npx"
-args = ["-y", "@modelcontextprotocol/server-filesystem", "/tmp"]
-
-[web_search]
-enabled = true
-"#
-        .to_string()
-    }
 
     /// 目标快照 TOML（第三方预设形状：model + model_provider + model_providers）。
     fn third_party_target(model: &str, name: &str) -> String {
@@ -251,53 +230,41 @@ requires_openai_auth = true
         )
     }
 
-    /// 按路径取合并结果里的字符串值（测试读值用，不依赖格式）。
-    fn get_str(s: &str, path: &[&str]) -> Option<String> {
-        let doc: DocumentMut = s.parse().ok()?;
-        let mut cur = doc.get(path[0])?;
-        for key in &path[1..] {
-            cur = cur.get(*key)?;
-        }
-        cur.as_str()
-            .map(str::to_string)
-            .or_else(|| cur.as_bool().map(|b| b.to_string()))
-    }
-
     fn parsed_doc(s: &str) -> DocumentMut {
         s.parse().unwrap()
     }
 
     #[test]
     fn controlled_fields_replaced_uncontrolled_preserved() {
-        let live = live_with_uncontrolled();
+        let live = testutil::live_with_uncontrolled(App::Codex);
         let target = third_party_target("kimi-k2.7-code", "kimi");
         let merged = merge_codex_config(&live, &target).unwrap();
         // 受控键整块替换。
         assert_eq!(
-            get_str(&merged, &["model"]).as_deref(),
+            testutil::toml_get_str(&merged, &["model"]).as_deref(),
             Some("kimi-k2.7-code")
         );
         assert_eq!(
-            get_str(&merged, &["model_providers", "custom", "name"]).as_deref(),
+            testutil::toml_get_str(&merged, &["model_providers", "custom", "name"]).as_deref(),
             Some("kimi")
         );
         assert_eq!(
-            get_str(&merged, &["model_providers", "custom", "base_url"]).as_deref(),
+            testutil::toml_get_str(&merged, &["model_providers", "custom", "base_url"]).as_deref(),
             Some("https://api.moonshot.cn/v1")
         );
         // 非受控字段原样保留。
         assert_eq!(
-            get_str(&merged, &["mcp_servers", "filesystem", "command"]).as_deref(),
+            testutil::toml_get_str(&merged, &["mcp_servers", "filesystem", "command"]).as_deref(),
             Some("npx")
         );
         assert_eq!(
-            get_str(&merged, &["web_search", "enabled"]).as_deref(),
+            testutil::toml_get_str(&merged, &["web_search", "enabled"]).as_deref(),
             Some("true")
         );
         // 受控键但目标没带 → 从 live 撤除（model_reasoning_effort；受控轴
         // 「新供应商赢」，缺失即撤、不保留旧值）。
         assert!(
-            get_str(&merged, &["model_reasoning_effort"]).is_none(),
+            testutil::toml_get_str(&merged, &["model_reasoning_effort"]).is_none(),
             "目标缺失的受控键必须撤除，不得残留旧供应商的值"
         );
         // 注释保留针对「未替换的键」成立（见 comment_and_format_preserved_on_
@@ -309,7 +276,7 @@ requires_openai_auth = true
 
     #[test]
     fn target_uncontrolled_fields_are_ignored_not_written() {
-        let live = live_with_uncontrolled();
+        let live = testutil::live_with_uncontrolled(App::Codex);
         // 目标也带了 mcp_servers / web_search——非受控，绝不能覆盖 live 的。
         let target = r#"model = "gpt-5.6"
 
@@ -322,12 +289,12 @@ enabled = false
 "#;
         let merged = merge_codex_config(&live, target).unwrap();
         assert_eq!(
-            get_str(&merged, &["mcp_servers", "filesystem", "command"]).as_deref(),
+            testutil::toml_get_str(&merged, &["mcp_servers", "filesystem", "command"]).as_deref(),
             Some("npx"),
             "live 的 mcp_servers 保留，目标的被忽略"
         );
         assert_eq!(
-            get_str(&merged, &["web_search", "enabled"]).as_deref(),
+            testutil::toml_get_str(&merged, &["web_search", "enabled"]).as_deref(),
             Some("true"),
             "live 的 web_search 保留"
         );
@@ -339,7 +306,7 @@ enabled = false
         let merged = merge_codex_config("", &target).unwrap();
         let doc = parsed_doc(&merged);
         assert_eq!(
-            get_str(&merged, &["model"]).as_deref(),
+            testutil::toml_get_str(&merged, &["model"]).as_deref(),
             Some("kimi-k2.7-code")
         );
         assert!(
@@ -351,16 +318,16 @@ enabled = false
 
     #[test]
     fn empty_target_removes_controlled_keeps_uncontrolled() {
-        let live = live_with_uncontrolled();
+        let live = testutil::live_with_uncontrolled(App::Codex);
         let merged = merge_codex_config(&live, "").unwrap();
         // 目标没有受控内容 → live 的受控键全部撤除（官方登录态版快照为空，
         // 切换 = 回到无身份配置；旧供应商的 model 残留会让切换静默失效）。
         assert!(
-            get_str(&merged, &["model"]).is_none(),
+            testutil::toml_get_str(&merged, &["model"]).is_none(),
             "空目标必须撤除 live 的受控键 model"
         );
         assert!(
-            get_str(&merged, &["model_reasoning_effort"]).is_none(),
+            testutil::toml_get_str(&merged, &["model_reasoning_effort"]).is_none(),
             "空目标必须撤除 live 的受控键 model_reasoning_effort"
         );
         assert!(
@@ -369,11 +336,11 @@ enabled = false
         );
         // 非受控字段保留。
         assert_eq!(
-            get_str(&merged, &["mcp_servers", "filesystem", "command"]).as_deref(),
+            testutil::toml_get_str(&merged, &["mcp_servers", "filesystem", "command"]).as_deref(),
             Some("npx")
         );
         assert_eq!(
-            get_str(&merged, &["web_search", "enabled"]).as_deref(),
+            testutil::toml_get_str(&merged, &["web_search", "enabled"]).as_deref(),
             Some("true")
         );
     }
@@ -400,11 +367,11 @@ enabled = false
         let back =
             merge_codex_config(&merged, &third_party_target("kimi-k2.7-code", "kimi")).unwrap();
         assert_eq!(
-            get_str(&back, &["model"]).as_deref(),
+            testutil::toml_get_str(&back, &["model"]).as_deref(),
             Some("kimi-k2.7-code")
         );
         assert_eq!(
-            get_str(&back, &["model_providers", "custom", "base_url"]).as_deref(),
+            testutil::toml_get_str(&back, &["model_providers", "custom", "base_url"]).as_deref(),
             Some("https://api.moonshot.cn/v1")
         );
     }
@@ -433,7 +400,7 @@ name = "New"
             "注释必须保留: {merged}"
         );
         assert_eq!(
-            get_str(&merged, &["model_providers", "custom", "name"]).as_deref(),
+            testutil::toml_get_str(&merged, &["model_providers", "custom", "name"]).as_deref(),
             Some("New")
         );
     }
@@ -481,7 +448,7 @@ name = "New"
         assert_eq!(fs::read_to_string(&auth_path).unwrap(), login);
         let written = fs::read_to_string(&config_path).unwrap();
         assert!(
-            get_str(&written, &["model"]).is_none(),
+            testutil::toml_get_str(&written, &["model"]).is_none(),
             "登录态版切换撤除受控键: {written}"
         );
         let bak = tmp.path().join("config.toml.bak");
@@ -532,7 +499,7 @@ name = "New"
         // config 一并写完（语义断言，不依赖 toml_edit 的字节格式）。
         let written = fs::read_to_string(&config_path).unwrap();
         assert_eq!(
-            get_str(&written, &["model"]).as_deref(),
+            testutil::toml_get_str(&written, &["model"]).as_deref(),
             Some("kimi-k2.7-code")
         );
     }
@@ -552,7 +519,10 @@ name = "New"
             serde_json::from_str(&fs::read_to_string(&auth_path).unwrap()).unwrap();
         assert_eq!(auth["OPENAI_API_KEY"], serde_json::json!("sk-1"));
         let written = fs::read_to_string(&config_path).unwrap();
-        assert_eq!(get_str(&written, &["model"]).as_deref(), Some("m"));
+        assert_eq!(
+            testutil::toml_get_str(&written, &["model"]).as_deref(),
+            Some("m")
+        );
     }
 
     #[test]
@@ -600,7 +570,8 @@ name = "New"
             ".bak 是写盘前的 live 快照"
         );
         assert_eq!(
-            get_str(&fs::read_to_string(&config_path).unwrap(), &["model"]).as_deref(),
+            testutil::toml_get_str(&fs::read_to_string(&config_path).unwrap(), &["model"])
+                .as_deref(),
             Some("kimi-k2.7-code")
         );
 
@@ -632,7 +603,10 @@ name = "New"
         .unwrap();
         assert!(config_path.exists());
         let written = fs::read_to_string(&config_path).unwrap();
-        assert_eq!(get_str(&written, &["model"]).as_deref(), Some("m"));
+        assert_eq!(
+            testutil::toml_get_str(&written, &["model"]).as_deref(),
+            Some("m")
+        );
         assert!(
             !tmp.path().join("config.toml.bak").exists(),
             "live 原本不存在 → 无备份"
@@ -721,7 +695,10 @@ name = "New"
         let target = r#"{"config":"model = \"gpt-5.6\""}"#;
         switch_codex_live(&config_path, &auth_path, target, "").unwrap();
         let written = fs::read_to_string(&config_path).unwrap();
-        assert_eq!(get_str(&written, &["model"]).as_deref(), Some("gpt-5.6"));
+        assert_eq!(
+            testutil::toml_get_str(&written, &["model"]).as_deref(),
+            Some("gpt-5.6")
+        );
         switch_codex_live(&config_path, &auth_path, target, "").unwrap();
         assert_eq!(fs::read_to_string(&config_path).unwrap(), written);
         assert!(
@@ -753,8 +730,14 @@ name = "New"
 theme = "dark"
 "#;
         let out = merge_codex_snippet(merged, snippet).unwrap();
-        assert_eq!(get_str(&out, &["model"]).as_deref(), Some("kimi-k2.7-code"));
-        assert_eq!(get_str(&out, &["tui", "theme"]).as_deref(), Some("dark"));
+        assert_eq!(
+            testutil::toml_get_str(&out, &["model"]).as_deref(),
+            Some("kimi-k2.7-code")
+        );
+        assert_eq!(
+            testutil::toml_get_str(&out, &["tui", "theme"]).as_deref(),
+            Some("dark")
+        );
     }
 
     #[test]
@@ -764,7 +747,7 @@ theme = "dark"
         let snippet = r#"approval_policy = "never""#;
         let out = merge_codex_snippet(merged, snippet).unwrap();
         assert_eq!(
-            get_str(&out, &["approval_policy"]).as_deref(),
+            testutil::toml_get_str(&out, &["approval_policy"]).as_deref(),
             Some("oncalls"),
             "live 已有的键不覆盖"
         );
@@ -792,15 +775,15 @@ new_field = "from-snippet"
         let out = merge_codex_snippet(merged, snippet).unwrap();
         // filesystem 保留、github 补上（含凭据，不禁）。
         assert_eq!(
-            get_str(&out, &["mcp_servers", "filesystem", "command"]).as_deref(),
+            testutil::toml_get_str(&out, &["mcp_servers", "filesystem", "command"]).as_deref(),
             Some("npx")
         );
         assert_eq!(
-            get_str(&out, &["mcp_servers", "github", "command"]).as_deref(),
+            testutil::toml_get_str(&out, &["mcp_servers", "github", "command"]).as_deref(),
             Some("npx")
         );
         assert_eq!(
-            get_str(
+            testutil::toml_get_str(
                 &out,
                 &[
                     "mcp_servers",
@@ -815,12 +798,12 @@ new_field = "from-snippet"
         );
         // shared：command live 赢，new_field 补上。
         assert_eq!(
-            get_str(&out, &["mcp_servers", "shared", "command"]).as_deref(),
+            testutil::toml_get_str(&out, &["mcp_servers", "shared", "command"]).as_deref(),
             Some("live"),
             "同 server 键 live 已有 → 不覆盖"
         );
         assert_eq!(
-            get_str(&out, &["mcp_servers", "shared", "new_field"]).as_deref(),
+            testutil::toml_get_str(&out, &["mcp_servers", "shared", "new_field"]).as_deref(),
             Some("from-snippet"),
             "递归补缺失：片段独有的子键补上"
         );
@@ -849,7 +832,7 @@ command = "npx"
         for empty in ["", "   ", "\n"] {
             let out = merge_codex_snippet(merged, empty).unwrap();
             assert_eq!(
-                get_str(&out, &["mcp_servers", "filesystem", "command"]).as_deref(),
+                testutil::toml_get_str(&out, &["mcp_servers", "filesystem", "command"]).as_deref(),
                 Some("npx")
             );
         }
@@ -870,7 +853,10 @@ theme = "dark"
         let once = merge_codex_snippet(merged, snippet).unwrap();
         let twice = merge_codex_snippet(&once, snippet).unwrap();
         assert_eq!(once, twice);
-        assert_eq!(get_str(&twice, &["tui", "theme"]).as_deref(), Some("dark"));
+        assert_eq!(
+            testutil::toml_get_str(&twice, &["tui", "theme"]).as_deref(),
+            Some("dark")
+        );
     }
 
     #[test]
@@ -925,25 +911,25 @@ name = "x""#,
         switch_codex_live(&config_path, &auth_path, target, snippet).unwrap();
         let written = fs::read_to_string(&config_path).unwrap();
         assert_eq!(
-            get_str(&written, &["model"]).as_deref(),
+            testutil::toml_get_str(&written, &["model"]).as_deref(),
             Some("kimi-k2.7-code")
         );
         assert_eq!(
-            get_str(&written, &["tui", "theme"]).as_deref(),
+            testutil::toml_get_str(&written, &["tui", "theme"]).as_deref(),
             Some("light"),
             "live 已有的片段不覆盖"
         );
         assert_eq!(
-            get_str(&written, &["tui", "top_output_style"]).as_deref(),
+            testutil::toml_get_str(&written, &["tui", "top_output_style"]).as_deref(),
             Some("compact"),
             "片段独有的子键补上"
         );
         assert_eq!(
-            get_str(&written, &["mcp_servers", "github", "command"]).as_deref(),
+            testutil::toml_get_str(&written, &["mcp_servers", "github", "command"]).as_deref(),
             Some("npx")
         );
         assert_eq!(
-            get_str(
+            testutil::toml_get_str(
                 &written,
                 &[
                     "mcp_servers",
@@ -1014,19 +1000,19 @@ name = "x""#,
         assert!(written.contains("# 主题"), "非受控表内注释保留: {written}");
         // 身份键受控替换（old→kimi）；非受控 [tui].text live 赢；片段独有键补上。
         assert_eq!(
-            get_str(&written, &["model"]).as_deref(),
+            testutil::toml_get_str(&written, &["model"]).as_deref(),
             Some("kimi-k2.7-code")
         );
         assert_eq!(
-            get_str(&written, &["tui", "text"]).as_deref(),
+            testutil::toml_get_str(&written, &["tui", "text"]).as_deref(),
             Some("light")
         );
         assert_eq!(
-            get_str(&written, &["tui", "top_output_style"]).as_deref(),
+            testutil::toml_get_str(&written, &["tui", "top_output_style"]).as_deref(),
             Some("compact")
         );
         assert_eq!(
-            get_str(&written, &["mcp_servers", "github", "command"]).as_deref(),
+            testutil::toml_get_str(&written, &["mcp_servers", "github", "command"]).as_deref(),
             Some("npx")
         );
         // 键序保留：model（顶层）→ [tui] → 片段补的 [mcp_servers.github] 依次在后。

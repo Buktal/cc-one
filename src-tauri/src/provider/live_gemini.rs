@@ -34,6 +34,7 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 use crate::error::{AppError, AppResult};
+use crate::model::App;
 use crate::provider::live::{parse_live_or_empty, read_live_settings};
 use crate::provider::settings_codec::{parse_gemini_settings, GeminiSettings, GEMINI_API_KEY_ENV};
 /// `selectedType` 取值：API Key 版（env 含 `GEMINI_API_KEY`）。
@@ -53,11 +54,10 @@ pub const SELECTED_TYPE_OAUTH: &str = "oauth";
 /// `mcpServers` 等其余顶层键永不被清单撤除（目标声明时替换、未声明时保留）。
 pub const GEMINI_IDENTITY_FIELDS: &[&str] = &["model"];
 
-/// Gemini 配置目录：`~/.gemini`。
+/// Gemini 配置目录：`~/.gemini`（家目录映射归 [`App::app_config_dir`]，
+/// 单一声明处）。
 pub fn gemini_dir() -> AppResult<PathBuf> {
-    let home =
-        dirs::home_dir().ok_or_else(|| AppError::Config("cannot resolve home dir".into()))?;
-    Ok(home.join(".gemini"))
+    App::Gemini.app_config_dir()
 }
 
 /// `~/.gemini/.env` 路径。

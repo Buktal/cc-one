@@ -4,20 +4,23 @@
 // git so their row shows a spinner while busy (the caller passes `busy`).
 //
 // Pure rendering — the CRUD handlers and the pending/busy flags come from
-// useSessionsBrowser. The rename input inside the popover is transient local
-// state (the hook only learns the new name on submit).
+// useSessionsBrowser. The rename editor is the shared inline-edit pair
+// (useInlineEdit owns draft/open/busy, InlineTextEdit owns the Enter / Escape /
+// blur / ✓✕ contract); this component snapshots the group into the editor on
+// begin and closes the popover when a commit lands.
 
-import { Check, Loader2, MoreHorizontal, Pencil, Trash2, X } from "lucide-react"
+import { Loader2, MoreHorizontal, Pencil, Trash2 } from "lucide-react"
 import { useState } from "react"
 import { useTranslation } from "react-i18next"
 import { ConfirmDialog } from "@/components/confirm-dialog"
+import { InlineTextEdit } from "@/components/inline-text-edit"
 import { Button } from "@/components/ui/button"
-import { Input } from "@/components/ui/input"
 import {
   Popover,
   PopoverContent,
   PopoverTrigger,
 } from "@/components/ui/popover"
+import { useInlineEdit } from "@/hooks/use-inline-edit"
 import type { SessionGroup } from "@/types/generated/bindings"
 
 export function GroupActionsPopover({
@@ -33,27 +36,32 @@ export function GroupActionsPopover({
   busy: boolean
 }) {
   const { t } = useTranslation()
-  const [renaming, setRenaming] = useState(false)
-  const [draft, setDraft] = useState(g.name)
   const [popoverOpen, setPopoverOpen] = useState(false)
+  // 行内重命名：draft/open/busy 机器归 useInlineEdit，键盘/失焦/按钮契约归
+  // InlineTextEdit。target 存 begin 时抓的组对象——提交回调拿到的是改名前的
+  // 组（快照语义，比对 name 不受列表重取影响）。onRename 以 Promise<void>
+  // 上报（失败走 toast，resolve 不区分成败）：resolve = 完成（连弹层一起收
+  // 起），reject = 失败留守编辑态；空名由 InlineTextEdit 挡下不可提交，
+  // 未改名静默收尾（不打 mutation）。
+  const rename = useInlineEdit<SessionGroup>({
+    commit: async (target, draft) => {
+      const name = draft.trim()
+      if (name && name !== target.name) {
+        try {
+          await onRename(target, name)
+        } catch {
+          return false
+        }
+      }
+      setPopoverOpen(false)
+      return true
+    },
+  })
+  const renaming = rename.target !== null
   // Deleting goes through a confirmation dialog (unlike rename, the action is
   // destructive — sessions would silently move to Ungrouped otherwise). The
   // dialog closes before the mutation runs, matching how the popover acts.
   const [deleteConfirmOpen, setDeleteConfirmOpen] = useState(false)
-
-  function startRename() {
-    setDraft(g.name)
-    setRenaming(true)
-  }
-
-  async function commitRename() {
-    const name = draft.trim()
-    setRenaming(false)
-    setPopoverOpen(false)
-    if (name && name !== g.name) {
-      await onRename(g, name)
-    }
-  }
 
   function confirmDelete() {
     setPopoverOpen(false)
@@ -82,34 +90,21 @@ export function GroupActionsPopover({
         </PopoverTrigger>
         <PopoverContent className="w-56 p-2" align="end">
           {renaming ? (
-            <div className="flex items-center gap-1">
-              <Input
-                value={draft}
-                onChange={(e) => setDraft(e.target.value)}
-                className="h-7"
-                autoFocus
-                onKeyDown={(e) => {
-                  if (e.key === "Enter") void commitRename()
-                  if (e.key === "Escape") setRenaming(false)
-                }}
-              />
-              <Button variant="ghost" size="icon-sm" onClick={commitRename}>
-                <Check />
-              </Button>
-              <Button
-                variant="ghost"
-                size="icon-sm"
-                onClick={() => setRenaming(false)}
-              >
-                <X />
-              </Button>
-            </div>
+            <InlineTextEdit
+              value={rename.draft}
+              onValueChange={rename.setDraft}
+              busy={rename.busy}
+              onCommit={() => void rename.commit()}
+              onCancel={rename.cancel}
+              ariaLabel={t("sessions.group.rename")}
+              autoFocus
+            />
           ) : (
             <div className="flex flex-col gap-0.5">
               <button
                 type="button"
                 className="hover:bg-hover flex items-center gap-2 rounded-md px-2 py-1.5 text-left text-sm"
-                onClick={startRename}
+                onClick={() => rename.begin(g, g.name)}
               >
                 <Pencil className="size-3.5" />
                 {t("sessions.group.rename")}

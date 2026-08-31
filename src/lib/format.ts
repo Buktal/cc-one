@@ -16,6 +16,7 @@
 // `formatCostAmount` instead of the metric shapers.
 
 import dayjs from "dayjs"
+import type { TFunction } from "i18next"
 
 /** Compact a token count to K/M/B: `3.61M`, `1.2B`, `856`. Language-independent. */
 export function formatTokens(n: number | null | undefined): string {
@@ -96,6 +97,25 @@ export function formatDuration(ms: number | null | undefined): string {
   const m = Math.floor(v / 60_000)
   const sec = Math.round((v % 60_000) / 1000)
   return `${m}m${sec.toString().padStart(2, "0")}s`
+}
+
+// --------------------------------------------- 秒数档位文案（间隔/延时类） ----
+
+/** 秒数 → 档位展示文案，「秒/分/时」分档决策的唯一实现（架构审查Ⅵ候选⑧a，
+ *  general-card 曾内联 4 份同式三元）：0 → zeroKey（如 autoTuck 的「关闭」；
+ *  未传 zeroKey 按 0 秒渲染），<60 秒 → common.seconds，<1 小时 →
+ *  common.minutes（除以 60），≥1 小时 → common.hours（除以 3600）。只定键
+ *  与插值变量，文案翻译由调用方传入的 t 完成——预设表将来加「小时」档
+ *  （如 push 7200）时，选项列表与触发器共用本函数，不可能再各说各话。 */
+export function formatDurationLabel(
+  secs: number,
+  t: TFunction,
+  opts?: { zeroKey?: string },
+): string {
+  if (secs === 0 && opts?.zeroKey) return t(opts.zeroKey)
+  if (secs < 60) return t("common.seconds", { n: secs })
+  if (secs < 3600) return t("common.minutes", { n: secs / 60 })
+  return t("common.hours", { n: secs / 3600 })
 }
 
 // ------------------------------------------------------- session span trio ----
@@ -194,6 +214,16 @@ export function formatTimeExact(
   const d = dayjs(ts)
   if (!d.isValid()) return String(ts)
   return d.format("YYYY-MM-DD HH:mm")
+}
+
+/** Timestamp → 相对措辞（`fromNow`，语言随 dayjs locale——插件注册与切换
+ *  收口在 `@/i18n/languages`，这里不注册）。空值 → 「—」，与 formatTime
+ *  同一对空值规则。相对时间文案的纯函数出口（架构审查Ⅵ候选⑧b）：
+ *  RelativeTime 组件渲染悬浮触发文本用它，不便嵌 Tooltip 的面（Popover
+ *  触发器、metric 段拼接）直接取它——不再散落裸 `dayjs().fromNow()`。 */
+export function formatRelative(ts: string | number | null | undefined): string {
+  if (!ts) return "—"
+  return dayjs(ts).fromNow()
 }
 
 /** ISO day `yyyy-mm-dd` → `MM/DD`. */

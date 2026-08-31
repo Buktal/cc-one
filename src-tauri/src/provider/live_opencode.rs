@@ -41,13 +41,13 @@ use std::path::{Path, PathBuf};
 use serde_json::Value;
 
 use crate::error::{AppError, AppResult};
+use crate::model::App;
 
 /// `~/.config/opencode` 目录（跨平台统一走 home，硬编码不尊重 XDG_CONFIG_HOME）。
 /// OpenCode CLI 自身在 mac/win 也硬编码此路径，写到 XDG 位置它不读。
+/// 家目录映射归 [`App::app_config_dir`]（单一声明处）。
 pub fn opencode_config_dir() -> AppResult<PathBuf> {
-    let home =
-        dirs::home_dir().ok_or_else(|| AppError::Config("cannot resolve home dir".into()))?;
-    Ok(home.join(".config").join("opencode"))
+    App::OpenCode.app_config_dir()
 }
 
 /// `~/.config/opencode/opencode.json` 路径。

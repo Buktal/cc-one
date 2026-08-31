@@ -8,12 +8,26 @@
 //! safety net); same-name different-kind is rejected (a path cannot be both a
 //! file and a directory, and the delete-then-create it would need is
 //! destructive). Per-device subtrees never collide across devices.
+//!
+//! 前端传入的路径参数（subpath / rel_path / device_scope / peer_id）一律经
+//! [`device_subdir`] 的包含性谓词定位：写盘只发生在 library root 内。
+//! 谓词本身在 [`paths`]，对端遗忘的 library 副作用在 [`forget`]。
 
 use std::path::{Path, PathBuf};
 
 use crate::config::{ConfigData, ConfigStore};
 use crate::db::Store;
 use crate::error::{AppError, AppResult};
+
+mod forget;
+mod paths;
+#[cfg(test)]
+mod tests;
+
+pub(crate) use forget::count_subtree;
+pub use forget::forget_device_library;
+pub(crate) use paths::has_only_plain_components;
+use paths::{device_subdir, is_plain_entry_name};
 
 /// A Library entry is either a single file or a directory tree.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize, specta::Type)]
@@ -94,7 +108,6 @@ pub fn scan(
 ) -> AppResult<Vec<LibraryEntry>> {
     let paths = config.paths();
     let cfg = config.get();
-    let lib_root = paths.library.clone();
 
     // Device enumeration + display names both come from the device registry —
     // the single source — so the library view shows the same device set and the
@@ -107,7 +120,7 @@ pub fn scan(
 
     let mut out = Vec::new();
     for did in device_ids {
-        let dir = lib_root.join(&did).join(subpath_rel(subpath));
+        let dir = device_subdir(&paths, &did, subpath)?;
         if !dir.is_dir() {
             continue;
         }
@@ -157,16 +170,6 @@ pub fn scan(
     Ok(out)
 }
 
-/// Subpath normalised to a relative PathBuf (empty ⇒ device root).
-fn subpath_rel(subpath: &str) -> PathBuf {
-    let trimmed = subpath.trim().trim_matches('/');
-    if trimmed.is_empty() {
-        PathBuf::new()
-    } else {
-        PathBuf::from(trimmed)
-    }
-}
-
 /// `<deviceId>/<sub>/<name>`, forward-slash joined for cross-platform rel paths.
 fn join_rel(device_id: &str, subpath: &str, name: &str) -> String {
     let sub = subpath.trim().trim_matches('/');
@@ -195,10 +198,7 @@ pub fn upload(
     if cfg.device_id.is_empty() {
         return Err(AppError::Config("device id not initialized".into()));
     }
-    let dest_dir = paths
-        .library
-        .join(&cfg.device_id)
-        .join(subpath_rel(subpath));
+    let dest_dir = device_subdir(paths, &cfg.device_id, subpath)?;
     std::fs::create_dir_all(&dest_dir)?;
     for item in items {
         let src = Path::new(&item.source_path);
@@ -209,7 +209,7 @@ pub fn upload(
             )));
         }
         let name = item.target_name.trim();
-        if name.is_empty() || name.contains('/') || name.contains('\\') || name == ".gitkeep" {
+        if !is_plain_entry_name(name) || name == ".gitkeep" {
             return Err(AppError::Config(format!("invalid target name: {name}")));
         }
         let dst = dest_dir.join(name);
@@ -331,7 +331,7 @@ pub fn rename_entry(
 ) -> AppResult<()> {
     let target = resolve_rel(paths, rel_path)?;
     let name = new_name.trim();
-    if name.is_empty() || name.contains('/') || name.contains('\\') {
+    if !is_plain_entry_name(name) {
         return Err(AppError::Config(format!("invalid name: {name}")));
     }
     let dst = target.parent().unwrap_or_else(|| Path::new(".")).join(name);
@@ -343,118 +343,23 @@ pub fn rename_entry(
     Ok(())
 }
 
-/// Resolve a `<deviceId>/<sub>/<name>` rel path under the library root, then
-/// canonicalize and confirm it stays inside the root (defends against `../`).
+/// Resolve a `<deviceId>/<sub>/<name>` rel path under the library root and
+/// confirm it stays inside (defends against `../`). [`device_subdir`] 的薄壳：
+/// 包含性谓词已收口在那里，这里只补「条目必须已存在」这一半（读 / 改 / 删
+/// 的既有语义，不存在即 not found）。
 fn resolve_rel(paths: &crate::config::Paths, rel_path: &str) -> AppResult<PathBuf> {
     let rel = rel_path.trim().trim_matches('/');
     if rel.is_empty() {
         return Err(AppError::Config("empty library path".into()));
     }
-    let p = paths.library.join(rel);
-    let canon = p
-        .canonicalize()
-        .map_err(|_| AppError::Config(format!("library entry not found: {rel_path}")))?;
-    let root_canon = paths
-        .library
-        .canonicalize()
-        .unwrap_or_else(|_| paths.library.clone());
-    if !canon.starts_with(&root_canon) {
-        return Err(AppError::Config("library path escapes the root".into()));
+    let (device_id, subpath) = rel.split_once('/').unwrap_or((rel, ""));
+    let target = device_subdir(paths, device_id, subpath)?;
+    if !target.exists() {
+        return Err(AppError::Config(format!(
+            "library entry not found: {rel_path}"
+        )));
     }
-    Ok(canon)
-}
-
-// ---------------------------------------------------------------------------
-// device forget (migrate / delete a peer's subtree)
-// ---------------------------------------------------------------------------
-
-/// Sanitise a peer display name into a safe `from-<name>` folder label,
-/// falling back to the device id when the name is empty. Path separators and
-/// Windows-reserved chars become `_`; length is capped.
-fn migrate_folder_name(name: &str, fallback_id: &str) -> String {
-    let cleaned: String = name
-        .trim()
-        .chars()
-        .map(|c| match c {
-            '/' | '\\' | ':' | '*' | '?' | '"' | '<' | '>' | '|' => '_',
-            _ => c,
-        })
-        .collect::<String>()
-        .trim()
-        .to_string();
-    let base = if cleaned.is_empty() {
-        fallback_id.to_string()
-    } else {
-        cleaned.chars().take(64).collect()
-    };
-    format!("from-{base}")
-}
-
-/// Apply a [`LibraryForgetAction`] to a peer's library subtree. Local-only —
-/// no Git push (matches `forget_device`'s existing `repo/data/<id>/` cleanup;
-/// a peer still active elsewhere reappears on the next sync). `Migrate` moves
-/// the subtree into THIS device's library under `from-<peerName>/` (a unique
-/// suffix is appended on collision so repeated migrations never overwrite).
-/// No-op when the peer has no library subtree.
-pub fn forget_device_library(
-    paths: &crate::config::Paths,
-    cfg: &ConfigData,
-    peer_id: &str,
-    action: LibraryForgetAction,
-    peer_name: &str,
-) -> AppResult<()> {
-    let peer_dir = paths.library.join(peer_id);
-    if !peer_dir.exists() {
-        return Ok(());
-    }
-    match action {
-        LibraryForgetAction::Delete => {
-            std::fs::remove_dir_all(&peer_dir)?;
-        }
-        LibraryForgetAction::Migrate => {
-            let self_root = paths.library.join(&cfg.device_id);
-            std::fs::create_dir_all(&self_root)?;
-            let folder = migrate_folder_name(peer_name, peer_id);
-            let mut target = self_root.join(&folder);
-            let mut n = 2;
-            while target.exists() {
-                target = self_root.join(format!("{folder}-{n}"));
-                n += 1;
-            }
-            std::fs::rename(&peer_dir, &target)?;
-        }
-    }
-    Ok(())
-}
-
-/// Recursively count files (excl. `.gitkeep`) and folders under a device's
-/// library subtree; `{0, 0}` when it does not exist.
-pub(crate) fn count_subtree(dir: &Path) -> DeviceLibrarySummary {
-    fn walk(dir: &Path, files: &mut f64, dirs: &mut f64) {
-        let Ok(rd) = std::fs::read_dir(dir) else {
-            return;
-        };
-        for e in rd.flatten() {
-            if e.file_name().to_string_lossy() == ".gitkeep" {
-                continue;
-            }
-            let Ok(ft) = e.file_type() else {
-                continue;
-            };
-            if ft.is_dir() {
-                *dirs += 1.0;
-                walk(&e.path(), files, dirs);
-            } else {
-                *files += 1.0;
-            }
-        }
-    }
-    let mut files = 0.0;
-    let mut dirs = 0.0;
-    if dir.is_dir() {
-        walk(dir, &mut files, &mut dirs);
-    }
-    DeviceLibrarySummary { files, dirs }
+    Ok(target)
 }
 
 // ---------------------------------------------------------------------------
@@ -503,218 +408,5 @@ pub(crate) fn read_text_entry(
     match String::from_utf8(bytes) {
         Ok(text) => Ok(Some(text)),
         Err(_) => Ok(None),
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::config::Paths;
-
-    fn self_cfg() -> ConfigData {
-        ConfigData {
-            device_id: "aabbccddeeff".to_string(),
-            ..Default::default()
-        }
-    }
-
-    fn write_file(p: &Path, body: &str) {
-        std::fs::write(p, body).unwrap();
-    }
-
-    #[test]
-    fn read_text_entry_returns_utf8_text() {
-        let tmp = tempfile::tempdir().unwrap();
-        let paths = Paths::resolve(tmp.path());
-        let dev = "aabbccddeeff";
-        let dir = paths.library.join(dev);
-        std::fs::create_dir_all(&dir).unwrap();
-        write_file(&dir.join("notes.md"), "# Hello\n\n正文内容");
-        let text = read_text_entry(&paths, &format!("{dev}/notes.md")).unwrap();
-        assert_eq!(text.as_deref(), Some("# Hello\n\n正文内容"));
-    }
-
-    #[test]
-    fn read_text_entry_returns_none_for_binary_and_oversized() {
-        let tmp = tempfile::tempdir().unwrap();
-        let paths = Paths::resolve(tmp.path());
-        let dev = "aabbccddeeff";
-        let dir = paths.library.join(dev);
-        std::fs::create_dir_all(&dir).unwrap();
-        // NUL byte in the head ⇒ binary.
-        write_file(&dir.join("bin.dat"), "ok\0binary");
-        assert_eq!(
-            read_text_entry(&paths, &format!("{dev}/bin.dat")).unwrap(),
-            None,
-            "NUL in the first 8 KiB ⇒ not text"
-        );
-        // Over the 1 MiB cap ⇒ None (not an error).
-        let big = "x".repeat((TEXT_READ_LIMIT + 1) as usize);
-        write_file(&dir.join("big.txt"), &big);
-        assert_eq!(
-            read_text_entry(&paths, &format!("{dev}/big.txt")).unwrap(),
-            None,
-            "oversized file ⇒ not loaded"
-        );
-        // A directory is not text.
-        assert_eq!(
-            read_text_entry(&paths, dev).unwrap(),
-            None,
-            "directory ⇒ None"
-        );
-    }
-
-    #[test]
-    fn read_text_entry_rejects_escape_and_missing() {
-        let tmp = tempfile::tempdir().unwrap();
-        let paths = Paths::resolve(tmp.path());
-        // `..` escapes the library root.
-        std::fs::create_dir_all(paths.library.join("aabbccddeeff")).unwrap();
-        let err = read_text_entry(&paths, "../secret").unwrap_err();
-        assert!(
-            err.to_string().contains("escapes") || err.to_string().contains("not found"),
-            "path escape rejected: {err}"
-        );
-        // Missing file errors (resolve_rel canonicalize fails).
-        assert!(read_text_entry(&paths, "aabbccddeeff/nope.txt").is_err());
-    }
-
-    #[test]
-    fn migrate_moves_subtree_into_self() {
-        let tmp = tempfile::tempdir().unwrap();
-        let paths = Paths::resolve(tmp.path());
-        let cfg = self_cfg();
-        let peer = "112233445566";
-
-        let peer_dir = paths.library.join(peer);
-        std::fs::create_dir_all(peer_dir.join("sub")).unwrap();
-        write_file(&peer_dir.join("note.txt"), "hi");
-        write_file(&peer_dir.join("sub").join("inner.txt"), "yo");
-        write_file(&peer_dir.join(".gitkeep"), "");
-
-        forget_device_library(&paths, &cfg, peer, LibraryForgetAction::Migrate, "MacBook").unwrap();
-
-        // Peer subtree gone; contents now under self/from-MacBook/.
-        assert!(!peer_dir.exists());
-        let moved = paths.library.join(&cfg.device_id).join("from-MacBook");
-        assert!(moved.is_dir());
-        assert_eq!(
-            std::fs::read_to_string(moved.join("note.txt")).unwrap(),
-            "hi"
-        );
-        assert!(moved.join("sub").is_dir());
-        assert_eq!(
-            std::fs::read_to_string(moved.join("sub").join("inner.txt")).unwrap(),
-            "yo"
-        );
-    }
-
-    #[test]
-    fn migrate_collision_appends_suffix() {
-        let tmp = tempfile::tempdir().unwrap();
-        let paths = Paths::resolve(tmp.path());
-        let cfg = self_cfg();
-        let peer = "112233445566";
-
-        // Pre-existing migrate target must NOT be overwritten.
-        let existing = paths.library.join(&cfg.device_id).join("from-MacBook");
-        std::fs::create_dir_all(&existing).unwrap();
-        write_file(&existing.join("keeper.txt"), "keep");
-
-        let peer_dir = paths.library.join(peer);
-        std::fs::create_dir_all(&peer_dir).unwrap();
-        write_file(&peer_dir.join("note.txt"), "hi");
-
-        forget_device_library(&paths, &cfg, peer, LibraryForgetAction::Migrate, "MacBook").unwrap();
-
-        assert_eq!(
-            std::fs::read_to_string(existing.join("keeper.txt")).unwrap(),
-            "keep"
-        );
-        let moved = paths.library.join(&cfg.device_id).join("from-MacBook-2");
-        assert_eq!(
-            std::fs::read_to_string(moved.join("note.txt")).unwrap(),
-            "hi"
-        );
-    }
-
-    #[test]
-    fn delete_removes_subtree() {
-        let tmp = tempfile::tempdir().unwrap();
-        let paths = Paths::resolve(tmp.path());
-        let cfg = self_cfg();
-        let peer = "112233445566";
-
-        let peer_dir = paths.library.join(peer);
-        std::fs::create_dir_all(peer_dir.join("sub")).unwrap();
-        write_file(&peer_dir.join("note.txt"), "hi");
-
-        forget_device_library(&paths, &cfg, peer, LibraryForgetAction::Delete, "MacBook").unwrap();
-
-        assert!(!peer_dir.exists());
-    }
-
-    #[test]
-    fn forget_is_noop_when_peer_has_no_library() {
-        let tmp = tempfile::tempdir().unwrap();
-        let paths = Paths::resolve(tmp.path());
-        let cfg = self_cfg();
-        // No library/<peer>/ exists for either action.
-        forget_device_library(
-            &paths,
-            &cfg,
-            "112233445566",
-            LibraryForgetAction::Delete,
-            "MacBook",
-        )
-        .unwrap();
-        forget_device_library(
-            &paths,
-            &cfg,
-            "112233445566",
-            LibraryForgetAction::Migrate,
-            "MacBook",
-        )
-        .unwrap();
-        // Migrate must not spuriously create the self root on a no-op.
-        assert!(!paths.library.join(&cfg.device_id).exists());
-    }
-
-    #[test]
-    fn count_subtree_excludes_gitkeep() {
-        let tmp = tempfile::tempdir().unwrap();
-        let paths = Paths::resolve(tmp.path());
-        let peer_dir = paths.library.join("112233445566");
-        std::fs::create_dir_all(peer_dir.join("d1")).unwrap();
-        write_file(&peer_dir.join("a.txt"), "a");
-        write_file(&peer_dir.join(".gitkeep"), "");
-        write_file(&peer_dir.join("d1").join("b.txt"), "b");
-
-        let s = count_subtree(&peer_dir);
-        assert_eq!(s.files, 2.0); // a.txt + d1/b.txt (.gitkeep excluded)
-        assert_eq!(s.dirs, 1.0); // d1
-    }
-
-    #[test]
-    fn count_subtree_missing_dir_is_zero() {
-        let tmp = tempfile::tempdir().unwrap();
-        let paths = Paths::resolve(tmp.path());
-        let s = count_subtree(&paths.library.join("nope"));
-        assert_eq!(s.files, 0.0);
-        assert_eq!(s.dirs, 0.0);
-    }
-
-    #[test]
-    fn migrate_folder_name_sanitises() {
-        assert_eq!(
-            migrate_folder_name("MacBook", "112233445566"),
-            "from-MacBook"
-        );
-        assert_eq!(migrate_folder_name("a/b\\c", "112233445566"), "from-a_b_c");
-        assert_eq!(migrate_folder_name("", "112233445566"), "from-112233445566");
-        assert_eq!(
-            migrate_folder_name("   ", "112233445566"),
-            "from-112233445566"
-        );
     }
 }

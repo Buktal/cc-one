@@ -28,7 +28,8 @@ use std::path::{Path, PathBuf};
 
 use toml_edit::{DocumentMut, Item, Table};
 
-use crate::error::{AppError, AppResult};
+use crate::error::AppResult;
+use crate::model::App;
 use crate::provider::settings_codec::parse_grok_settings;
 
 /// profile 块表名：`[model.<profile>]`。注意与 [`MODELS_TABLE`]（default 指针
@@ -45,11 +46,10 @@ pub(crate) const MODELS_TABLE: &str = "models";
 /// cc-one profile）。
 pub(crate) const CC_ONE_PROFILE: &str = "cc-one";
 
-/// `~/.grok` 目录（跨平台统一走 home）。
+/// `~/.grok` 目录（跨平台统一走 home；家目录映射归
+/// [`App::app_config_dir`]，单一声明处）。
 pub fn grok_config_dir() -> AppResult<PathBuf> {
-    let home =
-        dirs::home_dir().ok_or_else(|| AppError::Config("cannot resolve home dir".into()))?;
-    Ok(home.join(".grok"))
+    App::Grok.app_config_dir()
 }
 
 /// `~/.grok/config.toml` 路径。
@@ -192,29 +192,9 @@ pub fn switch_grok_live(config_path: &Path, settings_config: &str, snippet: &str
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::error::AppError;
+    use crate::provider::testutil;
     use std::fs;
-
-    /// 一份带用户手动配置（非受控字段）的 live config.toml：用户自建 profile
-    /// + mcp_servers 都要原样保留。
-    fn live_with_uncontrolled() -> String {
-        r#"# 用户手动的配置
-[models]
-default = "my-custom"
-
-[model.my-custom]
-model = "grok-3"
-base_url = "https://old.dev"
-api_key = "old-key"
-api_backend = "responses"
-context_window = 100000
-name = "My Custom"
-
-[mcp_servers.filesystem]
-command = "npx"
-args = ["-y", "@modelcontextprotocol/server-filesystem", "/tmp"]
-"#
-        .to_string()
-    }
 
     /// 目标快照 TOML（第三方预设形状：cc-one profile 块）。
     fn third_party_target(model: &str, base_url: &str, name: &str) -> String {
@@ -230,52 +210,40 @@ name = {name:?}
         )
     }
 
-    /// 按路径取合并结果里的字符串值（测试读值用，不依赖格式）。
-    fn get_str(s: &str, path: &[&str]) -> Option<String> {
-        let doc: DocumentMut = s.parse().ok()?;
-        let mut cur = doc.get(path[0])?;
-        for key in &path[1..] {
-            cur = cur.get(*key)?;
-        }
-        cur.as_str()
-            .map(str::to_string)
-            .or_else(|| cur.as_integer().map(|i| i.to_string()))
-    }
-
     #[test]
     fn controlled_profile_replaced_uncontrolled_preserved() {
-        let live = live_with_uncontrolled();
+        let live = testutil::live_with_uncontrolled(App::Grok);
         let target = third_party_target("grok-4.5", "https://api.x.ai/v1", "xAI (Grok)");
         let merged = merge_grok_config(&live, &target).unwrap();
         // cc-one profile 写入 + default 指向它。
         assert_eq!(
-            get_str(&merged, &["model", "cc-one", "model"]).as_deref(),
+            testutil::toml_get_str(&merged, &["model", "cc-one", "model"]).as_deref(),
             Some("grok-4.5")
         );
         assert_eq!(
-            get_str(&merged, &["model", "cc-one", "base_url"]).as_deref(),
+            testutil::toml_get_str(&merged, &["model", "cc-one", "base_url"]).as_deref(),
             Some("https://api.x.ai/v1")
         );
         assert_eq!(
-            get_str(&merged, &["models", "default"]).as_deref(),
+            testutil::toml_get_str(&merged, &["models", "default"]).as_deref(),
             Some("cc-one")
         );
         // 用户的 my-custom profile 原样保留。
         assert_eq!(
-            get_str(&merged, &["model", "my-custom", "model"]).as_deref(),
+            testutil::toml_get_str(&merged, &["model", "my-custom", "model"]).as_deref(),
             Some("grok-3"),
             "用户自建 profile 必须保留"
         );
         // mcp_servers 原样保留。
         assert_eq!(
-            get_str(&merged, &["mcp_servers", "filesystem", "command"]).as_deref(),
+            testutil::toml_get_str(&merged, &["mcp_servers", "filesystem", "command"]).as_deref(),
             Some("npx")
         );
     }
 
     #[test]
     fn target_non_cc_one_profiles_are_ignored() {
-        let live = live_with_uncontrolled();
+        let live = testutil::live_with_uncontrolled(App::Grok);
         // 目标带了 cc-one 之外的 profile（target 里的 [model.other]）——非受控，
         // 绝不能写进 live。
         let target = r#"[model.cc-one]
@@ -292,11 +260,11 @@ base_url = "https://evil.dev"
 "#;
         let merged = merge_grok_config(&live, target).unwrap();
         assert_eq!(
-            get_str(&merged, &["model", "cc-one", "model"]).as_deref(),
+            testutil::toml_get_str(&merged, &["model", "cc-one", "model"]).as_deref(),
             Some("grok-4.5")
         );
         assert!(
-            get_str(&merged, &["model", "other"]).is_none(),
+            testutil::toml_get_str(&merged, &["model", "other"]).is_none(),
             "目标的非 cc-one profile 不得写入"
         );
     }
@@ -306,15 +274,15 @@ base_url = "https://evil.dev"
         let target = third_party_target("grok-4.5", "https://api.x.ai/v1", "xAI");
         let merged = merge_grok_config("", &target).unwrap();
         assert_eq!(
-            get_str(&merged, &["model", "cc-one", "model"]).as_deref(),
+            testutil::toml_get_str(&merged, &["model", "cc-one", "model"]).as_deref(),
             Some("grok-4.5")
         );
         assert_eq!(
-            get_str(&merged, &["models", "default"]).as_deref(),
+            testutil::toml_get_str(&merged, &["models", "default"]).as_deref(),
             Some("cc-one")
         );
         assert!(
-            get_str(&merged, &["mcp_servers"]).is_none(),
+            testutil::toml_get_str(&merged, &["mcp_servers"]).is_none(),
             "live 为空时目标里也不得引入非受控字段"
         );
     }
@@ -331,11 +299,11 @@ base_url = "https://api.x.ai/v1"
 "#;
         let merged = merge_grok_config(live, "").unwrap();
         assert!(
-            get_str(&merged, &["model", "cc-one"]).is_none(),
+            testutil::toml_get_str(&merged, &["model", "cc-one"]).is_none(),
             "登录态版必须移除 cc-one profile"
         );
         assert!(
-            get_str(&merged, &["models", "default"]).is_none(),
+            testutil::toml_get_str(&merged, &["models", "default"]).is_none(),
             "登录态版必须清掉我们设的 default 指针"
         );
     }
@@ -351,12 +319,12 @@ model = "grok-3"
 "#;
         let merged = merge_grok_config(live, "").unwrap();
         assert_eq!(
-            get_str(&merged, &["models", "default"]).as_deref(),
+            testutil::toml_get_str(&merged, &["models", "default"]).as_deref(),
             Some("my-custom"),
             "用户自设的 default 不得被登录态切换清掉"
         );
         assert_eq!(
-            get_str(&merged, &["model", "my-custom", "model"]).as_deref(),
+            testutil::toml_get_str(&merged, &["model", "my-custom", "model"]).as_deref(),
             Some("grok-3")
         );
     }
@@ -413,7 +381,10 @@ model   =   "grok-3"
     #[test]
     fn switch_writes_profile_and_preserves_user_blocks() {
         let tmp = tempfile::tempdir().unwrap();
-        let config_path = seed(tmp.path(), Some(&live_with_uncontrolled()));
+        let config_path = seed(
+            tmp.path(),
+            Some(&testutil::live_with_uncontrolled(App::Grok)),
+        );
 
         switch_grok_live(
             &config_path,
@@ -424,20 +395,20 @@ model   =   "grok-3"
 
         let written = fs::read_to_string(&config_path).unwrap();
         assert_eq!(
-            get_str(&written, &["model", "cc-one", "model"]).as_deref(),
+            testutil::toml_get_str(&written, &["model", "cc-one", "model"]).as_deref(),
             Some("grok-4.5")
         );
         assert_eq!(
-            get_str(&written, &["models", "default"]).as_deref(),
+            testutil::toml_get_str(&written, &["models", "default"]).as_deref(),
             Some("cc-one")
         );
         assert_eq!(
-            get_str(&written, &["model", "my-custom", "model"]).as_deref(),
+            testutil::toml_get_str(&written, &["model", "my-custom", "model"]).as_deref(),
             Some("grok-3"),
             "用户 profile 保留"
         );
         assert_eq!(
-            get_str(&written, &["mcp_servers", "filesystem", "command"]).as_deref(),
+            testutil::toml_get_str(&written, &["mcp_servers", "filesystem", "command"]).as_deref(),
             Some("npx"),
             "mcp_servers 保留"
         );
@@ -467,13 +438,13 @@ command = "npx"
         switch_grok_live(&config_path, r#"{"config":""}"#, "").unwrap();
 
         let written = fs::read_to_string(&config_path).unwrap();
-        assert!(get_str(&written, &["model", "cc-one"]).is_none());
+        assert!(testutil::toml_get_str(&written, &["model", "cc-one"]).is_none());
         assert!(
-            get_str(&written, &["models", "default"]).is_none(),
+            testutil::toml_get_str(&written, &["models", "default"]).is_none(),
             "我们设的 default 被清掉"
         );
         assert_eq!(
-            get_str(&written, &["mcp_servers", "filesystem", "command"]).as_deref(),
+            testutil::toml_get_str(&written, &["mcp_servers", "filesystem", "command"]).as_deref(),
             Some("npx"),
             "用户的 mcp_servers 保留"
         );
@@ -526,7 +497,7 @@ command = "npx"
         .unwrap();
         assert!(config_path.exists());
         assert_eq!(
-            get_str(
+            testutil::toml_get_str(
                 &fs::read_to_string(&config_path).unwrap(),
                 &["model", "cc-one", "model"]
             )
@@ -553,7 +524,7 @@ command = "npx"
         switch_grok_live(&config_path, target, "").unwrap();
         let written = fs::read_to_string(&config_path).unwrap();
         assert_eq!(
-            get_str(&written, &["model", "cc-one", "model"]).as_deref(),
+            testutil::toml_get_str(&written, &["model", "cc-one", "model"]).as_deref(),
             Some("grok-4.5")
         );
         let bak = tmp.path().join("config.toml.bak");
@@ -580,16 +551,16 @@ command = "npx"
         let written = fs::read_to_string(&config_path).unwrap();
         // 受控：cc-one profile + default 指针。
         assert_eq!(
-            get_str(&written, &["model", "cc-one", "model"]).as_deref(),
+            testutil::toml_get_str(&written, &["model", "cc-one", "model"]).as_deref(),
             Some("grok-4.5")
         );
         assert_eq!(
-            get_str(&written, &["models", "default"]).as_deref(),
+            testutil::toml_get_str(&written, &["models", "default"]).as_deref(),
             Some("cc-one")
         );
         // 片段补的 mcp_servers 落盘（含凭据也允许——不经 LLM 端点）。
         assert_eq!(
-            get_str(&written, &["mcp_servers", "github", "command"]).as_deref(),
+            testutil::toml_get_str(&written, &["mcp_servers", "github", "command"]).as_deref(),
             Some("npx"),
             "片段的 mcp_servers 经切换写盘补进 live"
         );
@@ -608,7 +579,7 @@ command = "npx"
 
         // 拒绝路径不写盘：live 原样。
         assert_eq!(
-            get_str(
+            testutil::toml_get_str(
                 &fs::read_to_string(&config_path).unwrap(),
                 &["models", "default"]
             )
@@ -686,11 +657,11 @@ command = "npx"
 "#;
         let out = merge_grok_snippet(merged, snippet).unwrap();
         assert_eq!(
-            get_str(&out, &["model", "cc-one", "model"]).as_deref(),
+            testutil::toml_get_str(&out, &["model", "cc-one", "model"]).as_deref(),
             Some("grok-4.5")
         );
         assert_eq!(
-            get_str(&out, &["mcp_servers", "github", "command"]).as_deref(),
+            testutil::toml_get_str(&out, &["mcp_servers", "github", "command"]).as_deref(),
             Some("npx")
         );
     }
@@ -706,12 +677,12 @@ extra = "from-snippet"
 "#;
         let out = merge_grok_snippet(merged, snippet).unwrap();
         assert_eq!(
-            get_str(&out, &["mcp_servers", "shared", "command"]).as_deref(),
+            testutil::toml_get_str(&out, &["mcp_servers", "shared", "command"]).as_deref(),
             Some("live"),
             "同 server 键 live 已有 → 不覆盖"
         );
         assert_eq!(
-            get_str(&out, &["mcp_servers", "shared", "extra"]).as_deref(),
+            testutil::toml_get_str(&out, &["mcp_servers", "shared", "extra"]).as_deref(),
             Some("from-snippet"),
             "递归补缺失：片段独有子键补上"
         );
@@ -732,7 +703,7 @@ extra = "from-snippet"
         for empty in ["", "   ", "\n"] {
             let out = merge_grok_snippet(merged, empty).unwrap();
             assert_eq!(
-                get_str(&out, &["model", "cc-one", "model"]).as_deref(),
+                testutil::toml_get_str(&out, &["model", "cc-one", "model"]).as_deref(),
                 Some("grok-4.5")
             );
         }
@@ -751,7 +722,7 @@ extra = "from-snippet"
         let twice = merge_grok_snippet(&once, snippet).unwrap();
         assert_eq!(once, twice);
         assert_eq!(
-            get_str(&twice, &["mcp_servers", "github", "command"]).as_deref(),
+            testutil::toml_get_str(&twice, &["mcp_servers", "github", "command"]).as_deref(),
             Some("npx")
         );
     }

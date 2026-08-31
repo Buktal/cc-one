@@ -1,6 +1,8 @@
 import dayjs from "dayjs"
+import type { TFunction } from "i18next"
 import { describe, expect, it } from "vitest"
 
+import "@/i18n/languages"
 import {
   dateInputToDay,
   formatCost,
@@ -9,11 +11,13 @@ import {
   formatCount,
   formatDay,
   formatDuration,
+  formatDurationLabel,
   formatInt,
   formatMetricLine,
   formatMetricSeg,
   formatPct,
   formatRatio,
+  formatRelative,
   formatSegValue,
   formatSize,
   formatTime,
@@ -182,6 +186,31 @@ describe("formatDuration", () => {
   })
 })
 
+describe("formatDurationLabel (秒数档位文案)", () => {
+  // formatDurationLabel 的 t 替身：把键与插值 n 拼进返回值，断言键选择与
+  // 变量换算。Cast 到 TFunction（branded 类型）与生产签名对齐（error.test
+  // 同款做法）。
+  const t = ((key: string, opts?: Record<string, unknown>) =>
+    opts && "n" in opts ? `${key}:${String(opts.n)}` : key) as TFunction
+
+  it("0 → zeroKey（autoTuck 的「关闭」）；未传 zeroKey 按 0 秒渲染", () => {
+    expect(formatDurationLabel(0, t, { zeroKey: "x.off" })).toBe("x.off")
+    expect(formatDurationLabel(0, t)).toBe("common.seconds:0")
+  })
+
+  it("<60 秒 → common.seconds；<1 小时 → common.minutes（除以 60）", () => {
+    expect(formatDurationLabel(5, t)).toBe("common.seconds:5")
+    expect(formatDurationLabel(59, t)).toBe("common.seconds:59")
+    expect(formatDurationLabel(60, t)).toBe("common.minutes:1")
+    expect(formatDurationLabel(300, t)).toBe("common.minutes:5")
+  })
+
+  it("≥1 小时 → common.hours（除以 3600）——预设表加小时档不用改分档", () => {
+    expect(formatDurationLabel(3600, t)).toBe("common.hours:1")
+    expect(formatDurationLabel(7200, t)).toBe("common.hours:2")
+  })
+})
+
 describe("spanParts (时长拆分)", () => {
   const cases: Array<{
     name: string
@@ -327,6 +356,21 @@ describe("formatTime / formatTimeExact", () => {
     expect(formatTimeExact("")).toBe("—")
     expect(formatTime("not-a-time")).toBe("not-a-time")
     expect(formatTimeExact("not-a-time")).toBe("not-a-time")
+  })
+})
+
+describe("formatRelative (相对时间出口)", () => {
+  it("空值 → —（与 formatTime 同一对空值规则）", () => {
+    expect(formatRelative(null)).toBe("—")
+    expect(formatRelative(undefined)).toBe("—")
+    expect(formatRelative("")).toBe("—")
+    expect(formatRelative(0)).toBe("—")
+  })
+
+  it("相对措辞走 fromNow，语言随 dayjs locale（插件注册收口 @/i18n/languages，本文件 import 即与生产同路径）", () => {
+    const ts = dayjs().subtract(3, "hour").valueOf()
+    expect(formatRelative(ts)).toBe("3 hours ago")
+    expect(formatRelative(ts)).toBe(dayjs(ts).fromNow())
   })
 })
 

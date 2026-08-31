@@ -215,7 +215,7 @@ fn upsert_provider_row(
         .optional()?
     };
     let id = if provider.id.is_empty() {
-        crate::model::generate_provider_id()
+        crate::model::generate_short_hex_id()
     } else {
         provider.id.clone()
     };

@@ -1,8 +1,19 @@
 // Library browser state + actions, extracted from LibraryView so the
 // component shrinks to pure rendering. Owns: the scan/devices queries + the
 // three mutations, the device-scope / subpath navigation state, webview
-// drag-drop upload collection, per-row rename/export/delete busy state, the
+// drag-drop upload collection, per-row export/delete/rename busy state, the
 // preview target, and the derived device picker + breadcrumb.
+//
+// 返回值按簇聚合（query / nav / upload / actions / preview，对照
+// useSyncRepo 的命名接口形状）：裸 setState 不过缝，每个簇暴露意图命名的
+// 方法（onSearch / pickDevice / preview.open…）。行内编辑的开/草稿状态不在
+// 这里——rename 编辑器随 InlineTextEdit + useInlineEdit 下沉到视图，本 hook
+// 只保留 rename 的业务动作（actions.rename：trim、同名跳过、mutation、行级
+// busy、toast）。
+//
+// 行级 busy 用 busyRelPath 一个键承载（export / delete / rename 三动作共
+// 用，同行的其它按钮据此禁用），置位/复位的 try/finally 样板收进 withBusy
+// 一份。
 //
 // The Tauri webview handle (getCurrentWebview) is fetched lazily inside the
 // drag-drop effect — never at module top — so this module imports cleanly in
@@ -46,8 +57,6 @@ export function useLibraryBrowser() {
   const [dragging, setDragging] = useState(false)
   const [pendingPaths, setPendingPaths] = useState<string[] | null>(null)
   const [preview, setPreview] = useState<LibraryEntry | null>(null)
-  const [renaming, setRenaming] = useState<string | null>(null)
-  const [renameVal, setRenameVal] = useState("")
   const [busyRelPath, setBusyRelPath] = useState<string | null>(null)
 
   const atRoot = subpath === ""
@@ -138,6 +147,10 @@ export function useLibraryBrowser() {
     [deviceScope, subpath, deviceOptions],
   )
 
+  function pickDevice(id: string) {
+    setDeviceScope(id)
+  }
+
   function drill(entry: LibraryEntry) {
     const { deviceId, rest } = splitEntryPath(entry.rel_path)
     setDeviceScope(deviceId)
@@ -148,112 +161,121 @@ export function useLibraryBrowser() {
     setSubpath(upFromSubpath(subpath))
   }
 
-  async function onAddFiles() {
+  async function addFiles() {
     const selected = await open({ multiple: true, directory: false })
     if (!selected) return
     const paths = Array.isArray(selected) ? selected : [selected]
     if (paths.length > 0) setPendingPaths(paths)
   }
 
+  /** 行级 busy 样板的单一实现：置位 → 跑动作 → finally 复位。export /
+   *  delete / rename 三个动作共用，同行的其它按钮据 busyRelPath 禁用。 */
+  async function withBusy<T>(relPath: string, fn: () => Promise<T>) {
+    setBusyRelPath(relPath)
+    try {
+      return await fn()
+    } finally {
+      setBusyRelPath(null)
+    }
+  }
+
   async function onExport(entry: LibraryEntry) {
     const dir = await open({ directory: true })
     if (!dir) return
-    setBusyRelPath(entry.rel_path)
-    try {
-      await runWithToast(
+    await withBusy(entry.rel_path, () =>
+      runWithToast(
         exportMut,
         { relPath: entry.rel_path, targetDir: dir },
         {
           success: { key: "library.toast.exported" },
           failed: { key: "library.toast.failed" },
         },
-      )
-    } finally {
-      setBusyRelPath(null)
-    }
+      ),
+    )
   }
 
   async function onDelete(entry: LibraryEntry) {
-    setBusyRelPath(entry.rel_path)
-    try {
-      await runWithToast(deleteMut, entry.rel_path, {
+    await withBusy(entry.rel_path, () =>
+      runWithToast(deleteMut, entry.rel_path, {
         success: { key: "library.toast.deleted" },
         failed: { key: "library.toast.failed" },
-      })
-    } finally {
-      setBusyRelPath(null)
-    }
+      }),
+    )
   }
 
-  function startRename(entry: LibraryEntry) {
-    setRenaming(entry.rel_path)
-    setRenameVal(entry.name)
-  }
-
-  async function commitRename(entry: LibraryEntry) {
-    const name = renameVal.trim()
-    if (!name || name === entry.name) {
-      setRenaming(null)
-      return
-    }
-    setBusyRelPath(entry.rel_path)
-    try {
-      const ok = await runWithToast(
+  /** 重命名的业务动作（编辑器的开/草稿状态归视图的 useInlineEdit）。
+   *  resolve true = 完成（含「空名 / 未改名」的静默收尾——不打 mutation 直接
+   *  收起编辑器）；false = 失败，编辑器留在编辑态可改。 */
+  async function onRename(
+    entry: LibraryEntry,
+    nextName: string,
+  ): Promise<boolean> {
+    const name = nextName.trim()
+    if (!name || name === entry.name) return true
+    return withBusy(entry.rel_path, () =>
+      runWithToast(
         renameMut,
         { relPath: entry.rel_path, newName: name },
         {
           success: { key: "library.toast.renamed" },
           failed: { key: "library.toast.failed" },
         },
-      )
-      if (ok) setRenaming(null)
-    } finally {
-      setBusyRelPath(null)
-    }
+      ),
+    )
   }
 
   return {
-    // scan data
-    entries: visibleEntries,
-    totalCount: filteredEntries.length,
-    page: browser.page,
-    totalPages: browser.totalPages,
-    goToPage: browser.goToPage,
-    density: browser.density,
-    isLoading,
-    scanError,
-    refetchScan,
-    // search
-    search,
-    setSearch,
-    // device picker
-    deviceOptions,
-    // navigation state
-    deviceScope,
-    setDeviceScope,
-    subpath,
-    atRoot,
-    showDevice,
-    breadcrumb,
-    // drag-drop upload
-    dragging,
-    pendingPaths,
-    clearPendingPaths: () => setPendingPaths(null),
-    onAddFiles,
-    // row actions
-    renaming,
-    renameVal,
-    setRenameVal,
-    cancelRename: () => setRenaming(null),
-    busyRelPath,
-    drill,
-    goUp,
-    onExport,
-    onDelete,
-    startRename,
-    commitRename,
-    // preview
-    preview,
-    setPreview,
+    // 查询 + 表格分页 + 客户端搜索：列表从哪来、当前显示哪些。
+    query: {
+      /** 当前页条目（已搜索过滤 + 分页切片）。 */
+      entries: visibleEntries,
+      totalCount: filteredEntries.length,
+      page: browser.page,
+      totalPages: browser.totalPages,
+      goToPage: browser.goToPage,
+      density: browser.density,
+      isLoading,
+      scanError,
+      refetchScan,
+      /** 目录名过滤（客户端，不落查询）。 */
+      search,
+      onSearch: setSearch,
+    },
+    // 导航：设备范围 + 目录层级（面包屑 / 钻入 / 上一级）。
+    nav: {
+      deviceOptions,
+      deviceScope,
+      /** 范围选择器：选定一台设备（回到它的根目录）。 */
+      pickDevice,
+      subpath,
+      atRoot,
+      showDevice,
+      breadcrumb,
+      /** 目录行钻入（同一动作也挂在行点击上）。 */
+      drill,
+      goUp,
+    },
+    // 拖拽 / 选择文件进入上传确认。
+    upload: {
+      dragging,
+      pendingPaths,
+      /** 关掉上传确认框（放弃待上传清单）。 */
+      close: () => setPendingPaths(null),
+      /** 打开文件选择器，选中即进入待上传。 */
+      addFiles,
+    },
+    // 行级动作 + 行级 busy（同行其它按钮据 busyRelPath 禁用）。
+    actions: {
+      busyRelPath,
+      export: onExport,
+      remove: onDelete,
+      rename: onRename,
+    },
+    // 预览浮层（entry 非 null = 开着）。
+    preview: {
+      entry: preview,
+      open: (entry: LibraryEntry) => setPreview(entry),
+      close: () => setPreview(null),
+    },
   }
 }

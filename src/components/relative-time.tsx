@@ -3,18 +3,17 @@
 // 修改时间），悬浮侧还有 MM/DD 与 YYYY-MM-DD 两派——统一为 formatTimeExact：
 // 相对措辞（「3 小时前」）已丢精度，悬浮里年份必须补全。
 //
-// fromNow 的语言随 dayjs 全局 locale（LanguageSync 驱动）；插件注册收口在
-// @/i18n/languages，本组件不再自行 extend。空值渲染「—」（与 formatTime
-// 的空值语义一致）。
-
-import dayjs from "dayjs"
+// 相对措辞本身走 formatRelative（⑧b 的纯函数出口）——不便嵌 Tooltip 的面
+// （Popover 触发器、metric 段拼接）拿同一份文案。fromNow 的语言随 dayjs
+// 全局 locale（LanguageSync 驱动）；插件注册收口在 @/i18n/languages，本
+// 组件不再自行 extend。空值渲染「—」（与 formatTime 的空值语义一致）。
 
 import {
   Tooltip,
   TooltipContent,
   TooltipTrigger,
 } from "@/components/ui/tooltip"
-import { formatTimeExact } from "@/lib/format"
+import { formatRelative, formatTimeExact } from "@/lib/format"
 import { cn } from "@/lib/utils"
 
 export function RelativeTime({
@@ -32,7 +31,7 @@ export function RelativeTime({
   return (
     <Tooltip>
       <TooltipTrigger render={<span className={cn(className)} />}>
-        {dayjs(ts).fromNow()}
+        {formatRelative(ts)}
       </TooltipTrigger>
       <TooltipContent side={side}>{formatTimeExact(ts)}</TooltipContent>
     </Tooltip>

@@ -10,7 +10,6 @@
 // 的 label-时刻两列（tabular-nums 对齐）。首启（从未采集过）给引导文案。
 // 相对时间随顶栏查询轮询重算（与原 DataFreshness 同一策略）。
 
-import dayjs from "dayjs"
 import { useTranslation } from "react-i18next"
 
 import { useAppInfoQuery } from "@/app/store/api"
@@ -20,7 +19,7 @@ import {
   PopoverTrigger,
 } from "@/components/ui/popover"
 import { useFreshness } from "@/hooks/use-freshness"
-import { formatTime } from "@/lib/format"
+import { formatRelative, formatTime } from "@/lib/format"
 import { cn } from "@/lib/utils"
 
 /** 心跳点：有数据 = 品牌 ping（顶栏唯一持续动画元素，数据的「生命体征」）；
@@ -66,7 +65,7 @@ export function StatusCapsule() {
               {deviceName}
             </span>
             <span className="max-[1360px]:hidden whitespace-nowrap">
-              · {dayjs(collect).fromNow()}
+              · {formatRelative(collect)}
             </span>
           </>
         ) : (

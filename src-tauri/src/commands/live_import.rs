@@ -9,7 +9,7 @@ use std::path::PathBuf;
 
 use tauri::State;
 
-use super::{emit_providers_changed, AppState};
+use super::{run_blocking, AppState, Emit};
 use crate::db::Store;
 use crate::error::{AppError, AppResult};
 use crate::model::{App, Provider};
@@ -26,18 +26,19 @@ pub async fn add_provider_to_live_cmd(
     id: String,
 ) -> AppResult<Provider> {
     let store = state.store.clone();
-    let provider = tauri::async_runtime::spawn_blocking(move || -> AppResult<Provider> {
-        let provider = store
-            .get_provider(app, &id)?
-            .ok_or_else(|| AppError::Config(format!("provider not found in {app:?} pool: {id}")))?;
-        // 编排与 switch 的附加分支共用 provider::activation（单一归属）。
-        let paths = activation::resolve_paths(app)?;
-        activation::ensure_opencode_in_live(&store, provider, &paths.opencode_config)
-    })
+    run_blocking(
+        "add_provider_to_live",
+        Emit::Providers(&app_handle),
+        move || {
+            let provider = store.get_provider(app, &id)?.ok_or_else(|| {
+                AppError::Config(format!("provider not found in {app:?} pool: {id}"))
+            })?;
+            // 编排与 switch 的附加分支共用 provider::activation（单一归属）。
+            let paths = activation::resolve_paths(app)?;
+            activation::ensure_opencode_in_live(&store, provider, &paths.opencode_config)
+        },
+    )
     .await
-    .map_err(|e| AppError::Internal(format!("add_provider_to_live task failed: {e}")))??;
-    emit_providers_changed(&app_handle);
-    Ok(provider)
 }
 
 /// 附加模式「移除」按钮：从 live 配置删 provider 条目（DB 记录保留，随时再加
@@ -52,17 +53,18 @@ pub async fn remove_provider_from_live_cmd(
     id: String,
 ) -> AppResult<Provider> {
     let store = state.store.clone();
-    let provider = tauri::async_runtime::spawn_blocking(move || -> AppResult<Provider> {
-        let provider = store
-            .get_provider(app, &id)?
-            .ok_or_else(|| AppError::Config(format!("provider not found in {app:?} pool: {id}")))?;
-        let paths = activation::resolve_paths(app)?;
-        activation::remove_from_live(&store, provider, &paths.opencode_config)
-    })
+    run_blocking(
+        "remove_provider_from_live",
+        Emit::Providers(&app_handle),
+        move || {
+            let provider = store.get_provider(app, &id)?.ok_or_else(|| {
+                AppError::Config(format!("provider not found in {app:?} pool: {id}"))
+            })?;
+            let paths = activation::resolve_paths(app)?;
+            activation::remove_from_live(&store, provider, &paths.opencode_config)
+        },
+    )
     .await
-    .map_err(|e| AppError::Internal(format!("remove_provider_from_live task failed: {e}")))??;
-    emit_providers_changed(&app_handle);
-    Ok(provider)
 }
 
 /// 「从 live 配置导入」：读该应用的 live 文件(s)（路径序 = [`App::live_paths`]，
@@ -78,14 +80,15 @@ pub async fn import_providers_from_live_cmd(
     name_overrides: HashMap<String, String>,
 ) -> AppResult<u32> {
     let store = state.store.clone();
-    let count = tauri::async_runtime::spawn_blocking(move || -> AppResult<u32> {
-        let texts = live::read_app_live_texts(app)?;
-        import_live::import_from_live_texts(&store, app, &texts, &name_overrides)
-    })
+    run_blocking(
+        "import_providers_from_live",
+        Emit::Providers(&app_handle),
+        move || {
+            let texts = live::read_app_live_texts(app)?;
+            import_live::import_from_live_texts(&store, app, &texts, &name_overrides)
+        },
+    )
     .await
-    .map_err(|e| AppError::Internal(format!("import_providers_from_live task failed: {e}")))??;
-    emit_providers_changed(&app_handle);
-    Ok(count)
 }
 
 // ---------------- 「从 live 配置导入」预览（只读）----------------
@@ -182,12 +185,11 @@ pub async fn preview_live_import_cmd(
     app: App,
 ) -> AppResult<LiveImportPreview> {
     let store = state.store.clone();
-    tauri::async_runtime::spawn_blocking(move || {
+    run_blocking("preview_live_import", Emit::None, move || {
         let paths = app.live_paths()?;
         preview_live_import_at(&store, app, &paths)
     })
     .await
-    .map_err(|e| AppError::Internal(format!("preview_live_import task failed: {e}")))?
 }
 
 #[cfg(test)]

@@ -6,7 +6,7 @@ use std::path::{Path, PathBuf};
 use rusqlite::{Connection, OpenFlags};
 use tauri::State;
 
-use super::{emit_providers_changed, AppState};
+use super::{run_blocking, AppState, Emit};
 use crate::error::{AppError, AppResult};
 use crate::model::App;
 use crate::provider::import::{ImportKeyStrategy, ProviderImportMode};
@@ -101,7 +101,9 @@ pub async fn import_from_ccswitch_cmd(
     db_path: Option<String>,
 ) -> AppResult<import_ccswitch::CcSwitchImportReport> {
     let store = state.store.clone();
-    let report = tauri::async_runtime::spawn_blocking(
+    run_blocking(
+        "import_from_ccswitch",
+        Emit::Providers(&app_handle),
         move || -> AppResult<import_ccswitch::CcSwitchImportReport> {
             let now = crate::time::now_iso();
             let home =
@@ -127,9 +129,6 @@ pub async fn import_from_ccswitch_cmd(
         },
     )
     .await
-    .map_err(|e| AppError::Internal(format!("import_from_ccswitch task failed: {e}")))??;
-    emit_providers_changed(&app_handle);
-    Ok(report)
 }
 
 #[cfg(test)]

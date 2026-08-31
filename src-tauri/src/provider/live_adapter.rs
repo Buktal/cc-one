@@ -21,7 +21,10 @@
 //!
 //! settings_config 的形状（`{env, auth, config}` 字段名 / 密钥键名与 typed
 //! 值 ⇄ 文本的双向）归 [`crate::provider::settings_codec`]（per-app 形状
-//! 单源），不在本 seam 复述。
+//! 单源），不在本 seam 复述。live 路径的**目录根**（`~/.claude` / `~/.codex` /
+//! `~/.gemini` / `~/.grok` / `~/.config/opencode`）同样是 per-app 事实，收在
+//! [`App::app_config_dir`]——五份 `dirs::home_dir` 样板的唯一声明处，各
+//! `live_*` 模块的目录函数委托它。
 //!
 //! ADR-0010 的片段层策略此前只在注释里被复述约 6 遍、没进代码：现在
 //! [`SnippetLayer`] 是唯一表达——claude/gemini 的 **settings_config 层**（片段
@@ -58,12 +61,32 @@ pub(crate) enum SnippetLayer {
 }
 
 impl App {
+    /// 各 app 的用户级配置目录（per-app 家目录映射的单一归属，收编五份逐字
+    /// 相同的 `dirs::home_dir` 样板）：claude=`~/.claude`、codex=`~/.codex`、
+    /// gemini=`~/.gemini`、grok=`~/.grok`、opencode=`~/.config/opencode`（后
+    /// 者硬编码不尊重 `XDG_CONFIG_HOME`——OpenCode CLI 自身在 mac/win 也硬
+    /// 编码此路径，写到 XDG 位置它不读）。各 `live_*` 模块的目录函数以它为
+    /// 根；home 解析失败 → `Err`（与被收编的各分支原样板的错误一致）。
+    pub(crate) fn app_config_dir(self) -> AppResult<PathBuf> {
+        let home =
+            dirs::home_dir().ok_or_else(|| AppError::Config("cannot resolve home dir".into()))?;
+        Ok(match self {
+            App::Claude => home.join(".claude"),
+            App::Codex => home.join(".codex"),
+            App::Gemini => home.join(".gemini"),
+            App::Grok => home.join(".grok"),
+            App::OpenCode => home.join(".config").join("opencode"),
+        })
+    }
+
     /// live 文件路径（顺序固定：claude=[settings.json]，codex=[config.toml,
     /// auth.json]，gemini=[.env, settings.json]，grok=[config.toml]，
-    /// opencode=[opencode.json]）。写盘 / 片段提取 / 反向导入共用这一份
-    /// 「app → 路径」映射（单一事实来源）。opencode 的单份文件是 opencode.json
-    /// ——附加模式的**写盘**不走 write_live（单键 read-modify-write 在
-    /// `live_opencode`），但**反向导入**读它，与单激活同一条读取面。
+    /// opencode=[opencode.json]）。目录根统一走 [`App::app_config_dir`]（各
+    /// `live_*` 模块的路径函数委托它），本方法只声明「app → 文件名序列」。
+    /// 写盘 / 片段提取 / 反向导入共用这一份「app → 路径」映射（单一事实来源）。
+    /// opencode 的单份文件是 opencode.json——附加模式的**写盘**不走
+    /// write_live（单键 read-modify-write 在 `live_opencode`），但**反向导入**
+    /// 读它，与单激活同一条读取面。
     pub(crate) fn live_paths(self) -> AppResult<Vec<PathBuf>> {
         Ok(match self {
             App::Claude => vec![live::claude_settings_path()?],
@@ -685,6 +708,22 @@ command = "npx""#
         );
         assert_eq!(names(App::Grok), vec!["config.toml".to_string()]);
         assert_eq!(names(App::OpenCode), vec!["opencode.json".to_string()]);
+    }
+
+    /// app_config_dir 的 per-app 家目录映射（五份 home-dir 样板收编后的单一
+    /// 声明处）：四个单激活 app 各占 home 下的一个点目录，opencode 固定
+    /// `~/.config/opencode`（不尊重 XDG_CONFIG_HOME）。
+    #[test]
+    fn app_config_dir_maps_per_app_home_subdir() {
+        let home = dirs::home_dir().unwrap();
+        assert_eq!(App::Claude.app_config_dir().unwrap(), home.join(".claude"));
+        assert_eq!(App::Codex.app_config_dir().unwrap(), home.join(".codex"));
+        assert_eq!(App::Gemini.app_config_dir().unwrap(), home.join(".gemini"));
+        assert_eq!(App::Grok.app_config_dir().unwrap(), home.join(".grok"));
+        assert_eq!(
+            App::OpenCode.app_config_dir().unwrap(),
+            home.join(".config").join("opencode")
+        );
     }
 
     /// 导入条目的 multiplicity 契约：单激活 app 空文本 → 0 条、有受控内容 →

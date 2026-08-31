@@ -24,6 +24,8 @@ export const commands = {
 	 *  Unbind the repo, downgrading to Standalone. Clears the local
 	 *  `.git` so a re-bind (often to a different repo) starts clean instead of
 	 *  reusing the old remote/branch. Usage rows (DB) and `data/` are retained.
+	 *  `reset_local_git` 对仓库 `remove_dir_all(.git)`，大仓库能跑上秒——必须
+	 *  离开主线程，走 [`run_blocking`]。
 	 */
 	clearSyncRepo: () => typedError<RunMode, AppError>(__TAURI_INVOKE("clear_sync_repo")),
 	/**  Rename *this* device (display name only — not a uniqueness key). */
@@ -105,7 +107,8 @@ export const commands = {
 	savePricingToFile: () => typedError<null, AppError>(__TAURI_INVOKE("save_pricing_to_file")),
 	/**
 	 *  Fetch LiteLLM upstream pricing and merge into the DB (seed).
-	 *  Network → async + offloaded. Best-effort: returns count merged (0 offline).
+	 *  Network → offloaded via [`run_blocking`]. Best-effort: returns count merged
+	 *  (0 offline).
 	 */
 	fetchLitellmPricing: () => typedError<number, AppError>(__TAURI_INVOKE("fetch_litellm_pricing")),
 	/**  Read the current preferences for the Settings card. */
@@ -395,12 +398,10 @@ export const commands = {
 	 *  clause). Returns how many rows matched; the confirm step lives frontend-side.
 	 */
 	deleteSessionsCmd: (keys: SessionKey[]) => typedError<number, AppError>(__TAURI_INVOKE("delete_sessions_cmd", { keys })),
-	listLocalGroupsCmd: () => typedError<LocalGroup[], AppError>(__TAURI_INVOKE("list_local_groups_cmd")),
 	createLocalGroupCmd: (name: string) => typedError<LocalGroup, AppError>(__TAURI_INVOKE("create_local_group_cmd", { name })),
 	renameLocalGroupCmd: (id: string, name: string) => typedError<null, AppError>(__TAURI_INVOKE("rename_local_group_cmd", { id, name })),
 	deleteLocalGroupCmd: (id: string) => typedError<null, AppError>(__TAURI_INVOKE("delete_local_group_cmd", { id })),
 	reorderLocalGroupsCmd: (orderedIds: string[]) => typedError<null, AppError>(__TAURI_INVOKE("reorder_local_groups_cmd", { orderedIds })),
-	listSyncedGroupsCmd: () => typedError<SyncedGroup[], AppError>(__TAURI_INVOKE("list_synced_groups_cmd")),
 	createSyncedGroupCmd: (name: string) => typedError<SyncedGroup, AppError>(__TAURI_INVOKE("create_synced_group_cmd", { name })),
 	renameSyncedGroupCmd: (id: string, name: string) => typedError<null, AppError>(__TAURI_INVOKE("rename_synced_group_cmd", { id, name })),
 	deleteSyncedGroupCmd: (id: string) => typedError<null, AppError>(__TAURI_INVOKE("delete_synced_group_cmd", { id })),
@@ -421,7 +422,7 @@ export const commands = {
 	 *  切换供应商（核心动作）——薄壳：编排下沉 `provider::activation`。单激活
 	 *  「切换」与附加模式「加入 live」的组合次序（片段合并层 ADR-0010 分派、受控
 	 *  写盘、「写盘成功才落激活态」顺序不变量）都在那里表达并可测；本命令只剩
-	 *  spawn_blocking + 失效信号。「保存」只写 DB（save_provider_cmd），本命令才
+	 *  blocking 执行 + 失效信号。「保存」只写 DB（save_provider_cmd），本命令才
 	 *  真正写盘。
 	 */
 	switchProviderCmd: (app: App, id: string) => typedError<Provider, AppError>(__TAURI_INVOKE("switch_provider_cmd", { app, id })),
@@ -473,19 +474,23 @@ export const commands = {
 	 *  内容操作，不改用户显式的启停选择（原实现强制 enabled=true 会覆盖显式
 	 *  停用）。合并结果经与手动保存同一条校验（[`App::validate_snippet`] 单一入口，
 	 *  提取器滤凭据/端点/空值后这里是兜底）。无可提取 → 现有片段原样。非静默——
-	 *  前端先检测候选、用户确认才调本命令。返回更新后的片段。
+	 *  前端先检测候选、用户确认才调本命令。返回更新后的片段。读 live 文件 +
+	 *  config 写盘走 [`run_blocking`]；不发事件总线信号（片段读挂 `App` tag，
+	 *  前端在 mutation 成功处自己失效）。
 	 */
 	extractSnippetFromLiveCmd: (app: App) => typedError<CommonConfigSnippet, AppError>(__TAURI_INVOKE("extract_snippet_from_live_cmd", { app })),
 	/**
 	 *  导出全部供应商为 JSON 文档，写入 `target_path`（前端 save 对话框选的位置）。
 	 *  `include_keys=false` 时剔除 settingsConfig env 里的密钥键。换设备迁移 /
-	 *  留档用，不经过 git 同步。返回文档里的 provider 数量。
+	 *  留档用，不经过 git 同步。返回文档里的 provider 数量。读全表 + 写用户选的
+	 *  目标文件都是重 IO——走 [`run_blocking`] 离开主线程。
 	 */
 	exportProvidersCmd: (includeKeys: boolean, targetPath: string) => typedError<number, AppError>(__TAURI_INVOKE("export_providers_cmd", { includeKeys, targetPath })),
 	/**
 	 *  从 JSON 文档导入供应商（合并 / 覆盖模式）。`source_path` 是前端 open
 	 *  对话框选的文件。只写本机 DB（`save_provider`），不触发 providers.json
-	 *  同步写——导入的 key 只进本机库。返回应用 / 跳过计数。
+	 *  同步写——导入的 key 只进本机库。返回应用 / 跳过计数。读文件 + 批量落库
+	 *  走 [`run_blocking`]，成功后发 providers 失效信号。
 	 */
 	importProvidersCmd: (sourcePath: string, mode: ProviderImportMode) => typedError<ProviderImportReport, AppError>(__TAURI_INVOKE("import_providers_cmd", { sourcePath, mode })),
 	/**
@@ -624,15 +629,26 @@ export type App =
 /**
  *  The single error type crossing the Rust→JS boundary.
  * 
- *  Variants are kept coarse and serializable-friendly: low-level causes
- *  (io / rusqlite / git2) are stringified into `Internal` rather than leaked
- *  across the boundary, so the contract stays stable and specta-friendly.
+ *  Variants are kept coarse and serializable-friendly: low-level causes are
+ *  stringified into the matching coarse variant (`Io` / `Db` / `Sync`) rather
+ *  than leaked across the boundary, so the contract stays stable and
+ *  specta-friendly.
  */
 export type AppError = 
 /**  The local data dir / config could not be created or read. */
 { type: "Config"; data: string } | 
 /**  SQLite Local Store error. */
 { type: "Db"; data: string } | 
+/**
+ *  A filesystem / std-io failure (read / write / create / rename / delete)
+ *  on an ordinary data file: library file ops, pricing-file writes,
+ *  exported-provider writes, snapshot reads, … Kept separate from
+ *  [`AppError::Config`] because the frontend keys the user-facing message
+ *  off the variant name — an unplugged USB drive during an export is not a
+ *  "configuration error". `Config` keeps meaning bad config *content* or
+ *  unresolvable config identity, not a failing disk operation.
+ */
+{ type: "Io"; data: string } | 
 /**  A parser failed to discover/parse Source logs. */
 { type: "SourceParser"; data: string } | 
 /**  Pricing lookup / cost calc error. */

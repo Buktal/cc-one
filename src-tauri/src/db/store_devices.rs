@@ -51,7 +51,7 @@ impl super::Store {
             .collect::<rusqlite::Result<Vec<_>>>()?;
         drop(stmt);
         for (device_id, first_seen) in gaps {
-            let name = crate::config::default_display_name(&device_id);
+            let name = crate::devices::default_display_name(&device_id);
             conn.execute(
                 "INSERT INTO device (device_id, display_name, is_self, first_seen)
                  VALUES (?1, ?2, 0, ?3)

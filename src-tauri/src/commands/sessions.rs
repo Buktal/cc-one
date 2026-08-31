@@ -1,57 +1,30 @@
 //! 会话域：转录查询、收藏/标题/分组归属、本地与同步分组 CRUD。
 
-use tauri::{Emitter, State};
+use tauri::State;
 
-use super::AppState;
-use crate::config::{ConfigData, ConfigStore, Paths};
-use crate::error::{AppError, AppResult};
+use super::{run_blocking, AppState, Emit};
+use crate::error::AppResult;
 use crate::model::{
     GroupTrack, LocalGroup, ProjectStatsRow, SessionFilter, SessionGroup, SessionGroupCounts,
     SessionKey, SessionMessage, SessionQuery, SessionRow, SessionStatsRow, SyncedGroup,
 };
 use crate::sessions;
 
-/// Emit `sessions_changed` so the frontend's session queries invalidate.
-fn emit_sessions_changed(app_handle: &tauri::AppHandle) {
-    let _ = app_handle.emit("sessions_changed", ());
-}
-
-/// Run one Store write, then emit `sessions_changed`. The emit is part of the
-/// write's contract — a write without it strands the frontend's session cache
-/// stale, and nothing else would catch the omission — so the pairing lives in
-/// this one function instead of being re-typed at every command.
+/// Run one Store write, then emit `sessions_changed`（名单源见
+/// `crate::events`）. The emit is part of the write's contract — a write
+/// without it strands the frontend's session cache stale, and nothing else
+/// would catch the omission — so the pairing lives in this one function
+/// instead of being re-typed at every command. Same pairing on the
+/// git-touching track: the synced-group commands below go through
+/// `run_blocking` with `Emit::Sessions`, whose blocking work stays off the
+/// async runtime's threads.
 fn write_and_emit<T>(
     store: &crate::db::Store,
     app_handle: &tauri::AppHandle,
     write: impl FnOnce(&crate::db::Store) -> AppResult<T>,
 ) -> AppResult<T> {
     let out = write(store)?;
-    emit_sessions_changed(app_handle);
-    Ok(out)
-}
-
-/// Run one synced-groups domain write on the blocking pool, then emit
-/// `sessions_changed` — the same pairing contract as [`write_and_emit`], on
-/// the git-touching track whose writes must stay off the async runtime's
-/// threads. Every synced-group command is this one shape (domain `*_owned`
-/// call → emit on success), pinned here so a new write cannot skip the emit.
-async fn synced_group_write_and_emit<T>(
-    app_handle: tauri::AppHandle,
-    config: std::sync::Arc<ConfigStore>,
-    label: &str,
-    write: impl FnOnce(&Paths, &ConfigData) -> AppResult<T> + Send + 'static,
-) -> AppResult<T>
-where
-    T: Send + 'static,
-{
-    let out = tauri::async_runtime::spawn_blocking(move || -> AppResult<T> {
-        let cfg = config.get();
-        let paths = config.paths();
-        write(&paths, &cfg)
-    })
-    .await
-    .map_err(|e| AppError::Internal(format!("{label} task failed: {e}")))??;
-    emit_sessions_changed(&app_handle);
+    crate::events::emit_sessions_changed(app_handle);
     Ok(out)
 }
 
@@ -213,12 +186,6 @@ pub fn delete_sessions_cmd(
 
 #[tauri::command]
 #[specta::specta]
-pub fn list_local_groups_cmd(state: State<'_, AppState>) -> AppResult<Vec<LocalGroup>> {
-    state.store.list_local_groups()
-}
-
-#[tauri::command]
-#[specta::specta]
 pub fn create_local_group_cmd(
     state: State<'_, AppState>,
     app_handle: tauri::AppHandle,
@@ -272,22 +239,20 @@ pub fn reorder_local_groups_cmd(
 
 #[tauri::command]
 #[specta::specta]
-pub fn list_synced_groups_cmd(state: State<'_, AppState>) -> AppResult<Vec<SyncedGroup>> {
-    Ok(sessions::read_all_synced_groups(&state.config.paths()))
-}
-
-#[tauri::command]
-#[specta::specta]
 pub async fn create_synced_group_cmd(
     state: State<'_, AppState>,
     app_handle: tauri::AppHandle,
     name: String,
 ) -> AppResult<SyncedGroup> {
-    synced_group_write_and_emit(
-        app_handle,
-        state.config.clone(),
+    let config = state.config.clone();
+    run_blocking(
         "create_synced_group",
-        move |paths, cfg| sessions::create_synced_group_owned(paths, cfg, &name),
+        Emit::Sessions(&app_handle),
+        move || {
+            let cfg = config.get();
+            let paths = config.paths();
+            sessions::create_synced_group_owned(&paths, &cfg, &name)
+        },
     )
     .await
 }
@@ -300,11 +265,15 @@ pub async fn rename_synced_group_cmd(
     id: String,
     name: String,
 ) -> AppResult<()> {
-    synced_group_write_and_emit(
-        app_handle,
-        state.config.clone(),
+    let config = state.config.clone();
+    run_blocking(
         "rename_synced_group",
-        move |paths, cfg| sessions::rename_synced_group_owned(paths, cfg, &id, &name),
+        Emit::Sessions(&app_handle),
+        move || {
+            let cfg = config.get();
+            let paths = config.paths();
+            sessions::rename_synced_group_owned(&paths, &cfg, &id, &name)
+        },
     )
     .await
 }
@@ -316,11 +285,15 @@ pub async fn delete_synced_group_cmd(
     app_handle: tauri::AppHandle,
     id: String,
 ) -> AppResult<()> {
-    synced_group_write_and_emit(
-        app_handle,
-        state.config.clone(),
+    let config = state.config.clone();
+    run_blocking(
         "delete_synced_group",
-        move |paths, cfg| sessions::delete_synced_group_owned(paths, cfg, &id),
+        Emit::Sessions(&app_handle),
+        move || {
+            let cfg = config.get();
+            let paths = config.paths();
+            sessions::delete_synced_group_owned(&paths, &cfg, &id)
+        },
     )
     .await
 }
@@ -332,11 +305,15 @@ pub async fn reorder_synced_groups_cmd(
     app_handle: tauri::AppHandle,
     ordered_ids: Vec<String>,
 ) -> AppResult<()> {
-    synced_group_write_and_emit(
-        app_handle,
-        state.config.clone(),
+    let config = state.config.clone();
+    run_blocking(
         "reorder_synced_group",
-        move |paths, cfg| sessions::reorder_synced_groups_owned(paths, cfg, &ordered_ids),
+        Emit::Sessions(&app_handle),
+        move || {
+            let cfg = config.get();
+            let paths = config.paths();
+            sessions::reorder_synced_groups_owned(&paths, &cfg, &ordered_ids)
+        },
     )
     .await
 }

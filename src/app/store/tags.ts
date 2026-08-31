@@ -76,8 +76,6 @@ export const STORE_DERIVED_READS: ReadonlySet<string> = new Set([
   "getSession",
   "sessionTranscript",
   "listGroups",
-  "listLocalGroups",
-  "listSyncedGroups",
   // Providers (sync imports peer providers into the Store)
   "listProviders",
   "getActiveProvider",

@@ -2,7 +2,7 @@
 
 use tauri::State;
 
-use super::AppState;
+use super::{run_blocking, AppState, Emit};
 use crate::error::{AppError, AppResult};
 use crate::model::PricingEntry;
 
@@ -69,12 +69,13 @@ pub fn save_pricing_to_file(state: State<'_, AppState>) -> AppResult<()> {
 }
 
 /// Fetch LiteLLM upstream pricing and merge into the DB (seed).
-/// Network → async + offloaded. Best-effort: returns count merged (0 offline).
+/// Network → offloaded via [`run_blocking`]. Best-effort: returns count merged
+/// (0 offline).
 #[tauri::command]
 #[specta::specta]
 pub async fn fetch_litellm_pricing(state: State<'_, AppState>) -> AppResult<u32> {
     let store = state.store.clone();
-    tauri::async_runtime::spawn_blocking(move || -> AppResult<u32> {
+    run_blocking("fetch_litellm_pricing", Emit::None, move || {
         let entries = crate::pricing::fetch_litellm()?;
         let mut merged = 0u32;
         for e in &entries {
@@ -84,5 +85,4 @@ pub async fn fetch_litellm_pricing(state: State<'_, AppState>) -> AppResult<u32>
         Ok(merged)
     })
     .await
-    .map_err(|e| AppError::Pricing(format!("litellm task failed: {e}")))?
 }

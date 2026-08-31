@@ -25,23 +25,7 @@ import {
 } from "@/components/ui/tooltip"
 import { cn } from "@/lib/utils"
 import type { LibraryEntry } from "@/types/generated/bindings"
-import { shouldThemeRender } from "../derive"
-
-const IMAGE_EXTS = ["png", "jpg", "jpeg", "gif", "webp", "svg", "bmp"]
-
-function extOf(name: string) {
-  return name.split(".").pop()?.toLowerCase() ?? ""
-}
-
-/** Pretty-print JSON with 2-space indent; any parse failure falls back to the
- *  raw text (a .json file can be a JSONL stream or a non-JSON body). */
-function maybePrettyJson(text: string): string {
-  try {
-    return JSON.stringify(JSON.parse(text), null, 2)
-  } catch {
-    return text
-  }
-}
+import { isImageName, maybePrettyJson, shouldThemeRender } from "../derive"
 
 export function PreviewSheet({
   entry,
@@ -61,7 +45,7 @@ export function PreviewSheet({
 }) {
   const { t } = useTranslation()
   const url = convertFileSrc(entry.abs_path)
-  const isImage = IMAGE_EXTS.includes(extOf(entry.name))
+  const isImage = isImageName(entry.name)
   const isText = shouldThemeRender(entry.name)
   const textQuery = useLibraryTextQuery(entry.rel_path, { skip: !isText })
   const [scale, setScale] = useState(1)

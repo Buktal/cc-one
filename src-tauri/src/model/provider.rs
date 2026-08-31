@@ -81,6 +81,31 @@ impl App {
     pub(crate) fn is_additive_mode(self) -> bool {
         matches!(self, App::OpenCode)
     }
+
+    /// 某应用「从未保存过通用片段」时的默认片段（per-app 事实，与
+    /// [`App::is_additive_mode`] 同类的低层分类）：claude 的 settings.json 有
+    /// 「隐藏署名」这一产品默认（`includeCoAuthoredBy: false`）；其余应用的
+    /// 配置没有等价概念，默认空片段（留空由用户自填）。启用恒为 true——片段
+    /// 是跨供应商的共享默认值，开箱即生效（显式保存过的条目在存储层有键，
+    /// 根本走不到这里）。
+    ///
+    /// 归 model 层而非 provider 域的 `snippet`：provider（`activation` /
+    /// `sync`）已依赖 `crate::config`，而默认片段的消费方正是不依赖任何域的
+    /// `config.rs`——决策放 provider 侧会让 config 反向 up-call provider。
+    /// 与 [`CommonConfigSnippet`] 同住一处，新增应用时穷尽 match 逼出显式
+    /// 决策，不再需要改存储层。
+    pub(crate) fn default_common_snippet(self) -> CommonConfigSnippet {
+        match self {
+            App::Claude => CommonConfigSnippet {
+                enabled: true,
+                content: r#"{"includeCoAuthoredBy": false}"#.to_string(),
+            },
+            App::Codex | App::Gemini | App::Grok | App::OpenCode => CommonConfigSnippet {
+                enabled: true,
+                content: String::new(),
+            },
+        }
+    }
 }
 
 /// Provider category. `Custom` is the value for user-created providers; the
@@ -162,11 +187,15 @@ pub struct CommonConfigSnippet {
     pub content: String,
 }
 
-/// A short random id for a user-created provider (8 lowercase hex chars — the
-/// same generator as the sessions' local group ids; both are device-local id
-/// spaces that never leave the machine, so a prefix is unnecessary).
-pub(crate) fn generate_provider_id() -> String {
-    crate::sessions::generate_local_group_id()
+/// 8 位小写 hex 短 id 的中性生成原语（4 随机字节 → hex）。设备本地的 id
+/// 空间共用这一份：用户自建供应商 id（`db::store_providers`）与本地会话
+/// 分组 id（`sessions::generate_local_group_id`）——都不出本机，无需设备前缀。
+/// 归 model 层（依赖图底层）：原语曾住 `sessions`，`model/provider` 为词法
+/// 复用 up-call sessions（方向倒置）；现在 sessions 反向消费本原语。
+pub(crate) fn generate_short_hex_id() -> String {
+    use rand::Rng;
+    let bytes: [u8; 4] = rand::thread_rng().gen();
+    bytes.iter().map(|b| format!("{b:02x}")).collect()
 }
 
 impl Provider {
@@ -340,9 +369,23 @@ mod tests {
 
     #[test]
     fn provider_id_is_eight_hex_chars() {
-        let id = generate_provider_id();
+        let id = generate_short_hex_id();
         assert_eq!(id.len(), 8);
         assert!(id.bytes().all(|b| b.is_ascii_hexdigit()));
+    }
+
+    /// 未保存过片段时的默认片段（per-app 决策收在 [`App::default_common_snippet`]）：
+    /// claude 默认隐藏署名片段；其余应用默认空片段；启用恒为 true。
+    #[test]
+    fn default_common_snippet_is_claude_signed_off_only() {
+        let claude = App::Claude.default_common_snippet();
+        assert_eq!(claude.content, r#"{"includeCoAuthoredBy": false}"#);
+        assert!(claude.enabled);
+        for app in [App::Codex, App::Gemini, App::Grok, App::OpenCode] {
+            let s = app.default_common_snippet();
+            assert_eq!(s.content, "", "{app:?} 默认空片段");
+            assert!(s.enabled, "{app:?} 默认启用");
+        }
     }
 
     /// A provider whose env carries all four secret keys plus a region, a

@@ -8,6 +8,11 @@
 // 的整理走后端 taplo（ADR-0011）：粘贴 / 外部值进入 / 「整理」按钮都调
 // format_toml_cmd（保注释、容错，失败保持原文）。
 //
+// 所有「整理后写回」的路径（粘贴 / 外部值进入 / 「整理」按钮）共用同一条管
+// 道：formatDoc 按语言选整理策略（JSON 本地 tidyJson，TOML 后端 taplo），
+// planDocApply + applyFormatted 统一执行写回——防回声与「用户编辑优先」守卫
+// 对两种语言由构造同一，语言差异只存在于 formatDoc 内部。
+//
 // `JsonEditor` is a thin `language="json"` wrapper over this (unchanged API for
 // existing consumers); the snippet card uses `language="toml"` for codex/grok.
 
@@ -21,7 +26,7 @@ import { placeholder } from "@codemirror/view"
 import { basicSetup, EditorView } from "codemirror"
 import { AlertCircle, Wand2 } from "lucide-react"
 import { useTheme } from "next-themes"
-import { useEffect, useMemo, useRef, useState } from "react"
+import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { useTranslation } from "react-i18next"
 
 import { useFormatTomlMutation } from "@/app/store/api"
@@ -122,6 +127,49 @@ function objectLinter(mustBeObject: string) {
   })
 }
 
+/** applyFormatted 的决策核（纯函数，所有写回路径共用）。snapshot 是发起整
+ *  理时读到的 doc 快照，对照编辑器当前 doc 与整理结果判三态：
+ *  - "stale"：doc 已不等于快照 → 用户在异步整理间隙输入过。用户的每次击键
+ *    都已实时回传父级，这里任何补写都只会覆盖或倒退，必须放弃（不写也不
+ *    回传）。
+ *  - "write"：doc 仍是快照且整理改变了内容 → 整篇替换并回传。
+ *  - "settle"：doc 已是目标形（幂等：后端整理无变化 / 失败回原文 / JSON 已
+ *    展开）→ 不发空事务，但仍回传一次——粘贴路径的粘贴原文从未经普通编辑
+ *    回传父级，必须补；其余路径父级已持同值，setState Object.is 判等直接
+ *    收敛，无副作用。 */
+export type DocApplyPlan = "stale" | "write" | "settle"
+
+export function planDocApply(
+  docNow: string,
+  snapshot: string,
+  formatted: string,
+): DocApplyPlan {
+  if (docNow !== snapshot) return "stale"
+  return formatted === snapshot ? "settle" : "write"
+}
+
+/** formatDoc 的 TOML 整理后端（注入面）：生产传 formatToml 的 mutation
+ *  trigger，测试传 fake。data / error 二选一（RTK mutation 结果形状）。 */
+export type FormatTomlBackend = (text: string) => Promise<{
+  data?: string
+  error?: unknown
+}>
+
+/** 按语言把文本整理为规范形（策略入口，所有写回路径共用）：JSON 走本地
+ *  tidyJson（容错排版 + 键字母序排序，见 lib/json，同步）；TOML 走后端
+ *  format_toml_cmd（taplo 保注释，ADR-0011，异步）。容错契约：不抛错、总
+ *  返回一份完整可写回的文本——TOML 失败（error 或无 data）返回原文，调用
+ *  管道因此不需要失败分支。 */
+export async function formatDoc(
+  language: CodeLanguage,
+  text: string,
+  formatToml: FormatTomlBackend,
+): Promise<string> {
+  if (language === "json") return tidyJson(text)
+  const res = await formatToml(text)
+  return res.data ?? text
+}
+
 export function CodeEditor({
   value,
   onChange,
@@ -136,10 +184,11 @@ export function CodeEditor({
   // dark, so a dark-first render avoids flashing the light editor.
   const isDark = (resolvedTheme ?? "dark") === "dark"
   // JSON gets the rich layer; TOML is highlight-only (no client parser → no
-  // format / paste-expand / validation strip, see file header). TOML 的整理走
-  // 后端 taplo（ADR-0011）：ref 保存 mutation trigger（每次渲染可能换引用），
-  // 供 mount-once 的 updateListener / effects 闭包安全调用。
+  // format / paste-expand / validation strip, see file header). 语言差异全部
+  // 收敛进 formatDoc（整理策略）；写回策略由 applyFormatted 对两种语言统一。
   const isJson = language === "json"
+  // TOML 整理后端（formatDoc 的注入值）：ref 保存 mutation trigger（每次渲染
+  // 可能换引用），供 mount-once 的 updateListener / effects 闭包安全调用。
   const [formatToml] = useFormatTomlMutation()
   const formatTomlRef = useRef(formatToml)
   formatTomlRef.current = formatToml
@@ -172,13 +221,37 @@ export function CodeEditor({
     ]
   }, [isJson, t])
 
+  // The onChange callback lives in a ref so mount-once closures (the update
+  // listener below and applyFormatted here) always see the latest prop.
+  const onChangeRef = useRef(onChange)
+  onChangeRef.current = onChange
+
+  // 整理写回管道的执行半边（决策半边是模块级的 planDocApply）。闭包只经 ref
+  // 读活值（viewRef / pushingRef / onChangeRef），mount-once 的 update
+  // listener 持有的首帧引用因此始终正确。
+  const applyFormatted = useCallback((snapshot: string, formatted: string) => {
+    const view = viewRef.current
+    if (!view) return
+    const plan = planDocApply(view.state.doc.toString(), snapshot, formatted)
+    if (plan === "stale") return
+    if (plan === "write") {
+      pushingRef.current = true
+      try {
+        view.dispatch({
+          changes: { from: 0, to: snapshot.length, insert: formatted },
+        })
+      } finally {
+        pushingRef.current = false
+      }
+    }
+    // settle（幂等）也回传：见 planDocApply 的三态说明。
+    onChangeRef.current(formatted)
+  }, [])
+
   // Create the editor once, with an empty doc — the value-sync effect below
   // pushes the real initial value right after (same commit, no visible flash).
   // Everything reactive reconfigures through the compartments in the effects
-  // below, so the editor mounts exactly once. The onChange callback lives in a
-  // ref so this mount-once closure always sees the latest prop.
-  const onChangeRef = useRef(onChange)
-  onChangeRef.current = onChange
+  // below, so the editor mounts exactly once.
   // biome-ignore lint/correctness/useExhaustiveDependencies: mount-once CodeMirror view; all reactive inputs reconfigure through compartments below
   useEffect(() => {
     if (!containerRef.current) return
@@ -199,54 +272,21 @@ export function CodeEditor({
           ),
           EditorView.updateListener.of((update) => {
             if (!update.docChanged || pushingRef.current) return
-            // 粘贴（含「全部替换」式插入）即自动展开：与外部值进入同一规则。
-            // JSON 本地整理（formatJson 容错，语法错误 / 尾逗号等无效 JSON 也
-            // 展开成可读结构，字符串字面量不受影响）；TOML 调后端 taplo
-            // （ADR-0011「输入后自动触发」，保注释、容错）。先 dispatch 再回传
-            // 格式化结果，父级状态一次到位，不会闪过原文。TOML 异步整理回调时
-            // 若用户已继续编辑（doc 不再等于粘贴快照）不强推，只回传当前内容。
-            // 错误位置由 jsonParseLinter 的红线标记，这里只负责排版。
+            // 粘贴（含「全部替换」式插入）即自动展开：与外部值进入、「整理」
+            // 按钮同一条 formatDoc → applyFormatted 管道。JSON 本地整理（容
+            // 错，语法错误 / 尾逗号等无效 JSON 也展开成可读结构，字符串字面
+            // 量不受影响）；TOML 调后端 taplo（ADR-0011「输入后自动触发」，
+            // 保注释、容错）。异步回调里用户若已继续输入，applyFormatted 的
+            // stale 守卫放弃写回——击键已实时回传父级，内容不丢；整理未改变
+            // 内容则 settle 幂等补回传，父级状态一次到位，不闪原文。错误位
+            // 置由 jsonParseLinter 的红线标记，这里只负责排版。
             if (
               update.transactions.some((tr) => tr.isUserEvent("input.paste"))
             ) {
               const text = update.view.state.doc.toString()
-              if (isJson) {
-                const formatted = tidyJson(text)
-                if (formatted !== text) {
-                  pushingRef.current = true
-                  try {
-                    update.view.dispatch({
-                      changes: { from: 0, to: text.length, insert: formatted },
-                    })
-                  } finally {
-                    pushingRef.current = false
-                  }
-                }
-                onChangeRef.current(formatted)
-                return
-              }
-              void formatTomlRef.current(text).then((res) => {
-                const formatted = res.error ? text : res.data
-                if (formatted === text) {
-                  onChangeRef.current(text)
-                  return
-                }
-                const view = viewRef.current
-                if (!view || view.state.doc.toString() !== text) {
-                  // 用户已继续编辑：不覆盖，只保证父级拿到粘贴原文。
-                  onChangeRef.current(text)
-                  return
-                }
-                pushingRef.current = true
-                try {
-                  view.dispatch({
-                    changes: { from: 0, to: text.length, insert: formatted },
-                  })
-                } finally {
-                  pushingRef.current = false
-                }
-                onChangeRef.current(formatted)
-              })
+              void formatDoc(language, text, formatTomlRef.current).then(
+                (formatted) => applyFormatted(text, formatted),
+              )
               return
             }
             onChangeRef.current(update.state.doc.toString())
@@ -264,50 +304,22 @@ export function CodeEditor({
 
   // External value → push into the editor without echoing back. No-op when the
   // doc already holds the value (covers the editor's own edits round-tripping
-  // through the parent). A compact JSON external value is expanded to multi-line
-  // on the way in (JSON only) — opening the form shows a readable structure
-  // instead of a single compressed line. formatJson is lenient (jsonc-parser):
-  // even broken JSON spreads into an outline, never throws. TOML external values
-  // go through the backend taplo formatter (ADR-0011 auto-trigger) — async, so
-  // the callback skips if the user already edited (doc no longer matches the
-  // snapshot) and never overwrites their typing. The editor's own edits never
-  // reach this path (cur === value).
+  // through the parent). Both languages enter the same formatDoc →
+  // applyFormatted pipeline as paste and the format button: the incoming value
+  // is normalized on the way in (JSON tidy-expanded locally, TOML through the
+  // backend taplo — failure keeps the original text), and a user who typed
+  // during the async round-trip wins (stale guard): their keystrokes already
+  // reported the newer content to the parent, so the push must not clobber it.
+  // The editor's own edits never reach this path (cur === value).
   useEffect(() => {
     const view = viewRef.current
     if (!view) return
     const cur = view.state.doc.toString()
     if (cur === value) return
-    if (isJson) {
-      let insert = value
-      if (!pushingRef.current) {
-        const formatted = tidyJson(value)
-        if (formatted !== value) insert = formatted
-      }
-      pushingRef.current = true
-      try {
-        view.dispatch({ changes: { from: 0, to: cur.length, insert } })
-      } finally {
-        pushingRef.current = false
-      }
-      if (insert !== value) onChangeRef.current(insert)
-      return
-    }
-    // TOML：外部值进入（打开表单 / 保存回读 / T6 提取后）即调后端整理。容错：
-    // 失败保持原文；回调时 doc 已不等于进入时的快照 → 用户编辑过，不强推。
-    void formatTomlRef.current(value).then((res) => {
-      const formatted = res.error ? value : res.data
-      const v = viewRef.current
-      if (!v || v.state.doc.toString() !== cur) return
-      if (formatted === value) return
-      pushingRef.current = true
-      try {
-        v.dispatch({ changes: { from: 0, to: cur.length, insert: formatted } })
-      } finally {
-        pushingRef.current = false
-      }
-      onChangeRef.current(formatted)
-    })
-  }, [value, isJson])
+    void formatDoc(language, value, formatTomlRef.current).then((formatted) =>
+      applyFormatted(cur, formatted),
+    )
+  }, [value, language, applyFormatted])
 
   // Refresh the validation strip whenever the controlled text changes (JSON
   // only — TOML validity is checked by the backend). User edits round-trip
@@ -356,34 +368,17 @@ export function CodeEditor({
     })
   }, [placeholderText, placeholderCompartment])
 
-  /** 统一「整理」：按语言分派——JSON 本地 tidyJson（格式化+排序）；TOML 调
-   *  后端 format_toml_cmd（taplo 保注释格式化，见 ADR-0011）。TOML 是异步：
-   *  dispatch 结果时用 pushingRef 防回声。 */
-  function handleFormat() {
+  /** 「整理」按钮：读当前 doc → formatDoc 按语言整理 → applyFormatted 写回，
+   *  与粘贴 / 外部值进入共用同一管道。整理失败（formatDoc 返回原文）落为
+   *  settle 幂等：无事务、同值回传由 setState 判等收敛；异步整理期间用户
+   *  已输入则 stale 守卫放弃写回，不覆盖。 */
+  async function handleFormat() {
     const view = viewRef.current
     if (!view) return
     const text = view.state.doc.toString()
     if (!text.trim()) return
-    const apply = (formatted: string) => {
-      if (formatted === text) return
-      pushingRef.current = true
-      try {
-        view.dispatch({
-          changes: { from: 0, to: text.length, insert: formatted },
-        })
-      } finally {
-        pushingRef.current = false
-      }
-      onChange(formatted)
-    }
-    if (isJson) {
-      apply(tidyJson(text))
-    } else {
-      void formatTomlRef.current(text).then((res) => {
-        // mutation 容错（run 归一）：失败保持原文（整理是容错的，不弹错）。
-        if (!res.error) apply(res.data)
-      })
-    }
+    const formatted = await formatDoc(language, text, formatTomlRef.current)
+    applyFormatted(text, formatted)
   }
 
   return (
@@ -407,7 +402,7 @@ export function CodeEditor({
                 variant="outline"
                 size="xs"
                 disabled={disabled}
-                onClick={handleFormat}
+                onClick={() => void handleFormat()}
               >
                 <Wand2 />
                 {t("jsonEditor.format")}

@@ -6,7 +6,6 @@
 // <Tooltip> in the tree shares delay/hover config without re-wrapping.
 
 import { invoke } from "@tauri-apps/api/core"
-import { listen } from "@tauri-apps/api/event"
 import { ThemeProvider, useTheme } from "next-themes"
 import type { ReactNode } from "react"
 import { useEffect } from "react"
@@ -17,6 +16,13 @@ import "@/i18n"
 import { useSkinEffect } from "@/hooks/use-skin"
 import { LanguageSync } from "@/i18n/LanguageSync"
 
+import {
+  listenAppEvent,
+  PROVIDERS_CHANGED,
+  SESSIONS_CHANGED,
+  TRAY_SHOW_MAIN,
+  USAGE_CHANGED,
+} from "./app-events"
 import { CloseRequestedDialog } from "./close-requested-dialog"
 import { vaultApi } from "./store/api"
 import { setMode } from "./store/slices/viewSlice"
@@ -50,7 +56,7 @@ export function AppProviders({ children }: { children: ReactNode }) {
   // truth. One tag replaces a per-domain list that had drifted (the collect /
   // sync mutations once forgot Sessions).
   useEffect(() => {
-    const off = listen("usage_changed", () => {
+    const off = listenAppEvent(USAGE_CHANGED, () => {
       store.dispatch(vaultApi.util.invalidateTags(INVALIDATE_STORE))
     })
     return () => {
@@ -63,7 +69,7 @@ export function AppProviders({ children }: { children: ReactNode }) {
   // the whole `Sessions` tag so every active session query (list + the open
   // transcript) refetches.
   useEffect(() => {
-    const off = listen("sessions_changed", () => {
+    const off = listenAppEvent(SESSIONS_CHANGED, () => {
       store.dispatch(vaultApi.util.invalidateTags(["Sessions"]))
     })
     return () => {
@@ -75,7 +81,7 @@ export function AppProviders({ children }: { children: ReactNode }) {
   // `providers_changed` after each provider write; invalidate the whole
   // `Providers` tag so the active provider list refetches in place.
   useEffect(() => {
-    const off = listen("providers_changed", () => {
+    const off = listenAppEvent(PROVIDERS_CHANGED, () => {
       store.dispatch(vaultApi.util.invalidateTags(["Providers"]))
     })
     return () => {
@@ -87,7 +93,7 @@ export function AppProviders({ children }: { children: ReactNode }) {
   // window is in lightweight mode, morph back — setMode("full") is a no-op when
   // already full, and useWindowMode restores the window geometry on the change.
   useEffect(() => {
-    const off = listen("tray-show-main", () => {
+    const off = listenAppEvent(TRAY_SHOW_MAIN, () => {
       store.dispatch(setMode("full"))
     })
     return () => {

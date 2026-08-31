@@ -2,9 +2,9 @@
 // intercepted with close_behavior = Ask, Rust emits `close-requested`; this
 // component shows the minimize/quit dialog and resolves it via `confirmClose`.
 
-import { listen } from "@tauri-apps/api/event"
 import { useEffect, useState } from "react"
 import { useTranslation } from "react-i18next"
+import { CLOSE_REQUESTED, listenAppEvent } from "@/app/app-events"
 import { confirmClose } from "@/app/store/api"
 import { Button } from "@/components/ui/button"
 import { Checkbox } from "@/components/ui/checkbox"
@@ -23,7 +23,7 @@ export function CloseRequestedDialog() {
   const [remember, setRemember] = useState(false)
 
   useEffect(() => {
-    const off = listen("close-requested", () => setOpen(true))
+    const off = listenAppEvent(CLOSE_REQUESTED, () => setOpen(true))
     return () => {
       off.then((unlisten) => unlisten())
     }

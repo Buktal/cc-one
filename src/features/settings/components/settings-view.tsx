@@ -20,7 +20,6 @@ import {
   Unplug,
   XCircle,
 } from "lucide-react"
-import { useState } from "react"
 import { useTranslation } from "react-i18next"
 import { useRebillMutation, useSetDisplayNameMutation } from "@/app/store/api"
 import { CopyButton } from "@/components/copy-button"
@@ -33,6 +32,7 @@ import { AboutCard } from "@/features/settings/components/about-card"
 import { DeviceList } from "@/features/settings/components/device-list"
 import { GeneralCard } from "@/features/settings/components/general-card"
 import { useSyncRepo } from "@/features/settings/use-sync-repo"
+import { useInlineEdit } from "@/hooks/use-inline-edit"
 import { useMutateWithToast } from "@/hooks/use-toast-mutation"
 import type { VerifyReport } from "@/types/generated/bindings"
 
@@ -55,11 +55,20 @@ export function SettingsView() {
     verifying,
     syncing,
   } = useSyncRepo()
-  const [setName, { isLoading: naming }] = useSetDisplayNameMutation()
+  const [setName] = useSetDisplayNameMutation()
   const [rebill, { isLoading: rebilling }] = useRebillMutation()
   const runWithToast = useMutateWithToast()
 
-  const [displayName, setDisplayName] = useState("")
+  // 显示名设置是常开编辑（无键位、无取消）：useInlineEdit 以 K = void 使用，
+  // target / begin / cancel 不参与，机器只供「草稿 + busy + 成功清空」——
+  // 提交成功 settle 即清空草稿（与旧 setDisplayName("") 同一收尾）。
+  const displayName = useInlineEdit<void>({
+    commit: (_target, draft) =>
+      runWithToast(setName, draft.trim(), {
+        success: { key: "settings.toast.displayNameUpdated" },
+        failed: { key: "settings.toast.renameFailed" },
+      }),
+  })
 
   return (
     <div className="mx-auto flex max-w-6xl flex-col gap-6">
@@ -117,19 +126,13 @@ export function SettingsView() {
             <Input
               className="flex-1"
               placeholder={t("settings.local.displayNamePlaceholder")}
-              value={displayName}
-              onChange={(e) => setDisplayName(e.target.value)}
+              value={displayName.draft}
+              onChange={(e) => displayName.setDraft(e.target.value)}
             />
             <Button
               size="sm"
-              disabled={naming || !displayName.trim()}
-              onClick={async () => {
-                const ok = await runWithToast(setName, displayName.trim(), {
-                  success: { key: "settings.toast.displayNameUpdated" },
-                  failed: { key: "settings.toast.renameFailed" },
-                })
-                if (ok) setDisplayName("")
-              }}
+              disabled={displayName.busy || !displayName.draft.trim()}
+              onClick={() => void displayName.commit()}
             >
               {t("common.save")}
             </Button>
@@ -189,7 +192,7 @@ export function SettingsView() {
                 ) : null}
               </span>
             </Row>
-            <Row label="Token">
+            <Row label={t("settings.sync.token")}>
               <span className="text-muted-foreground font-mono text-xs">
                 {info?.masked_token ?? t("settings.sync.notConfigured")}
               </span>
@@ -230,6 +233,8 @@ export function SettingsView() {
                 {t("settings.sync.repoUrl")}
               </Label>
               <Input
+                // 占位符是 HTTPS 仓库地址的格式示例——URL 本身跨语言可读，
+                // 属于不本地化的专名例外（对照 VerifyBanner 的后端 message）。
                 placeholder="https://github.com/<owner>/<repo>.git"
                 value={repoUrl}
                 onChange={(e) => setRepoUrl(e.target.value)}
@@ -239,6 +244,8 @@ export function SettingsView() {
               </Label>
               <Input
                 type="password"
+                // 占位符展示 GitHub fine-grained PAT 的字面前缀，是令牌格式
+                // 示例而非英文文案，保持原文不本地化（同上属专名例外）。
                 placeholder="github_pat_…"
                 value={token}
                 onChange={(e) => setToken(e.target.value)}

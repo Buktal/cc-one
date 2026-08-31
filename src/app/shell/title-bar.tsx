@@ -242,6 +242,9 @@ function TopNavBtn({
         <span className="max-[1180px]:hidden">
           {label}
           {item.beta ? (
+            // BETA 是软件里跨语言通用的状态徽标缩写（zh/ja 用户都按原文理
+            // 解），保持原文不本地化；完整的 beta 说明句走 nav.betaTitle 本地
+            // 化（见上 title 拼接）。
             <span className="text-accent-brand/80 ml-1.5 text-[9px] font-bold tracking-widest">
               BETA
             </span>

@@ -8,6 +8,8 @@
 //! 共用原语：受控合并 / 备份 / 原子写 / 无变化无操作，各分支同一套「只合并
 //! 受控字段、非受控字段原地保留、备份 + 原子写」语义）、`live_codex` /
 //! `live_gemini` / `live_grok` / `live_opencode`（其余 app 的写盘实现）、
+//! `live_toml`（TOML 载体共用机制：live / target 解析、片段补缺失、片段校验
+//! 与合并骨架——codex / grok 共用，经 `live` re-export）、
 //! `keys`（密钥位置清单 + strip / restore 成对纯函数：push / 导出剥、pull
 //! 回填共用，见本目录 `keys.rs`）、`snippet`（通用配置片段：手写片段 + 启用
 //! 开关，写盘时合并进受控字段，存本机 config.json 不同步）、`export_import`
@@ -34,6 +36,7 @@ pub mod live_codex;
 pub mod live_gemini;
 pub mod live_grok;
 pub mod live_opencode;
+pub(crate) mod live_toml;
 pub mod model_fetch;
 pub mod settings_codec;
 pub mod snippet;

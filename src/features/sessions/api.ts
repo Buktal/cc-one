@@ -50,8 +50,6 @@ export const {
   useSetSessionSyncedGroupMutation,
   useDeleteSessionsMutation,
   useListGroupsQuery,
-  useListLocalGroupsQuery,
-  useListSyncedGroupsQuery,
   useCreateLocalGroupMutation,
   useRenameLocalGroupMutation,
   useDeleteLocalGroupMutation,
@@ -186,19 +184,11 @@ export const {
       invalidatesTags: ["Sessions"],
     }),
 
-    // Groups — unified list is the one the UI fetches; the per-track lists are
-    // exposed for completeness. Both tracks cache under `Sessions` so any group
+    // Groups — the unified list is the only groups read (the per-track reads
+    // died with the commands behind them). Cached under `Sessions` so any group
     // CRUD (which invalidates `Sessions`) refreshes the sidebar in place.
     listGroups: b.query<SessionGroup[], void>({
       queryFn: async () => run(commands.listGroupsCmd()),
-      providesTags: storeRead("Sessions"),
-    }),
-    listLocalGroups: b.query<LocalGroup[], void>({
-      queryFn: async () => run(commands.listLocalGroupsCmd()),
-      providesTags: storeRead("Sessions"),
-    }),
-    listSyncedGroups: b.query<SyncedGroup[], void>({
-      queryFn: async () => run(commands.listSyncedGroupsCmd()),
       providesTags: storeRead("Sessions"),
     }),
     createLocalGroup: b.mutation<LocalGroup, string>({

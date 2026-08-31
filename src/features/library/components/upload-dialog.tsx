@@ -23,6 +23,7 @@ import {
 import { Input } from "@/components/ui/input"
 import { useMutateWithToast } from "@/hooks/use-toast-mutation"
 import type { UploadItem } from "@/types/generated/bindings"
+import { extOf } from "../derive"
 import { kindIcon } from "../kind-icon"
 
 type Row = { sourcePath: string; name: string }
@@ -34,10 +35,10 @@ function basename(p: string): string {
 }
 
 /** The dialog only has dropped paths, not kinds — no extension is its best
- *  guess for "directory". Delegates to the shared kindIcon (single source). */
+ *  guess for "directory". Delegates to the shared kindIcon (single source);
+ *  the extensionless test reads the shared extOf (empty = no dot in name). */
 function rowIcon(name: string) {
-  const ext = name.split(".").pop()?.toLowerCase()
-  return kindIcon(name, !ext || name === ext)
+  return kindIcon(name, extOf(name) === "")
 }
 
 export function UploadDialog({

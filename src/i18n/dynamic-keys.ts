@@ -71,6 +71,7 @@ export const EXTRACT_GROUP_KINDS = ["endpoint", "model", "behavior"] as const
 export const APP_ERROR_TYPES = [
   "Config",
   "Db",
+  "Io",
   "SourceParser",
   "Pricing",
   "Sync",

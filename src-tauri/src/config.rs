@@ -10,10 +10,18 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
-use rand::Rng;
+// deviceId 原语归 devices 域（CONTEXT「Device registry」：哪些设备存在 + 设备
+// 命名是 registry 的知识），bootstrap 首代从这里调取。
+use crate::devices::{default_display_name, generate_device_id, is_valid_device_id};
 
 use crate::error::{AppError, AppResult};
 use crate::model::{App, CommonConfigSnippet, RunMode};
+
+mod wire;
+
+// 跨界偏好枚举（wire 类型）归子模块 [`wire`]；re-export 保持
+// `crate::config::` 的既有引用面（调用方路径零变化）。
+pub use wire::{CloseBehavior, Language, LightweightExpand, Skin};
 
 /// Root of all cc one local data: `~/.config/cc-one`.
 pub fn root_dir() -> AppResult<PathBuf> {
@@ -124,67 +132,6 @@ impl Paths {
     }
 }
 
-/// Window-close behavior preference. Crosses the Rust→JS boundary.
-#[derive(
-    Debug, Clone, Copy, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize, specta::Type,
-)]
-#[serde(rename_all = "snake_case")]
-pub enum CloseBehavior {
-    /// Show the minimize/quit dialog each time (default).
-    #[default]
-    Ask,
-    /// Always minimize to tray — keeps the background scheduler alive.
-    Minimize,
-    /// Always quit.
-    Quit,
-}
-
-/// How the lightweight glance card's tucked half-icon expands.
-/// Crosses the Rust→JS boundary; Rust itself doesn't act on it (a pure frontend
-/// interaction), but it rides `ConfigData` so every Settings preference lives in
-/// one place.
-#[derive(
-    Debug, Clone, Copy, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize, specta::Type,
-)]
-#[serde(rename_all = "snake_case")]
-pub enum LightweightExpand {
-    /// Click the half-icon to expand (default — won't fire on a stray hover).
-    #[default]
-    Click,
-    /// Hover the half-icon to expand.
-    Hover,
-}
-
-/// Color skin for multi-skin theming (token-first). Serialized
-/// snake_case; `neutral` is the default and maps to NO `data-skin` attribute on
-/// `<html>` (the :root/.dark values in src/index.css ARE the Neutral palette —
-/// pure greyscale chrome over a default multi-hue chart). Per-device, not synced
-/// (config.json never enters the repo). The four chromatic skins each override
-/// `--brand` (+ `--brand-strong`) and the button-foreground vars in index.css;
-/// everything else holds. The frontend applies it; Rust only stores it.
-///
-/// Back-compat: the legacy snake_case names (`pixso`/`cuiwei`/`tingwu`/
-/// `yanzhi`/`zizi`) are accepted as aliases, so an older config.json lands on
-/// the closest new skin instead of failing to deserialize — `pixso` (the old
-/// default) → `Neutral` (the new default); the rest map by hue family.
-#[derive(
-    Debug, Clone, Copy, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize, specta::Type,
-)]
-#[serde(rename_all = "snake_case")]
-pub enum Skin {
-    #[default]
-    #[serde(alias = "pixso")]
-    Neutral,
-    #[serde(alias = "cuiwei")]
-    Sage,
-    #[serde(alias = "tingwu")]
-    Azure,
-    #[serde(alias = "yanzhi")]
-    Crimson,
-    #[serde(alias = "zizi")]
-    Mauve,
-}
-
 /// Default background-collect interval in seconds (30 s — decoupled
 /// from the push cadence, which has its own interval).
 ///
@@ -209,23 +156,12 @@ fn default_lightweight_auto_tuck_secs() -> u32 {
     30
 }
 
-/// 通用配置片段默认内容：隐藏署名（`includeCoAuthoredBy: false`）。
+/// 旧全局片段字段（`common_config_snippet`）的 serde 默认：旧写法只有 claude
+/// 池，其默认内容 = claude 的默认片段。内容决策单源在
+/// [`App::default_common_snippet`]（model 层 per-app 事实）——这里只是旧字段
+/// 的存储默认垫片，不再持有片段字面量。
 fn default_common_config_snippet() -> String {
-    r#"{"includeCoAuthoredBy": false}"#.to_string()
-}
-
-/// Display language. Serialized lowercase (`en`/`zh`/`ja`), matching
-/// the frontend locale codes. The tray "Quit" item — the only user-facing Rust
-/// string — is localized from this; all other UI text is frontend i18n.
-#[derive(
-    Debug, Clone, Copy, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize, specta::Type,
-)]
-#[serde(rename_all = "lowercase")]
-pub enum Language {
-    #[default]
-    En,
-    Zh,
-    Ja,
+    App::Claude.default_common_snippet().content
 }
 
 /// The local `config.json` content. Never uploaded to the repo.
@@ -356,22 +292,15 @@ impl ConfigData {
     }
 
     /// 某应用的通用配置片段：已有条目原样返回；缺省（新应用池 / 手改
-    /// config.json 删了键）按应用给默认——claude 沿用隐藏署名片段，其余应用
-    /// 默认空片段（它们的配置里没有署名概念，留空由用户自填）。未保存过 →
-    /// **默认启用**（片段是跨供应商的共享默认值，开箱即生效；显式保存过
-    /// enabled=false 的条目原样返回，尊重用户关闭）。
+    /// config.json 删了键）回退 [`App::default_common_snippet`] 的 per-app
+    /// 默认（claude 隐藏署名片段、其余空片段；未保存过 → 默认启用）。本方法
+    /// 只管「存 map、缺键给默认」的存取语义，不含 per-app 内容决策——那归
+    /// model 层的 App（第 6 个应用带默认片段时改 App，不改这里）。
     pub fn snippet_for(&self, app: App) -> CommonConfigSnippet {
         self.common_config_snippets
             .get(app.as_str())
             .cloned()
-            .unwrap_or_else(|| CommonConfigSnippet {
-                enabled: true,
-                content: if app == App::Claude {
-                    default_common_config_snippet()
-                } else {
-                    String::new()
-                },
-            })
+            .unwrap_or_else(|| app.default_common_snippet())
     }
 
     /// 写入某应用的通用配置片段（set 命令；内容合法性由调用方校验）。
@@ -547,92 +476,9 @@ impl ConfigStore {
     }
 }
 
-/// A valid deviceId is 12 lowercase hex chars (48-bit short id).
-pub fn is_valid_device_id(id: &str) -> bool {
-    id.len() == 12
-        && id
-            .chars()
-            .all(|c| c.is_ascii_hexdigit() && (!c.is_ascii_alphabetic() || c.is_ascii_lowercase()))
-}
-
-/// Generate a 12-hex deviceId (48 bits), retrying if it collides with an
-/// existing device dir in `repo/data/` (collision check).
-fn generate_device_id(paths: &Paths) -> String {
-    let existing = list_existing_device_ids(&paths.repo_data);
-    let mut rng = rand::thread_rng();
-    for _ in 0..8 {
-        let bytes: [u8; 6] = rng.gen();
-        let id = hex_encode(&bytes);
-        if !existing.iter().any(|e| e == &id) {
-            return id;
-        }
-    }
-    // Astronomically unlikely (8 × 2^-48); fall through with the last candidate.
-    let bytes: [u8; 6] = rng.gen();
-    hex_encode(&bytes)
-}
-
-fn list_existing_device_ids(repo_data: &Path) -> Vec<String> {
-    match fs::read_dir(repo_data) {
-        Ok(rd) => rd
-            .filter_map(|e| e.ok())
-            .filter_map(|e| e.file_name().to_str().map(|s| s.to_string()))
-            .filter(|s| is_valid_device_id(s))
-            .collect(),
-        Err(_) => Vec::new(),
-    }
-}
-
-fn hex_encode(bytes: &[u8]) -> String {
-    let mut s = String::with_capacity(bytes.len() * 2);
-    for b in bytes {
-        s.push_str(&format!("{b:02x}"));
-    }
-    s
-}
-
-pub fn default_display_name(device_id: &str) -> String {
-    let prefix = &device_id[..6.min(device_id.len())];
-    format!("Device-{prefix}")
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn valid_device_id_rules() {
-        assert!(is_valid_device_id("0123456789ab"));
-        assert!(is_valid_device_id("abcdef012345"));
-        assert!(!is_valid_device_id("0123456789a")); // too short
-        assert!(!is_valid_device_id("0123456789abc")); // too long
-        assert!(!is_valid_device_id("abcdef01234g")); // non-hex letter
-        assert!(!is_valid_device_id("ABCDEF012345")); // uppercase rejected
-    }
-
-    #[test]
-    fn generated_device_id_is_valid() {
-        let tmp = tempfile::tempdir().unwrap();
-        let paths = Paths::resolve(tmp.path());
-        let id = generate_device_id(&paths);
-        assert!(is_valid_device_id(&id));
-    }
-
-    #[test]
-    fn generated_device_id_avoids_existing_collisions() {
-        let tmp = tempfile::tempdir().unwrap();
-        let paths = Paths::resolve(tmp.path());
-        // Pre-seed an existing device dir under repo/data/.
-        fs::create_dir_all(paths.device_data_dir("aabbccddeeff")).unwrap();
-        for _ in 0..16 {
-            let id = generate_device_id(&paths);
-            assert_ne!(
-                id, "aabbccddeeff",
-                "generator must avoid existing device dirs"
-            );
-            assert!(is_valid_device_id(&id));
-        }
-    }
 
     #[test]
     fn mode_requires_both_repo_url_and_token() {
