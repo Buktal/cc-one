@@ -1,149 +1,110 @@
-# cc one
+<div align="center">
 
-> **あなたの AI CLI 使用量は、あなたのもの。** cc one は AI CLI がすでに書き出しているセッションログを読み取り、トークン・コスト・キャッシュ効率・トレンドに変換します。ローカルファーストのデスクトップダッシュボードで、自分が管理する GitHub リポジトリ経由の複数端末間同期もオプションで利用できます。
+# CC One
 
-[![Version](https://img.shields.io/github/v/release/Buktal/cc-one?color=blue&label=version)](https://github.com/Buktal/cc-one/releases)
-[![Platforms](https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux-lightgrey.svg)](https://github.com/Buktal/cc-one/releases)
-[![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](./LICENSE)
-[![Built with Tauri](https://img.shields.io/badge/built%20with-Tauri%202-orange.svg)](https://tauri.app/)
+**AI コーディング CLI向けの使用量ダッシュボードとプロバイダ管理ツール**
 
-[English](./README.md) | [简体中文](./README.zh-CN.md) | **日本語** | [更新履歴](./CHANGELOG.ja-JP.md)
+[![Release](https://img.shields.io/github/v/release/Buktal/cc-one)](https://github.com/Buktal/cc-one/releases/latest)
+[![License](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
+[![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux-blueviolet)](https://github.com/Buktal/cc-one/releases/latest)
 
-<img src="./docs/images/ad-ja.png" alt="cc one ダッシュボード" width="800">
+[English](README.md) | [简体中文](README.zh-CN.md) | [日本語](README.ja-JP.md)
 
----
+<img src="./docs/images/dashboard-overview.png" alt="CC One ダッシュボード" width="800">
 
-## 背景
+</div>
 
-**Claude Code、Codex、Gemini CLI、Grok CLI、OpenCode** のセッションは、それぞれディスクにログを書き出します——トークン、キャッシュヒット、支出——それらすべてはプレーンテキストとして端末に残されたままです。cc one はそのログを読み取り、**いくら使ったか、何を得たか、トークンがどこへ向かったか**を鮮明な形にします。プロバイダーの切り替えも管理し、各 CLI が実際に読み込む設定ファイルを書き込みます。
-
-製品全体は 2 つの原則に従います：
-
-- **ローカルファースト。** フル機能のダッシュボードはゼロネットワークで動作します——ディスク上のログだけがすべての依存です。
-- **ログに対して厳密に読み取り専用。** cc one はセッションログもツールの動作も決して変更しません。唯一の書き込みはプロバイダー切り替えで、常に明示的な操作であり、必ず事前にバックアップされます。
-
-複数端末間同期はオプションのレイヤーであり、利用の前提条件ではありません。
-
-## スクリーンショット
-
-| | ライト | ダーク |
-| --- | --- | --- |
-| **ダッシュボード** | <img src="./docs/images/light-usage.png" alt="ダッシュボード（ライト）" width="320"> | <img src="./docs/images/dark-usage.png" alt="ダッシュボード（ダーク）" width="320"> |
-| **消費量** | <img src="./docs/images/light-consumption.png" alt="消費量（ライト）" width="320"> | <img src="./docs/images/dark-consumption.png" alt="消費量（ダーク）" width="320"> |
-| **グランスモード** | <img src="./docs/images/light-floating-card.png" alt="グランスモード（ライト）" width="320"> | <img src="./docs/images/dark-floating-card.png" alt="グランスモード（ダーク）" width="320"> |
+CC One は、AI コーディング CLI のローカルセッションログを Token・コスト・トレンド・セッションの使用量分析に変換し、プロバイダ設定を管理するデスクトップアプリケーションです。データはすべてローカルの SQLite に保存されます。マルチデバイス同期を有効にした場合、データはユーザー所有のプライベート Git リポジトリを介して交換され、アクセストークンはローカルマシンから外に出ません。
 
 ## 機能
 
-### プロバイダー
+### 使用量ダッシュボード
 
-- **5 つの AI CLI、1 つの設定ハブ** —— 切り替えはその CLI が実際に読み込む設定ファイルを、制御フィールドのみマージし、書き込み前に必ずバックアップして書き込みます。
-- **59 のビルトインプリセット** —— プリセットを選択し、キーを入力して切り替えます。CC-Switch、ローカル設定、CC One バックアップからのインポート、リスト全体の JSON エクスポートに対応。
-- **モデルロールマッピング** —— 5 ロール（Sonnet / Opus / Fable / Haiku / Subagent）、それぞれにモデルと 1M コンテキストトグル。ワンクリックでベンダーのモデルリストを取得。
-- **構造は同期、キーは非同期** —— プロバイダーリストは端末単位で同期。端末の外へ出るものからは常に API キーが除去されます。
+- 5 つの視点:概要・デバイス・プロジェクト・セッション・リクエスト。
+- Token の 4 分類集計(入力・出力・キャッシュ作成・キャッシュ読み取り)と、キャッシュヒット率・リクエスト数・コスト。
+- 使用量トレンド、日別リクエスト数、ターン数と所要時間の分布、モデル別比率、デバイス別・プロジェクト別ランキング。
+- リクエスト単位のログ。各リクエストのコスト明細(入力 / 出力 / キャッシュ読み取り / キャッシュ書き込み、課金モデル、停止理由)を展開表示。
 
-### ダッシュボード
+### セッションワークベンチ
 
-- **4 バケットのトークン経済** —— input / output / cache creation / cache read を、請求書に一致する 1 つのモデルに正規化。
-- **キャッシュヒット率・モデル分布・リクエスト数とコスト** —— モデルはトークン順、それぞれにキャッシュヒット率を表示。合計は収集時点で固定。
-- **トレンドとリクエストログ** —— 今日と昨日の差分付きの多指標トレンドチャート。呼び出し単位のログはクリックで完全な詳細を展開。
+<table>
+<tr>
+<td><img src="./docs/images/sessions-workbench.png" alt="セッションワークベンチ" width="420"></td>
+<td><img src="./docs/images/session-detail.png" alt="セッション詳細" width="420"></td>
+</tr>
+</table>
 
-### セッション
+- プロジェクト・グループ・お気に入りの 3 種類のビューでセッションをナビゲート。一括でお気に入り登録・グループ設定・削除が可能。
+- 会話全文の閲覧、ターン単位のナビゲーション、セッション内検索、メッセージのコピーに対応。
+- ローカルグループはローカルマシンのみに保存。お気に入りとお気に入りグループはデバイス間で同期。
 
-- **ブラウズ可能な履歴** —— すべての会話をプロジェクト単位で整理し、全文検索と期間・ソース・モデル・デバイスによるフィルタに対応。
-- **完全なトランスクリプトが即座に** —— 収集時にローカルへ保存。シンタックスハイライト付きのマークダウン描画、セッション内検索とジャンプに対応。
-- **ローカルとお気に入り** —— 端末の外に出ないプライベートグループと、ソースデバイス表示付きで同期されるお気に入りグループ。端末の外に出るのはお気に入り登録したセッションだけです。
+### プロバイダ管理(Beta)
 
-### 同期（オプション）
+- アプリごとに独立したプロバイダプールと、単一アクティブ方式(OpenCode は追加方式:複数プロバイダが同一設定ファイルに共存)。
+- 内蔵の設定プリセット、モデルロールマッピング(Claude Code の 1M コンテキストフラグを含む)、アプリ別の共通設定スニペット。マージ時はプロバイダの設定を優先。
+- 切り替え時に書き換えるのはプロバイダが管理するフィールドのみ。設定ファイルのその他のフィールドはそのまま保持。書き込みはアトミックかつバックアップ付きで、内容に変化がない場合は冪等。
+- CC-Switch および既存の設定ファイルからのインポートに対応。
 
-- **自分のリポジトリ、プレーンテキスト** —— 使用量は人間が読める端末別・日付別の JSONL として、あなたが管理する GitHub リポジトリへ投影。間にサードパーティのサーバーはありません。
-- **構造的に無衝突** —— 端末分離書き込み、決定的な成果物、自己修復 rebase。
-- **システムプロキシ対応**。ダッシュボード・グランスカード・ミニバーは単一端末に絞り込み可能。
+### マルチデバイス同期
 
-### ライブラリ
+- データはユーザー所有のプライベート Git リポジトリを介し、HTTPS とパーソナルアクセストークンで交換。トークンはローカルマシンにのみ保存。
+- 使用量データ・お気に入りセッション・お気に入りグループ・デバイス別ファイルライブラリを、デバイス単位で分離して Git でバージョン管理。
 
-- **ドラッグで中継アップロード** —— ファイル / ディレクトリをウィンドウにドロップすると、同期リポジトリ経由でその端末のサブツリーへ。
-- **アプリ内プレビューと手動エクスポート** —— 画像、テキスト / JSON、それ以外はサンドボックス描画。任意のパスへのエクスポートに対応。
+<table>
+<tr>
+<td><img src="./docs/images/floating-card.png" alt="フローティングカード" width="260"></td>
+<td>
 
-### コストと価格
+### フローティング使用量カード
 
-- モデル別に編集可能な価格、ワンクリックでの LiteLLM コスト表取得、価格なしレコードの再請求、JSON インポート / エクスポート。
+画面端に貼り付くコンパクトなカードで、本日の消費量(Token 4 分類・キャッシュヒット率・リクエスト数・コスト)を一覧表示。メインウィンドウをトレイに最小化すると自動で収納されます。
 
-### エクスペリエンス
+</td>
+</tr>
+</table>
 
-- **グランスモード** —— 画面端のミニバー、またはダッシュボードを映すフローティングカード。各形態の配置は個別に保持されます。
-- **マルチスキンテーマ**、トレイ常駐のバックグラウンド収集（5〜60 秒）、署名付き自動更新。UI は English / 简体中文 / 日本語。
+### その他
 
-## ローカルに留まるもの、同期されるもの
+- モデル課金単価の設定:内蔵価格テーブル、カスタムエントリ、LiteLLM からの取得、インポート・エクスポート。
+- デバイスごとのファイルライブラリ。同期リポジトリでバージョン管理。
+- GitHub Releases 経由のアプリ内自動アップデート。
+- UI は English / 日本語 / 中文対応。ライト・ダークテーマとアクセントスキン。
+- トレイ常駐とバックグラウンド収集に対応。
 
-| | スタンドアロン | 同期モード（リポジトリバインド済み） |
-| --- | --- | --- |
-| 使用量・コスト・トレンド・リクエストログ | ローカルのみ | 端末間で同期 |
-| セッションのトランスクリプトとお気に入り | ローカルのみ | お気に入り登録したセッションのみ同期、他はローカル |
-| プロバイダー構造 | ローカルのみ | 端末単位で同期——API キーは決して同期されない |
-| ライブラリファイル | ローカルのみ | 端末間で同期 |
-| 設定・スキン・価格上書き・ローカルグループ | ローカル | ローカル——リポジトリには一切書き込まれません |
+## 対応 CLI
 
-リポジトリをバインドして同期を有効にしない限り、データが端末の外へ出ることはありません。アクセストークンも端末に留まり、リポジトリに書き込まれることはありません。
+| CLI | 使用量解析 | プロバイダ管理 |
+| --- | :---: | :---: |
+| Claude Code | ✓ | ✓ 単一アクティブ |
+| Codex CLI | ✓ | ✓ 単一アクティブ |
+| Gemini CLI | ✓ | ✓ 単一アクティブ |
+| Grok CLI | ✓ | ✓ 単一アクティブ |
+| OpenCode | ✓ | ✓ 追加方式 |
 
-## 仕組み
+## インストール
 
-```
-  AI CLI セッションログ
-  (Claude Code · Codex · Gemini CLI · Grok CLI · OpenCode)
-          │  (読み取り専用)
-          ▼
-       Collect ──────▶ ローカルストア (SQLite) ──────▶ ダッシュボード & セッション
-          │
-          │  (オプション · 同期モード)
-          ▼
-     成果物 (プレーンテキスト、端末別 + 日付別)
-          │
-    push / pull は自分の GitHub リポジトリ経由
-          │
-          ▼
-       他の端末
-```
+[Releases](https://github.com/Buktal/cc-one/releases/latest) からパッケージをダウンロードしてください。
 
-[Tauri 2](https://tauri.app/) アプリです：Rust バックエンドが収集、ローカルストア（唯一の真実の源）、プロバイダー設定の書き込み、オプション同期を担当し、React フロントエンドが生成された型安全な IPC バインディングを通じてダッシュボードを描画します。
-
-## クイックスタート
-
-お使いの OS のインストーラは **[Releases](https://github.com/Buktal/cc-one/releases)** ページからダウンロードできます。
-
-| OS | インストーラ |
+| プラットフォーム | パッケージ |
 | --- | --- |
-| **Windows** | `.msi` または `.exe`（NSIS）セットアップ |
-| **macOS** | `.dmg`（Apple Silicon / arm64） |
-| **Linux** | `.deb`、`.AppImage`（一部で `.rpm`） |
+| Windows(x64) | `CC.One_*_x64-setup.exe` または `CC.One_*_x64_en-US.msi` |
+| macOS(Apple Silicon) | `CC.One_*_aarch64.dmg` |
+| Linux(x86_64) | `CC.One_*_amd64.deb` / `CC.One_*_1.x86_64.rpm` / `CC.One_*_amd64.AppImage` |
 
-**初回起動：** cc one を起動すると、ローカルの AI CLI セッションログをスキャンしてダッシュボードが自動的に表示されます。アカウントもサインインもネットワークも不要。複数端末で利用する場合は、**設定**で自分が管理する GitHub リポジトリをバインドして同期を有効にしてください。
-
-> **macOS の注意：** 現在のビルドは未署名です。初回起動時はアプリを右クリック → **開く**、または隔離属性を除去してください：
-> ```bash
-> xattr -dr com.apple.quarantine /Applications/cc one.app
-> ```
+アプリケーションは GitHub Releases の更新を確認し、アプリ内で自動アップデートします。
 
 ## ソースからビルド
 
-**前提条件：** [Node.js](https://nodejs.org/) 20+ LTS + [Yarn 4](https://yarnpkg.com/)（[Corepack](https://nodejs.org/api/corepack.html) 経由）、および安定版 [Rust](https://www.rust-lang.org/) とお使いの OS の [Tauri 前提条件](https://tauri.app/start/prerequisites/)。
+前提条件:Node.js ≥ 20、Yarn 4、Rust ツールチェーン、[Tauri 2 のプラットフォーム依存関係](https://v2.tauri.app/start/prerequisites/)。
 
-```bash
-corepack enable  # package.json で固定された Yarn バージョンを有効化
-yarn install     # 依存関係をインストール
-yarn dev         # 開発モードでデスクトップアプリを実行
-yarn dist        # リリースバイナリをビルド
-yarn check       # 静的チェック（Biome + tsc + Rust fmt/clippy）——CI と同じゲート
-yarn test        # テストスイートを実行
+```sh
+yarn install
+yarn dev      # 開発モードで起動
+yarn check    # 静的検査と型検査(Biome、tsc、clippy、rustfmt)
+yarn test     # テストスイート(Vitest、cargo test)
+yarn dist     # 配布パッケージのビルド
 ```
-
-**技術スタック：** [Tauri 2](https://tauri.app/) (Rust) · [React 19](https://react.dev/) · [TypeScript](https://www.typescriptlang.org/) · [Vite](https://vite.dev/) · [Tailwind CSS v4](https://tailwindcss.com/) · [shadcn/ui](https://ui.shadcn.com/) · [Redux Toolkit](https://redux-toolkit.js.org/) · [Recharts](https://recharts.org/)
-
-## コントリビュート
-
-issue と提案は歓迎します。PR の前には `yarn check` と `yarn test` を実行してください。大きな機能の場合は、先に issue でアプローチを議論してください。
 
 ## ライセンス
 
-[MIT](./LICENSE) © cc one Contributors
-
-[![LINUX DO](https://img.shields.io/badge/LINUX%20DO-%E3%82%B3%E3%83%9F%E3%83%A5%E3%83%8B%E3%83%86%E3%82%A3%E8%AA%8D%E5%AE%9A-blue?style=flat-square&logo=linux)](https://linux.do)
+[MIT](LICENSE)

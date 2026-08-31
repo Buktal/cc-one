@@ -1,149 +1,110 @@
-# cc one
+<div align="center">
 
-> **你的 AI CLI 用量，由你掌控。** cc one 读取你的 AI CLI 已经写下的会话日志，把它们变成 token、成本、缓存效率与趋势——一个本地优先的桌面看板，并可选地通过你掌控的 GitHub 仓库在多设备间同步。
+# CC One
 
-[![Version](https://img.shields.io/github/v/release/Buktal/cc-one?color=blue&label=version)](https://github.com/Buktal/cc-one/releases)
-[![平台](https://img.shields.io/badge/%E5%B9%B3%E5%8F%B0-Windows%20%7C%20macOS%20%7C%20Linux-lightgrey.svg)](https://github.com/Buktal/cc-one/releases)
-[![License](https://img.shields.io/badge/license-MIT-green.svg)](./LICENSE)
-[![Built with Tauri](https://img.shields.io/badge/built%20with-Tauri%202-orange.svg)](https://tauri.app/)
+**AI 编码 CLI 的用量看板与供应商管理器**
 
-[English](./README.md) | **简体中文** | [日本語](./README.ja-JP.md) | [更新日志](./CHANGELOG.zh-CN.md)
+[![Release](https://img.shields.io/github/v/release/Buktal/cc-one)](https://github.com/Buktal/cc-one/releases/latest)
+[![License](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
+[![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux-blueviolet)](https://github.com/Buktal/cc-one/releases/latest)
 
-<img src="./docs/images/ad-zh.png" alt="cc one 看板" width="800">
+[English](README.md) | [简体中文](README.zh-CN.md) | [日本語](README.ja-JP.md)
 
----
+<img src="./docs/images/dashboard-overview.png" alt="CC One 数据看板" width="800">
 
-## 为什么
+</div>
 
-每次使用 **Claude Code、Codex、Gemini CLI、Grok CLI、OpenCode**，都会在磁盘上写下一份会话日志——token、缓存命中、支出——全部以纯文本形式留存于本机，未经解读。cc one 读取这些日志，将其转化为清晰的图景：**支出多少、获得什么、token 流向何处。** 它同时管理供应商切换，写出每个 CLI 实际读取的配置文件。
-
-整个产品遵循两项核心原则：
-
-- **本地优先。** 完整看板在零网络环境下即可工作——磁盘上已有的日志就是全部依赖。
-- **对你的日志严格只读。** cc one 绝不修改会话日志，也绝不干预工具行为。唯一的写入是供应商切换：永远是你的主动操作，永远先备份。
-
-多设备同步是可选层，绝非使用前提。
-
-## 截图
-
-| | 浅色 | 深色 |
-| --- | --- | --- |
-| **看板** | <img src="./docs/images/light-usage.png" alt="看板（浅色）" width="320"> | <img src="./docs/images/dark-usage.png" alt="看板（深色）" width="320"> |
-| **消耗** | <img src="./docs/images/light-consumption.png" alt="消耗（浅色）" width="320"> | <img src="./docs/images/dark-consumption.png" alt="消耗（深色）" width="320"> |
-| **速览模式** | <img src="./docs/images/light-floating-card.png" alt="速览模式（浅色）" width="320"> | <img src="./docs/images/dark-floating-card.png" alt="速览模式（深色）" width="320"> |
+CC One 是一款桌面应用,将 AI 编码 CLI 的本地会话日志转化为用量洞察——Token、成本、趋势与会话——并管理其供应商配置。数据全部存储于本地 SQLite;启用多设备同步后,数据经由您自有的私有 Git 仓库交换,访问令牌仅保存在本机。
 
 ## 功能
 
-### 供应商
+### 数据看板
 
-- **五个 AI CLI，一个配置中枢** —— 切换供应商写入该 CLI 实际读取的配置文件，只合并受控字段，写入前先备份原文件。
-- **59 个内置预设** —— 选择预设、填入密钥，即可完成切换。支持从 CC-Switch、本机配置文件或 CC One 备份导入；完整列表随时可导出为 JSON。
-- **模型角色映射** —— 五个角色（Sonnet / Opus / Fable / Haiku / Subagent），各配模型与 1M 上下文开关；一键获取厂商模型列表。
-- **结构同步，密钥永不同步** —— 供应商列表按设备同步；任何离开本机的内容都会先剥离 API 密钥。
+- 五个维度:概览、设备、项目、会话、请求。
+- Token 四桶核算——输入、输出、缓存创建、缓存命中——附缓存命中率、请求数与成本。
+- 使用趋势、每日请求量、轮次与时长分布、模型占比、设备与项目排行。
+- 请求级日志,逐条展开成本明细(输入 / 输出 / 缓存读 / 缓存写、计费模型、停止原因)。
 
-### 看板
+### 会话工作台
 
-- **四桶 token 口径** —— input / output / cache creation / cache read，跨 CLI 归一为贴合真实计费的一致模型。
-- **缓存命中率、模型分布、请求数与成本** —— 模型按 token 排序、各附缓存命中率；总量在采集时冻结。
-- **趋势与请求日志** —— 多指标趋势图附今日对比昨日增量；逐调用日志含 token 明细与成本，点击展开完整详情。
+<table>
+<tr>
+<td><img src="./docs/images/sessions-workbench.png" alt="会话工作台" width="420"></td>
+<td><img src="./docs/images/session-detail.png" alt="会话详情" width="420"></td>
+</tr>
+</table>
 
-### 会话
+- 按项目、分组、收藏三类视图导航会话;支持批量收藏、批量分组、批量删除。
+- 完整对话原文阅读,支持轮次导航、会话内搜索与消息复制。
+- 本地分组仅存本机;收藏与收藏分组跨设备同步。
 
-- **可浏览的历史** —— 每次对话按项目归类，全文搜索，按时间 / 来源 / 模型 / 设备筛选。
-- **完整原文，即时可看** —— 采集时写入本地数据库；markdown 渲染、语法高亮；会话内搜索命中高亮并可直接跳转。
-- **本地与收藏** —— 私有本地分组绝不离开本机；收藏的会话跨设备同步并带来源设备标记。只有收藏的会话才会离开你的机器。
+### 供应商管理(Beta)
 
-### 同步（可选）
+- 每个应用独立的供应商池,单激活模式(OpenCode 为附加模式:多个供应商共存于同一配置)。
+- 内置配置预设、模型角色映射(含 Claude Code 的 1M 上下文标记)、按应用共享的通用配置片段,合并时供应商配置优先。
+- 切换仅重写供应商受控字段,配置文件中的其余字段原样保留;写入原子化、先备份,内容无变化时幂等。
+- 支持从 CC-Switch 与现有配置文件导入。
 
-- **你自己的仓库、纯文本产物** —— 用量投影为人类可读、按设备按天切分的 JSONL，写入你掌控的 GitHub 仓库；中间不经过任何第三方服务。
-- **构造上无冲突** —— 设备隔离写入、确定性产物、自愈 rebase。
-- **跟随系统代理**；看板、速览卡与迷你条可限定到单台设备。
+### 多设备同步
 
-### 库（Library）
+- 数据经由您自有的私有 Git 仓库交换,走 HTTPS 与个人访问令牌;令牌仅存储于本机。
+- 用量数据、收藏会话、收藏分组与每设备文件库均按设备隔离,以 Git 版本化管理。
 
-- **拖入即中转上传** —— 把文件 / 目录拖进窗口，即经同步仓库进入该设备的子目录。
-- **应用内预览与手动导出** —— 图片、文本 / JSON、其余内容沙箱渲染；导出到自选路径。
+<table>
+<tr>
+<td><img src="./docs/images/floating-card.png" alt="悬浮用量卡" width="260"></td>
+<td>
 
-### 成本与定价
+### 悬浮用量卡
 
-- 逐模型可编辑定价、一键获取 LiteLLM 成本表、为无价记录补账、JSON 导入导出。
+贴附屏幕边缘的紧凑卡片,一览今日消耗——Token 四桶、缓存命中率、请求数与成本;主窗口最小化到托盘后自动收起。
 
-### 体验
+</td>
+</tr>
+</table>
 
-- **速览模式** —— 贴边迷你条或复用看板的悬浮卡；各形态分别记录自身位置。
-- **多皮肤主题**、托盘常驻后台采集（5s–60s）、签名自动更新；界面支持 English / 简体中文 / 日本語。
+### 其他功能
 
-## 什么留在本地，什么参与同步
+- 模型计价可配置:内置价格表、自定义条目、LiteLLM 拉取、导入与导出。
+- 每设备独立的文件库,经同步仓库版本化管理。
+- 经 GitHub Releases 应用内自动更新。
+- 界面支持 English / 日本語 / 中文;明暗主题与多套配色皮肤。
+- 支持托盘常驻与后台采集。
 
-| | 独立模式 | 同步模式（已绑定仓库） |
-| --- | --- | --- |
-| 用量、成本、趋势、请求日志 | 仅本地 | 跨设备同步 |
-| 会话原文与收藏 | 仅本地 | 收藏的会话同步；其余留在本地 |
-| 供应商结构 | 仅本地 | 按设备同步——API 密钥永不参与 |
-| 库文件 | 仅本地 | 跨设备同步 |
-| 设置、皮肤、定价覆盖、本地分组 | 本地 | 本地——绝不写入仓库 |
+## 支持的 CLI
 
-未绑定仓库并开启同步前，没有任何数据离开你的机器。访问令牌留在本机，永不写入仓库。
+| CLI | 用量解析 | 供应商管理 |
+| --- | :---: | :---: |
+| Claude Code | ✓ | ✓ 单激活 |
+| Codex CLI | ✓ | ✓ 单激活 |
+| Gemini CLI | ✓ | ✓ 单激活 |
+| Grok CLI | ✓ | ✓ 单激活 |
+| OpenCode | ✓ | ✓ 附加 |
 
-## 工作原理
+## 安装
 
-```
-  AI CLI 会话日志
-  (Claude Code · Codex · Gemini CLI · Grok CLI · OpenCode)
-          │  (只读)
-          ▼
-       Collect ──────▶ 本地存储 (SQLite) ──────▶ 看板与会话
-          │
-          │  (可选 · 同步模式)
-          ▼
-    产物文件 (纯文本，按设备 + 日期)
-          │
-    push / pull 经你的 GitHub 仓库
-          │
-          ▼
-       其他设备
-```
-
-一个 [Tauri 2](https://tauri.app/) 应用：Rust 后端负责采集、本地存储（唯一事实来源）、供应商配置写入与可选同步；React 前端通过生成的类型安全 IPC 绑定渲染看板。
-
-## 快速开始
-
-从 **[Releases](https://github.com/Buktal/cc-one/releases)** 页面下载对应平台的安装包。
+从 [Releases](https://github.com/Buktal/cc-one/releases/latest) 下载安装包:
 
 | 平台 | 安装包 |
 | --- | --- |
-| **Windows** | `.msi` 或 `.exe`（NSIS）安装程序 |
-| **macOS** | `.dmg`（Apple Silicon / arm64） |
-| **Linux** | `.deb`、`.AppImage`（部分版本提供 `.rpm`） |
+| Windows(x64) | `CC.One_*_x64-setup.exe` 或 `CC.One_*_x64_en-US.msi` |
+| macOS(Apple Silicon) | `CC.One_*_aarch64.dmg` |
+| Linux(x86_64) | `CC.One_*_amd64.deb` / `CC.One_*_1.x86_64.rpm` / `CC.One_*_amd64.AppImage` |
 
-**首次运行：** 启动 cc one——它会扫描本地的 AI CLI 会话日志，看板数据随即自动填充。无需账号、无需登录、无需联网。跨机器查看用量，请在 **设置** 中绑定你掌控的 GitHub 仓库并开启同步。
-
-> **macOS 提示：** 当前构建未签名。首次启动时请右键点击应用 → **打开**，或去除隔离属性：
-> ```bash
-> xattr -dr com.apple.quarantine /Applications/cc one.app
-> ```
+应用会检查 GitHub Releases 并在应用内完成自动更新。
 
 ## 从源码构建
 
-**前置条件：** [Node.js](https://nodejs.org/) 20+ LTS + [Yarn 4](https://yarnpkg.com/)（经 [Corepack](https://nodejs.org/api/corepack.html)），以及稳定版 [Rust](https://www.rust-lang.org/) 和你操作系统的 [Tauri 前置依赖](https://tauri.app/start/prerequisites/)。
+前置要求:Node.js ≥ 20、Yarn 4、Rust 工具链,以及 [Tauri 2 平台依赖](https://v2.tauri.app/start/prerequisites/)。
 
-```bash
-corepack enable  # 激活 package.json 中钉定的 Yarn 版本
-yarn install     # 安装依赖
-yarn dev         # 以开发模式运行桌面应用
-yarn dist        # 构建发布版二进制
-yarn check       # 静态检查（Biome + tsc + Rust fmt/clippy）——与 CI 同一门槛
-yarn test        # 运行测试套件
+```sh
+yarn install
+yarn dev      # 以开发模式运行应用
+yarn check    # 代码检查与类型检查(Biome、tsc、clippy、rustfmt)
+yarn test     # 测试套件(Vitest、cargo test)
+yarn dist     # 构建分发包
 ```
-
-**技术栈：** [Tauri 2](https://tauri.app/) (Rust) · [React 19](https://react.dev/) · [TypeScript](https://www.typescriptlang.org/) · [Vite](https://vite.dev/) · [Tailwind CSS v4](https://tailwindcss.com/) · [shadcn/ui](https://ui.shadcn.com/) · [Redux Toolkit](https://redux-toolkit.js.org/) · [Recharts](https://recharts.org/)
-
-## 贡献
-
-欢迎提交 issue 与建议。提交 PR 前请运行 `yarn check` 与 `yarn test`。较大功能请先开 issue 讨论方案。
 
 ## 许可证
 
-[MIT](./LICENSE) © cc one Contributors
-
-[![LINUX DO](https://img.shields.io/badge/LINUX%20DO-%E7%A4%BE%E5%8C%BA%E8%AE%A4%E5%8F%AF-blue?style=flat-square&logo=linux)](https://linux.do)
+[MIT](LICENSE)
