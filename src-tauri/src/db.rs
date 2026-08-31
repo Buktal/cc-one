@@ -50,7 +50,6 @@ use std::sync::Mutex;
 
 use rusqlite::{params, params_from_iter, types::Value as SqlValue, Connection, OptionalExtension};
 
-use crate::collect::artifact::ArtifactDirSig;
 use crate::error::{AppError, AppResult};
 use crate::model::{
     project_identity, DeviceUsageRow, GroupTrack, LocalGroup, LogCostBreakdown, LogsQuery,
@@ -63,6 +62,7 @@ use crate::model::{
 };
 use crate::pricing::{ModelPricing, PricingBook};
 use crate::source_parser::{FileCursor, ScanProgress, ScanProgressDelta};
+use crate::sync::dir_gate::DirSig;
 
 /// 分页 limit 的唯一夹紧点：所有走 SQL `LIMIT` 的分页查询（请求日志
 /// `query_logs`、会话列表 `query_sessions_page`）统一经此规范化到
@@ -76,12 +76,14 @@ pub(crate) fn page_limit(limit: u32) -> i64 {
 /// Thread-safe wrapper over a single SQLite connection.
 pub struct Store {
     conn: Mutex<Connection>,
-    /// Pull-side coarse gate: per-device artifact-dir signatures as of the
-    /// last read (in-memory — a restart just re-reads once and the
-    /// `(uuid, device_id)` primary key dedup absorbs it). Owned by
-    /// `sync::domains::usage_import` (see its gate doc); kept here because the
-    /// Store is the shared, thread-safe object every pull path already holds.
-    pub(crate) artifact_dir_sigs: Mutex<HashMap<PathBuf, ArtifactDirSig>>,
+    /// Pull-side coarse gate: per-directory signatures as of the last read
+    /// (in-memory — a restart just re-reads once and the store's primary keys
+    /// absorb it). Keyed by directory, domain-agnostic; driven by the pull
+    /// imports via `sync::dir_gate::DirGate` (that module carries the gate's
+    /// one argument). Kept here because the Store is the shared, thread-safe
+    /// object every pull path already holds. Cleared wholesale by
+    /// [`Store::invalidate_pull_dir_sigs`] after a landed git checkout.
+    pub(crate) pull_dir_sigs: Mutex<HashMap<PathBuf, DirSig>>,
 }
 
 impl Store {
@@ -100,10 +102,26 @@ impl Store {
         conn.execute_batch(&schema::schema_indexes_sql())?;
         let store = Self {
             conn: Mutex::new(conn),
-            artifact_dir_sigs: Mutex::new(HashMap::new()),
+            pull_dir_sigs: Mutex::new(HashMap::new()),
         };
         store.ensure_pricing_seed()?;
         Ok(store)
+    }
+
+    /// Drop every cached pull-gate dir signature (see `pull_dir_sigs`). The
+    /// ONE caller is `flow::pull_and_import` after a checkout landed
+    /// (fast-forward, or the diverge rebase's hard reset): the checkout just
+    /// rewrote the worktree, so the cached as-of-last-read no longer
+    /// describes it — and a byte-identical restore (mtime/length unchanged,
+    /// which is exactly what a force-checkout of unchanged files produces)
+    /// must still be re-read. This is what makes the
+    /// forget-device-then-repull round-trip work. An UpToDate pull keeps the
+    /// cache warm.
+    pub(crate) fn invalidate_pull_dir_sigs(&self) {
+        self.pull_dir_sigs
+            .lock()
+            .expect("pull gate poisoned")
+            .clear();
     }
 }
 

@@ -35,8 +35,14 @@ pub fn pull_and_import(store: &Store, paths: &Paths, cfg: &ConfigData) -> AppRes
     let (url, token) = require_synced(cfg)?;
     let repo = open_or_clone(&url, &paths.repo, &token)?;
     // Two-step sync: pull (fetch + fast-forward), then — only on diverge —
-    // rebase local-only commits onto the remote tip and push.
-    match pull(&repo, &token)? {
+    // rebase local-only commits onto the remote tip and push. A pull that
+    // landed a checkout (fast-forward, or the rebase's hard reset) rewrote
+    // the worktree, so the pull gate's cached dir signatures
+    // (`crate::sync::dir_gate`, held on the Store) no longer describe it — drop
+    // them and let this pull's imports re-read everything git changed. An
+    // UpToDate pull touched nothing: the gate stays warm and unchanged dirs
+    // skip their reads.
+    let checked_out = match pull(&repo, &token)? {
         PullOutcome::Diverged(upstream) => {
             rebase_and_push(
                 &repo,
@@ -45,8 +51,13 @@ pub fn pull_and_import(store: &Store, paths: &Paths, cfg: &ConfigData) -> AppRes
                 &cfg.display_name,
                 &author_email(cfg),
             )?;
+            true
         }
-        PullOutcome::UpToDate | PullOutcome::FastForwarded => {}
+        PullOutcome::FastForwarded => true,
+        PullOutcome::UpToDate => false,
+    };
+    if checked_out {
+        store.invalidate_pull_dir_sigs();
     }
     // The table is the domain list AND the execution order — iterating it is
     // the only path a domain's import is ever reached by.

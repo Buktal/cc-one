@@ -6,6 +6,9 @@
 //!     (`DOMAINS`, a row per domain) holding each domain's push-side
 //!     materialize + pull-side import, plus the shared atomic dirty-flag
 //!     clear. Knows nothing about git.
+//!   - [`dir_gate`] — the pull-side per-directory read gate both import
+//!     halves share. Knows no domain (each supplies its own subtree path and
+//!     file predicate).
 //!   - [`flow`] — the high-level pull → import → commit → push pipeline that
 //!     composes the git primitives with the domain pairs.
 //!
@@ -17,6 +20,10 @@
 //! using `crate::sync::*` unchanged.
 
 mod domains;
+// The gate is mechanism, not a domain row: the DOMAINS table composes domain
+// actions, and the usage/sessions imports both reach for this one. `pub(crate)`
+// because `db::Store` holds the gate's signature cache.
+pub(crate) mod dir_gate;
 mod flow;
 mod git;
 
@@ -345,9 +352,9 @@ mod tests {
 
         // Re-pulling is a no-op. Simulate a peer's re-push that still carries
         // an already-imported row: append a duplicate of the file's own line —
-        // the length change makes the coarse gate re-read the dir (mtime alone
-        // is not reliable within the filesystem's granularity tick), and the
-        // (uuid, device_id) primary key must dedup the re-import to zero.
+        // the length change re-opens the pull gate for the dir (why the gate
+        // keys on length, not mtime alone: `sync::dir_gate`'s module doc), and
+        // the (uuid, device_id) primary key must dedup the re-import to zero.
         let pulled_file = paths_b
             .device_data_dir("aabbccddeeff")
             .join("usage-2026-07-13.jsonl");

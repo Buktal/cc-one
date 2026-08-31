@@ -6,10 +6,13 @@
 //! collect is store-only (it never writes this file). The **push** path
 //! materializes a favorited session's file from the store
 //! ([`recompute_session_snapshot`]); **pull** reads peers' files back in
-//! ([`read_all_session_snapshots`]). Whether a snapshot should exist at all
-//! (favorited ⇔ file present) is decided in `snapshot_policy`, not here — this
-//! module only owns the byte-stable materialization and tolerant read.
+//! ([`read_session_snapshots`], one peer dir at a time — which dirs to read is
+//! the pull-side coarse gate's call, `crate::sync::dir_gate`). Whether a
+//! snapshot should exist at all (favorited ⇔ file present) is decided in
+//! `snapshot_policy`, not here — this module only owns the byte-stable
+//! materialization and tolerant read.
 
+use std::collections::BTreeSet;
 use std::path::Path;
 
 use crate::collect::jsonl::rewrite_jsonl_file;
@@ -19,6 +22,7 @@ use crate::error::{AppError, AppResult};
 use crate::model::{
     SessionMessage, SessionSnapshotLine, SessionSnapshotMeta, SESSION_SNAPSHOT_VERSION,
 };
+use crate::sync::dir_gate::DirSig;
 
 /// Recompute one session's derived snapshot from the store: the meta line first
 /// (system data + favorited + synced_group_id), then every message in
@@ -61,36 +65,57 @@ pub struct ParsedSessionSnapshot {
     pub messages: Vec<SessionMessage>,
 }
 
-/// Read every PEER's `sessions/<id>.jsonl` snapshots. `self_device_id`'s own
-/// directory is skipped — self is local-authoritative (collect-driven), so its
-/// git snapshot must never overwrite fresher local state on pull. Each file's
-/// first line is the meta (`type:"session"`); the rest are messages
-/// (`type:"message"`). A snapshot whose `v` exceeds
-/// [`SESSION_SNAPSHOT_VERSION`] is the upgrade-gate hit: it is skipped with a
-/// logged warning (not a hard error — a newer peer's snapshot must not break an
-/// older binary's whole pull), so its messages simply do not arrive until the
-/// user upgrades. Malformed lines are skipped.
-pub fn read_all_session_snapshots(
-    paths: &Paths,
-    self_device_id: &str,
+/// The sessions domain's pull-gate file predicate: EVERY regular file. The
+/// tolerant read below consumes whatever sits in the sessions dir (a
+/// malformed peer file must not abort a pull), so there is no name shape to
+/// filter on — the regular-file guard in `dir_sig` does the filtering.
+/// Predicate for [`crate::sync::dir_gate::dir_sig`].
+pub(crate) fn any_snapshot_file(_path: &Path) -> bool {
+    true
+}
+
+/// The session ids whose snapshot FILE exists, derived from the gate's
+/// directory enumeration — the presence half of the pull reconcile (file
+/// vanished ⇒ un-favorite), cheap enough to run every pull. A snapshot file
+/// is `<session_id>.jsonl`, named after its meta id by the push writer (see
+/// `Paths::session_snapshot_path`), so the stem IS the id for every snapshot
+/// the contract produces. Deriving presence from file NAMES (not parsed
+/// meta) means a file that fails to parse here — a newer peer's
+/// upgrade-gated snapshot, a corrupt line — still guards its favorite from a
+/// spurious un-favorite: file exists ⇔ favorited is the invariant's own
+/// terms. Non-jsonl files are tracked by the gate and tolerated by the read,
+/// but claim no session id.
+pub(crate) fn session_ids_with_files(sig: &DirSig) -> BTreeSet<String> {
+    sig.file_names()
+        .filter(|n| n.ends_with(".jsonl"))
+        .map(|n| n.trim_end_matches(".jsonl").to_string())
+        .collect()
+}
+
+/// Read one PEER's `sessions/<id>.jsonl` snapshots out of an already-located
+/// sessions dir — the per-dir read the pull gate wraps (`crate::sync::
+/// dir_gate` decides WHICH dirs get read; skipping self's dir is the
+/// caller's job, since self is local-authoritative: its git snapshot must
+/// never overwrite fresher local state on pull). Each file's first line is
+/// the meta (`type:"session"`); the rest are messages (`type:"message"`). A
+/// snapshot whose `v` exceeds [`SESSION_SNAPSHOT_VERSION`] is the
+/// upgrade-gate hit: it is skipped with a logged warning (not a hard error —
+/// a newer peer's snapshot must not break an older binary's whole pull), so
+/// its messages simply do not arrive until the user upgrades. Malformed
+/// lines are skipped.
+pub fn read_session_snapshots(
+    dir: &Path,
+    device_id: &str,
 ) -> AppResult<Vec<ParsedSessionSnapshot>> {
     let mut out = Vec::new();
-    for dev in crate::devices::iter_data_device_ids(paths)? {
-        // Self's snapshots are written by this device's own push — pulling them
-        // back would clobber local state with a (possibly stale) git copy.
-        if dev == self_device_id {
-            continue;
-        }
-        let sess_dir = paths.device_data_dir(&dev).join("sessions");
-        if !sess_dir.is_dir() {
-            continue;
-        }
-        for f in std::fs::read_dir(&sess_dir)? {
-            let f = f?;
-            if f.file_type()?.is_file() {
-                if let Some(snap) = read_one_session_snapshot(&f.path(), &dev) {
-                    out.push(snap);
-                }
+    if !dir.is_dir() {
+        return Ok(out);
+    }
+    for f in std::fs::read_dir(dir)? {
+        let f = f?;
+        if f.file_type()?.is_file() {
+            if let Some(snap) = read_one_session_snapshot(&f.path(), device_id) {
+                out.push(snap);
             }
         }
     }

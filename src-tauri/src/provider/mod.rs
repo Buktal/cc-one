@@ -21,8 +21,9 @@
 //! 双向，见本目录 `settings_codec.rs`）、以及 `model_fetch`（拉取供应商的
 //! 模型列表：OpenAI 兼容 `GET /v1/models`，候选 URL 构造是纯函数、失败错误串
 //! 带分桶标签——见本目录 `model_fetch.rs`）。`activation` 是激活编排（单激活
-//! 「切换」与附加模式「加入 / 移出 live」的组合次序权威：「写盘成功才落激活
-//! 态」，命令层只留薄壳，见本目录 `activation.rs`）。
+//! 「切换」、附加模式「加入 / 移出 live」与「删除供应商」的组合次序权威：
+//! 「写盘成功才落激活态」「live 撤除成功才删行」，命令层只留薄壳，见本目录
+//! `activation.rs`）。
 
 pub mod activation;
 pub mod export_import;

@@ -6,11 +6,11 @@
 //! each dirty day's file from the store ([`recompute_usage_day`] /
 //! [`recompute_turns_day`]), and **pull** reads peers' files back into the store
 //! ([`read_device_artifacts`] / [`read_device_turn_artifacts`], one device dir
-//! at a time — the pull-side coarse gate decides WHICH dirs to re-read via
-//! [`artifact_dir_sig`]). Only the row type, file-name prefix, and day accessor
+//! at a time — which dirs to re-read is the pull-side coarse gate's call,
+//! `crate::sync::dir_gate`, with this module's [`usage_artifact_file`] as the
+//! file predicate). Only the row type, file-name prefix, and day accessor
 //! differ — captured by [`ArtifactGrain`] so the policy lives in one place.
 
-use std::collections::BTreeMap;
 use std::path::Path;
 
 #[cfg(test)]
@@ -114,7 +114,8 @@ fn read_device_artifacts_of<A: ArtifactGrain>(
 }
 
 /// One device's usage Artifacts (production — the pull path imports one
-/// device dir at a time, gated by [`artifact_dir_sig`]).
+/// device dir at a time, gated by the pull-side coarse gate, see
+/// [`usage_artifact_file`]).
 pub(crate) fn read_device_artifacts(paths: &Paths, device_id: &str) -> AppResult<Vec<UsageRecord>> {
     read_device_artifacts_of::<UsageGrain>(paths, device_id)
 }
@@ -128,55 +129,12 @@ pub(crate) fn read_device_turn_artifacts(
     read_device_artifacts_of::<TurnGrain>(paths, device_id)
 }
 
-/// One device artifact dir's signature — the pull-side coarse gate's state.
-/// `filename → (mtime_nanos, len)` for every `<usage|turns>-*.jsonl` file in
-/// the dir; empty for an absent dir. Computed from `read_dir` + metadata
-/// only — no file content is read, so an unchanged dir costs a directory
-/// listing, not a JSONL re-parse.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub(crate) struct ArtifactDirSig {
-    files: BTreeMap<String, (u128, u64)>,
-}
-
-/// Compute a device dir's [`ArtifactDirSig`]. An absent dir yields the empty
-/// signature — caching it makes a LATER-appearing dir (a peer's first push)
-/// read on the next pull, because its non-empty signature differs.
-///
-/// The gate is deliberately coarse (mtime + length, no content hash): a file
-/// rewritten within the filesystem's mtime granularity tick with an unchanged
-/// length could be missed until its next rewrite (observed on Windows: rapid
-/// rewrites can keep the same mtime; a real content change nearly always
-/// changes the length — rows only grow or get corrected — which the signature
-/// catches). The residual miss window is narrow and accepted for a coarse
-/// gate; whatever IS re-read is still backstopped by the `(uuid, device_id)`
-/// primary key.
-pub(crate) fn artifact_dir_sig(paths: &Paths, device_id: &str) -> AppResult<ArtifactDirSig> {
-    let dir = paths.device_data_dir(device_id);
-    if !dir.exists() {
-        return Ok(ArtifactDirSig::default());
-    }
-    let mut files = BTreeMap::new();
-    for entry in std::fs::read_dir(&dir)? {
-        let entry = entry?;
-        let path = entry.path();
-        if !(is_artifact_of::<UsageGrain>(&path) || is_artifact_of::<TurnGrain>(&path)) {
-            continue;
-        }
-        let meta = entry.metadata()?;
-        let mtime = meta
-            .modified()
-            .ok()
-            .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
-            .map(|d| d.as_nanos())
-            .unwrap_or(0);
-        let name = path
-            .file_name()
-            .and_then(|n| n.to_str())
-            .unwrap_or_default()
-            .to_string();
-        files.insert(name, (mtime, meta.len()));
-    }
-    Ok(ArtifactDirSig { files })
+/// The usage domain's pull-gate file predicate: the Artifact files
+/// `<usage|turns>-*.jsonl` — exactly the files [`read_device_artifacts`] and
+/// [`read_device_turn_artifacts`] consume. Predicate for
+/// [`crate::sync::dir_gate::dir_sig`].
+pub(crate) fn usage_artifact_file(path: &Path) -> bool {
+    is_artifact_of::<UsageGrain>(path) || is_artifact_of::<TurnGrain>(path)
 }
 
 /// Stand up a device's usage Artifact for the sync round-trip tests — group the
@@ -365,44 +323,5 @@ mod tests {
         // No rows in the store for this day/device ⇒ recompute clears the file.
         recompute_usage_day(&store, &paths, dev, "2026-07-13").unwrap();
         assert!(!day_file.exists(), "empty day ⇒ stale file removed");
-    }
-
-    /// The pull-side coarse gate's signature: an absent dir is empty; files
-    /// land under their name with mtime+len; a content-changing rewrite (a
-    /// peer's new row) changes the signature — the gate re-reads. An unchanged
-    /// dir yields the same signature again (the gate's skip condition). NOTE:
-    /// a rewrite can land inside the filesystem's mtime-granularity tick
-    /// (observed: identical mtime for rapid rewrites on Windows), so the test
-    /// drives the change through LENGTH, never through a presumed mtime
-    /// refresh — the residual same-len-same-mtime race is documented on
-    /// [`artifact_dir_sig`].
-    #[test]
-    fn artifact_dir_sig_tracks_names_mtime_and_len() {
-        let tmp = tempfile::tempdir().unwrap();
-        let paths = Paths::resolve(tmp.path());
-        let dev = "0123456789ab";
-        assert_eq!(
-            artifact_dir_sig(&paths, dev).unwrap(),
-            ArtifactDirSig::default(),
-            "absent dir ⇒ empty signature"
-        );
-
-        let dir = paths.device_data_dir(dev);
-        std::fs::create_dir_all(&dir).unwrap();
-        let file = dir.join("usage-2026-07-13.jsonl");
-        std::fs::write(&file, "{\"uuid\":\"u1\"}\n").unwrap();
-        let s1 = artifact_dir_sig(&paths, dev).unwrap();
-        assert_eq!(s1.files.len(), 1, "only artifact files are tracked");
-        assert_eq!(s1.files["usage-2026-07-13.jsonl"].1, 14, "length captured");
-
-        // A content-changing rewrite (a peer's new row) must change the
-        // signature — the gate re-reads.
-        std::fs::write(&file, "{\"uuid\":\"u1\"}\n{\"uuid\":\"u2\"}\n").unwrap();
-        let s2 = artifact_dir_sig(&paths, dev).unwrap();
-        assert_ne!(s1, s2, "content change changes the signature");
-
-        // Unchanged dir ⇒ identical signature (the gate skips the re-read).
-        let s3 = artifact_dir_sig(&paths, dev).unwrap();
-        assert_eq!(s2, s3, "unchanged dir ⇒ stable signature");
     }
 }

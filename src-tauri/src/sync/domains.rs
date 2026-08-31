@@ -29,7 +29,9 @@
 //! days-clean + sessions-dirty.
 
 use std::collections::{BTreeMap, BTreeSet};
+use std::path::PathBuf;
 
+use super::dir_gate::{dir_sig, DirGate, DirSig};
 use crate::config::Paths;
 use crate::db::{DaySnapshot, SessionCounts, Store};
 use crate::error::AppResult;
@@ -177,30 +179,25 @@ pub fn usage_materialize(
 /// (`Store::ingest` knows exactly which rows landed), NOT the number of
 /// records read, so unchanged dirs can be skipped without losing count.
 ///
-/// 粗门（COARSE GATE）：每设备目录按「文件名集合 + 每文件 mtime/长度」签名
-/// 判定增量（[`crate::collect::artifact::artifact_dir_sig`]），签名未变的
-/// 目录不重读——文件按天增长、每设备每天 2 个、调度器每 push 间隔一轮 pull，
-/// 没变的目录重读纯属浪费。签名缓存挂在本 Store 上（内存态，重启即失：首轮
-/// pull 全量重读，PK 去重兜底；决策记录：不加 SQLite 持久化——缓存只是优化，
-/// 丢了无害）。门只省读、不改语义：`(uuid, device_id)` PK 去重仍是正确性
-/// 兜底；对端文件被删（设备遗忘、快照消失→取消收藏）由 git 检出的文件
-/// 消失 + sessions 域 / `reload_devices_into_store` 处理，本门不参与（目录
-/// 消失即不枚举，回灌时检出重写文件、mtime 变化，门自然放行）。残余风险见
-/// `artifact_dir_sig` 文档（mtime 粒度内的等长改写可能漏读一次——字节稳定
-/// 重算下等同内容，无害）。The table's uniform signature carries
-/// `self_device_id`, but usage ignores it — this domain reads EVERY device's
-/// artifacts, self's included (the uuid key dedupes self's rows).
+/// GATED ([`crate::sync::dir_gate`] carries the mechanism and its one
+/// argument): each device dir is re-read only when its signature — file-name
+/// set + per-file mtime/length over [`crate::collect::artifact::
+/// usage_artifact_file`] — changed since the last vouched read. The table's
+/// uniform signature carries `self_device_id`, but usage ignores it — this
+/// domain reads EVERY device's artifacts, self's included (the uuid key
+/// dedupes self's rows).
 pub fn usage_import(store: &Store, paths: &Paths, _self_device_id: &str) -> AppResult<u32> {
-    let mut gate = store
-        .artifact_dir_sigs
-        .lock()
-        .expect("artifact gate poisoned");
+    let gate = DirGate::new(store.pull_dir_sigs.lock().expect("pull gate poisoned"));
     let mut records = Vec::new();
     let mut turns = Vec::new();
+    // The reads this pull performed; vouched for only after the ingest below
+    // succeeded, so a failed read or ingest leaves the cache stale and the
+    // next pull retries (the DirGate protocol).
+    let mut read: Vec<(PathBuf, DirSig)> = Vec::new();
     for device in crate::devices::iter_data_device_ids(paths)? {
         let dir = paths.device_data_dir(&device);
-        let sig = crate::collect::artifact::artifact_dir_sig(paths, &device)?;
-        if gate.get(&dir) == Some(&sig) {
+        let sig = dir_sig(&dir, crate::collect::artifact::usage_artifact_file)?;
+        if gate.unchanged(&dir, &sig) {
             continue; // unchanged since the last read — no file content read
         }
         records.extend(crate::collect::artifact::read_device_artifacts(
@@ -209,11 +206,13 @@ pub fn usage_import(store: &Store, paths: &Paths, _self_device_id: &str) -> AppR
         turns.extend(crate::collect::artifact::read_device_turn_artifacts(
             paths, &device,
         )?);
-        gate.insert(dir, sig);
+        read.push((dir, sig));
     }
     drop(gate);
     let inserted = store.ingest(&records)?;
     store.ingest_turn_durations(&turns)?;
+    // The reads landed in the store — now vouch for them.
+    DirGate::new(store.pull_dir_sigs.lock().expect("pull gate poisoned")).observe_all(read);
     Ok(inserted.len() as u32)
 }
 
@@ -281,26 +280,63 @@ pub fn sessions_materialize(
 
 /// Pull-side import: import peers' session snapshots into the store and
 /// propagate cross-device un-favorites. Self's own snapshots are skipped on
-/// read ([`crate::sessions::session_snapshot::read_all_session_snapshots`]), so
-/// self's rows are never overwritten by a possibly-stale git copy of itself.
-/// For every peer that has (or had) a favorited session row, sessions whose
-/// snapshot file vanished since the last pull are un-favorited and their shared
-/// messages dropped — the pull-side counterpart to the push-side jsonl
-/// deletion. Returns the number of peer snapshots imported (the sessions
-/// domain's `imported` count; self's own skipped files never count).
+/// read — self is local-authoritative (collect-driven), so its git snapshot
+/// must never overwrite fresher local state. The two halves are split by
+/// cost:
+///
+///   - PRESENCE (cheap, every pull): the session ids each peer's sessions dir
+///     still has a snapshot FILE for, derived from the same enumeration the
+///     gate compares ([`crate::sessions::session_snapshot::
+///     session_ids_with_files`]) so it runs even when the gate skips the dir.
+///     A peer's favorited sessions whose file vanished since the last pull
+///     are un-favorited and their shared messages dropped — the pull-side
+///     counterpart to the push-side jsonl deletion.
+///   - IMPORT (expensive, gated): parse + import only the peers whose
+///     sessions-dir signature changed — a file added, removed, or rewritten
+///     all change the signature (`crate::sync::dir_gate` carries the
+///     mechanism), so whatever a peer shipped is read exactly once.
+///
+/// Returns the number of peer snapshots parsed + imported this pull (the
+/// sessions domain's `imported` count): 0 when every peer dir was unchanged —
+/// the report counts read volume, and a gated pull reads nothing — and ALL of
+/// a dir's snapshots when the gate re-opens for it, not just the new ones.
 pub fn sessions_import(store: &Store, paths: &Paths, self_device_id: &str) -> AppResult<u32> {
-    let snapshots =
-        crate::sessions::session_snapshot::read_all_session_snapshots(paths, self_device_id)?;
-    let imported = snapshots.len() as u32;
-    // still-favorited ids per peer = the snapshot files that exist this pull.
+    use crate::sessions::session_snapshot::{
+        any_snapshot_file, read_session_snapshots, session_ids_with_files, ParsedSessionSnapshot,
+    };
+
+    let gate = DirGate::new(store.pull_dir_sigs.lock().expect("pull gate poisoned"));
+    let mut pending: Vec<ParsedSessionSnapshot> = Vec::new();
+    // The reads this pull performed; vouched for only after the imports below
+    // succeeded, so a failed read or import leaves the cache stale and the
+    // next pull retries (the DirGate protocol).
+    let mut read: Vec<(PathBuf, DirSig)> = Vec::new();
+    // still-present snapshot ids per peer = the presence half, every pull.
+    // Seeded BEFORE the gate check so a gated (skipped) dir reconciles too.
     let mut per_device: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
-    for snap in &snapshots {
-        per_device
-            .entry(snap.device_id.clone())
-            .or_default()
-            .insert(snap.meta.id.clone());
+    for device in crate::devices::iter_data_device_ids(paths)? {
+        // Self's snapshots are written by this device's own push — pulling
+        // them back would clobber local state with a (possibly stale) git
+        // copy.
+        if device == self_device_id {
+            continue;
+        }
+        let dir = paths.device_data_dir(&device).join("sessions");
+        let sig = dir_sig(&dir, any_snapshot_file)?;
+        per_device.insert(device.clone(), session_ids_with_files(&sig));
+        if gate.unchanged(&dir, &sig) {
+            continue; // unchanged since the last read — no snapshot re-parsed
+        }
+        pending.extend(read_session_snapshots(&dir, &device)?);
+        read.push((dir, sig));
+    }
+    drop(gate);
+    let imported = pending.len() as u32;
+    for snap in &pending {
         store.import_session_snapshot(&snap.device_id, &snap.meta, &snap.messages)?;
     }
+    // The reads landed in the store — now vouch for them.
+    DirGate::new(store.pull_dir_sigs.lock().expect("pull gate poisoned")).observe_all(read);
     // Reconcile every peer with a favorited row — including ones that shipped
     // no files this pull (they may have un-favorited everything). The sessions
     // to un-favorite here = the peer's favorited sessions whose snapshot file
@@ -538,18 +574,113 @@ mod tests {
         );
     }
 
+    /// The sessions domain rides the pull gate (`sync::dir_gate`): a second
+    /// pull over an unchanged worktree re-parses nothing (imported == 0 — the
+    /// observable of "unchanged dir not re-read") while the cheap presence
+    /// half still runs and leaves the covered favorite intact; a NEW snapshot
+    /// file from the peer changes the dir's signature, re-opening the gate
+    /// for the WHOLE dir (both files re-parsed — the store's keys dedupe the
+    /// repeat).
+    #[test]
+    fn sessions_import_skips_unchanged_peer_dirs_but_presence_half_still_runs() {
+        use crate::model::SessionSystemData;
+
+        fn sys(id: &str) -> SessionSystemData {
+            SessionSystemData {
+                id: id.into(),
+                source: "claude_code".into(),
+                project_dir: "/p".into(),
+                title_orig: format!("Title {id}"),
+                started_at: "2026-08-01T00:00:00.000Z".into(),
+                last_active_at: "2026-08-02T00:00:00.000Z".into(),
+                agent_type: String::new(),
+                parent_session_id: String::new(),
+            }
+        }
+
+        let (_tmp, paths) = tmp_paths();
+        let self_id = "0123456789ab";
+        let peer = "aabbccddeeff";
+
+        // The peer materializes ONE favorited snapshot.
+        let peer_store = mem();
+        crate::collect::ingest::ingest_sessions(
+            &peer_store,
+            peer,
+            &[sys("sx")],
+            &[msg(
+                "u-sx",
+                "sx",
+                SessionMessageRole::User,
+                "2026-08-01T10:00:00Z",
+            )],
+        )
+        .unwrap();
+        peer_store.set_session_favorited(peer, "sx", true).unwrap();
+        sessions_materialize(&peer_store, &paths, peer).unwrap();
+
+        // Pull 1: cold gate — the snapshot is parsed and imported.
+        let ours = mem();
+        assert_eq!(
+            sessions_import(&ours, &paths, self_id).unwrap(),
+            1,
+            "cold gate reads the peer dir"
+        );
+        assert!(ours.get_session("sx", peer).unwrap().is_some());
+
+        // Pull 2, unchanged worktree: the gate skips the dir — nothing is
+        // re-parsed — while the presence half still runs and keeps the
+        // covered favorite.
+        assert_eq!(
+            sessions_import(&ours, &paths, self_id).unwrap(),
+            0,
+            "unchanged peer dir is not re-parsed"
+        );
+        assert_eq!(
+            ours.favorited_session_ids(peer).unwrap(),
+            vec!["sx".to_string()],
+            "presence reconcile keeps a covered favorite"
+        );
+
+        // The peer ships a second snapshot: the dir's signature changes, so
+        // the gate re-opens for the whole dir.
+        crate::collect::ingest::ingest_sessions(
+            &peer_store,
+            peer,
+            &[sys("sy")],
+            &[msg(
+                "u-sy",
+                "sy",
+                SessionMessageRole::User,
+                "2026-08-01T11:00:00Z",
+            )],
+        )
+        .unwrap();
+        peer_store.set_session_favorited(peer, "sy", true).unwrap();
+        sessions_materialize(&peer_store, &paths, peer).unwrap();
+        assert_eq!(
+            sessions_import(&ours, &paths, self_id).unwrap(),
+            2,
+            "changed dir re-reads whole; the new snapshot lands"
+        );
+        assert!(ours.get_session("sy", peer).unwrap().is_some());
+    }
+
     /// 遗忘 ≠ 数据丢失，但遗忘一个仍在仓库里的对端并不持久（架构审查Ⅲ候选③，
     /// pull 回灌语义固化）：跨设备数据由 git 快照承载，本机删行不是数据丢失；
     /// 对端的快照 / 用量 / 名字工件只要还在仓库里，下一次 pull 的导入半程就
     /// 原样回灌，把它的一切带回来。这里重放的正是 `flow::pull_and_import`
     /// 的导入序列（usage / sessions / devices 三步 import）；git 只在检出层
     /// 决定哪些文件进工作树（ff 强制检出会把远端仍有的文件带回来），与本重放
-    /// 正交——usage 域的粗门（目录签名未变不重读）也不挡住回灌：检出把文件
-    /// 重写回工作树、mtime 全变，签名必变、门必放行（本测试用「原样重写工件
-    /// 文件」模拟这一检出）。边界：回灌恢复的是快照承载的数据（系统字段 +
-    /// favorited + synced_group_id 来自对端），本机对该设备的私有用户数据
-    /// （custom_title / local_group_id / excluded）随行删除、不复活。遗忘真正
-    /// 落地 = 下一次 commit_all 把工作树删除提交并推上远端。
+    /// 正交——pull 粗门（目录签名未变不重读，usage 与 sessions 共用）也不挡
+    /// 回灌：检出落地后 flow 显式失效门缓存（`invalidate_pull_dir_sigs`），
+    /// 导入对全部目录重读（本测试无真实 git，调同一失效入口模拟检出；工件
+    /// 文件字节原样未动，回灌依旧成立——这正是失效入口存在的意义：检出可能
+    /// 写回字节相同的文件，mtime/长度都不保证变）。边界：回灌恢复的是快照
+    /// 承载的数据（系统字段 + favorited + synced_group_id 来自对端），本机
+    /// 对该设备的私有用户数据（custom_title / local_group_id / excluded）
+    /// 随行删除、不复活。遗忘真正落地 = 下一次 commit_all 把工作树删除提交
+    /// 并推上远端。
     #[test]
     fn forget_device_local_is_undone_by_a_pull_that_restores_the_snapshot() {
         use crate::model::SessionSystemData;
@@ -619,21 +750,10 @@ mod tests {
             paths.session_snapshot_path(peer, "sx").exists(),
             "前提：对端快照仍在仓库工作树"
         );
-        // 生产上这一步是 pull 检出把对端工件重写回工作树（文件重建、mtime
-        // 刷新，usage 粗门必放行）；本测试没有真实检出，用「给工件文件追加
-        // 空行」模拟——容错读取跳过空行、解析内容不变，但长度必变、签名必变
-        // （同字节重写可能落在文件系统 mtime 粒度内，不能依赖 mtime 刷新）。
-        for entry in std::fs::read_dir(paths.device_data_dir(peer))
-            .unwrap()
-            .flatten()
-        {
-            let p = entry.path();
-            if p.is_file() {
-                let mut text = std::fs::read_to_string(&p).unwrap();
-                text.push('\n');
-                std::fs::write(&p, text).unwrap();
-            }
-        }
+        // 生产上这一步是 pull 检出把对端工件重写回工作树，flow 随即失效门
+        // 缓存；本测试没有真实检出，调同一失效入口模拟，然后原样重放导入
+        // 序列。文件一个字节都不改——回灌不得依赖 mtime/长度变化。
+        ours.invalidate_pull_dir_sigs();
         usage_import(&ours, &paths, self_id).unwrap();
         sessions_import(&ours, &paths, self_id).unwrap();
         crate::devices::reload_devices_into_store(&ours, &paths, self_id).unwrap();

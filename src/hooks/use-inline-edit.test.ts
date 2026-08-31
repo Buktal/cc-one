@@ -50,6 +50,19 @@ describe("提交时序（三路提交共用一个在途位）", () => {
     expect(inlineEditNext(busy, { kind: "commit-start" })).toBe(busy)
   })
 
+  it("消费方路径：在途时第二次提交被挡（session-detail 标题改名的双 Enter 只落一份写入）", () => {
+    let s = inlineEditNext(inlineEditClosed<string>(), {
+      kind: "begin",
+      target: "row-1",
+      draft: "b.md",
+    })
+    s = inlineEditNext(s, { kind: "edit", draft: "c.md" })
+    // 第一次提交进在途位；第二次提交（Enter / 保存键再触发）被同一在途位挡下
+    // ——状态对象不变，即第二份 commit-start 没有发生。
+    const inFlight = inlineEditNext(s, { kind: "commit-start" })
+    expect(inlineEditNext(inFlight, { kind: "commit-start" })).toBe(inFlight)
+  })
+
   it("commit-done 成功 → 收起并清空草稿（成功后关闭语义）", () => {
     const busy = inlineEditNext(open("b.md"), { kind: "commit-start" })
     expect(inlineEditNext(busy, { kind: "commit-done", ok: true })).toEqual(

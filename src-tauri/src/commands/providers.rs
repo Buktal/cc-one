@@ -1,5 +1,5 @@
-//! Provider 域（供应商）：CRUD、导出/导入、拉模型列表。切换编排已下沉
-//! `provider::activation`（架构审查候选③），本模块只是其命令层薄壳。
+//! Provider 域（供应商）：CRUD、导出/导入、拉模型列表。切换与删除的编排已
+//! 下沉 `provider::activation`（架构审查候选③/Ⅶ-B1），本模块只是其命令层薄壳。
 //! 通用配置片段的 get/set/整理/提取在 [`super::snippet`]，live 反向导入在
 //! [`super::live_import`]，CC-Switch 导入在 [`super::ccswitch`]。
 
@@ -34,6 +34,9 @@ pub fn save_provider_cmd(
     Ok(saved)
 }
 
+/// 删除供应商——薄壳：撤 live 半边（附加模式、已托管才撤）+ 删行的组合次序
+/// 收在 `provider::activation::delete_provider`（「live 撤除成功才删行」不变量
+/// 在那里表达并可测），本命令只剩 blocking 执行 + 失效信号。
 #[tauri::command]
 #[specta::specta]
 pub async fn delete_provider_cmd(
@@ -44,20 +47,8 @@ pub async fn delete_provider_cmd(
 ) -> AppResult<()> {
     let store = state.store.clone();
     run_blocking("delete_provider", Emit::Providers(&app_handle), move || {
-        // 附加模式：provider 若已写进 live，先走对称的移除半边（live 撤除 +
-        // meta.liveManaged=false + 落库）再删 DB——与停用路径共用
-        // activation::remove_from_live 同一入口。meta 半边对即将删除的行是一
-        // 次幂等落库：若删除中途失败，行（managed=false）与 live 文件（条目
-        // 已撤）状态仍然一致；单激活直接删 DB（其 live 由切换覆盖，无残留
-        // 概念）。
-        if app.is_additive_mode() {
-            if let Some(provider) = store.get_provider(app, &id)? {
-                let paths = activation::resolve_paths(app)?;
-                activation::remove_from_live(&store, provider, &paths.opencode_config)?;
-            }
-        }
-        store.delete_provider(app, &id)?;
-        Ok(())
+        let paths = activation::resolve_paths(app)?;
+        activation::delete_provider(&store, app, &id, &paths)
     })
     .await
 }

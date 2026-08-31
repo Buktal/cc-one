@@ -19,7 +19,7 @@
 // 回归测试锁着）。
 
 import { FileJson, FileQuestion, Loader2, Pencil, Upload } from "lucide-react"
-import { useEffect, useRef, useState } from "react"
+import { useEffect, useState } from "react"
 import { useTranslation } from "react-i18next"
 import { toast } from "sonner"
 import {
@@ -30,6 +30,7 @@ import {
 } from "@/app/store/api"
 import { EmptyState } from "@/components/empty-state"
 import { InlineBanner } from "@/components/inline-banner"
+import { InlineTextEdit } from "@/components/inline-text-edit"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import {
@@ -40,7 +41,6 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog"
-import { Input } from "@/components/ui/input"
 import {
   Tooltip,
   TooltipContent,
@@ -55,6 +55,7 @@ import {
   pairModelNameKeys,
   snippetCoveredKeys,
 } from "@/features/providers/derive"
+import { useInlineEdit } from "@/hooks/use-inline-edit"
 import type { EXTRACT_GROUP_KINDS } from "@/i18n/dynamic-keys"
 import { rawErrorText } from "@/lib/error"
 
@@ -355,7 +356,11 @@ function DiscoverPanel({
 /** 条目行：名字（可点击改名）+ 推导理由行（等宽、截断）+ 徽标组。preview=true
  *  时显示「含密钥/无密钥」与「新建/更新」徽标且名字可改；结果视图只读（密钥
  *  信息在预览环节已完成告知，结果页保持干净，名字已按覆盖值落库）。行内改名后
- *  理由行消失——名字由用户接管，不再需要解释它的来处。 */
+ *  理由行消失——名字由用户接管，不再需要解释它的来处。编辑器是收编原语
+ *  （架构审查Ⅶ候选 C1）：draft/开合机器归 useInlineEdit，键盘/失焦契约归
+ *  InlineTextEdit 的 bare 形态（行内没有 ✓/✕ 按钮位）——Enter/失焦提交、
+ *  空草稿 = 放弃收起、Escape 取消且取消后晚到的 blur 不再提交（契约单一
+ *  归属，此前手抄的 cancelEditRef 守卫随原语的取消位删除）。 */
 function EntryRow({
   entry: e,
   preview,
@@ -372,43 +377,32 @@ function EntryRow({
   onRename: (name: string) => void
 }) {
   const { t } = useTranslation()
-  const [editing, setEditing] = useState(false)
-  const [draft, setDraft] = useState("")
-  // Escape 放弃编辑的显式守卫：Escape 置位后，即便 input 卸载前 blur 派发，
-  // commit 也不会把 Escape 前的草稿提交上去（ref 比依赖「卸载后 blur 不冒泡」
-  // 的隐式行为可靠）。
-  const cancelEditRef = useRef(false)
-
-  function commit() {
-    if (cancelEditRef.current) return
-    const trimmed = draft.trim()
-    if (trimmed) onRename(trimmed)
-    setEditing(false)
-  }
+  // K = void：改名无键位需求（onRename 已闭包住本条的 key），target 不参与，
+  // begin/cancel 只是编辑态的开与关。改名是本地覆盖（无异步、恒成功收起）；
+  // 空草稿不会到达 commit——原语把空草稿的 Enter/失焦转为放弃。
+  const rename = useInlineEdit<void>({
+    commit: async (_target, draft) => {
+      const trimmed = draft.trim()
+      if (trimmed) onRename(trimmed)
+      return true
+    },
+  })
+  const editing = rename.target !== null
 
   return (
     <div className="flex items-start justify-between gap-3 border-b border-border py-1.5 text-sm last:border-b-0">
       <div className="min-w-0 flex-1">
         {editing ? (
-          <Input
-            value={draft}
+          <InlineTextEdit
+            bare
+            value={rename.draft}
+            onValueChange={rename.setDraft}
+            onCommit={() => void rename.commit()}
+            onCancel={rename.cancel}
+            inputClassName="h-6 text-xs"
+            ariaLabel={t("providers.liveImport.col.name")}
             autoFocus
-            onFocus={(ev) => ev.currentTarget.select()}
-            onChange={(ev) => setDraft(ev.target.value)}
-            onBlur={commit}
-            onKeyDown={(ev) => {
-              if (ev.key === "Enter") {
-                ev.preventDefault()
-                commit()
-              } else if (ev.key === "Escape") {
-                // 放弃本次编辑：显式置位守卫，后续任何 blur 都不提交。
-                cancelEditRef.current = true
-                setEditing(false)
-                setDraft("")
-              }
-            }}
-            className="h-6 text-xs"
-            aria-label={t("providers.liveImport.col.name")}
+            selectOnFocus
           />
         ) : (
           <Tooltip>
@@ -416,11 +410,7 @@ function EntryRow({
               render={
                 <button
                   type="button"
-                  onClick={() => {
-                    cancelEditRef.current = false
-                    setDraft(name)
-                    setEditing(true)
-                  }}
+                  onClick={() => rename.begin(undefined, name)}
                   disabled={!preview}
                   className="text-foreground flex max-w-full items-center gap-1 truncate rounded-sm font-medium outline-none hover:underline focus-visible:ring-2 focus-visible:ring-ring disabled:cursor-default disabled:hover:no-underline"
                 >

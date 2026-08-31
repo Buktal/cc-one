@@ -7,9 +7,10 @@
 //
 // target 是编辑目标的键位（library 传整个 LibraryEntry，消费方按 rel_path 比
 // 较；device-list 传 DeviceInfo）——开编辑器那一刻抓到的对象让提交回调天然
-// 拿到原始值（如改前的名字），无需再查表。无键位的常开编辑（settings 的
-// 显示名输入框）以 K = void 使用：begin / cancel / target 不参与，机器退化
-// 为「草稿 + busy + 成功清空」。
+// 拿到原始值（如改前的名字），无需再查表。无键位目标的编辑以 K = void 使用
+// （settings 的常开显示名输入框、live-import 条目行的就地改名态）：target 不
+// 参与——常开变体 begin / cancel 也不参与（机器退化为「草稿 + busy + 成功
+// 清空」），开合变体 begin / cancel 只是编辑态的开与关。
 
 import { useState } from "react"
 
