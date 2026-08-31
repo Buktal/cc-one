@@ -133,19 +133,17 @@ impl Paths {
     }
 }
 
-/// Default background-collect interval in seconds (30 s — decoupled
-/// from the push cadence, which has its own interval).
+/// Default background-collect interval in seconds (30 s).
 ///
 /// `u32` (not `u64`): the value crosses the Rust→JS boundary via the typed
 /// specta contract, and specta forbids exporting BigInt-style types (`u64`,
-/// `i64`, …) to avoid JS precision loss. `u32`'s range (≈4.29e9 s) is ample
-/// for an interval clamped to [5, 3600].
+/// `i64`, …) to avoid JS precision loss — `u32`'s range (≈4.29e9 s) is ample
+/// for these intervals.
 fn default_collect_interval_secs() -> u32 {
     30
 }
 
-/// Default push-to-sync interval in seconds (10 min). Decoupled from
-/// collect so a short collect cadence does not bloat the Git history.
+/// Default push-to-sync interval in seconds (10 min).
 fn default_push_interval_secs() -> u32 {
     600
 }
@@ -185,13 +183,12 @@ pub struct ConfigData {
     /// Window-close behavior. `Ask` ⇒ show the minimize/quit dialog.
     #[serde(default)]
     pub close_behavior: CloseBehavior,
-    /// Background collect interval in seconds. Clamped to [5, 3600]
-    /// at use; serialized verbatim so the UI shows what the user typed.
+    /// Background collect interval in seconds; clamped at use via
+    /// [`Self::clamp_collect_interval_secs`], serialized verbatim for the UI.
     #[serde(default = "default_collect_interval_secs")]
     pub collect_interval_secs: u32,
-    /// Push-to-sync interval in seconds. Synced only; clamped to
-    /// [60, 7200] at use. Decoupled from collect so the Git push cadence stays
-    /// independent of the (shorter) collect cadence.
+    /// Push-to-sync interval in seconds (Synced only; clamped at use via
+    /// [`Self::clamp_push_interval_secs`]).
     #[serde(default = "default_push_interval_secs")]
     pub push_interval_secs: u32,
     /// Display language. Default English; per-device, not synced
@@ -279,6 +276,22 @@ impl ConfigData {
 
     pub fn is_synced(&self) -> bool {
         self.mode() == RunMode::Synced
+    }
+
+    /// Interval bounds, declared once — the Settings setter clamps the
+    /// submitted value through these fns, the scheduler the stored value
+    /// through the same fns (a hand-edited config.json can carry out-of-range
+    /// numbers), so the numbers live only here. Collect [5, 3600] s: floor
+    /// keeps the parse cadence from hammering the loop, ceiling caps
+    /// dashboard staleness.
+    pub fn clamp_collect_interval_secs(seconds: u32) -> u32 {
+        seconds.clamp(5, 3600)
+    }
+
+    /// Push [60, 7200] s (Synced only), decoupled from collect: the Git
+    /// history grows at push cadence, not the (shorter) collect cadence.
+    pub fn clamp_push_interval_secs(seconds: u32) -> u32 {
+        seconds.clamp(60, 7200)
     }
 
     /// 某应用当前激活的供应商 id；未激活 → `None`。

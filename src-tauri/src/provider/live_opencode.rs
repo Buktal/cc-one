@@ -32,9 +32,9 @@
 //! （本项目最高价值的测试接缝）：输入 (当前 live JSON 文本, 目标 key, entry
 //! JSON 文本) → 输出合并后 JSON 文本，不碰文件系统。「只动这一个键、其它保留」
 //! 这个关键不变量靠它们落进可测代码。注意 key（opencode.json 的
-//! `provider.<key>`）由命令层决定来源（name slug / id / 专用字段——附加模式
-//! 允许改名，key 是否随改名变是命令层策略），本模块只接收最终 key 字符串，不
-//! 关心它怎么派生。
+//! `provider.<key>`）由激活编排决定来源（`provider::activation` 经
+//! [`derive_live_key`] 派生：name slug / id / 专用字段，改名后 key 是否变化是
+//! 派生函数的策略），本模块只接收最终 key 字符串，不关心它怎么派生。
 
 use std::path::{Path, PathBuf};
 
@@ -175,7 +175,7 @@ pub fn remove_opencode_provider(config_path: &Path, key: &str) -> AppResult<()> 
 // ---- 写盘 key 派生（slug）+ 已托管状态（meta）-------------------------------
 //
 // opencode.json 的 `provider.<key>` 的 key 不等于 cc one 的 Provider.id（id 是
-// 固定 8 位 hex，不可读，且导入时会重新生成）。key 由命令层首次按名字 slugify
+// 固定 8 位 hex，不可读，且导入时会重新生成）。key 由激活编排首次按名字 slugify
 // 生成、持久化在 meta.liveKey，之后稳定（改名不重算——附加模式 key 稳定才不会
 // 弄断用户顶层 `model: "<key>/<model>"` 引用）。导入时直接用配置文件原 key 作
 // liveKey，保留用户手写配置。以下纯函数支撑这套派生，不碰文件系统。
@@ -201,7 +201,7 @@ pub fn slugify(name: &str) -> String {
 }
 
 /// 解析 live opencode.json，返回 `provider` map 现有的全部 key（provider 段非
-/// 对象 / 解析失败 → 空 Vec）。纯函数，命令层用它做 slug 冲突检测。
+/// 对象 / 解析失败 → 空 Vec）。纯函数，[`derive_live_key`] 用它做 slug 冲突检测。
 pub fn provider_keys(live: &str) -> Vec<String> {
     let Ok(root) = parse_opencode_live(live) else {
         return Vec::new();
@@ -287,7 +287,7 @@ pub fn entry_display_name(entry: &Value, key: &str) -> String {
 }
 
 /// 读 meta 里的 `liveKey`（opencode.json 的 provider.<key> 的 key）。`None` = 未
-/// 设置（首次添加时由命令层 slugify 生成并写回 meta）。
+/// 设置（首次添加时由激活编排 slugify 生成并写回 meta）。
 pub fn meta_live_key(meta: &str) -> Option<String> {
     parse_meta(meta)
         .ok()?

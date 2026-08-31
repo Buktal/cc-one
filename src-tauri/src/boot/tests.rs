@@ -206,8 +206,10 @@ fn plan_tick_table() {
     }
 }
 
-/// Interval clamping must match the scheduler's `clamp` ranges exactly:
-/// collect ∈ [5, 3600], push ∈ [60, 7200].
+/// `plan_tick` must derive its cadence from the [`ConfigData`] clamp fns —
+/// the single declaration of the interval bounds — so out-of-range stored
+/// values (a hand-edited config.json can carry them) never reach the
+/// deadlines.
 #[test]
 fn plan_tick_clamps_intervals() {
     let t0 = Instant::now();

@@ -2,31 +2,13 @@
 
 use tauri::State;
 
-use super::{run_blocking, AppState, Emit};
+use super::{run_blocking, write_and_emit, AppState, Emit};
 use crate::error::AppResult;
 use crate::model::{
     GroupTrack, LocalGroup, ProjectStatsRow, SessionFilter, SessionGroup, SessionGroupCounts,
     SessionKey, SessionMessage, SessionQuery, SessionRow, SessionStatsRow, SyncedGroup,
 };
 use crate::sessions;
-
-/// Run one Store write, then emit `sessions_changed`（名单源见
-/// `crate::events`）. The emit is part of the write's contract — a write
-/// without it strands the frontend's session cache stale, and nothing else
-/// would catch the omission — so the pairing lives in this one function
-/// instead of being re-typed at every command. Same pairing on the
-/// git-touching track: the synced-group commands below go through
-/// `run_blocking` with `Emit::Sessions`, whose blocking work stays off the
-/// async runtime's threads.
-fn write_and_emit<T>(
-    store: &crate::db::Store,
-    app_handle: &tauri::AppHandle,
-    write: impl FnOnce(&crate::db::Store) -> AppResult<T>,
-) -> AppResult<T> {
-    let out = write(store)?;
-    crate::events::emit_sessions_changed(app_handle);
-    Ok(out)
-}
 
 #[tauri::command]
 #[specta::specta]
@@ -118,7 +100,7 @@ pub fn set_session_favorited_cmd(
     device_id: String,
     favorited: bool,
 ) -> AppResult<()> {
-    write_and_emit(&state.store, &app_handle, |store| {
+    write_and_emit(&state.store, Emit::Sessions(&app_handle), |store| {
         store.set_session_favorited(&device_id, &id, favorited)
     })
 }
@@ -132,7 +114,7 @@ pub fn set_session_custom_title_cmd(
     device_id: String,
     title: Option<String>,
 ) -> AppResult<()> {
-    write_and_emit(&state.store, &app_handle, |store| {
+    write_and_emit(&state.store, Emit::Sessions(&app_handle), |store| {
         store.set_session_custom_title(&device_id, &id, title.as_deref())
     })
 }
@@ -146,7 +128,7 @@ pub fn set_session_local_group_cmd(
     device_id: String,
     group_id: Option<String>,
 ) -> AppResult<()> {
-    write_and_emit(&state.store, &app_handle, |store| {
+    write_and_emit(&state.store, Emit::Sessions(&app_handle), |store| {
         store.set_session_local_group(&device_id, &id, group_id.as_deref())
     })
 }
@@ -160,7 +142,7 @@ pub fn set_session_synced_group_cmd(
     device_id: String,
     group_id: Option<String>,
 ) -> AppResult<()> {
-    write_and_emit(&state.store, &app_handle, |store| {
+    write_and_emit(&state.store, Emit::Sessions(&app_handle), |store| {
         store.set_session_synced_group(&device_id, &id, group_id.as_deref())
     })
 }
@@ -177,7 +159,7 @@ pub fn delete_sessions_cmd(
     app_handle: tauri::AppHandle,
     keys: Vec<SessionKey>,
 ) -> AppResult<u32> {
-    write_and_emit(&state.store, &app_handle, |store| {
+    write_and_emit(&state.store, Emit::Sessions(&app_handle), |store| {
         store.delete_sessions(&keys).map(|n| n as u32)
     })
 }
@@ -191,7 +173,7 @@ pub fn create_local_group_cmd(
     app_handle: tauri::AppHandle,
     name: String,
 ) -> AppResult<LocalGroup> {
-    write_and_emit(&state.store, &app_handle, |store| {
+    write_and_emit(&state.store, Emit::Sessions(&app_handle), |store| {
         let id = sessions::generate_local_group_id();
         let created_at = crate::time::now_iso();
         store.create_local_group(&id, name.trim(), &created_at)
@@ -206,7 +188,7 @@ pub fn rename_local_group_cmd(
     id: String,
     name: String,
 ) -> AppResult<()> {
-    write_and_emit(&state.store, &app_handle, |store| {
+    write_and_emit(&state.store, Emit::Sessions(&app_handle), |store| {
         store.rename_local_group(&id, name.trim())
     })
 }
@@ -218,7 +200,7 @@ pub fn delete_local_group_cmd(
     app_handle: tauri::AppHandle,
     id: String,
 ) -> AppResult<()> {
-    write_and_emit(&state.store, &app_handle, |store| {
+    write_and_emit(&state.store, Emit::Sessions(&app_handle), |store| {
         store.delete_local_group(&id)
     })
 }
@@ -230,7 +212,7 @@ pub fn reorder_local_groups_cmd(
     app_handle: tauri::AppHandle,
     ordered_ids: Vec<String>,
 ) -> AppResult<()> {
-    write_and_emit(&state.store, &app_handle, |store| {
+    write_and_emit(&state.store, Emit::Sessions(&app_handle), |store| {
         store.reorder_local_groups(&ordered_ids)
     })
 }

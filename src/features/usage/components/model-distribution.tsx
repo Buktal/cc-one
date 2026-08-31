@@ -1,7 +1,9 @@
 // Model distribution — top-N models by cost or tokens, with an "其他" aggregate.
 // Clicking a row narrows the dashboard filter to that model (onPickModel), which
 // re-runs every Usage-tagged query including this one (providesTags is
-// filter-scoped, so the list itself refreshes too).
+// filter-scoped, so the list itself refreshes too). Rows render through the
+// section system's DistRow (#106)：聚合行照系统语义 hatch（与项目区聚合行
+// 同一读法）且不可点——onPickModel 只认具体模型。
 
 import { X } from "lucide-react"
 import { useState } from "react"
@@ -24,7 +26,7 @@ import {
   formatSegValue,
   formatTokens,
 } from "@/lib/format"
-import { cn } from "@/lib/utils"
+import { DistRow } from "./dist-row"
 
 const TOP_N = 5
 
@@ -120,13 +122,9 @@ export function ModelDistribution({
           </span>
         ) : (
           items.map((it) => {
-            const pct = (it.value / total) * 100
-            // 当前 filter 选中的模型行高亮 —— 点击行收窄全看板后, 这里
-            // 既是反馈 (知道筛选生效) 也是入口 (header chip 一键清除)。
-            const selected = it.model === filter.model
             // DSL: 分布行主值不带标签（模型名在行左即标签）—— `数量 · 占比`；
-            // 缓存命中是有标签的段，与主值同行拼接。
-            const line = formatMetricLine([
+            // 缓存命中是有标签的段，与主值同行拼接进 value 半行。
+            const value = formatMetricLine([
               formatSegValue(fmt(it.value), it.value / total),
               ...(it.cache_hit_rate
                 ? [
@@ -137,40 +135,23 @@ export function ModelDistribution({
                   ]
                 : []),
             ])
+            // 当前 filter 选中的模型行高亮 —— 点击行收窄全看板后, 这里
+            // 既是反馈 (知道筛选生效) 也是入口 (header chip 一键清除)。
+            // 聚合行（model 为 null）不可点——onPickModel 只认具体模型。
+            const model = it.model
             return (
-              <button
+              <DistRow
                 key={it.label}
-                type="button"
-                disabled={!it.model}
-                aria-pressed={it.model ? selected : undefined}
-                onClick={() => it.model && onPickModel(it.model)}
-                className={cn(
-                  "group -mx-2 flex flex-col gap-1 rounded-md px-2 py-1.5 text-left disabled:cursor-default",
-                  selected ? "bg-accent-tint" : it.model && "hover:bg-hover",
-                )}
-              >
-                <div className="flex items-center justify-between gap-2 text-xs">
-                  <span
-                    className={cn(
-                      "text-foreground truncate font-mono",
-                      selected
-                        ? "text-accent-brand-strong"
-                        : "group-hover:text-primary",
-                    )}
-                  >
-                    {it.label}
-                  </span>
-                  <span className="text-muted-foreground shrink-0 tabular-nums">
-                    {line}
-                  </span>
-                </div>
-                <div className="bg-muted h-1.5 w-full overflow-hidden rounded-full">
-                  <div
-                    className="bg-primary h-full rounded-full transition-all group-hover:bg-primary/80"
-                    style={{ width: `${Math.max(pct, 2)}%` }}
-                  />
-                </div>
-              </button>
+                /* 模型 id 行 mono；「其他」是本地化聚合名，同系统里未知项目
+                    行一样不 mono。 */
+                mono={model != null}
+                name={it.label}
+                value={value}
+                share={it.value / total}
+                hatch={model == null}
+                selected={model === filter.model}
+                onClick={model == null ? undefined : () => onPickModel(model)}
+              />
             )
           })
         )}

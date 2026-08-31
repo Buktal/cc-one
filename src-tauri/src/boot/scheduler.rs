@@ -13,7 +13,7 @@ use tauri::AppHandle;
 
 use super::{AppResult, BootCtx};
 use crate::collect::{self, SyncRoundPosture};
-use crate::config::ConfigStore;
+use crate::config::{ConfigData, ConfigStore};
 use crate::db::Store;
 use crate::events;
 
@@ -68,8 +68,11 @@ pub(super) fn plan_tick(
     next_push: Instant,
     cfg: &crate::config::ConfigData,
 ) -> (Vec<TickAction>, Instant, Instant) {
-    let collect_secs = cfg.collect_interval_secs.clamp(5, 3600) as u64;
-    let push_secs = cfg.push_interval_secs.clamp(60, 7200) as u64;
+    // Bounds are declared once on ConfigData (same fn the settings setter
+    // clamps through — the stored value can be out of range if config.json
+    // was hand-edited).
+    let collect_secs = ConfigData::clamp_collect_interval_secs(cfg.collect_interval_secs) as u64;
+    let push_secs = ConfigData::clamp_push_interval_secs(cfg.push_interval_secs) as u64;
 
     let mut actions = Vec::new();
     let mut new_collect = next_collect;
@@ -106,8 +109,9 @@ pub(super) fn plan_tick(
 fn scheduler_loop(store: Arc<Store>, config: Arc<ConfigStore>, app: AppHandle) {
     let start = Instant::now();
     let mut next_collect = start;
-    let mut next_push =
-        start + Duration::from_secs(config.get().push_interval_secs.clamp(60, 7200) as u64);
+    let first_push_secs =
+        ConfigData::clamp_push_interval_secs(config.get().push_interval_secs) as u64;
+    let mut next_push = start + Duration::from_secs(first_push_secs);
     loop {
         // Snapshot config once per tick (matches the original pre-sleep read
         // so live Settings changes apply next tick).

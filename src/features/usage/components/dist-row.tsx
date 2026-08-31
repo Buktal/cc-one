@@ -8,6 +8,7 @@
 // section's「本机」mark).
 
 import { Badge } from "@/components/ui/badge"
+import { shareBarPct } from "@/lib/format"
 import { cn } from "@/lib/utils"
 
 export function DistRow({
@@ -30,7 +31,8 @@ export function DistRow({
   /** Pre-formatted DSL value half (`数量 · 占比`) — the caller builds it with
    *  formatSegValue so the caliber stays in the DSL layer. */
   value: string
-  /** [0,1] share driving the bar width. */
+  /** [0,1] share driving the bar width — shareBarPct clamps it (sliver floor
+   *  + overflow ceiling), the row system's single clamp. */
   share: number
   sub?: string
   hatch?: boolean
@@ -86,7 +88,7 @@ export function DistRow({
                 ? "bg-primary"
                 : "bg-primary/70 group-hover:bg-primary",
           )}
-          style={{ width: `${Math.max(Math.min(share * 100, 100), 2)}%` }}
+          style={{ width: `${shareBarPct(share)}%` }}
         />
       </div>
       {sub ? (

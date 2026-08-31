@@ -260,6 +260,17 @@ export function formatSegValue(value: string, share?: number | null): string {
   return share == null ? value : `${value} · ${formatPct(share)}`
 }
 
+/** Share [0,1] → the distribution system's bar-fill width in percent, clamped
+ *  to [2,100]: a sliver share stays visible (the DistRow floor) and no value
+ *  can overflow the track. Non-finite share (an empty-total 0/0) renders as
+ *  the floor sliver. One implementation for every bar in the system — the
+ *  DistRow rows and the BucketComposition stacked bar included. */
+export function shareBarPct(share: number): number {
+  const pct = Number(share) * 100
+  if (!Number.isFinite(pct)) return 2
+  return Math.min(Math.max(pct, 2), 100)
+}
+
 /** Join metric segments into one line with the DSL separator ` · `. */
 export function formatMetricLine(segs: readonly string[]): string {
   return segs.join(" · ")

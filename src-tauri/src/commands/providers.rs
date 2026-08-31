@@ -5,7 +5,7 @@
 
 use tauri::State;
 
-use super::{run_blocking, AppState, Emit};
+use super::{run_blocking, write_and_emit, AppState, Emit};
 use crate::error::AppResult;
 use crate::model::{App, Provider};
 use crate::provider::activation;
@@ -22,6 +22,8 @@ pub fn list_providers_cmd(state: State<'_, AppState>, app: App) -> AppResult<Vec
 /// Upsert a provider (empty id = create, non-empty = edit). Returns the
 /// persisted row so the caller learns the assigned id / sort position without
 /// a second read. The provider carries its `app` (the pool it belongs to).
+/// Light DB write → the main-thread track (`write_and_emit`); the emit rides
+/// the same call so the invalidation cannot drift from the write.
 #[tauri::command]
 #[specta::specta]
 pub fn save_provider_cmd(
@@ -29,9 +31,9 @@ pub fn save_provider_cmd(
     app_handle: tauri::AppHandle,
     provider: Provider,
 ) -> AppResult<Provider> {
-    let saved = state.store.save_provider(provider)?;
-    crate::events::emit_providers_changed(&app_handle);
-    Ok(saved)
+    write_and_emit(&state.store, Emit::Providers(&app_handle), |store| {
+        store.save_provider(provider)
+    })
 }
 
 /// 删除供应商——薄壳：撤 live 半边（附加模式、已托管才撤）+ 删行的组合次序
@@ -61,9 +63,9 @@ pub fn reorder_providers_cmd(
     app: App,
     ordered_ids: Vec<String>,
 ) -> AppResult<()> {
-    state.store.reorder_providers(app, &ordered_ids)?;
-    crate::events::emit_providers_changed(&app_handle);
-    Ok(())
+    write_and_emit(&state.store, Emit::Providers(&app_handle), |store| {
+        store.reorder_providers(app, &ordered_ids)
+    })
 }
 
 /// 切换供应商（核心动作）——薄壳：编排下沉 `provider::activation`。单激活

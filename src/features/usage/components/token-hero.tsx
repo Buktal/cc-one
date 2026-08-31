@@ -9,6 +9,10 @@
 import dayjs from "dayjs"
 import { useTranslation } from "react-i18next"
 import type { FilterState } from "@/app/store/slices/filterSlice"
+import {
+  BucketComposition,
+  type CompositionSegment,
+} from "@/components/bucket-composition"
 import { Card, CardContent } from "@/components/ui/card"
 import { useTokenSnapshot } from "@/features/usage/use-token-snapshot"
 import {
@@ -22,14 +26,6 @@ import {
 } from "@/lib/format"
 import { BUCKET_DISPLAY, type BucketStatKey } from "@/lib/token-buckets"
 
-// 展示名册 BUCKET_DISPLAY（lib/token-buckets）的 usage 域投影：堆叠条与图例
-// 共用同一序，色/文案键不再手抄（序即名册序，与趋势图/会话统计同契约）。
-const SEGMENTS = BUCKET_DISPLAY.map((b) => ({
-  key: `${b.bucket}_tokens` as BucketStatKey,
-  label: `usage.tokens.${b.suffix}`,
-  color: b.cssVar,
-}))
-
 export function TokenHero({ filter }: { filter: FilterState }) {
   const { t } = useTranslation()
   const {
@@ -39,13 +35,22 @@ export function TokenHero({ filter }: { filter: FilterState }) {
     dailyAvg,
     hourlyAvg,
   } = useTokenSnapshot(filter)
-  const total = s.total_tokens || 1
+  const total = s.total_tokens
   const avgNode = singleDay
     ? t("usage.hero.hourlyAvg", {
         n: dayjs().hour() + 1,
         avg: formatTokens(hourlyAvg),
       })
     : t("usage.hero.dailyAvg", { avg: formatTokens(dailyAvg) })
+  // 展示名册 BUCKET_DISPLAY（lib/token-buckets）的 usage 域投影：构成条与
+  // 图例共用同一序（序即名册序，与趋势图/会话统计同契约）；文案键与取数在
+  // 本域拼接，呈现几何归 BucketComposition 原语。
+  const segments: CompositionSegment[] = BUCKET_DISPLAY.map((b) => ({
+    key: b.bucket,
+    label: t(`usage.tokens.${b.suffix}`),
+    color: b.cssVar,
+    value: Number(s[`${b.bucket}_tokens` as BucketStatKey] ?? 0),
+  }))
 
   return (
     <Card interactive className="h-full">
@@ -79,46 +84,15 @@ export function TokenHero({ filter }: { filter: FilterState }) {
           </div>
         </div>
 
-        {/* 四桶堆叠 + 竖排 legend + 口径行 */}
-        <div className="bg-muted flex h-2.5 w-full overflow-hidden rounded-full">
-          {SEGMENTS.map((seg) => {
-            const v = Number(s[seg.key] ?? 0)
-            const pct = (v / total) * 100
-            return (
-              <div
-                key={seg.key}
-                className="h-full"
-                style={{ width: `${pct}%`, backgroundColor: seg.color }}
-              />
-            )
-          })}
-        </div>
-
-        <div className="flex flex-col gap-1.5">
-          {SEGMENTS.map((seg) => {
-            const v = Number(s[seg.key] ?? 0)
-            return (
-              <div
-                key={seg.key}
-                className="flex items-center justify-between gap-1.5 text-xs"
-              >
-                <span className="flex min-w-0 items-center gap-1.5">
-                  <span
-                    className="inline-block size-2 shrink-0 rounded-sm"
-                    style={{ backgroundColor: seg.color }}
-                  />
-                  <span className="text-muted-foreground truncate">
-                    {t(seg.label)}
-                  </span>
-                </span>
-                {/* DSL: 数量 · 占比（占比恒一位小数）。 */}
-                <span className="shrink-0 tabular-nums">
-                  {formatSegValue(formatTokens(v), v / total)}
-                </span>
-              </div>
-            )
-          })}
-        </div>
+        {/* 四桶构成条 + 竖排 legend（原语单点）+ 口径行。值半行走 DSL
+            `数量 · 占比`（占比恒一位小数）。 */}
+        <BucketComposition
+          segments={segments}
+          total={total}
+          renderValue={(value, share) =>
+            formatSegValue(formatTokens(value), share)
+          }
+        />
 
         {/* DSL footer 行：请求 · 命中率 · 成本（标签 数量 段拼装）。 */}
         <div className="text-muted-foreground border-border/60 mt-auto flex items-center border-t pt-2.5 text-xs">

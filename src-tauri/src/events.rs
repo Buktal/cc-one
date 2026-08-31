@@ -6,8 +6,9 @@
 //! Rust 白发，编译器两端都不报错）。
 //!
 //! 事件名字符串统一 snake_case。通知轨的「谁写完该发哪条」配对契约由
-//! `commands::run_blocking` 的 `Emit` 变体声明；本模块只管「名字 + 怎么发」，
-//! 不管「谁该发」。
+//! `commands` 的 `Emit` 变体声明，两条执行轨共用（异步轨 `run_blocking`、
+//! 主线程轨 `write_and_emit`，分派收在 `commands::notify`）；本模块只管
+//! 「名字 + 怎么发」，不管「谁该发」。
 
 use tauri::Emitter;
 

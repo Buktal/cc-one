@@ -25,6 +25,21 @@ fn masked_token_redacts() {
     assert_eq!(c.masked_token().as_deref(), Some("ghp_…mnop"));
 }
 
+// ---- 采集 / 推送间隔区间（单源声明）----
+
+/// 区间字面量只住在 [`ConfigData::clamp_collect_interval_secs`] /
+/// `clamp_push_interval_secs` 这两个 fn 里（写侧 preferences setter、读侧
+/// scheduler 都经它们 clamp），这里钉住边界值本身，区间被静默改动即红。
+#[test]
+fn interval_clamp_bounds() {
+    assert_eq!(ConfigData::clamp_collect_interval_secs(1), 5);
+    assert_eq!(ConfigData::clamp_collect_interval_secs(30), 30);
+    assert_eq!(ConfigData::clamp_collect_interval_secs(50_000), 3600);
+    assert_eq!(ConfigData::clamp_push_interval_secs(1), 60);
+    assert_eq!(ConfigData::clamp_push_interval_secs(600), 600);
+    assert_eq!(ConfigData::clamp_push_interval_secs(50_000), 7200);
+}
+
 #[test]
 fn snippet_fields_default_and_roundtrip() {
     // 旧 config.json 没有片段字段 → 旧全局字段反序列化默认 false（历史

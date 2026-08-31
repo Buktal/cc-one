@@ -23,6 +23,7 @@ import {
   formatTime,
   formatTimeExact,
   formatTokens,
+  shareBarPct,
   spanLabelKey,
   spanMsOf,
   spanParts,
@@ -391,5 +392,20 @@ describe("dateInputToDay", () => {
     expect(dateInputToDay("  2026-07-28  ")).toBe("2026-07-28")
     expect(dateInputToDay("")).toBeNull()
     expect(dateInputToDay("   ")).toBeNull()
+  })
+})
+
+describe("shareBarPct (分布条宽度钳制 — DistRow / BucketComposition 单点)", () => {
+  it("clamps the bar width into the [2,100]% band (sliver floor + overflow ceiling)", () => {
+    expect(shareBarPct(0.5)).toBe(50)
+    expect(shareBarPct(1)).toBe(100)
+    expect(shareBarPct(1.5)).toBe(100)
+    expect(shareBarPct(0)).toBe(2)
+    expect(shareBarPct(-0.2)).toBe(2)
+  })
+
+  it("non-finite share (empty-total 0/0) → floor sliver", () => {
+    expect(shareBarPct(Number.NaN)).toBe(2)
+    expect(shareBarPct(Number.POSITIVE_INFINITY)).toBe(2)
   })
 })

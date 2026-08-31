@@ -3,7 +3,7 @@
 use tauri::{Manager, State};
 
 use super::AppState;
-use crate::config::{CloseBehavior, Language, LightweightExpand, Skin};
+use crate::config::{CloseBehavior, ConfigData, Language, LightweightExpand, Skin};
 use crate::error::AppResult;
 
 /// User-tunable preferences surfaced in the Settings「通用」card.
@@ -18,7 +18,7 @@ pub struct Preferences {
     pub skin: Skin,
 }
 
-fn to_preferences(cfg: &crate::config::ConfigData) -> Preferences {
+fn to_preferences(cfg: &ConfigData) -> Preferences {
     Preferences {
         close_behavior: cfg.close_behavior,
         collect_interval_secs: cfg.collect_interval_secs,
@@ -53,7 +53,9 @@ pub fn set_close_behavior(
 #[tauri::command]
 #[specta::specta]
 pub fn set_collect_interval(state: State<'_, AppState>, seconds: u32) -> AppResult<Preferences> {
-    let clamped = seconds.clamp(5, 3600);
+    // Bounds are declared once on ConfigData — the scheduler clamps the
+    // stored value through the same fn.
+    let clamped = ConfigData::clamp_collect_interval_secs(seconds);
     let cfg = state.config.update(|c| c.collect_interval_secs = clamped)?;
     Ok(to_preferences(&cfg))
 }
@@ -64,7 +66,8 @@ pub fn set_collect_interval(state: State<'_, AppState>, seconds: u32) -> AppResu
 #[tauri::command]
 #[specta::specta]
 pub fn set_push_interval(state: State<'_, AppState>, seconds: u32) -> AppResult<Preferences> {
-    let clamped = seconds.clamp(60, 7200);
+    // Same single declaration as the collect interval above.
+    let clamped = ConfigData::clamp_push_interval_secs(seconds);
     let cfg = state.config.update(|c| c.push_interval_secs = clamped)?;
     Ok(to_preferences(&cfg))
 }

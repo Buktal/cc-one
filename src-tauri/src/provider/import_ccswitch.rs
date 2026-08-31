@@ -25,19 +25,28 @@
 //! **统一供应商**（`settings` 表 `universal_providers`）：一个跨应用共享的聚合
 //! 网关。cc one 每应用独立池、不做跨应用共享，故把它展开成 claude / codex /
 //! gemini 各自的独立子 Provider（id 前缀 `universal-<app>-`），配置不丢。
+//!
+//! 模块分两半：**转换半**（本文件，纯函数：翻译 / 展开 / 收集）与**读源半**
+//! （子模块 [`source`]：CC-Switch SQLite 与旧版 config.json → 输入类型）。读源
+//! 在 `commands::ccswitch` 薄壳做完后喂进 [`collect_ccswitch_imports`]，本模块
+//! 不碰 SQLite / 文件。
+
+mod source;
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use specta::Type;
 use toml_edit::{DocumentMut, Item, Table};
 
-use crate::error::{AppError, AppResult};
 use crate::model::{App, Provider, ProviderCategory};
 use crate::provider::settings_codec::{
     build_claude_settings, build_codex_settings, build_gemini_settings, GEMINI_API_KEY_ENV,
     GOOGLE_GEMINI_BASE_URL_ENV,
 };
-use rusqlite::{Connection, OptionalExtension};
+
+// 读源半的对外出口保持原位：命令层继续从 `import_ccswitch::*` 取用，use 路径
+// 不因拆分而动；实现在子模块 [`source`]。
+pub use source::{parse_legacy_json, read_providers_from_db, read_universals_from_db};
 
 // ── 输入类型（CC-Switch 侧，宽容反序列化）───────────────────────────────────
 
@@ -424,7 +433,7 @@ fn universal_child(
     }
 }
 
-// ── 读盘 + 收集（命令层调用）─────────────────────────────────────────────────
+// ── 收集（命令层调用）────────────────────────────────────────────────────────
 
 /// 把已读入的 CC-Switch 供应商 + 统一供应商转换收集成（待写库的 cc one Provider，
 /// 跳过明细）。纯收集：调 [`convert_ccswitch_provider`] / [`expand_universal`]，
@@ -459,82 +468,6 @@ pub fn collect_ccswitch_imports(
         }
     }
     (imported, skipped)
-}
-
-/// 从 CC-Switch SQLite 读 `providers` 表全部行为 [`CcSwitchProvider`]。
-/// `settings_config` / `meta` 列是 JSON 文本，这里解析为 [`Value`]；解析失败按
-/// null / `{}` 处理（容错——单条坏数据不让整个导入崩）。
-pub fn read_providers_from_db(conn: &Connection) -> AppResult<Vec<CcSwitchProvider>> {
-    let mut stmt = conn.prepare(
-        "SELECT id, app_type, name, settings_config, website_url, category, \
-         sort_index, notes, icon, icon_color, meta FROM providers",
-    )?;
-    let rows = stmt.query_map([], |row| {
-        let settings_text: String = row.get(3)?;
-        let meta_text: String = row.get::<_, Option<String>>(10)?.unwrap_or_default();
-        let settings_config: Value = serde_json::from_str(&settings_text).unwrap_or(Value::Null);
-        let meta: Value =
-            serde_json::from_str(&meta_text).unwrap_or_else(|_| Value::Object(Default::default()));
-        Ok(CcSwitchProvider {
-            id: row.get(0)?,
-            app_type: row.get(1)?,
-            name: row.get(2)?,
-            settings_config,
-            website_url: row.get::<_, Option<String>>(4)?,
-            category: row.get::<_, Option<String>>(5)?,
-            sort_index: row.get::<_, Option<i64>>(6)?,
-            notes: row.get::<_, Option<String>>(7)?,
-            icon: row.get::<_, Option<String>>(8)?,
-            icon_color: row.get::<_, Option<String>>(9)?,
-            meta,
-        })
-    })?;
-    rows.collect::<rusqlite::Result<Vec<_>>>()
-        .map_err(|e| AppError::Config(format!("读取 CC-Switch providers 表失败: {e}")))
-}
-
-/// 从 CC-Switch SQLite 读 `settings` 表的 `universal_providers`（统一供应商 map）。
-/// 键不存在 → 空列表（CC-Switch 可能没有统一供应商）。
-pub fn read_universals_from_db(conn: &Connection) -> AppResult<Vec<UniversalProvider>> {
-    let text: Option<String> = conn
-        .query_row(
-            "SELECT value FROM settings WHERE key = 'universal_providers'",
-            [],
-            |row| row.get(0),
-        )
-        .optional()?;
-    let Some(text) = text else {
-        return Ok(vec![]);
-    };
-    let map: std::collections::HashMap<String, UniversalProvider> = serde_json::from_str(&text)
-        .map_err(|e| AppError::Config(format!("解析 universal_providers 失败: {e}")))?;
-    Ok(map.into_values().collect())
-}
-
-/// 解析 CC-Switch 旧版 JSON（`config.json`，`MultiAppConfig` 结构）：`apps.<app_type>
-/// .providers` 是 id → provider 的 map。id 取 map key、app_type 取外层 app key
-/// （旧 JSON 的 provider 对象里通常没这俩字段，这里补上）。旧 JSON 不含统一供应商。
-pub fn parse_legacy_json(text: &str) -> AppResult<(Vec<CcSwitchProvider>, Vec<UniversalProvider>)> {
-    let v: Value = serde_json::from_str(text)
-        .map_err(|e| AppError::Config(format!("CC-Switch config.json 解析失败: {e}")))?;
-    let mut providers = Vec::new();
-    if let Some(apps) = v.get("apps").and_then(|a| a.as_object()) {
-        for (app_type, app_cfg) in apps {
-            if let Some(pm) = app_cfg.get("providers").and_then(|p| p.as_object()) {
-                for (id, prov) in pm {
-                    let mut prov = prov.clone();
-                    if let Some(obj) = prov.as_object_mut() {
-                        obj.insert("id".into(), Value::String(id.clone()));
-                        obj.insert("appType".into(), Value::String(app_type.clone()));
-                    }
-                    if let Ok(p) = serde_json::from_value::<CcSwitchProvider>(prov) {
-                        providers.push(p);
-                    }
-                }
-            }
-        }
-    }
-    Ok((providers, vec![]))
 }
 
 #[cfg(test)]
