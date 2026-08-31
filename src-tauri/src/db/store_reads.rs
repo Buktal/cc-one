@@ -242,8 +242,9 @@ impl super::Store {
     /// project registry — 本机全部会话 ∪ 远程收藏快照 (both live in the one
     /// `sessions` table; the only cross-device session rows are pulled
     /// favorite snapshots) — narrowed by the filter's OTHER dimensions through
-    /// the sessions-side WHERE builder, whose fields map 1:1 onto
-    /// `UsageFilter`'s (time reads `last_active_at`, the sessions grain). The
+    /// the sessions-side WHERE builder, reached via the shared cross-grain
+    /// mapping `UsageFilter::to_session_grain` (time reads `last_active_at`,
+    /// the sessions grain). The
     /// empty identity never becomes a candidate (a session with no launch dir
     /// is not a pickable project). The unknown bucket's PRESENCE is probed on
     /// the usage side (session-less rows under the same other-dimensions
@@ -251,15 +252,9 @@ impl super::Store {
     pub fn query_distinct_projects(&self, filter: &UsageFilter) -> AppResult<ProjectCandidates> {
         let conn = self.conn.lock().expect("db mutex poisoned");
         // Known projects: sessions-side distinct identities, other dimensions
-        // applied, own facet dropped.
-        let session_filter = SessionFilter {
-            from_ts: filter.from_ts.clone(),
-            to_ts: filter.to_ts.clone(),
-            model: filter.model.clone(),
-            source: filter.source.clone(),
-            device_scope: filter.device_scope.clone(),
-            ..Default::default()
-        };
+        // applied via the shared cross-grain mapping (own facet dropped there,
+        // with the compile-time guard — see `UsageFilter::to_session_grain`).
+        let session_filter = filter.to_session_grain();
         let (clause, params_vec) = build_session_where(Some(&session_filter));
         let sql = format!(
             "SELECT pid FROM (\

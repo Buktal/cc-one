@@ -119,7 +119,7 @@ impl super::Store {
                     &mut conds,
                     &mut uparams,
                     "u.",
-                    &usage_grain(f),
+                    &f.to_usage_grain(),
                     FacetGates::dropping(Facet::Project),
                 );
             }
@@ -491,25 +491,6 @@ fn unknown_bucket_suppressed(f: &SessionFilter) -> bool {
         || f.local_group_id.is_some()
         || f.synced_group_id.is_some()
         || f.search.as_deref().is_some_and(|s| !s.trim().is_empty())
-}
-
-/// The usage-grain view of a `SessionFilter` — the five fields the two filter
-/// shapes share (time / device / model / source). The unknown bucket's direct
-/// read goes through the SAME usage-grain assembly as every other usage read
-/// ([`push_usage_facets`]), which takes the `UsageFilter` shape; this explicit
-/// mapping is the one seam. 字段穷举而非 `..Default::default()`：给
-/// `UsageFilter` 新增字段会让这个字面量编译失败——漏接未知桶在这里被编译
-/// 器拦下，而不是静默漂移。`project` 恒 `None`：桶的「项目」就是其 NOT
-/// EXISTS 定义，不是一层筛选；known 桶的项目语义归 build_session_where。
-fn usage_grain(f: &SessionFilter) -> UsageFilter {
-    UsageFilter {
-        from_ts: f.from_ts.clone(),
-        to_ts: f.to_ts.clone(),
-        model: f.model.clone(),
-        source: f.source.clone(),
-        device_scope: f.device_scope.clone(),
-        project: None,
-    }
 }
 
 #[cfg(test)]
@@ -921,28 +902,6 @@ mod tests {
         ] {
             assert!(unknown_bucket_suppressed(&suppressed));
         }
-    }
-
-    /// SessionFilter → UsageFilter 的接缝直测：五个共享轴逐字段搬运，
-    /// `project` 恒 `None`（桶的项目身份 = NOT EXISTS，不是筛选）。
-    #[test]
-    fn usage_grain_maps_the_shared_axes_and_drops_project() {
-        let f = SessionFilter {
-            from_ts: Some("2026-08-01T00:00:00Z".into()),
-            to_ts: Some("2026-08-27T00:00:00Z".into()),
-            model: Some("glm-5.2".into()),
-            source: Some("claude_code".into()),
-            device_scope: Some("dev".into()),
-            project: Some(UNKNOWN_PROJECT.into()),
-            ..Default::default()
-        };
-        let u = usage_grain(&f);
-        assert_eq!(u.from_ts, f.from_ts);
-        assert_eq!(u.to_ts, f.to_ts);
-        assert_eq!(u.model, f.model);
-        assert_eq!(u.source, f.source);
-        assert_eq!(u.device_scope, f.device_scope);
-        assert!(u.project.is_none(), "项目不映射——桶自身即项目定义");
     }
 
     /// The SessionFilter project dimension: matching runs through

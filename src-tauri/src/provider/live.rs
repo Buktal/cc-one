@@ -18,7 +18,8 @@
 //!   非受控字段被忽略，绝不写 live。
 //! - 写盘顺序：读当前 live → 受控合并 → 内容无变化则**无操作**（不备份、
 //!   不写盘、不碰 mtime，见 [`commit_live_file`]）→ 备份 `settings.json.bak`
-//!   （单份覆盖）→ 原子写（临时文件 + 改名，进程中断不产生半截文件）。
+//!   （单份覆盖）→ 原子写（原语归 `crate::fs_atomic`：临时文件 + 改名，进程
+//!   中断不产生半截文件）。
 //! - 清洗：写 live 前剥掉配置里的应用内部 meta 字段（`api_format` /
 //!   `apiFormat` 等，类比 cc-switch `sanitize_claude_settings_for_live`）。
 //! - **不做** cc-switch 的整文件覆盖 + Backfill。
@@ -29,12 +30,12 @@
 //! 「非受控字段保留」这个关键不变量靠它落进可测代码，而不是散文注释。
 
 use std::fs;
-use std::io::Write;
 use std::path::{Path, PathBuf};
 
 use toml_edit::Table;
 
 use crate::error::{AppError, AppResult};
+use crate::fs_atomic::atomic_write_file;
 use crate::model::App;
 
 /// 写盘时从配置里剥掉的内部 meta 字段（类比 cc-switch
@@ -142,31 +143,6 @@ pub(crate) fn backup_path(path: &Path) -> PathBuf {
         .map(|e| e.to_string_lossy().into_owned())
         .unwrap_or_default();
     path.with_extension(format!("{ext}.bak"))
-}
-
-/// 原子写：先把内容写入同目录的临时文件（独立名字，避免并发写冲突），再改名
-/// 覆盖目标。进程在写盘中途中断只会留下临时文件，不会产生半截 live 文件。
-/// claude settings.json 与 codex config.toml/auth.json 共用（单一事实来源）。
-pub(crate) fn atomic_write_file(path: &Path, content: &str) -> AppResult<()> {
-    let parent = path
-        .parent()
-        .ok_or_else(|| AppError::Config("live file path has no parent dir".into()))?;
-    fs::create_dir_all(parent)?;
-    let file_name = path
-        .file_name()
-        .ok_or_else(|| AppError::Config("live file path has no file name".into()))?;
-    let nanos = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_nanos())
-        .unwrap_or(0);
-    let tmp = parent.join(format!("{}.tmp.{nanos}", file_name.to_string_lossy()));
-    {
-        let mut f = fs::File::create(&tmp)?;
-        f.write_all(content.as_bytes())?;
-        f.flush()?;
-    }
-    fs::rename(&tmp, path)?;
-    Ok(())
 }
 
 /// 按 app 读 live 文件文本（缺失文件读为空串——merge / 导入按空处理）：
@@ -664,29 +640,6 @@ mod tests {
             fs::read_to_string(&bak).unwrap(),
             r#"{"env":{"A":"2"}}"#,
             ".bak 单份覆盖，不追加不堆积"
-        );
-    }
-
-    #[test]
-    fn atomic_write_leaves_no_temp_file_and_replaces_target() {
-        let tmp = tempfile::tempdir().unwrap();
-        let path = tmp.path().join("settings.json");
-        fs::write(&path, "old").unwrap();
-        atomic_write_file(&path, r#"{"env":{"A":"1"}}"#).unwrap();
-        assert_eq!(fs::read_to_string(&path).unwrap(), r#"{"env":{"A":"1"}}"#);
-        // 临时文件已改名，目录里没有残留 .tmp.*。
-        let leftovers: Vec<_> = fs::read_dir(tmp.path())
-            .unwrap()
-            .filter_map(|e| e.ok())
-            .filter(|e| {
-                e.file_name()
-                    .to_string_lossy()
-                    .contains("settings.json.tmp.")
-            })
-            .collect();
-        assert!(
-            leftovers.is_empty(),
-            "原子写后不得残留临时文件: {leftovers:?}"
         );
     }
 

@@ -23,6 +23,7 @@ mod db;
 mod devices;
 mod error;
 mod events;
+mod fs_atomic;
 mod library;
 mod model;
 mod pricing;

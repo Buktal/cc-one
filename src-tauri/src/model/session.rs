@@ -10,6 +10,8 @@
 //! (`custom_title` / `favorited` / `synced_group_id`) rides the sessions table
 //! row, which the per-session sync phase will carry into git.
 
+use super::usage::UsageFilter;
+
 /// Session system data: the layer collect re-extracts from the source log on
 /// every pass. Refreshable — re-collecting a session updates these fields in
 /// place. This is a strict subset of the SQLite `sessions` row (which also
@@ -189,7 +191,8 @@ pub struct SessionRow {
     pub source: String,
     /// Project identity for the project dimension — the stored launch
     /// directory with a Claude Code worktree suffix collapsed to its parent
-    /// ([`project_identity`]). The raw launch dir stays in the `sessions` row
+    /// ([`project_identity`](crate::model::project_identity)). The raw launch
+    /// dir stays in the `sessions` row
     /// and the git snapshot; truncation is a read-side rule, so nothing is
     /// lost and no re-collect is needed for existing rows.
     pub project_dir: String,
@@ -228,86 +231,10 @@ pub struct SessionKey {
     pub device_id: String,
 }
 
-/// Sentinel for the project dimension's「未知项目」(unknown project) bucket:
-/// usage whose session row never arrived. On a multi-device store the only
-/// cross-device session rows are pulled FAVORITE snapshots ("收藏才进 git"),
-/// so a peer's non-favorited usage resolves to no session — without this
-/// bucket that usage would silently vanish from every project view. Session-less
-/// legacy usage rows (empty `session_id`) land here too.
-///
-/// Filter semantics per grain — both are "we cannot name a project for this":
-/// - usage side (`UsageFilter.project` = sentinel): NOT EXISTS a `sessions`
-///   row for the record's `(session_id, device_id)` — remote usage without a
-///   pulled favorite snapshot, or session-less rows;
-/// - sessions side (`SessionFilter.project` = sentinel): sessions whose
-///   project IDENTITY is empty (`project_identity(s.project_dir) = ''`) — a
-///   session row exists, but it carries no launch dir.
-///
-/// The value crosses the wire as DATA (see [`ProjectCandidates`]), so the
-/// frontend labels the special option without a second copy of the literal.
-/// A real directory named exactly this string would be mis-bucketed — the
-/// double-underscore form is chosen to make that collision pathological.
-pub const UNKNOWN_PROJECT: &str = "__unknown_project__";
-
-/// Project-dropdown candidates: the known project identities plus the unknown
-/// bucket's presence. Returned by the distinct-projects read; the sentinel
-/// rides as data (`unknown`) instead of being embedded in `projects`, so the
-/// dropdown can render one labeled special option without recognizing the
-/// literal string.
-#[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize, specta::Type)]
-pub struct ProjectCandidates {
-    /// Known project identities under the filter's other dimensions, sorted.
-    /// Never contains the unknown sentinel or the empty identity (a session
-    /// with no launch dir is not a pickable project).
-    pub projects: Vec<String>,
-    /// `Some(sentinel)` when session-less usage exists in the same window —
-    /// the「未知项目」option is offered exactly then. `None` = no unknown
-    /// usage, so the option stays hidden.
-    pub unknown: Option<String>,
-}
-
-/// Map a stored `project_dir` (the session's launch directory, collected raw
-/// from the source log) to the project identity the project dimension groups
-/// by: a Claude Code worktree suffix — a `.claude` path component immediately
-/// followed by a `worktrees` component — collapses to its parent directory.
-/// Claude Code launches parallel/subagent sessions inside
-/// `<project>/.claude/worktrees/<name>`, transient scratch copies that must
-/// aggregate under `<project>` itself (their sessions, tokens, and costs are
-/// the parent project's; left raw, each worktree would surface as its own
-/// one-session bucket — 15 such buckets on the machine this rule was derived
-/// from, issue #84). Both separators match: cwd strings arrive from Windows
-/// (`\`) and Unix (`/`) devices alike via the cross-device store. The first
-/// worktree segment wins. Returns the input unchanged when no worktree
-/// segment exists, or when the cut would leave an empty prefix (a bare
-/// relative worktree path keeps its raw form rather than degrading to the
-/// empty no-project bucket).
-pub fn project_identity(project_dir: &str) -> &str {
-    // (byte offset, component) pairs over BOTH separators — a Unix peer's
-    // `/home/p/.claude/worktrees/x` and a Windows `\` form live in the same
-    // store, so neither separator may be assumed.
-    let mut comps: Vec<(usize, &str)> = Vec::new();
-    let mut start = 0;
-    for (i, c) in project_dir.char_indices() {
-        if c == '/' || c == '\\' {
-            comps.push((start, &project_dir[start..i]));
-            start = i + 1; // '/' and '\\' are 1-byte ASCII
-        }
-    }
-    comps.push((start, &project_dir[start..]));
-    for w in 0..comps.len() - 1 {
-        if comps[w].1 == ".claude" && comps[w + 1].1 == "worktrees" {
-            let (cut, _) = comps[w];
-            if cut > 0 {
-                // Drop the separator before `.claude` too (also 1-byte).
-                return &project_dir[..cut - 1];
-            }
-        }
-    }
-    project_dir
-}
-
 /// Optional filter for `query_sessions`. Every field optional; `None` = no
-/// constraint. Mirrors the shape of `UsageFilter` for the session list.
+/// constraint. The shared-facet half mirrors `UsageFilter` exactly — the one
+/// cross-grain mapping between the two shapes lives on
+/// [`SessionFilter::to_usage_grain`] / [`UsageFilter::to_session_grain`].
 #[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize, specta::Type)]
 pub struct SessionFilter {
     /// Scope to one device (`None` = all devices).
@@ -324,7 +251,7 @@ pub struct SessionFilter {
     /// launch dir: the comparison runs through the `project_identity` SQL
     /// scalar, so a Claude Code worktree session (`<proj>\.claude\worktrees\…`)
     /// matches its parent project's bucket. Same rule the project aggregate
-    /// groups by. The [`UNKNOWN_PROJECT`] sentinel matches sessions whose
+    /// groups by. The [`UNKNOWN_PROJECT`](crate::model::UNKNOWN_PROJECT) sentinel matches sessions whose
     /// identity is EMPTY (a session row exists but carries no launch dir) —
     /// the sessions-side face of the unknown bucket; the usage-side face
     /// (session-less usage, NOT EXISTS) lives on `UsageFilter.project`.
@@ -346,6 +273,29 @@ pub struct SessionFilter {
     /// Lives backend-side because paged results make client-side filtering
     /// inconsistent (it would only search the loaded page).
     pub search: Option<String>,
+}
+
+impl SessionFilter {
+    /// The usage-grain view of this filter — the five fields the two filter
+    /// shapes share (time / device / model / source). The unknown bucket's
+    /// direct read goes through the SAME usage-grain assembly as every other
+    /// usage read (`push_usage_facets`), which takes the `UsageFilter` shape;
+    /// this and the reverse [`UsageFilter::to_session_grain`] are the one
+    /// seam between the two grains. 字段穷举而非 `..Default::default()`：
+    /// 给 `UsageFilter` 新增字段会让这个字面量编译失败——漏接未知桶在
+    /// 这里被编译器拦下，而不是静默漂移。`project` 恒 `None`：桶的
+    /// 「项目」就是其 NOT EXISTS 定义，不是一层筛选；known 桶的项目语义
+    /// 归 build_session_where。
+    pub fn to_usage_grain(&self) -> UsageFilter {
+        UsageFilter {
+            from_ts: self.from_ts.clone(),
+            to_ts: self.to_ts.clone(),
+            model: self.model.clone(),
+            source: self.source.clone(),
+            device_scope: self.device_scope.clone(),
+            project: None,
+        }
+    }
 }
 
 /// Paged session-list query — mirrors `LogsQuery` (filter + limit + offset) so
@@ -402,7 +352,7 @@ pub struct SessionGroupCounts {
 /// a Claude Code worktree session and its usage land under the PARENT project,
 /// never as a one-session bucket of their own.
 ///
-/// One SYNTHETIC row may carry the [`UNKNOWN_PROJECT`] sentinel as its key
+/// One SYNTHETIC row may carry the [`UNKNOWN_PROJECT`](crate::model::UNKNOWN_PROJECT) sentinel as its key
 /// instead: the aggregate over usage with no session row (remote usage whose
 /// favorite snapshot was never pulled, session-less legacy rows). Its
 /// `session_count` is 0 by definition (no session rows exist) and its
@@ -411,7 +361,7 @@ pub struct SessionGroupCounts {
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, specta::Type)]
 pub struct ProjectStatsRow {
     /// Project identity — the bucket key the filter's `project` matches. One
-    /// synthetic row can carry the [`UNKNOWN_PROJECT`] sentinel instead: the
+    /// synthetic row can carry the [`UNKNOWN_PROJECT`](crate::model::UNKNOWN_PROJECT) sentinel instead: the
     /// aggregate over session-less usage (see `Store::query_project_stats`).
     pub project_dir: String,
     /// Sessions in the bucket. Same grain as the session list: one row per
@@ -539,69 +489,4 @@ pub struct SyncedGroup {
     /// files lack the field — `default_group_position` (MAX) sorts them last.
     #[serde(default = "default_group_position")]
     pub position: u32,
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    // ---- project_identity: worktree suffix collapses to the parent project ----
-
-    #[test]
-    fn project_identity_collapses_windows_worktree_suffix() {
-        // The real-world shape this rule was derived from (issue #84): a
-        // subagent/parallel session launched in a Claude Code worktree.
-        assert_eq!(
-            project_identity("D:\\Project\\O_CC_One\\.claude\\worktrees\\agent-a10c476b"),
-            "D:\\Project\\O_CC_One"
-        );
-    }
-
-    #[test]
-    fn project_identity_collapses_unix_worktree_suffix() {
-        // A Unix peer's cwd lands in the same cross-device store.
-        assert_eq!(
-            project_identity("/home/me/proj/.claude/worktrees/agent-ff"),
-            "/home/me/proj"
-        );
-    }
-
-    #[test]
-    fn project_identity_no_worktree_segment_is_unchanged() {
-        // Ordinary launch dirs — including a project that merely CONTAINS a
-        // `.claude` dir (without the `worktrees` child) — pass through.
-        assert_eq!(
-            project_identity("D:\\Project\\O_CC_One"),
-            "D:\\Project\\O_CC_One"
-        );
-        assert_eq!(project_identity("/home/me/proj"), "/home/me/proj");
-        assert_eq!(project_identity("D:\\foo\\.claude"), "D:\\foo\\.claude");
-        // A directory whose name merely ends in `.claude` is NOT the segment.
-        assert_eq!(
-            project_identity("D:\\foo\\my.claude\\worktrees\\x"),
-            "D:\\foo\\my.claude\\worktrees\\x"
-        );
-        assert_eq!(project_identity(""), "");
-    }
-
-    #[test]
-    fn project_identity_empty_parent_keeps_raw_form() {
-        // A bare relative worktree path would truncate to nothing; keeping the
-        // raw string avoids degrading the row to the empty no-project bucket.
-        assert_eq!(
-            project_identity(".claude\\worktrees\\agent-x"),
-            ".claude\\worktrees\\agent-x"
-        );
-    }
-
-    #[test]
-    fn project_identity_trailing_separator_and_nested_forms() {
-        // Trailing separator: the tail empty component changes nothing.
-        assert_eq!(project_identity("/p/.claude/worktrees/agent-x/"), "/p");
-        // First segment wins when (pathologically) two appear.
-        assert_eq!(
-            project_identity("/p/.claude/worktrees/x/.claude/worktrees/y"),
-            "/p"
-        );
-    }
 }

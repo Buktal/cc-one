@@ -7,6 +7,8 @@ use std::str::FromStr;
 
 use rust_decimal::Decimal;
 
+use super::session::SessionFilter;
+
 // ---- Token / tool sub-structures (shared by internal record + DTOs) ----
 
 /// Token four-pack (per-call). `u32` across the boundary.
@@ -435,6 +437,33 @@ pub struct UsageFilter {
     /// no constraint. Also applied to the per-turn aggregates in `UsageStats`
     /// (`turn_durations` carries `session_id`).
     pub project: Option<String>,
+}
+
+impl UsageFilter {
+    /// The session-grain view of this filter — the same five shared fields
+    /// (time / device / model / source) that [`SessionFilter::to_usage_grain`]
+    /// carries the other way; the reverse of the one seam between the two
+    /// grains. `project` is dropped: the distinct-projects facet read uses this
+    /// to narrow candidates by every OTHER dimension — the project facet being
+    /// listed IS the query's product, so it must not constrain its own
+    /// candidates. 字段穷举而非 `..Default::default()`：给 `SessionFilter`
+    /// 新增字段会让这个字面量编译失败——第六个共享 facet 若不在两个方向
+    /// 同时接线，在这里被编译器拦下（此前 `..Default::default()` 会让项目
+    /// 下拉候选静默漏收窄），而不是静默漂移。
+    pub fn to_session_grain(&self) -> SessionFilter {
+        SessionFilter {
+            from_ts: self.from_ts.clone(),
+            to_ts: self.to_ts.clone(),
+            model: self.model.clone(),
+            source: self.source.clone(),
+            device_scope: self.device_scope.clone(),
+            favorited: None,
+            local_group_id: None,
+            synced_group_id: None,
+            project: None,
+            search: None,
+        }
+    }
 }
 
 /// Query params for the request-log endpoint (adds paging to `UsageFilter`).

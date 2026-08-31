@@ -72,6 +72,12 @@ pub(crate) enum Emit<'a> {
 /// 按 `label` 归因成 `AppError::Internal`；工作成功后才发 `Emit` 声明的失效
 /// 事件（失败不发——前端缓存不被半成品写污染）。新写命令不得再手抄
 /// `spawn_blocking` + map_err，更不得绕过本入口在别处 emit。
+///
+/// 明示例外（唯一一处）：config.json 的写盘是同目录 temp+rename 的小文件
+/// 原子写（收口在 [`crate::config::ConfigStore`]），属主线程可承担的轻 IO——
+/// 偏好类同步命令在主线程直调 `ConfigStore::update` 不算违约。该例外由
+/// ConfigStore 单点拥有（config.json 的读写都收在它一处），除它之外的任何
+/// 文件写仍是重活，必须走本入口离开主线程。
 pub(crate) async fn run_blocking<T, F>(label: &str, emit: Emit<'_>, f: F) -> AppResult<T>
 where
     T: Send + 'static,
