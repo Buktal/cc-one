@@ -5,6 +5,19 @@ All notable changes to cc one are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.1.0] - 2026-09-01
+
+### Added
+
+- **Usage trends restacked into an area group + a daily-cost card** — the four-bucket line chart becomes a stacked area group (bucket-colored fills, shared stack, per-bucket legend show/hide kept) with an absolute/share capsule toggle on the card. Share mode pins the Y axis to 0–100%, drops hidden buckets from the denominator, reads tooltip rows as "share · absolute", and shows the day's absolute total and cost in the footer. A new daily-cost card plots per-day total cost as top-labeled bars (label density capped at 14) under a permanent "list-price estimate" note; both charts read the same trend cache — zero extra queries. (#119)
+- **Contribution calendar + "Last year" preset** — a calendar-heatmap card: Monday-first week grid on a five-level neutral ink scale (quartile cuts over non-zero days, so any magnitude stays five-level readable), month/weekday labels from the dayjs locale, per-cell native-title readings; the span stretches with the global filter window (wide windows scroll horizontally) and clicking a cell narrows the window to that day. The new "Last year" preset is dynamic (`today − 364d`, never frozen into the query) and lands on all three pages' date-range chips. (#119)
+- **KPI sparklines + semicircle composition charts** — the requests / cache-hit / cost / tokens KPI cells each gain a trailing sparkline (hand-drawn SVG with an accent end dot, following the global filter's day-by-day / hour-by-hour granularity; the hit-rate formula is single-sourced into `lib/token-buckets`, shared with the sessions page). Session turns and request durations upgrade from progress bars to 180° semicircle composition charts (joined arc segments + ring-center total + precise readings on the right). (#119)
+- **Dimension cards completed + most-expensive-sessions Top-N** — the sessions Top-N card gains a tokens/cost metric switch (the cost setting is "most expensive sessions", ranked like ccusage's session report) and Top rows carry cost / request count / four-bucket breakdowns; model rows gain request counts, project rows gain cache-hit rate (suppressed when there was no cache activity), device rows gain cost. (#119)
+
+### Changed
+
+- **Cost caliber labeled everywhere** — every cost figure now carries a permanent "list-price estimate" note (same estimation family as ccusage calculate / Claude Code's local estimate): the hero footer, project / device / session inline cost segments, the KPI cost cell, and the trend tooltip's cost row, with the KPI total-cost label updated to match. (#119)
+
 ## [2.0.3] - 2026-08-28
 
 ### Added
@@ -313,6 +326,9 @@ First public, open-source release.
 - **macOS**: Apple Silicon (arm64) only; builds are unsigned — right-click → **Open** on first launch (or `xattr -dr com.apple.quarantine /Applications/cc one.app`). Intel Mac users can build from source.
 - **Providers**: Claude Code only; additional providers (Codex, Cursor, …) are planned.
 
+[2.1.0]: https://github.com/Buktal/cc-one/releases/tag/v2.1.0
+[2.0.3]: https://github.com/Buktal/cc-one/releases/tag/v2.0.3
+[2.0.2]: https://github.com/Buktal/cc-one/releases/tag/v2.0.2
 [2.0.1]: https://github.com/Buktal/cc-one/releases/tag/v2.0.1
 [2.0.0]: https://github.com/Buktal/cc-one/releases/tag/v2.0.0
 [1.8.0]: https://github.com/Buktal/cc-one/releases/tag/v1.8.0

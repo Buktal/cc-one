@@ -4,6 +4,19 @@ cc one 的所有显著变更记录于此。
 
 格式基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，并遵循[语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [2.1.0] - 2026-09-01
+
+### 新增
+
+- **趋势区改版为堆叠面积组 + 每日成本卡** —— 四桶折线升级为堆叠面积组（桶色填充、共享 stack、图例逐桶显隐保留），卡头加绝对值/占比胶囊开关；占比模式 Y 轴钉 0–100%、隐藏桶从分母剔除、tooltip 行读「占比 · 绝对量」并在合计行显当日绝对总量与成本。新增每日成本卡，逐日总成本画成顶标数柱（顶标密度上限 14 根），卡头常驻「标价估算」口径注；两卡共用同一条趋势缓存，零额外请求。(#119)
+- **贡献图（日历热力）+「近一年」预设** —— 新增日历热力卡：周一打头的周历格子，中性墨阶五档色（按非零日四分位切档，任何量级保持五档可辨），月标/周几行标随 dayjs locale，逐格原生 title 读数；跨度随全局筛选窗口伸缩（宽窗横向滚动），点击一格 = 窗口收窄到该日。新增「近一年」预设，from = 今天−364 天动态计算不冻结日期，三页日期预设表同步生效。(#119)
+- **KPI 格尾 Sparkline + 半环构成图** —— 请求、命中率、成本、Token 四格各配尾线（自绘 SVG + accent 端点，随全局筛选取逐日/逐小时粒度；命中率公式提升 `lib/token-buckets` 单源，与 sessions 页共用）；会话轮次四档与请求时长四档从进度条升级为 180° 半环构成图（弧段相接 + 环心合计 + 右侧精确读数）。(#119)
+- **维度卡字段补全 + 最贵会话 Top-N** —— 会话 Top-N 卡加 tokens/cost 指标开关（cost 档即「最贵会话」，排序口径沿 ccusage session 报表），Top 行携带成本/请求数/四桶分项；模型行 sub 补请求数、项目行 sub 补命中率（无缓存活动不渲染）、设备行 sub 补成本。(#119)
+
+### 变更
+
+- **成本口径标注常驻** —— 所有成本数字旁常驻「标价估算」口径注（与 ccusage calculate / Claude Code 本地估算同类）：hero 底行、项目/设备/会话行内成本段、KPI 成本格、趋势 tooltip 成本行一并标注，KPI 总成本标签随之更新。(#119)
+
 ## [2.0.3] - 2026-08-28
 
 ### 新增
@@ -311,6 +324,9 @@ cc one 的所有显著变更记录于此。
 - **macOS**：仅 Apple Silicon（arm64）；构建未签名——首次启动右键 →「打开」（或 `xattr -dr com.apple.quarantine /Applications/cc one.app`）。Intel Mac 用户可从源码构建。
 - **Provider**：当前仅 Claude Code；更多 provider（Codex、Cursor 等）规划中。
 
+[2.1.0]: https://github.com/Buktal/cc-one/releases/tag/v2.1.0
+[2.0.3]: https://github.com/Buktal/cc-one/releases/tag/v2.0.3
+[2.0.2]: https://github.com/Buktal/cc-one/releases/tag/v2.0.2
 [2.0.1]: https://github.com/Buktal/cc-one/releases/tag/v2.0.1
 [2.0.0]: https://github.com/Buktal/cc-one/releases/tag/v2.0.0
 [1.8.0]: https://github.com/Buktal/cc-one/releases/tag/v1.8.0
