@@ -8,13 +8,13 @@
 import dayjs from "dayjs"
 
 /**
- * Time-range preset. The dynamic ones (today / 7d / 30d) are the
+ * Time-range preset. The dynamic ones (today / 7d / 30d / 1y) are the
  * source of truth — their day bounds are recomputed on every query, so "today"
  * stays today even across midnight (a dynamic preset never stores a concrete
  * date). "all" means no bounds; "custom" keeps the user-picked from_day /
  * to_day verbatim.
  */
-export type Preset = "today" | "7d" | "30d" | "all" | "custom"
+export type Preset = "today" | "7d" | "30d" | "1y" | "all" | "custom"
 
 /** The time-range half of a filter state: preset + stored day bounds. */
 export interface DayRange {
@@ -38,25 +38,30 @@ export function presetDays(p: Preset): Pick<DayRange, "from_day" | "to_day"> {
       return { from_day: dayStr(-6), to_day: dayStr() }
     case "30d":
       return { from_day: dayStr(-29), to_day: dayStr() }
+    case "1y":
+      // 364 天回看 = 含今天的 365 天窗口（贡献图「近一年」档的唯一前置，
+      // 也随三页共享对所有时间形态读生效）。
+      return { from_day: dayStr(-364), to_day: dayStr() }
     default:
       return { from_day: "", to_day: "" }
   }
 }
 
-/** The EFFECTIVE day bounds for a filter: a dynamic preset (today / 7d / 30d)
- *  is recomputed on the spot (it stores no concrete date), so it always means
- *  the current day window at query time regardless of when it was picked.
- *  "all" / "custom" return the stored values verbatim — "all" stores empty
- *  bounds, "custom" keeps the user-picked days. Single place that answers
- *  "what days does this filter mean", shared by the endpoint queryFns and the
- *  DateRangeChip display. */
+/** The EFFECTIVE day bounds for a filter: a dynamic preset (today / 7d /
+ *  30d / 1y) is recomputed on the spot (it stores no concrete date), so it
+ *  always means the current day window at query time regardless of when it
+ *  was picked. "all" / "custom" return the stored values verbatim — "all"
+ *  stores empty bounds, "custom" keeps the user-picked days. Single place
+ *  that answers "what days does this filter mean", shared by the endpoint
+ *  queryFns and the DateRangeChip display. */
 export function effectiveDays(
   f: Pick<DayRange, "range_preset" | "from_day" | "to_day">,
 ): Pick<DayRange, "from_day" | "to_day"> {
   if (
     f.range_preset === "today" ||
     f.range_preset === "7d" ||
-    f.range_preset === "30d"
+    f.range_preset === "30d" ||
+    f.range_preset === "1y"
   ) {
     return presetDays(f.range_preset)
   }

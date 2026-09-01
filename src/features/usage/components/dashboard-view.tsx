@@ -13,10 +13,15 @@ import { RotateCcw } from "lucide-react"
 import { useEffect, useRef, useState } from "react"
 import { useTranslation } from "react-i18next"
 import { useAppDispatch, useAppSelector } from "@/app/store/hooks"
-import { patchFilter, resetFilter } from "@/app/store/slices/filterSlice"
+import {
+  dayRangePatch,
+  patchFilter,
+  resetFilter,
+} from "@/app/store/slices/filterSlice"
 import { Button } from "@/components/ui/button"
 import { cn } from "@/lib/utils"
 import { useSectionScroll } from "../use-section-scroll"
+import { CalendarHeatmap } from "./calendar-heatmap"
 import { ControlBar } from "./control-bar"
 import { DailyCostChart } from "./daily-cost-chart"
 import { DeviceSection } from "./device-section"
@@ -159,6 +164,14 @@ export function DashboardView() {
               都是宽形，窄窗下随筛选自然退化）。四分区重组留待后期。 */}
           <div className="min-[1080px]:col-span-12">
             <DailyCostChart filter={filter} />
+          </div>
+          <div className="min-[1080px]:col-span-12">
+            <CalendarHeatmap
+              filter={filter}
+              onPickDay={(day) =>
+                dispatch(patchFilter(dayRangePatch(day, day)))
+              }
+            />
           </div>
         </div>
       </Section>

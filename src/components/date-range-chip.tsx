@@ -52,6 +52,7 @@ const PRESETS: DateRangePreset[] = [
   { value: "today", key: "usage.control.today" },
   { value: "7d", key: "usage.control.last7d" },
   { value: "30d", key: "usage.control.last30d" },
+  { value: "1y", key: "usage.control.last1y" },
   { value: "all", key: "usage.control.all" },
 ]
 

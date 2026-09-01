@@ -85,6 +85,16 @@ export function dayPatch(
   return { range_preset: "custom", [field]: day }
 }
 
+/** 双日同时写入的切片补丁（#119 贡献图格点击的词汇表：点一格 = 窗口收窄
+ *  到该日，from = to = 该日）。dayPatch 一次只能写一个 day 字段，二次写入
+ *  会落成半开的 custom 窗口——单点语义需要 from/to 原子成对。 */
+export function dayRangePatch(
+  from_day: string,
+  to_day: string,
+): Partial<FilterState> {
+  return { range_preset: "custom", from_day, to_day }
+}
+
 /** Convert internal FilterState (empty = no constraint) → API UsageFilter (null).
  *  Date bounds are derived via effectiveDays: a dynamic preset (today/7d/30d)
  *  re-rolls to the current day on every call, so the caller (an endpoint

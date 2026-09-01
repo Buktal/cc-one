@@ -34,6 +34,14 @@ describe("effectiveDays", () => {
     })
   })
 
+  it("recomputes the 1y preset to a 365-day window ending today", () => {
+    const f1y = base({ range_preset: "1y", from_day: "1999-01-01" })
+    expect(effectiveDays(f1y)).toEqual({
+      from_day: dayStr(-364),
+      to_day: dayStr(),
+    })
+  })
+
   it("returns stored bounds verbatim for all / custom", () => {
     // "all" stores empty bounds; "custom" keeps the user-picked days.
     expect(effectiveDays(base({ range_preset: "all" }))).toEqual({
