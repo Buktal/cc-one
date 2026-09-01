@@ -77,6 +77,9 @@ export function calendarCells(points: readonly TrendPoint[]): CalendarCell[] {
 
 /** One hour-matrix cell: a single local hour of one day. */
 export interface HourMatrixCell {
+  /** Local ISO day `YYYY-MM-DD` — the row's day, denormalized onto each cell
+   *  so every cell satisfies HeatCellData (title line + pick-day click). */
+  day: string
   /** 0–23, parsed from the Hour bucket key `YYYY-MM-DDTHH`. */
   hour: number
   tokens: number
@@ -114,6 +117,7 @@ export function hourMatrixRows(points: readonly TrendPoint[]): HourMatrixRow[] {
       rows.push(cur)
     }
     cur.cells.push({
+      day,
       hour: Number(p.day.slice(11, 13)),
       tokens: Number(p.total_tokens),
       requests: Number(p.request_count),

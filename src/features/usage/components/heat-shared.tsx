@@ -37,6 +37,7 @@ export function HeatCell({
   cell: HeatCellData
   selected?: boolean
   onPickDay: (day: string) => void
+  showDayMark?: boolean
   className?: string
 }) {
   const { t } = useTranslation()
