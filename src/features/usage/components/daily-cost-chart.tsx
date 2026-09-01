@@ -55,9 +55,14 @@ export function DailyCostChart({ filter }: { filter: FilterState }) {
   const tickInterval = tickIntervalFor(bars.length)
 
   return (
-    <Card interactive>
+    <Card interactive className="h-full">
       <CardHeader>
-        <CardTitle>{t("usage.costDaily.title")}</CardTitle>
+        {/* 主标题跟桶粒度：单日窗口实为当日逐小时，标题不再写死「每日」。 */}
+        <CardTitle>
+          {hourly
+            ? t("usage.costDaily.todayTitle")
+            : t("usage.costDaily.title")}
+        </CardTitle>
         <CardAction>
           <span className="text-muted-foreground text-xs tabular-nums">
             {t("usage.caliber.priceEstimate")}
@@ -68,7 +73,8 @@ export function DailyCostChart({ filter }: { filter: FilterState }) {
           </span>
         </CardAction>
       </CardHeader>
-      <CardContent>
+      {/* flex-1 + 居中：与每日请求卡同行配平（卡随行拉伸，图区居中）。 */}
+      <CardContent className="flex flex-1 flex-col justify-center">
         <QueryState
           isLoading={isLoading}
           error={error}

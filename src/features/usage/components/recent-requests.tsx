@@ -1,7 +1,6 @@
-// RecentRequests — dashboard middle-column footer. Latest N request
-// rows as a compact list + a "全部 →" link into the logs view. Doubles as a
-// height-filler so the middle column tracks the right column, and as a quick
-// path from the dashboard into the full ledger. Polls with the shared interval.
+// RecentRequests — dashboard footer. Latest N request rows as a compact
+// list + a "全部 →" link into the logs view: the quick path from the
+// dashboard into the full ledger. Polls with the shared interval.
 
 import { ArrowRight } from "lucide-react"
 import { useTranslation } from "react-i18next"

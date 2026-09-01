@@ -86,9 +86,10 @@ export function dayRangeToTs(
 }
 
 /** 单日窗口判定：时间戳范围落在同一个本地日 → 趋势按小时分桶，否则按天。
- *  request-section / usage-trend-chart / use-token-snapshot 三处共用此一谓词
- *  （曾各抄一遍 isSame("day")、注释互指）。跨时区语义：UTC+8 的「今天」映射成
- *  仍属同一本地日的 24h UTC 窗口，isSame("day") 在本地日上判定即正确命中。 */
+ *  daily-request-chart / usage-trend-chart / use-token-snapshot 等处共用此一
+ *  谓词（曾各抄一遍 isSame("day")、注释互指）。跨时区语义：UTC+8 的「今天」
+ *  映射成仍属同一本地日的 24h UTC 窗口，isSame("day") 在本地日上判定即正确
+ *  命中。 */
 export function sameDayWindow(
   fromTs?: string | null,
   toTs?: string | null,

@@ -2,7 +2,9 @@ import dayjs from "dayjs"
 import { describe, expect, it } from "vitest"
 
 import {
+  cumulativeTrend,
   shareStackTrend,
+  zeroFillDailyTrend,
   zeroFillTrend,
   zeroTrendPoint,
 } from "@/features/usage/derive-trend"
@@ -37,12 +39,17 @@ function bucketTrend(day: string, buckets: [number, number, number, number]) {
 describe("zeroFillTrend", () => {
   it("returns input unchanged when empty (caller keeps its empty state)", () => {
     const now = dayjs("2026-07-30T15:30")
-    expect(zeroFillTrend([], now, now)).toEqual([])
+    expect(zeroFillTrend([], now, now, now)).toEqual([])
   })
 
   it("pads 00:00 → current hour for today, preserving real records", () => {
     const now = dayjs("2026-07-30T15:30")
-    const filled = zeroFillTrend([trend("2026-07-30T15", 999)], now, now)
+    const filled = zeroFillTrend(
+      [trend("2026-07-30T15", 999)],
+      now.startOf("day"),
+      now,
+      now,
+    )
     // 00:00 … 15:00 inclusive = 16 buckets.
     expect(filled).toHaveLength(16)
     expect(filled[0].day).toBe("2026-07-30T00")
@@ -53,7 +60,12 @@ describe("zeroFillTrend", () => {
 
   it("fills every gap with a zero point of the right shape", () => {
     const now = dayjs("2026-07-30T02:30")
-    const filled = zeroFillTrend([trend("2026-07-30T02", 5)], now, now)
+    const filled = zeroFillTrend(
+      [trend("2026-07-30T02", 5)],
+      now.startOf("day"),
+      now,
+      now,
+    )
     expect(filled).toHaveLength(3)
     expect(filled[0]).toEqual(zeroTrendPoint("2026-07-30T00"))
   })
@@ -64,7 +76,12 @@ describe("zeroFillTrend", () => {
     // real records never matched, collapsing the chart to a flat zero line.
     const target = dayjs("2026-07-30T15:30")
     const now = dayjs("2026-07-31T10:00")
-    const filled = zeroFillTrend([trend("2026-07-30T15", 999)], target, now)
+    const filled = zeroFillTrend(
+      [trend("2026-07-30T15", 999)],
+      target.startOf("day"),
+      target.endOf("day"),
+      now,
+    )
     // 00:00 … 23:00 = 24 buckets.
     expect(filled).toHaveLength(24)
     expect(filled[0].day).toBe("2026-07-30T00")
@@ -72,6 +89,59 @@ describe("zeroFillTrend", () => {
     expect(filled[23].day).toBe("2026-07-30T23")
     expect(filled[15].day).toBe("2026-07-30T15")
     expect(filled[15].total_tokens).toBe(999)
+  })
+
+  it("spans a short multi-day window day by day (the calendar's hour matrix)", () => {
+    // from 7-30T00 to 7-31T23 with now on 8-02 → two full days = 48 buckets;
+    // the real record on day 2 keeps its slot.
+    const now = dayjs("2026-08-02T10:00")
+    const filled = zeroFillTrend(
+      [trend("2026-07-31T13", 42)],
+      dayjs("2026-07-30T00:00"),
+      dayjs("2026-07-31T23:59"),
+      now,
+    )
+    expect(filled).toHaveLength(48)
+    expect(filled[0].day).toBe("2026-07-30T00")
+    expect(filled[37]).toMatchObject({ day: "2026-07-31T13", total_tokens: 42 })
+    expect(filled[47].day).toBe("2026-07-31T23")
+  })
+})
+
+describe("zeroFillDailyTrend", () => {
+  it("returns input unchanged when empty (caller keeps its empty state)", () => {
+    const now = dayjs("2026-08-16T10:00")
+    expect(zeroFillDailyTrend([], now, now, now)).toEqual([])
+  })
+
+  it("fills missing days so calendar cells keep their true weekday slot", () => {
+    // Records on Mon 08-10 and Sun 08-16 only: without the fill the five
+    // recordless days would collapse and later records would drift into
+    // wrong weekday columns. 08-12 (Wed) keeps index 2 of the full week.
+    const filled = zeroFillDailyTrend(
+      [trend("2026-08-10", 7), trend("2026-08-12", 5), trend("2026-08-16", 9)],
+      dayjs("2026-08-10T00:00"),
+      dayjs("2026-08-16T23:59"),
+      dayjs("2026-09-01T10:00"),
+    )
+    expect(filled).toHaveLength(7)
+    expect(filled[0]).toMatchObject({ day: "2026-08-10", total_tokens: 7 })
+    expect(filled[1].day).toBe("2026-08-11")
+    expect(filled[1].total_tokens).toBe(0)
+    expect(filled[2]).toMatchObject({ day: "2026-08-12", total_tokens: 5 })
+    expect(filled[6]).toMatchObject({ day: "2026-08-16", total_tokens: 9 })
+  })
+
+  it("keeps today as a full day cell (no hour truncation on the day step)", () => {
+    const now = dayjs("2026-08-16T10:00")
+    const filled = zeroFillDailyTrend(
+      [trend("2026-08-15", 3)],
+      dayjs("2026-08-15T00:00"),
+      now,
+      now,
+    )
+    expect(filled).toHaveLength(2)
+    expect(filled[1]).toMatchObject({ day: "2026-08-16", total_tokens: 0 })
   })
 })
 
@@ -145,5 +215,26 @@ describe("shareStackTrend", () => {
 
   it("passes an empty series through as an empty series", () => {
     expect(shareStackTrend([])).toEqual([])
+  })
+})
+
+describe("cumulativeTrend", () => {
+  it("prefix-sums total_tokens and keeps the source point shape", () => {
+    const out = cumulativeTrend([
+      trend("2026-08-01", 10),
+      trend("2026-08-02", 0),
+      trend("2026-08-03", 30),
+    ])
+    expect(out.map((p) => [p.day, p.cum])).toEqual([
+      ["2026-08-01", 10],
+      ["2026-08-02", 10],
+      ["2026-08-03", 40],
+    ])
+    // 结构超集：当日增量读 total_tokens（与源点同字段同义）。
+    expect(out[2].total_tokens).toBe(30)
+  })
+
+  it("passes an empty series through as an empty series", () => {
+    expect(cumulativeTrend([])).toEqual([])
   })
 })

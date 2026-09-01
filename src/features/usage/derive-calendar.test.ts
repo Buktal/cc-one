@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest"
 
-import { calendarCells } from "@/features/usage/derive-rhythm"
+import { calendarCells, hourMatrixRows } from "@/features/usage/derive-calendar"
 
 import type { TrendPoint } from "@/types/generated/bindings"
 
@@ -20,6 +20,11 @@ function dayTrend(
     request_count: 0,
     ...extra,
   }
+}
+
+/** Hour-bucket point (`day` = `YYYY-MM-DDTHH`). */
+function hourTrend(day: string, total: number): TrendPoint {
+  return dayTrend(day, total)
 }
 
 // 2026-08-10 is a Monday — the ideal grid anchor.
@@ -86,5 +91,60 @@ describe("calendarCells", () => {
     expect(cell.requests).toBe(7)
     expect(cell.cost).toBeCloseTo(1.25)
     expect(cell.tokens).toBe(100)
+  })
+})
+
+describe("hourMatrixRows", () => {
+  it("returns empty for an empty window", () => {
+    expect(hourMatrixRows([])).toEqual([])
+  })
+
+  it("groups a zero-filled day into one row of 24 ascending hours", () => {
+    const points = Array.from({ length: 24 }, (_, h) =>
+      hourTrend(`2026-08-31T${String(h).padStart(2, "0")}`, h * 10),
+    )
+    const rows = hourMatrixRows(points)
+    expect(rows).toHaveLength(1)
+    expect(rows[0].day).toBe("2026-08-31")
+    expect(rows[0].cells).toHaveLength(24)
+    expect(rows[0].cells.map((c) => c.hour)).toEqual(
+      Array.from({ length: 24 }, (_, h) => h),
+    )
+  })
+
+  it("splits multi-day windows into one row per day", () => {
+    const rows = hourMatrixRows([
+      hourTrend("2026-08-30T22", 5),
+      hourTrend("2026-08-30T23", 5),
+      hourTrend("2026-08-31T00", 5),
+    ])
+    expect(rows.map((r) => r.day)).toEqual(["2026-08-30", "2026-08-31"])
+    expect(rows[0].cells).toHaveLength(2)
+    expect(rows[1].cells).toHaveLength(1)
+  })
+
+  it("levels by quartile of the NON-ZERO hours (same scale as the week calendar)", () => {
+    // Non-zero values: 10, 20, 30, 40, 50 → thresholds 20/30/40.
+    const values = [0, 10, 20, 30, 40, 50]
+    const rows = hourMatrixRows(
+      values.map((v, h) => hourTrend(`2026-08-31T0${h}`, v)),
+    )
+    expect(rows[0].cells.map((c) => c.level)).toEqual([0, 1, 1, 2, 3, 4])
+  })
+
+  it("carries requests and cost through per cell", () => {
+    const rows = hourMatrixRows(
+      [hourTrend("2026-08-31T08", 100)].map((p) => ({
+        ...p,
+        request_count: 3,
+        total_cost_usd: 0.5,
+      })),
+    )
+    expect(rows[0].cells[0]).toMatchObject({
+      hour: 8,
+      tokens: 100,
+      requests: 3,
+    })
+    expect(rows[0].cells[0].cost).toBeCloseTo(0.5)
   })
 })

@@ -187,7 +187,9 @@ export const commands = {
 	readLibraryText: (relPath: string) => typedError<string | null, AppError>(__TAURI_INVOKE("read_library_text", { relPath })),
 	/**
 	 *  File/folder counts for one device's library subtree — used by the
-	 *  forget-device dialog to show what would be migrated or deleted.
+	 *  forget-device dialog to show what would be migrated or deleted. Path
+	 *  safety lives in [`library::device_summary`] (the `device_subdir` gate);
+	 *  this command stays a thin typed shell over it.
 	 */
 	libraryDeviceSummary: (deviceId: string) => typedError<DeviceLibrarySummary, AppError>(__TAURI_INVOKE("library_device_summary", { deviceId })),
 	querySessionsCmd: (query: SessionQuery) => typedError<SessionRow[], AppError>(__TAURI_INVOKE("query_sessions_cmd", { query })),
@@ -212,7 +214,7 @@ export const commands = {
 	 *  launch dir: the comparison runs through the `project_identity` SQL
 	 *  scalar, so a Claude Code worktree session (`<proj>\.claude\worktrees\…`)
 	 *  matches its parent project's bucket. Same rule the project aggregate
-	 *  groups by. The [`UNKNOWN_PROJECT`] sentinel matches sessions whose
+	 *  groups by. The [`UNKNOWN_PROJECT`](crate::model::UNKNOWN_PROJECT) sentinel matches sessions whose
 	 *  identity is EMPTY (a session row exists but carries no launch dir) —
 	 *  the sessions-side face of the unknown bucket; the usage-side face
 	 *  (session-less usage, NOT EXISTS) lives on `UsageFilter.project`.
@@ -263,7 +265,7 @@ export const commands = {
 	 *  launch dir: the comparison runs through the `project_identity` SQL
 	 *  scalar, so a Claude Code worktree session (`<proj>\.claude\worktrees\…`)
 	 *  matches its parent project's bucket. Same rule the project aggregate
-	 *  groups by. The [`UNKNOWN_PROJECT`] sentinel matches sessions whose
+	 *  groups by. The [`UNKNOWN_PROJECT`](crate::model::UNKNOWN_PROJECT) sentinel matches sessions whose
 	 *  identity is EMPTY (a session row exists but carries no launch dir) —
 	 *  the sessions-side face of the unknown bucket; the usage-side face
 	 *  (session-less usage, NOT EXISTS) lives on `UsageFilter.project`.
@@ -313,7 +315,7 @@ export const commands = {
 	 *  launch dir: the comparison runs through the `project_identity` SQL
 	 *  scalar, so a Claude Code worktree session (`<proj>\.claude\worktrees\…`)
 	 *  matches its parent project's bucket. Same rule the project aggregate
-	 *  groups by. The [`UNKNOWN_PROJECT`] sentinel matches sessions whose
+	 *  groups by. The [`UNKNOWN_PROJECT`](crate::model::UNKNOWN_PROJECT) sentinel matches sessions whose
 	 *  identity is EMPTY (a session row exists but carries no launch dir) —
 	 *  the sessions-side face of the unknown bucket; the usage-side face
 	 *  (session-less usage, NOT EXISTS) lives on `UsageFilter.project`.
@@ -356,7 +358,8 @@ export const commands = {
 	/**
 	 *  Project identity for the project dimension — the stored launch
 	 *  directory with a Claude Code worktree suffix collapsed to its parent
-	 *  ([`project_identity`]). The raw launch dir stays in the `sessions` row
+	 *  ([`project_identity`](crate::model::project_identity)). The raw launch
+	 *  dir stays in the `sessions` row
 	 *  and the git snapshot; truncation is a read-side rule, so nothing is
 	 *  lost and no re-collect is needed for existing rows.
 	 */
@@ -414,8 +417,15 @@ export const commands = {
 	 *  Upsert a provider (empty id = create, non-empty = edit). Returns the
 	 *  persisted row so the caller learns the assigned id / sort position without
 	 *  a second read. The provider carries its `app` (the pool it belongs to).
+	 *  Light DB write → the main-thread track (`write_and_emit`); the emit rides
+	 *  the same call so the invalidation cannot drift from the write.
 	 */
 	saveProviderCmd: (provider: Provider) => typedError<Provider, AppError>(__TAURI_INVOKE("save_provider_cmd", { provider })),
+	/**
+	 *  删除供应商——薄壳：撤 live 半边（附加模式、已托管才撤）+ 删行的组合次序
+	 *  收在 `provider::activation::delete_provider`（「live 撤除成功才删行」不变量
+	 *  在那里表达并可测），本命令只剩 blocking 执行 + 失效信号。
+	 */
 	deleteProviderCmd: (app: App, id: string) => typedError<null, AppError>(__TAURI_INVOKE("delete_provider_cmd", { app, id })),
 	reorderProvidersCmd: (app: App, orderedIds: string[]) => typedError<null, AppError>(__TAURI_INVOKE("reorder_providers_cmd", { app, orderedIds })),
 	/**
@@ -996,7 +1006,7 @@ export type ProjectCandidates = {
  *  a Claude Code worktree session and its usage land under the PARENT project,
  *  never as a one-session bucket of their own.
  * 
- *  One SYNTHETIC row may carry the [`UNKNOWN_PROJECT`] sentinel as its key
+ *  One SYNTHETIC row may carry the [`UNKNOWN_PROJECT`](crate::model::UNKNOWN_PROJECT) sentinel as its key
  *  instead: the aggregate over usage with no session row (remote usage whose
  *  favorite snapshot was never pulled, session-less legacy rows). Its
  *  `session_count` is 0 by definition (no session rows exist) and its
@@ -1006,7 +1016,7 @@ export type ProjectCandidates = {
 export type ProjectStatsRow = {
 	/**
 	 *  Project identity — the bucket key the filter's `project` matches. One
-	 *  synthetic row can carry the [`UNKNOWN_PROJECT`] sentinel instead: the
+	 *  synthetic row can carry the [`UNKNOWN_PROJECT`](crate::model::UNKNOWN_PROJECT) sentinel instead: the
 	 *  aggregate over session-less usage (see `Store::query_project_stats`).
 	 */
 	project_dir: string,
@@ -1158,7 +1168,9 @@ export type ServerToolUse = {
 
 /**
  *  Optional filter for `query_sessions`. Every field optional; `None` = no
- *  constraint. Mirrors the shape of `UsageFilter` for the session list.
+ *  constraint. The shared-facet half mirrors `UsageFilter` exactly — the one
+ *  cross-grain mapping between the two shapes lives on
+ *  [`SessionFilter::to_usage_grain`] / [`UsageFilter::to_session_grain`].
  */
 export type SessionFilter = {
 	/**  Scope to one device (`None` = all devices). */
@@ -1176,7 +1188,7 @@ export type SessionFilter = {
 	 *  launch dir: the comparison runs through the `project_identity` SQL
 	 *  scalar, so a Claude Code worktree session (`<proj>\.claude\worktrees\…`)
 	 *  matches its parent project's bucket. Same rule the project aggregate
-	 *  groups by. The [`UNKNOWN_PROJECT`] sentinel matches sessions whose
+	 *  groups by. The [`UNKNOWN_PROJECT`](crate::model::UNKNOWN_PROJECT) sentinel matches sessions whose
 	 *  identity is EMPTY (a session row exists but carries no launch dir) —
 	 *  the sessions-side face of the unknown bucket; the usage-side face
 	 *  (session-less usage, NOT EXISTS) lives on `UsageFilter.project`.
@@ -1363,7 +1375,8 @@ export type SessionRow = {
 	/**
 	 *  Project identity for the project dimension — the stored launch
 	 *  directory with a Claude Code worktree suffix collapsed to its parent
-	 *  ([`project_identity`]). The raw launch dir stays in the `sessions` row
+	 *  ([`project_identity`](crate::model::project_identity)). The raw launch
+	 *  dir stays in the `sessions` row
 	 *  and the git snapshot; truncation is a read-side rule, so nothing is
 	 *  lost and no re-collect is needed for existing rows.
 	 */

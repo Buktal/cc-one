@@ -233,11 +233,6 @@
      皮肤块不写中性），也不借四桶色以免 token 语义串味。0 = 空格（GitHub
      NONE 档，在白卡上呈可辨的浅灰），1–4 = 数据四分位、亮色越深越热；
      取值沿 dashboard-v2 原型已校验的亮色墨阶。 */
-  --heat-0: #ececee;
-  --heat-1: #a9a9b1;
-  --heat-2: #7e7e88;
-  --heat-3: #54545e;
-  --heat-4: #2f2f36;
 }
 
 .dark {
@@ -312,11 +307,6 @@
   --metric-cost: #cd424d; /* 成本 — 朱红，比 output 深一档同 hue 区分 (3.6:1, KPI 大字) */
   /* 热力墨阶（暗色镜像，同 :root 注）：越亮越热；0 = 空格，比 card
      (#0d0d0f) 亮一档可辨。 */
-  --heat-0: #19191d;
-  --heat-1: #45454c;
-  --heat-2: #66666f;
-  --heat-3: #8f8f99;
-  --heat-4: #cfcfd6;
   --sidebar: #0d0d0f;
   --sidebar-foreground: #ffffff;
   --sidebar-primary: var(--brand);

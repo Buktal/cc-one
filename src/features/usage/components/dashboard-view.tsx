@@ -1,17 +1,27 @@
-// Dashboard view (#106) — 概览 (总消耗 + KPI 带 + 趋势 + 模型分布) → 设备 →
-// 项目 → 会话 → 请求 → 近期请求。分区不设标题横条：分区身份由吸顶 tabs
-// 承载 (编号 + scrollspy 高亮 + 底边进度线)，内容卡片自带各自的标题。
-// The shared filter bar (time / source / model / project / device + reset)
-// sits in flow above the sections — the same shape as the logs view's
-// header. Single frozen layer by design: only the tab bar sticks, so anchor
-// scroll margins and the scrollspy edge derive from its MEASURED height
-// (ResizeObserver — the bar can wrap at narrow widths), never a guessed
-// constant. Flat solid bg-card surface (index.css 平面铁律: no glass, no
-// backdrop-blur).
+// Dashboard view (#119 三期改版) — 单页流式看板，无分区导航：卡片自带标题、
+// 从上到下即阅读序，吸顶 tabs + scrollspy（原 01-06 分区跳转）随布局重排
+// 一并退役（use-section-scroll 无其他使用方，已删）。The shared filter bar
+// (time / source / model / project / device + reset) sits in flow at the top
+// — the same shape as the logs view's header.
+//
+// 网格按「读数叙事」分行（#119 四期：卡按语义归组，两组内部相邻不插花）：
+//   总量      TokenHero 4 + 趋势 8        —— 总量锚点与主趋势同屏
+//   指标      KPI 数字带 12               —— 紧凑一行九格
+//   日历      日历热力 12                 —— 独占整行（宽窗周历 53 列要满幅）
+//   维度排行  模型分布 4 + 会话排行 8     —— 第一组相邻，组内优先序
+//             项目排行 7 + 设备排行 5       模型 > 会话 > 项目 > 设备；
+//                                           设备仅多机注册表渲染（单机没有
+//                                           排行可读），单机项目独占整行
+//   时间分布  每日成本 6 + 每日请求 6     —— 第二组相邻：两张逐日柱
+//             轮次分布 6 + 时长分布 6     —— 两张四档半环（原 session/
+//                                            request 分区按卡语义拆散归组）
+//   明细      近期请求                    —— 页脚流水
+// Single frozen layer by design; flat solid bg-card surface (index.css 平面
+// 铁律: no glass, no backdrop-blur).
 
 import { RotateCcw } from "lucide-react"
-import { useEffect, useRef, useState } from "react"
 import { useTranslation } from "react-i18next"
+import { useDevicesQuery } from "@/app/store/api"
 import { useAppDispatch, useAppSelector } from "@/app/store/hooks"
 import {
   dayRangePatch,
@@ -19,113 +29,42 @@ import {
   resetFilter,
 } from "@/app/store/slices/filterSlice"
 import { Button } from "@/components/ui/button"
+import { CalendarHeatmap } from "@/features/usage/components/calendar-heatmap"
+import { ControlBar } from "@/features/usage/components/control-bar"
+import { DailyCostChart } from "@/features/usage/components/daily-cost-chart"
+import { DailyRequestChart } from "@/features/usage/components/daily-request-chart"
+import { DeviceSection } from "@/features/usage/components/device-section"
+import { DurationDistribution } from "@/features/usage/components/duration-distribution"
+import { KpiBand } from "@/features/usage/components/kpi-band"
+import { ModelDistribution } from "@/features/usage/components/model-distribution"
+import { ProjectSection } from "@/features/usage/components/project-section"
+import { RecentRequests } from "@/features/usage/components/recent-requests"
+import { SessionRanking } from "@/features/usage/components/session-ranking"
+import { TokenHero } from "@/features/usage/components/token-hero"
+import { TurnDistribution } from "@/features/usage/components/turn-distribution"
+import { UsageTrendChart } from "@/features/usage/components/usage-trend-chart"
+import { windowDayCount } from "@/features/usage/derive"
+import { effectiveDays } from "@/lib/date-range"
 import { cn } from "@/lib/utils"
-import { useSectionScroll } from "../use-section-scroll"
-import { CalendarHeatmap } from "./calendar-heatmap"
-import { ControlBar } from "./control-bar"
-import { DailyCostChart } from "./daily-cost-chart"
-import { DeviceSection } from "./device-section"
-import { KpiBand } from "./kpi-band"
-import { ModelDistribution } from "./model-distribution"
-import { ProjectSection } from "./project-section"
-import { RecentRequests } from "./recent-requests"
-import { RequestSection } from "./request-section"
-import { SessionSection } from "./session-section"
-import { TokenHero } from "./token-hero"
-import { UsageTrendChart } from "./usage-trend-chart"
-
-/** Section registry — tab order IS scroll order; ids anchor the spy + jumps.
- *  设备 leads the dimension sections (the #96 prototype's order). */
-const SECTIONS = [
-  { id: "dash-overview", key: "usage.sections.overview" },
-  { id: "dash-devices", key: "usage.sections.devices" },
-  { id: "dash-projects", key: "usage.sections.projects" },
-  { id: "dash-sessions", key: "usage.sections.sessions" },
-  { id: "dash-requests", key: "usage.sections.requests" },
-  { id: "dash-recent", key: "usage.sections.recent" },
-] as const
-const SECTION_IDS: readonly string[] = SECTIONS.map((s) => s.id)
 
 export function DashboardView() {
   const dispatch = useAppDispatch()
   const filter = useAppSelector((s) => s.filter.filter)
-  const rootRef = useRef<HTMLDivElement>(null)
-  const barRef = useRef<HTMLDivElement>(null)
-  // 吸顶栏实测高度（折行时变两行）。锚点 scroll-margin 与 scrollspy 边缘都
-  // 从它派生 —— 不变量「让位 ≥ 吸顶高度」由测量守住，不靠估计常量。
-  // 初值 48 = 单行形态（p-2 × 2 + 32px 内容），ResizeObserver 首帧即校正。
-  const [stickyBarH, setStickyBarH] = useState(48)
-  useEffect(() => {
-    const bar = barRef.current
-    if (!bar) return
-    const ro = new ResizeObserver(() => setStickyBarH(bar.offsetHeight))
-    ro.observe(bar)
-    return () => ro.disconnect()
-  }, [])
-  const { activeId, progress } = useSectionScroll(
-    rootRef,
-    SECTION_IDS,
-    stickyBarH,
-  )
   const { t } = useTranslation()
-
-  const jump = (id: string) => {
-    document.getElementById(id)?.scrollIntoView({
-      behavior: window.matchMedia("(prefers-reduced-motion: reduce)").matches
-        ? "auto"
-        : "smooth",
-    })
-  }
+  // 窗口日历天数是日历热力两形态（周历 / 小时矩阵）的同一事实来源（null
+  // = 无界窗口，如「全部」——恒走宽窗形态）。
+  const { from_day, to_day } = effectiveDays(filter)
+  const spanDays = windowDayCount(from_day, to_day)
+  // 「单机」判定走设备注册表（listDevices）台数，与 DeviceScopeControl /
+  // DeviceSection 的行可点判定同一口径：注册表 ≤1 台 = 无切换目标、无排行
+  // 可读，设备卡整个不渲染（而不是渲染一张空壳）。加载中按单机处理，
+  // 多机注册表就绪后卡片出现在页面尾部，不闪在首屏路径上。
+  const { data: devices = [] } = useDevicesQuery()
+  const multiDevice = devices.length > 1
 
   return (
-    <div
-      ref={rootRef}
-      className="mx-auto flex w-full max-w-[1380px] flex-col gap-3 pb-4"
-    >
-      {/* Sticky tabs — 吸顶只留 section tabs 单行（scrollspy 高亮 + 底边
-          进度线）。筛选不吸顶：与其他视图（日志页 / 会话工作台）一致，作
-          为页面顶部的常规 in-flow 行随页滚动。Flat solid bg-card（平面铁律）。 */}
-      <div
-        ref={barRef}
-        className="bg-card sticky top-0 z-20 rounded-lg border p-2 shadow-sm"
-      >
-        <nav
-          aria-label={t("usage.sections.aria")}
-          className="flex flex-wrap items-center gap-0.5"
-        >
-          {SECTIONS.map((s, i) => (
-            <button
-              key={s.id}
-              type="button"
-              aria-current={activeId === s.id ? "true" : undefined}
-              onClick={() => jump(s.id)}
-              className={cn(
-                "focus-visible:ring-ring/40 rounded-md px-2.5 py-1 text-xs font-medium whitespace-nowrap transition-colors outline-none focus-visible:ring-2",
-                activeId === s.id
-                  ? "bg-accent-tint text-accent-brand-strong"
-                  : "text-muted-foreground hover:bg-hover hover:text-foreground",
-              )}
-            >
-              <span className="text-muted-foreground/60 mr-1 tabular-nums">
-                {String(i + 1).padStart(2, "0")}
-              </span>
-              {t(s.key)}
-            </button>
-          ))}
-        </nav>
-        {/* Page scroll progress line hugging the bar's bottom edge. */}
-        <div
-          aria-hidden="true"
-          className="absolute right-2 bottom-0 left-2 h-0.5 overflow-hidden rounded-full"
-        >
-          <div
-            className="bg-primary h-full rounded-full opacity-75"
-            style={{ width: `${progress * 100}%` }}
-          />
-        </div>
-      </div>
-
-      {/* 筛选行 —— 与日志页同形（整宽 in-flow，不吸顶）。重置右贴行尾。 */}
+    <div className="mx-auto flex w-full max-w-[1380px] flex-col gap-3 pb-4">
+      {/* 筛选行 —— 与日志页同形（整宽 in-flow）。重置右贴行尾。 */}
       <div className="flex min-w-0 flex-wrap items-center gap-2">
         <div className="min-w-0 flex-1">
           <ControlBar />
@@ -141,83 +80,66 @@ export function DashboardView() {
         </Button>
       </div>
 
-      <Section id="dash-overview" stickyBarH={stickyBarH}>
-        {/* R1 概览：Hero 4/12 + KPI 8/12 首行两卡同高，趋势 8 + 分布 4 次行。 */}
-        <div className="grid gap-3 min-[1080px]:grid-cols-12">
-          <div className="min-[1080px]:col-span-4">
-            <TokenHero filter={filter} />
-          </div>
-          <div className="min-[1080px]:col-span-8">
-            <KpiBand filter={filter} />
-          </div>
-          <div className="min-[1080px]:col-span-8">
-            <UsageTrendChart filter={filter} />
-          </div>
-          <div className="min-[1080px]:col-span-4">
-            <ModelDistribution
-              filter={filter}
-              onPickModel={(m) => dispatch(patchFilter({ model: m }))}
-              onClearModel={() => dispatch(patchFilter({ model: "" }))}
-            />
-          </div>
-          {/* #119 第一期落子：趋势区新增时间形态卡（整宽 —— 日历/标数柱
-              都是宽形，窄窗下随筛选自然退化）。四分区重组留待后期。 */}
-          <div className="min-[1080px]:col-span-12">
-            <DailyCostChart filter={filter} />
-          </div>
-          <div className="min-[1080px]:col-span-12">
-            <CalendarHeatmap
-              filter={filter}
-              onPickDay={(day) =>
-                dispatch(patchFilter(dayRangePatch(day, day)))
-              }
-            />
-          </div>
+      <div className="grid gap-3 min-[1080px]:grid-cols-12">
+        <div className="min-[1080px]:col-span-4">
+          <TokenHero filter={filter} />
         </div>
-      </Section>
+        <div className="min-[1080px]:col-span-8">
+          <UsageTrendChart filter={filter} />
+        </div>
+        <div className="min-[1080px]:col-span-12">
+          <KpiBand filter={filter} />
+        </div>
+        <div className="min-[1080px]:col-span-12">
+          <CalendarHeatmap
+            filter={filter}
+            spanDays={spanDays}
+            onPickDay={(day) => dispatch(patchFilter(dayRangePatch(day, day)))}
+          />
+        </div>
 
-      <Section id="dash-devices" stickyBarH={stickyBarH}>
-        <DeviceSection filter={filter} />
-      </Section>
+        {/* —— 维度排行组：四卡相邻，左→右即优先序（模型 > 会话 > 项目 >
+            设备）。设备卡在场时项目收窄 7/12；单机项目独占整行。 —— */}
+        <div className="min-[1080px]:col-span-4">
+          <ModelDistribution
+            filter={filter}
+            onPickModel={(m) => dispatch(patchFilter({ model: m }))}
+            onClearModel={() => dispatch(patchFilter({ model: "" }))}
+          />
+        </div>
+        <div className="min-[1080px]:col-span-8">
+          <SessionRanking filter={filter} />
+        </div>
+        <div
+          className={cn(
+            "min-[1080px]:col-span-12",
+            multiDevice && "min-[1080px]:col-span-7",
+          )}
+        >
+          <ProjectSection filter={filter} />
+        </div>
+        {multiDevice ? (
+          <div className="min-[1080px]:col-span-5">
+            <DeviceSection filter={filter} />
+          </div>
+        ) : null}
 
-      <Section id="dash-projects" stickyBarH={stickyBarH}>
-        <ProjectSection filter={filter} />
-      </Section>
+        {/* —— 时间与分布组：四卡相邻（每日成本 > 每日请求 > 轮次 > 时长）—— */}
+        <div className="min-[1080px]:col-span-6">
+          <DailyCostChart filter={filter} />
+        </div>
+        <div className="min-[1080px]:col-span-6">
+          <DailyRequestChart filter={filter} />
+        </div>
+        <div className="min-[1080px]:col-span-6">
+          <TurnDistribution filter={filter} />
+        </div>
+        <div className="min-[1080px]:col-span-6">
+          <DurationDistribution filter={filter} />
+        </div>
+      </div>
 
-      <Section id="dash-sessions" stickyBarH={stickyBarH}>
-        <SessionSection filter={filter} />
-      </Section>
-
-      <Section id="dash-requests" stickyBarH={stickyBarH}>
-        <RequestSection filter={filter} />
-      </Section>
-
-      <Section id="dash-recent" stickyBarH={stickyBarH}>
-        <RecentRequests />
-      </Section>
+      <RecentRequests />
     </div>
-  )
-}
-
-/** One dashboard section — a scroll-margin-anchored block (no head; the
- *  sticky tabs carry the section identity). The margin clears the frozen
- *  tab bar's MEASURED height plus a small breathing gap for anchor jumps. */
-function Section({
-  id,
-  stickyBarH,
-  children,
-}: {
-  id: string
-  stickyBarH: number
-  children: React.ReactNode
-}) {
-  return (
-    <section
-      id={id}
-      className="flex flex-col gap-2.5"
-      style={{ scrollMarginTop: stickyBarH + 12 }}
-    >
-      {children}
-    </section>
   )
 }

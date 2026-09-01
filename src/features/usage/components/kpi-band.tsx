@@ -1,15 +1,14 @@
-// KPI band — the overview's second card (#106 R1 定稿), beside the TokenHero
-// (4/12 + 8/12 两卡同高). Main row (5 大数字格): 平均时长 / 请求·轮 / 会话 /
-// 项目 / 设备; secondary row (4 格): 命中率 / 成本 / 日均 Token / 最长会话 —
-// 副行是 R1 的降级形态: 15px 值 + 单行 label (补充口径并进 label, · 分隔),
-// 与主行 20px 拉开层级。两行固定列数 (5 / 4) 永不折行 — 格宽随容器伸缩,
-// 小窗口靠 min-w-0 + truncate 兜底。#119: 有逐日/逐时序列的格（请求 / 命中
-// 率 / 成本 / Token）在格尾带 Sparkline——数据随全局筛选（同一条 trend 查询
-// 缓存），轮时长/会话数等待 TrendPoint 第三批扩展再配。Every number flows
-// through the metric DSL. The token delta/daily-average caliber comes from
-// use-token-snapshot (shared with the hero); the 会话/项目/设备 cells read the
-// SAME projectUsage / sessionUsage / deviceUsage queries the sections below
-// consume (one cache entry per filter).
+// KPI band — a compact metric strip (#119 三期改版: 原 Hero 旁的 8/12 大卡
+// 占位高、空白多，压成全宽一行九格的数字带：无卡头、格值 18px、格内
+// 值 + label + 口径 sub + 格尾 Sparkline，窄容器 3/5/9 列折行). 格序沿
+// R1 的主副行序（效率 → 规模 → 质量/成本）。#119: 有逐日/逐时序列的格
+// （请求 / 命中率 / 成本 / Token）在格尾带 Sparkline——数据随全局筛选
+// （同一条 trend 查询缓存），轮时长/会话数等待 TrendPoint 第三批扩展再配。
+// Every number flows through the metric DSL. The token delta/daily-average
+// caliber comes from use-token-snapshot (shared with the hero); the
+// 会话/项目/设备 cells read the SAME projectUsage / sessionUsage /
+// deviceUsage queries the sections below consume (one cache entry per
+// filter).
 
 import { useTranslation } from "react-i18next"
 import {
@@ -19,7 +18,7 @@ import {
   useTrendQuery,
 } from "@/app/store/api"
 import type { FilterState } from "@/app/store/slices/filterSlice"
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
+import { Card, CardContent } from "@/components/ui/card"
 import { Sparkline } from "@/features/usage/components/sparkline"
 import {
   deviceSectionStats,
@@ -40,7 +39,6 @@ import {
   spanParts,
 } from "@/lib/format"
 import { tokenBuckets, tokensHitRate } from "@/lib/token-buckets"
-import { cn } from "@/lib/utils"
 
 import type { TrendBucket } from "@/types/generated/bindings"
 
@@ -204,21 +202,12 @@ export function KpiBand({ filter }: { filter: FilterState }) {
   ]
 
   return (
-    <Card interactive className="h-full">
-      <CardHeader>
-        <CardTitle>{t("usage.kpi.title")}</CardTitle>
-      </CardHeader>
-      <CardContent className="flex h-full flex-1 flex-col justify-center gap-3.5">
-        {/* 主行：固定 5 列不折行 — 格宽随容器伸缩，min-w-0 + truncate 兜底。 */}
-        <div className="grid grid-cols-5 gap-x-4">
-          {main.map((c, i) => (
-            <KpiCell key={c.key} cell={c} first={i === 0} />
-          ))}
-        </div>
-        {/* 副行：固定 4 列，降级形态（15px 值 + label 并口径单行）。 */}
-        <div className="border-border/60 grid grid-cols-4 gap-x-6 border-t pt-3">
-          {secondary.map((c) => (
-            <SubCell key={c.key} cell={c} />
+    <Card interactive>
+      <CardContent className="flex flex-col gap-1 py-4">
+        {/* 单行九格自适应折行 — 格宽随容器伸缩，min-w-0 + truncate 兜底。 */}
+        <div className="grid grid-cols-3 gap-x-6 gap-y-4 min-[760px]:grid-cols-5 min-[1120px]:grid-cols-9">
+          {[...main, ...secondary].map((c) => (
+            <KpiCell key={c.key} cell={c} />
           ))}
         </div>
       </CardContent>
@@ -226,7 +215,7 @@ export function KpiBand({ filter }: { filter: FilterState }) {
   )
 }
 
-/** accent 色的单一映射 —— 主行格子与副行格子共用。 */
+/** accent 色的单一映射 —— 九格共用。 */
 function accentStyle(accent?: "cost" | "accent") {
   return accent === "cost"
     ? { color: "var(--metric-cost)" }
@@ -235,16 +224,10 @@ function accentStyle(accent?: "cost" | "accent") {
       : undefined
 }
 
-function KpiCell({ cell, first }: { cell: Cell; first: boolean }) {
+function KpiCell({ cell }: { cell: Cell }) {
   return (
-    <div
-      className={cn(
-        "min-w-0",
-        // 竖分隔线（首列无线）在任意宽度都画 —— 行永不折行，分隔不依赖断点。
-        !first && "border-border/60 border-l pl-4",
-      )}
-    >
-      <div className="text-xl leading-tight font-semibold tabular-nums">
+    <div className="min-w-0">
+      <div className="text-[18px] leading-tight font-semibold tabular-nums">
         <span style={accentStyle(cell.accent)}>{cell.value}</span>
       </div>
       <div className="text-muted-foreground mt-1 truncate text-[11.5px]">
@@ -257,24 +240,6 @@ function KpiCell({ cell, first }: { cell: Cell; first: boolean }) {
       ) : null}
       {cell.spark ? (
         <div className="mt-1.5">
-          <Sparkline values={cell.spark.values} color={cell.spark.color} />
-        </div>
-      ) : null}
-    </div>
-  )
-}
-
-function SubCell({ cell }: { cell: Cell }) {
-  return (
-    <div className="min-w-0">
-      <div className="text-[15px] leading-tight font-semibold tabular-nums">
-        <span style={accentStyle(cell.accent)}>{cell.value}</span>
-      </div>
-      <div className="text-muted-foreground mt-0.5 truncate text-[11px]">
-        {cell.sub ? `${cell.label} · ${cell.sub}` : cell.label}
-      </div>
-      {cell.spark ? (
-        <div className="mt-1">
           <Sparkline values={cell.spark.values} color={cell.spark.color} />
         </div>
       ) : null}

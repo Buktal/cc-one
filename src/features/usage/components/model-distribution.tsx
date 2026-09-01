@@ -75,7 +75,7 @@ export function ModelDistribution({
   ]
 
   return (
-    <Card interactive>
+    <Card interactive className="h-full">
       <CardHeader>
         <CardTitle>{t("usage.models.title")}</CardTitle>
         {/* 筛选 chip + 指标开关一起放进 CardAction (说明见下)。 */}
@@ -119,7 +119,8 @@ export function ModelDistribution({
           </div>
         </CardAction>
       </CardHeader>
-      <CardContent className="flex flex-col gap-2">
+      {/* flex-1 + 居中：与会话排行卡同行配平（行高由行数多的一侧决定）。 */}
+      <CardContent className="flex flex-1 flex-col justify-center gap-2">
         {items.length === 0 ? (
           <span className="text-muted-foreground text-sm">
             {t("usage.models.empty")}

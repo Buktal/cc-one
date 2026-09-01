@@ -1,11 +1,14 @@
 // Usage trend chart — the four token buckets (input / output / cache
 // creation / cache read) as a STACKED AREA group (#119 看板改版: 四条独立
 // 折线升级为堆叠面积)。堆叠把「每桶各自多大」换成「四桶怎么构成、构成随
-// 时间怎么迁移」——桶与桶的此消彼长在同卡内直接可读。一卡双模式：
+// 时间怎么迁移」——桶与桶的此消彼长在同卡内直接可读。一卡三模式：
 //   abs   — 绝对值堆叠（原四折线的同一份数据，改为构成读法）；
 //   share — 100% 占比堆叠（shareStackTrend）：每点按「可见桶总量」归一，
 //           图例隐藏一桶 = 把它剔出构成（从分母剔除），而不是把它画成 0
-//           ——隐藏读作「不参与构成」，剩余桶的占比始终归一。
+//           ——隐藏读作「不参与构成」，剩余桶的占比始终归一；
+//   cum   — 累计爬坡（cumulativeTrend，#119 二期）：窗口首点至今的 token
+//           前缀和，单面积渐隐 + 底部端值行（累计读数不靠 hover）。斜率
+//           即消耗加速度；单日窗口的逐小时累计同样成立。
 // Colors flow straight from the semantic B-tier chart tokens (--chart-input
 // / -output / -cache-create / -cache-read), so a skin swap changes the mood,
 // never the meaning.
@@ -34,7 +37,11 @@ import {
   ChartContainer,
   ChartTooltip,
 } from "@/components/ui/chart"
-import { shareStackTrend, zeroFillTrend } from "@/features/usage/derive-trend"
+import {
+  cumulativeTrend,
+  shareStackTrend,
+  zeroFillTrend,
+} from "@/features/usage/derive-trend"
 import { tickIntervalFor } from "@/lib/chart"
 import { dayRangeToTs, effectiveDays, sameDayWindow } from "@/lib/date-range"
 import { formatCost, formatDay, formatPct, formatTokens } from "@/lib/format"
@@ -58,8 +65,8 @@ const BUCKETS: Bucket[] = BUCKET_DISPLAY.map((b) => ({
   color: b.cssVar,
 }))
 
-/** 堆叠模式：abs = 绝对值堆叠；share = 100% 占比堆叠。 */
-type TrendMode = "abs" | "share"
+/** 堆叠模式：abs = 绝对值堆叠；share = 100% 占比堆叠；cum = 累计爬坡。 */
+type TrendMode = "abs" | "share" | "cum"
 
 /** Hour bucket key `YYYY-MM-DDTHH` → `HH:00` for the axis / tooltip. */
 function formatHour(key: string): string {
@@ -105,13 +112,15 @@ export function UsageTrendChart({ filter }: { filter: FilterState }) {
   // buckets (7d/30d/all) are left as-is; an entirely empty day stays empty so
   // QueryState shows its empty state rather than a flat zero line.
   const filled = useMemo(() => {
-    if (!hourly || !fromTs) return rawData
-    return zeroFillTrend(rawData, dayjs(fromTs), dayjs())
-  }, [hourly, rawData, fromTs])
+    if (!hourly || !fromTs || !toTs) return rawData
+    return zeroFillTrend(rawData, dayjs(fromTs), dayjs(toTs), dayjs())
+  }, [hourly, rawData, fromTs, toTs])
 
   // 占比模式：shareStackTrend 把每点四桶换成「占可见桶总量的比率」
-  // （0–1），分母随图例显隐收窄；绝对模式照旧原样。
+  // （0–1），分母随图例显隐收窄；绝对模式照旧原样；累计模式换
+  // cumulativeTrend 的前缀和点列（cum / dayTokens 两字段）。
   const data = useMemo(() => {
+    if (mode === "cum") return cumulativeTrend(filled)
     if (mode !== "share") return filled
     const visible = new Set<BucketStatKey>(
       BUCKETS.filter((b) => !hidden.has(b.key)).map((b) => b.key),
@@ -135,7 +144,7 @@ export function UsageTrendChart({ filter }: { filter: FilterState }) {
   )
 
   return (
-    <Card interactive>
+    <Card interactive className="h-full">
       <CardHeader>
         <CardTitle>{t("usage.trend.title")}</CardTitle>
         <CardAction>
@@ -147,11 +156,11 @@ export function UsageTrendChart({ filter }: { filter: FilterState }) {
                   : t("usage.trend.lastDays", { n: data.length })
                 : t("usage.trend.noData")}
             </span>
-            {/* 绝对值/占比模式开关 —— 胶囊开关惯例逐字同 model-distribution
+            {/* 绝对值/占比/累计模式开关 —— 胶囊开关惯例逐字同 model-distribution
                 的 header 写法（header 的 has-[card-action] 把开关待在自己的
                 auto 宽列里右对齐，不被标题宽度拉伸）。 */}
             <div className="bg-muted/60 inline-flex items-center gap-0.5 rounded-md p-0.5">
-              {(["abs", "share"] as const).map((m) => (
+              {(["abs", "share", "cum"] as const).map((m) => (
                 <button
                   key={m}
                   type="button"
@@ -164,14 +173,17 @@ export function UsageTrendChart({ filter }: { filter: FilterState }) {
                 >
                   {m === "abs"
                     ? t("usage.trend.modeAbsolute")
-                    : t("usage.trend.modeShare")}
+                    : m === "share"
+                      ? t("usage.trend.modeShare")
+                      : t("usage.trend.modeCumulative")}
                 </button>
               ))}
             </div>
           </div>
         </CardAction>
       </CardHeader>
-      <CardContent>
+      {/* flex-1：hero 同行配平时图区吃满卡身剩余高（卡随行拉伸）。 */}
+      <CardContent className="flex flex-1 flex-col justify-center">
         <QueryState
           isLoading={isLoading}
           error={error}
@@ -216,32 +228,70 @@ export function UsageTrendChart({ filter }: { filter: FilterState }) {
               <ChartTooltip
                 content={<TrendTooltip hourly={hourly} mode={mode} />}
               />
-              {/* stackId 共享 → 四带自下而上相接；带的顶缘描同色实线（1.5）
-                  读得出每桶的边界；去逐点 dot（面积的语言是「带」不是「点」），
-                  activeDot 只在 hover 处标位。 */}
-              {BUCKETS.filter((b) => !hidden.has(b.key)).map((b) => (
+              {mode === "cum" ? (
+                /* 累计模式：总量单面积（四桶的「存量构成」堆叠会误导——堆叠
+                   面积是每期构成，累计堆叠是存量读法，语义不同），渐隐填充 +
+                   2px 主色描边；端值读数走图例位的累计行，不靠 hover。 */
                 <Area
-                  key={b.key}
                   type="monotone"
-                  dataKey={b.key}
-                  name={t(b.name)}
-                  stackId="tokens"
-                  stroke={b.color}
-                  strokeWidth={1.5}
-                  fill={b.color}
-                  fillOpacity={0.55}
+                  dataKey="cum"
+                  name={t("usage.trend.modeCumulative")}
+                  stroke="var(--primary)"
+                  strokeWidth={2}
+                  fill="var(--primary)"
+                  fillOpacity={0.12}
                   dot={false}
-                  activeDot={{ r: 4, fill: b.color, strokeWidth: 0 }}
+                  activeDot={{ r: 4, fill: "var(--primary)", strokeWidth: 0 }}
                   isAnimationActive={false}
                 />
-              ))}
+              ) : (
+                /* stackId 共享 → 四带自下而上相接；带的顶缘描同色实线（1.5）
+                    读得出每桶的边界；去逐点 dot（面积的语言是「带」不是「点」），
+                    activeDot 只在 hover 处标位。 */
+                BUCKETS.filter((b) => !hidden.has(b.key)).map((b) => (
+                  <Area
+                    key={b.key}
+                    type="monotone"
+                    dataKey={b.key}
+                    name={t(b.name)}
+                    stackId="tokens"
+                    stroke={b.color}
+                    strokeWidth={1.5}
+                    fill={b.color}
+                    fillOpacity={0.55}
+                    dot={false}
+                    activeDot={{ r: 4, fill: b.color, strokeWidth: 0 }}
+                    isAnimationActive={false}
+                  />
+                ))
+              )}
             </AreaChart>
           </ChartContainer>
-          <TrendLegend
-            buckets={BUCKETS}
-            hidden={hidden}
-            onToggle={toggleLine}
-          />
+          {mode === "cum" ? (
+            /* 单系列无图例（标题即名）；图例位改放累计端值——爬坡终点的免
+               hover 读数，与每日成本卡的顶标同职责。端值直接从源点列求和
+               （data 是三态联合，不在此窄化）。 */
+            <div className="flex items-center justify-center gap-1.5 pt-3 text-xs">
+              <span
+                className="size-2 shrink-0 rounded-[2px]"
+                style={{ backgroundColor: "var(--primary)" }}
+              />
+              <span className="text-muted-foreground">
+                {t("usage.trend.modeCumulative")}
+              </span>
+              <span className="font-medium tabular-nums">
+                {formatTokens(
+                  filled.reduce((s, p) => s + Number(p.total_tokens ?? 0), 0),
+                )}
+              </span>
+            </div>
+          ) : (
+            <TrendLegend
+              buckets={BUCKETS}
+              hidden={hidden}
+              onToggle={toggleLine}
+            />
+          )}
         </QueryState>
       </CardContent>
     </Card>
@@ -320,6 +370,29 @@ function TrendTooltip(props: {
   const { t } = useTranslation()
   const { active, payload, label, hourly, mode = "abs" } = props
   if (!active || !payload?.length) return null
+  if (mode === "cum") {
+    // 累计模式单系列：一行「累计 · 当日增量」两读。
+    const point = payload[0]
+    return (
+      <div className="bg-popover rounded-md border p-2 text-xs shadow-sm">
+        <div className="mb-1 font-medium">
+          {label ? (hourly ? formatHour(label) : formatDay(label)) : ""}
+        </div>
+        <div className="flex items-center justify-between gap-4">
+          <span>{t("usage.trend.cumTotal")}</span>
+          <span className="tabular-nums">
+            {formatTokens(Number(point.value ?? 0))}
+          </span>
+        </div>
+        <div className="text-muted-foreground flex items-center justify-between gap-4">
+          <span>{t("usage.trend.cumDayDelta")}</span>
+          <span className="tabular-nums">
+            +{formatTokens(Number(point.payload?.total_tokens ?? 0))}
+          </span>
+        </div>
+      </div>
+    )
+  }
   const share = mode === "share"
   // 该时间点总成本 —— TrendPoint 自带, 补上「钱」的维度 (看板其他卡片
   // 没有成本的时间序列, 这里是最不打断浏览的位置)。
