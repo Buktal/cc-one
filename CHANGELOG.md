@@ -5,6 +5,21 @@ All notable changes to cc one are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.2.0] - 2026-09-01
+
+### Changed
+
+- **Dashboard regrouped by semantics** — the usage page re-orders into two adjacent groups: dimension rankings (model distribution > session Top-N > projects > devices; the device card renders only with a multi-device registry, otherwise the project card takes the full row) and time distribution (daily cost > daily requests > turn distribution > duration distribution). The old session/request sections dissolve into four standalone cards (session-ranking, turn-distribution, daily-request-chart, duration-distribution), and every card adopts the equal-height system (h-full + flex-1 content fill, subtitles moved into CardAction) so two cards on a row always bottom-align. (#119)
+- **Usage heatmap rebuilt with three window-fitted forms** — the calendar card now fills the full card width by filter window: a day × hour matrix at ≤7 days, a month-calendar wall chart at 8–70 days (rows = weeks, columns = weekdays, day numbers embedded in large cells), and a GitHub-style week grid beyond 70 days (column count adapts; "last year" spans 53 full-width columns). The color scale switches to NONE + four steps of accent progression (color-mix), retiring the --heat-* ink scale. (#119)
+
+### Removed
+
+- **Rhythm radars retired** — the weekly / hourly rhythm cards and their rhythm derivations are gone; the calendar derive module is renamed accordingly. (#119)
+
+### Fixed
+
+- **Calendar cells no longer drift** — zero-filling the daily trend now backfills missing zero days, so cells no longer slide onto the wrong weekday when the window's first day has no records. (#119)
+
 ## [2.1.0] - 2026-09-01
 
 ### Added
@@ -326,6 +341,7 @@ First public, open-source release.
 - **macOS**: Apple Silicon (arm64) only; builds are unsigned — right-click → **Open** on first launch (or `xattr -dr com.apple.quarantine /Applications/cc one.app`). Intel Mac users can build from source.
 - **Providers**: Claude Code only; additional providers (Codex, Cursor, …) are planned.
 
+[2.2.0]: https://github.com/Buktal/cc-one/releases/tag/v2.2.0
 [2.1.0]: https://github.com/Buktal/cc-one/releases/tag/v2.1.0
 [2.0.3]: https://github.com/Buktal/cc-one/releases/tag/v2.0.3
 [2.0.2]: https://github.com/Buktal/cc-one/releases/tag/v2.0.2

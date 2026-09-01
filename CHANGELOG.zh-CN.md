@@ -4,6 +4,21 @@ cc one 的所有显著变更记录于此。
 
 格式基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，并遵循[语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [2.2.0] - 2026-09-01
+
+### 变更
+
+- **看板按语义归组重排** —— usage 页重排为两组连续相邻：维度排行组（模型分布 > 会话 Top-N > 项目 > 设备；设备卡仅在多设备注册表时渲染，单机时项目卡独占整行）与时间分布组（每日成本 > 每日请求 > 轮次分布 > 时长分布）。原 session/request 两分区按卡语义拆散为 session-ranking、turn-distribution、daily-request-chart、duration-distribution 四张独立卡；全页入格卡统一等高体系（h-full + Content flex-1 纵向填充，副标收进 CardAction），同行两卡底缘恒齐。(#119)
+- **用量热力重做，按窗口三形态全幅铺满** —— 日历卡按筛选窗口自适应铺满卡宽：≤7 天为日×时矩阵；8–70 天为月历挂历（行=周、列=星期、大格内嵌日号）；>70 天为 GitHub 式周历（列数自适应，近一年 53 列满幅）。色阶改为 NONE + 四档主色渐进（color-mix），--heat-* 墨阶退役。(#119)
+
+### 移除
+
+- **节律雷达退役** —— 一周节律 / 时段节律卡及其节律派生删除，日历派生模块随之更名。(#119)
+
+### 修复
+
+- **日历格子不再错位** —— 趋势补零现在会补齐窗口内缺失的零日，窗口首日无记录时后格不再漂移到错误的星期位。(#119)
+
 ## [2.1.0] - 2026-09-01
 
 ### 新增
@@ -324,6 +339,7 @@ cc one 的所有显著变更记录于此。
 - **macOS**：仅 Apple Silicon（arm64）；构建未签名——首次启动右键 →「打开」（或 `xattr -dr com.apple.quarantine /Applications/cc one.app`）。Intel Mac 用户可从源码构建。
 - **Provider**：当前仅 Claude Code；更多 provider（Codex、Cursor 等）规划中。
 
+[2.2.0]: https://github.com/Buktal/cc-one/releases/tag/v2.2.0
 [2.1.0]: https://github.com/Buktal/cc-one/releases/tag/v2.1.0
 [2.0.3]: https://github.com/Buktal/cc-one/releases/tag/v2.0.3
 [2.0.2]: https://github.com/Buktal/cc-one/releases/tag/v2.0.2

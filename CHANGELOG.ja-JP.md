@@ -4,6 +4,21 @@ cc one の主な変更点をすべて記録します。
 
 形式は [Keep a Changelog](https://keepachangelog.com/ja/1.1.0/) に基づき、本プロジェクトは[セマンティックバージョニング](https://semver.org/lang/ja/)に従います。
 
+## [2.2.0] - 2026-09-01
+
+### 変更
+
+- **ダッシュボードを意味ごとに再グループ化** —— usage ページを連続隣接する 2 グループへ並べ替え：ディメンションランキング群（モデル分布 > セッション Top-N > プロジェクト > デバイス。デバイスカードはマルチデバイス登録があるときのみ描画、単体ではプロジェクトカードが 1 行を独占）と時間分布群（日次コスト > 日次リクエスト > ターン分布 > 所要時間分布）。旧 session/request の 2 セクションはカードの意味ごとに session-ranking、turn-distribution、daily-request-chart、duration-distribution の 4 枚の独立カードへ分解。全ページのカードは等高システムに統一（h-full + Content flex-1 で縦方向に充填、サブタイトルは CardAction へ移動）、同列の 2 カードは下端が常に揃う。(#119)
+- **使用量ヒートマップを再構築、ウィンドウに応じた 3 形態で全幅表示** —— カレンダーカードはフィルターウィンドウに応じてカード幅いっぱいに広がる：≤7 日は日×時間マトリクス、8–70 日は月カレンダー壁掛け式（行=週、列=曜日、大きなセルに日付を内蔵）、>70 日は GitHub 式週グリッド（列数は自動調整、過去 1 年は 53 列で全幅）。色スケールは NONE + 4 段階のアクセント漸進（color-mix）に切替、--heat-* インク階調を廃止。(#119)
+
+### 削除
+
+- **リズムレーダーを廃止** —— 週次/時間帯リズムカードとそのリズム派生を削除、カレンダー派生モジュールはそれに伴い改名。(#119)
+
+### 修正
+
+- **カレンダーセルがずれなくなる** —— トレンドのゼロ埋めがウィンドウ内の欠落ゼロ日を補うようになり、初日にレコードがないときも後続セルが誤った曜日位置へずれなくなる。(#119)
+
 ## [2.1.0] - 2026-09-01
 
 ### 追加
@@ -324,6 +339,10 @@ cc one の主な変更点をすべて記録します。
 - **macOS**: Apple Silicon（arm64）のみ。ビルドは未署名——初回起動時に右クリック → **開く**（または `xattr -dr com.apple.quarantine /Applications/cc one.app`）。Intel Mac ユーザーはソースからビルド可能。
 - **プロバイダ**: 現在は Claude Code のみ。追加プロバイダ（Codex、Cursor など）を計画中。
 
+[2.2.0]: https://github.com/Buktal/cc-one/releases/tag/v2.2.0
+[2.1.0]: https://github.com/Buktal/cc-one/releases/tag/v2.1.0
+[2.0.3]: https://github.com/Buktal/cc-one/releases/tag/v2.0.3
+[2.0.2]: https://github.com/Buktal/cc-one/releases/tag/v2.0.2
 [2.0.1]: https://github.com/Buktal/cc-one/releases/tag/v2.0.1
 [2.0.0]: https://github.com/Buktal/cc-one/releases/tag/v2.0.0
 [1.8.0]: https://github.com/Buktal/cc-one/releases/tag/v1.8.0
