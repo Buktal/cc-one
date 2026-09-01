@@ -532,11 +532,19 @@ fn device_summary_rejects_escaping_device_id() {
     let err = device_summary(&paths, "../outside").unwrap_err();
     assert!(err.to_string().contains("escapes"), "{err}");
 
-    // 绝对前缀会让 join 整体替换 base——必须拒绝；`/` 根分量跨平台非法，
-    // 盘符前缀仅在 Windows 上是绝对路径。
-    for bad in ["/cc-one-escape", "C:/cc-one-escape"] {
-        let err = device_summary(&paths, bad).unwrap_err();
-        assert!(err.to_string().contains("escapes"), "{bad}: {err}");
+    // 绝对前缀会让 join 整体替换 base——必须拒绝；`/` 根分量跨平台非法。
+    let err = device_summary(&paths, "/cc-one-escape").unwrap_err();
+    assert!(err.to_string().contains("escapes"), "{err}");
+
+    // 盘符前缀仅在 Windows 上是绝对路径（Prefix 分量被词法半边拒绝）；
+    // Unix 下 `C:` 只是普通分量名，落在库内不逃逸——读作零，不算越界。
+    // 各按本平台事实钉住，不写跨平台都假的单一断言。
+    if cfg!(windows) {
+        let err = device_summary(&paths, "C:/cc-one-escape").unwrap_err();
+        assert!(err.to_string().contains("escapes"), "{err}");
+    } else {
+        let s = device_summary(&paths, "C:/cc-one-escape").unwrap();
+        assert_eq!((s.files, s.dirs), (0.0, 0.0));
     }
     assert!(!tmp.path().join("outside").exists());
     assert!(!paths.library.join("cc-one-escape").exists());
