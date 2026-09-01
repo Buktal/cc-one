@@ -17,7 +17,11 @@ import { dayRangeToTs, effectiveDays } from "@/lib/date-range"
 import { spanMsOf } from "@/lib/format"
 import { projectBasename } from "@/lib/paths"
 import { ALL_FILTER } from "@/lib/source-tags"
-import { type TokenBuckets, totalTokensOf } from "@/lib/token-buckets"
+import {
+  type TokenBuckets,
+  tokensHitRate,
+  totalTokensOf,
+} from "@/lib/token-buckets"
 import type {
   GroupTrack,
   SessionFilter,
@@ -702,16 +706,10 @@ export function containerStatsRows(
 export type StatsTokens = TokenBuckets
 
 /**
- * Cache-hit ratio over the cacheable pool: cache_read / (input +
- * cache_creation + cache_read). Mirrors the Rust `TokenCounts::cache_hit_rate`
- * (the single implementation the backend rows read); kept here because the
- * workbench aggregates rows client-side and a ratio is not additive — only
- * the summed buckets can feed it. null when the pool is empty (no usage).
+ * Cache-hit ratio is lib/token-buckets 的 tokensHitRate（#119 提升后的单一
+ * 实现，usage/sessions 两域共用）——本域只在 aggregateStats 里以聚合后的
+ * 桶和喂它（比率不可加，不能对行率求均值）。
  */
-export function tokensHitRate(t: StatsTokens): number | null {
-  const pool = t.input + t.cache_creation + t.cache_read
-  return pool > 0 ? t.cache_read / pool : null
-}
 
 /** One per-model share of an aggregate — tokens are the model's four-bucket
  *  sum, `sessions` how many rows used it (the card's sub-line). */

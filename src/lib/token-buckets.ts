@@ -11,8 +11,8 @@ export interface TokenBuckets {
   cache_read: number
 }
 
-/** 总量 = 四桶之和。池定义唯一定义处（命中率池含不含 output 的答案不在这——
- *  那 cacheable pool 属于派生口径，见 sessions derive 的 tokensHitRate）。 */
+/** 总量 = 四桶之和。池定义唯一定义处（命中率池含不含 output 的答案见下方
+ *  tokensHitRate——cacheable pool 属于派生口径，也收在本文件）。 */
 export function sumBuckets(t: TokenBuckets): number {
   return t.input + t.output + t.cache_creation + t.cache_read
 }
@@ -45,6 +45,21 @@ export function tokenBuckets(row: FlatBucketRow | PackBucketRow): TokenBuckets {
 /** 单行的总 Token 量（tokenBuckets ∘ sumBuckets 的常用复合）。 */
 export function totalTokensOf(row: FlatBucketRow | PackBucketRow): number {
   return sumBuckets(tokenBuckets(row))
+}
+
+/**
+ * Cache-hit ratio over the cacheable pool: cache_read / (input +
+ * cache_creation + cache_read)——output 不在池里（命中率量的是「进来的
+ * 提示侧」可缓存 token 的命中，补全量不算）。与 Rust
+ * `TokenCounts::cache_hit_rate` 数学同构（后端行上的 rate 是它的单份实现）；
+ * 前端凡「自己聚了四桶再算比率」的场景共用本函数，不落第三份公式
+ * （#119 实施注意：曾住 features/sessions/derive，KPI 命中率 Sparkline
+ * 前提升到这）。池为空（无用量）→ null，调用方渲染占位而非 0——比率
+ * 不可加，只有桶和能喂它。
+ */
+export function tokensHitRate(t: TokenBuckets): number | null {
+  const pool = t.input + t.cache_creation + t.cache_read
+  return pool > 0 ? t.cache_read / pool : null
 }
 
 // -------------------------------- 展示名册 --------------------------------

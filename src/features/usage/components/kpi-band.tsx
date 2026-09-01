@@ -3,10 +3,12 @@
 // 项目 / 设备; secondary row (4 格): 命中率 / 成本 / 日均 Token / 最长会话 —
 // 副行是 R1 的降级形态: 15px 值 + 单行 label (补充口径并进 label, · 分隔),
 // 与主行 20px 拉开层级。两行固定列数 (5 / 4) 永不折行 — 格宽随容器伸缩,
-// 小窗口靠 min-w-0 + truncate 兜底。Every number flows through the metric
-// DSL. The token delta/daily-average caliber comes from use-token-snapshot
-// (shared with the hero); the 会话/项目/设备 cells read the SAME
-// projectUsage / sessionUsage / deviceUsage queries the sections below
+// 小窗口靠 min-w-0 + truncate 兜底。#119: 有逐日/逐时序列的格（请求 / 命中
+// 率 / 成本 / Token）在格尾带 Sparkline——数据随全局筛选（同一条 trend 查询
+// 缓存），轮时长/会话数等待 TrendPoint 第三批扩展再配。Every number flows
+// through the metric DSL. The token delta/daily-average caliber comes from
+// use-token-snapshot (shared with the hero); the 会话/项目/设备 cells read the
+// SAME projectUsage / sessionUsage / deviceUsage queries the sections below
 // consume (one cache entry per filter).
 
 import { useTranslation } from "react-i18next"
@@ -14,9 +16,11 @@ import {
   useDeviceUsageQuery,
   useProjectUsageQuery,
   useSessionUsageQuery,
+  useTrendQuery,
 } from "@/app/store/api"
 import type { FilterState } from "@/app/store/slices/filterSlice"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
+import { Sparkline } from "@/features/usage/components/sparkline"
 import {
   deviceSectionStats,
   projectRanking,
@@ -24,7 +28,7 @@ import {
   windowDayCount,
 } from "@/features/usage/derive"
 import { useTokenSnapshot } from "@/features/usage/use-token-snapshot"
-import { effectiveDays } from "@/lib/date-range"
+import { dayRangeToTs, effectiveDays, sameDayWindow } from "@/lib/date-range"
 import {
   formatCost,
   formatCount,
@@ -35,7 +39,10 @@ import {
   spanLabelKey,
   spanParts,
 } from "@/lib/format"
+import { tokenBuckets, tokensHitRate } from "@/lib/token-buckets"
 import { cn } from "@/lib/utils"
+
+import type { TrendBucket } from "@/types/generated/bindings"
 
 interface Cell {
   key: string
@@ -43,6 +50,9 @@ interface Cell {
   label: string
   sub?: string
   accent?: "cost" | "accent"
+  /** 格尾迷你趋势线（#119）：values 是与格值同口径的序列尾（多日 = 逐日、
+   *  单日 = 逐小时），color 用格子自己的 accent。 */
+  spark?: { values: number[]; color?: string }
 }
 
 export function KpiBand({ filter }: { filter: FilterState }) {
@@ -66,6 +76,25 @@ export function KpiBand({ filter }: { filter: FilterState }) {
   const { from_day, to_day } = effectiveDays(filter)
   const days = windowDayCount(from_day, to_day)
 
+  // 格尾 Sparkline 的序列源：与 use-token-snapshot 同一条 trend 查询
+  // （一 filterId 一份缓存，零额外请求），桶分辨率同看板口径 —— 多日逐日、
+  // 单日逐小时。轮时长/会话数无逐日字段（TrendPoint 待第三批扩展），那几
+  // 格本期不配 spark。
+  const { from_ts: fromTs, to_ts: toTs } = dayRangeToTs(from_day, to_day)
+  const sparkBucket: TrendBucket = sameDayWindow(fromTs, toTs) ? "Hour" : "Day"
+  const { data: sparkTrend = [] } = useTrendQuery({
+    filter,
+    bucket: sparkBucket,
+  })
+  const tokenSeries = sparkTrend.map((p) => Number(p.total_tokens))
+  const requestSeries = sparkTrend.map((p) => Number(p.request_count))
+  const costSeries = sparkTrend.map((p) => Number(p.total_cost_usd ?? 0))
+  // 逐日命中率：日桶四桶和喂共享公式（池空的日子 → null，滤掉不留断点——
+  // 序列是形状提示，不是逐点精确读数）。
+  const hitSeries = sparkTrend
+    .map((p) => tokensHitRate(tokenBuckets(p)))
+    .filter((v): v is number => v !== null)
+
   // 无轮次时无可算比率 — 占位破折号（与 formatDuration 的空值语义一致）。
   const perTurn =
     s.turn_count > 0 ? formatRatio(s.request_count / s.turn_count) : "—"
@@ -87,6 +116,8 @@ export function KpiBand({ filter }: { filter: FilterState }) {
       value: perTurn,
       label: t("usage.kpi.perTurn"),
       sub: `${t("usage.hero.requests")} ${formatCount(s.request_count)}`,
+      // 请求尾势挂在请求口径的格上（副行即窗口请求总量）。
+      spark: { values: requestSeries },
     },
     {
       key: "sessions",
@@ -128,6 +159,7 @@ export function KpiBand({ filter }: { filter: FilterState }) {
       label: t("usage.hero.cacheHitRate"),
       sub: t("usage.kpi.hitSub", { v: formatTokens(s.cache_read_tokens) }),
       accent: "accent",
+      spark: { values: hitSeries },
     },
     {
       key: "cost",
@@ -140,6 +172,7 @@ export function KpiBand({ filter }: { filter: FilterState }) {
             })
           : undefined,
       accent: "cost",
+      spark: { values: costSeries, color: "var(--metric-cost)" },
     },
     {
       key: "dailyTokens",
@@ -153,6 +186,7 @@ export function KpiBand({ filter }: { filter: FilterState }) {
         deltaPct != null
           ? `${deltaPct >= 0 ? "↑" : "↓"} ${formatPct(Math.abs(deltaPct))}`
           : undefined,
+      spark: { values: tokenSeries },
     },
     {
       key: "longest",
@@ -221,6 +255,11 @@ function KpiCell({ cell, first }: { cell: Cell; first: boolean }) {
           {cell.sub}
         </div>
       ) : null}
+      {cell.spark ? (
+        <div className="mt-1.5">
+          <Sparkline values={cell.spark.values} color={cell.spark.color} />
+        </div>
+      ) : null}
     </div>
   )
 }
@@ -234,6 +273,11 @@ function SubCell({ cell }: { cell: Cell }) {
       <div className="text-muted-foreground mt-0.5 truncate text-[11px]">
         {cell.sub ? `${cell.label} · ${cell.sub}` : cell.label}
       </div>
+      {cell.spark ? (
+        <div className="mt-1">
+          <Sparkline values={cell.spark.values} color={cell.spark.color} />
+        </div>
+      ) : null}
     </div>
   )
 }

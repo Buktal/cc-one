@@ -1,8 +1,10 @@
 // Request section (#106) — the request dimension: per-bucket request bars
 // (day resolution; hour on a single-day window, the trend chart's own rule)
 // with the peak bucket highlighted, and the turn-duration distribution
-// (<10s / 10–30s / 30–60s / >60s) with avg / P95. The bars read the SAME
-// trend query the overview chart consumes (one cache entry per filter).
+// (<10s / 10–30s / 30–60s / >60s) as a half-ring composition (#119 档位类
+// 形态：进度条 → 半环，环心合计 + 右侧行保精确读数) with avg / P95. The
+// bars read the SAME trend query the overview chart consumes (one cache
+// entry per filter).
 
 import { useTranslation } from "react-i18next"
 import { Bar, BarChart, Cell, XAxis } from "recharts"
@@ -15,16 +17,11 @@ import {
   ChartContainer,
   ChartTooltip,
 } from "@/components/ui/chart"
+import { SemicircleChart } from "@/features/usage/components/semicircle-chart"
 import { requestHeadline, windowDayCount } from "@/features/usage/derive"
 import { tickIntervalFor } from "@/lib/chart"
 import { dayRangeToTs, effectiveDays, sameDayWindow } from "@/lib/date-range"
-import {
-  formatCount,
-  formatDay,
-  formatDuration,
-  formatInt,
-  formatSegValue,
-} from "@/lib/format"
+import { formatCount, formatDay, formatDuration, formatInt } from "@/lib/format"
 import type { TrendBucket } from "@/types/generated/bindings"
 
 /** Bars shown — the prototype's "近 14 天" window (hour buckets on a
@@ -64,7 +61,7 @@ export function RequestSection({ filter }: { filter: FilterState }) {
     t("usage.requests.durBand4"),
   ]
   const durBuckets = stats?.turn_duration_buckets ?? [0, 0, 0, 0]
-  const durTotal = durBuckets.reduce((a, b) => a + b, 0) || 1
+  const durTotal = durBuckets.reduce((a, b) => a + b, 0)
 
   return (
     <QueryState
@@ -156,25 +153,15 @@ export function RequestSection({ filter }: { filter: FilterState }) {
             </span>
           </CardHeader>
           <CardContent className="flex flex-1 flex-col justify-center gap-2">
-            {durBuckets.map((count, i) => (
-              <div
-                key={durLabels[i]}
-                className="grid grid-cols-[64px_minmax(0,1fr)_110px] items-center gap-2 text-xs"
-              >
-                <span className="text-muted-foreground">{durLabels[i]}</span>
-                <div className="bg-muted h-1.5 w-full overflow-hidden rounded-full">
-                  <div
-                    className="bg-primary/70 h-full rounded-full"
-                    style={{
-                      width: `${Math.max((count / durTotal) * 100, 2)}%`,
-                    }}
-                  />
-                </div>
-                <span className="text-muted-foreground text-right tabular-nums">
-                  {formatSegValue(formatCount(count), count / durTotal)}
-                </span>
-              </div>
-            ))}
+            <SemicircleChart
+              tiers={durBuckets.map((count, i) => ({
+                label: durLabels[i],
+                count,
+              }))}
+              centerValue={formatCount(durTotal)}
+              centerLabel={t("usage.requests.turns")}
+              formatValue={formatCount}
+            />
             <div className="border-border/60 mt-2 flex flex-col gap-1.5 border-t pt-2 text-xs">
               <DurRow label={t("usage.kpi.avgDuration")}>
                 {formatDuration(stats?.avg_turn_duration_ms)}

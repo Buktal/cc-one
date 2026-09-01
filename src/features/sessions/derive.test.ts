@@ -42,7 +42,6 @@ import {
   sessionTabFilter,
   settleNeighborStep,
   type TreeSelectAction,
-  tokensHitRate,
   treeSelectValue,
   UNGROUPED,
   withCheckedToggle,
@@ -923,25 +922,6 @@ function statsRow(
     ...overrides,
   }
 }
-
-describe("tokensHitRate", () => {
-  it("derives cache_read / (input + cache_creation + cache_read)", () => {
-    expect(
-      tokensHitRate({
-        input: 30,
-        output: 99,
-        cache_creation: 10,
-        cache_read: 60,
-      }),
-    ).toBeCloseTo(60 / 100)
-  })
-
-  it("null when the cacheable pool is empty (no usage)", () => {
-    expect(
-      tokensHitRate({ input: 0, output: 5, cache_creation: 0, cache_read: 0 }),
-    ).toBeNull()
-  })
-})
 
 describe("aggregateStats", () => {
   it("sums additively, merges models, and derives the hit rate from summed buckets", () => {

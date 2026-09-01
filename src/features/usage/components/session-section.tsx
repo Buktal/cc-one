@@ -1,10 +1,11 @@
 // Session section (#106) — the dashboard's session dimension at usage grain:
-// the 1–3 / 4–8 / 9–16 / 17+ turn distribution (by session count, with the
-// subagent share below) and the Top-5 sessions by tokens (占比为占总消耗).
-// Turn buckets partition the sessions the section lists; the band boundaries
-// live in derive.sessionSectionStats (testable), and the turn grain's facet
-// caveat (model/source don't apply to turns) is the backend's documented
-// caliber, not re-derived here.
+// the 1–3 / 4–8 / 9–16 / 17+ turn distribution as a half-ring composition
+// (#119 档位类形态：进度条 → 半环，弧段 + 环心合计，右侧行保精确读数) and
+// the Top-5 sessions by tokens (占比为占总消耗). Turn buckets partition the
+// sessions the section lists; the band boundaries live in
+// derive.sessionSectionStats (testable), and the turn grain's facet caveat
+// (model/source don't apply to turns) is the backend's documented caliber,
+// not re-derived here.
 
 import { ArrowRight } from "lucide-react"
 import { useTranslation } from "react-i18next"
@@ -20,6 +21,7 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card"
+import { SemicircleChart } from "@/features/usage/components/semicircle-chart"
 import { sessionSectionStats } from "@/features/usage/derive"
 import { formatCount, formatSegValue, formatTokens } from "@/lib/format"
 import { cn } from "@/lib/utils"
@@ -54,18 +56,16 @@ export function SessionSection({ filter }: { filter: FilterState }) {
               {t("usage.sessions.bySessionCount")}
             </span>
           </CardHeader>
-          <CardContent className="flex flex-1 flex-col justify-center gap-2">
-            {stats.turnBuckets.map((count, i) => (
-              <BandRow
-                key={bandLabels[i]}
-                label={bandLabels[i]}
-                share={count / (stats.sessions || 1)}
-                value={formatSegValue(
-                  formatCount(count),
-                  count / (stats.sessions || 1),
-                )}
-              />
-            ))}
+          <CardContent className="flex flex-1 flex-col justify-center">
+            <SemicircleChart
+              tiers={stats.turnBuckets.map((count, i) => ({
+                label: bandLabels[i],
+                count,
+              }))}
+              centerValue={formatCount(stats.sessions)}
+              centerLabel={t("usage.kpi.sessions")}
+              formatValue={formatCount}
+            />
           </CardContent>
         </Card>
 
@@ -105,31 +105,5 @@ export function SessionSection({ filter }: { filter: FilterState }) {
         </Card>
       </div>
     </QueryState>
-  )
-}
-
-/** One labeled band row: label · bar · `数量 · 占比` (session count metric). */
-function BandRow({
-  label,
-  share,
-  value,
-}: {
-  label: string
-  share: number
-  value: string
-}) {
-  return (
-    <div className="grid grid-cols-[76px_minmax(0,1fr)_104px] items-center gap-2 text-xs">
-      <span className="text-muted-foreground truncate">{label}</span>
-      <div className="bg-muted h-1.5 w-full overflow-hidden rounded-full">
-        <div
-          className="bg-primary/70 h-full rounded-full"
-          style={{ width: `${Math.max(share * 100, 2)}%` }}
-        />
-      </div>
-      <span className="text-muted-foreground text-right tabular-nums">
-        {value}
-      </span>
-    </div>
   )
 }

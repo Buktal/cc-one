@@ -727,6 +727,7 @@
   "usage.requests.dailyTitle": "Requests per day",
   "usage.requests.todayHours": "Today · hourly",
   "usage.requests.lastDays": "Last {{n}} days",
+  "usage.requests.turns": "Turns",
   "usage.requests.tooltipCount": "{{n}} requests",
   "usage.requests.peakTag": " · peak",
   "usage.requests.durTitle": "Duration distribution",

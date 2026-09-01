@@ -725,6 +725,7 @@
   "usage.requests.dailyTitle": "每日请求",
   "usage.requests.todayHours": "今日 · 按小时",
   "usage.requests.lastDays": "近 {{n}} 天",
+  "usage.requests.turns": "轮次",
   "usage.requests.tooltipCount": "{{n}} 次请求",
   "usage.requests.peakTag": " · 峰值",
   "usage.requests.durTitle": "时长分布",

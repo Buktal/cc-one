@@ -14,6 +14,7 @@ import {
   sumBuckets,
   type TokenBuckets,
   tokenBuckets,
+  tokensHitRate,
   totalTokensOf,
 } from "./token-buckets"
 
@@ -72,6 +73,25 @@ describe("totalTokensOf", () => {
         tokens: { input: 1, output: 2, cache_creation: 3, cache_read: 4 },
       }),
     ).toBe(10)
+  })
+})
+
+describe("tokensHitRate", () => {
+  it("derives cache_read / (input + cache_creation + cache_read)", () => {
+    expect(
+      tokensHitRate({
+        input: 30,
+        output: 99,
+        cache_creation: 10,
+        cache_read: 60,
+      }),
+    ).toBeCloseTo(60 / 100)
+  })
+
+  it("null when the cacheable pool is empty (no usage)", () => {
+    expect(
+      tokensHitRate({ input: 0, output: 5, cache_creation: 0, cache_read: 0 }),
+    ).toBeNull()
   })
 })
 
