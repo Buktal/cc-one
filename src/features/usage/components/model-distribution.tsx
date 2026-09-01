@@ -20,6 +20,7 @@ import {
 import { topNModels } from "@/features/usage/derive"
 import {
   formatCost,
+  formatCount,
   formatMetricLine,
   formatMetricSeg,
   formatPct,
@@ -51,12 +52,14 @@ export function ModelDistribution({
     label: string
     value: number
     model: string | null
+    request_count: number
     cache_hit_rate?: number
   }> = [
     ...top.map((row) => ({
       label: row.model,
       value: row.value,
       model: row.model,
+      request_count: row.request_count,
       cache_hit_rate: row.cache_hit_rate,
     })),
     ...(rest.count > 0
@@ -65,6 +68,7 @@ export function ModelDistribution({
             label: t("usage.models.others", { n: rest.count }),
             value: rest.sum,
             model: null,
+            request_count: rest.requests,
           },
         ]
       : []),
@@ -123,7 +127,8 @@ export function ModelDistribution({
         ) : (
           items.map((it) => {
             // DSL: 分布行主值不带标签（模型名在行左即标签）—— `数量 · 占比`；
-            // 缓存命中是有标签的段，与主值同行拼接进 value 半行。
+            // 缓存命中是有标签的段，与主值同行拼接进 value 半行。请求数在
+            // sub 行（#119 维度行字段补全：ModelStatsRow 自带、此前未展示）。
             const value = formatMetricLine([
               formatSegValue(fmt(it.value), it.value / total),
               ...(it.cache_hit_rate
@@ -148,6 +153,12 @@ export function ModelDistribution({
                 name={it.label}
                 value={value}
                 share={it.value / total}
+                sub={formatMetricLine([
+                  formatMetricSeg(
+                    t("usage.hero.requests"),
+                    formatCount(it.request_count),
+                  ),
+                ])}
                 hatch={model == null}
                 selected={model === filter.model}
                 onClick={model == null ? undefined : () => onPickModel(model)}

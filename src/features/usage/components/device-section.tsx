@@ -19,6 +19,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { deviceSectionStats } from "@/features/usage/derive"
 import { deviceOptionLabel } from "@/lib/device-labels"
 import {
+  formatCost,
   formatCount,
   formatMetricLine,
   formatMetricSeg,
@@ -89,6 +90,11 @@ export function DeviceSection({ filter }: { filter: FilterState }) {
                   formatMetricSeg(
                     t("usage.hero.cacheHitRate"),
                     formatPct(r.cache_hit_rate),
+                  ),
+                  // 成本（#119 维度行字段补全）。
+                  formatMetricSeg(
+                    t("usage.metric.cost"),
+                    formatCost(r.total_cost_usd),
                   ),
                   // 本机的 recency 是「最近活跃」（实时采集）；对端的数据随
                   // pull 到达，展示为「最近同步」。

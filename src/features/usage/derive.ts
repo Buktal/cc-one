@@ -13,7 +13,11 @@ import {
   type FilterState,
 } from "@/app/store/slices/filterSlice"
 import { spanMsOf } from "@/lib/format"
-import { totalTokensOf } from "@/lib/token-buckets"
+import {
+  type TokenBuckets,
+  tokenBuckets,
+  totalTokensOf,
+} from "@/lib/token-buckets"
 import type {
   DeviceUsageRow,
   ModelStatsRow,
@@ -112,8 +116,14 @@ export function modelMetricValue(
 }
 
 export interface TopNResult {
-  top: { model: string; value: number; cache_hit_rate: number }[]
-  rest: { count: number; sum: number }
+  top: {
+    model: string
+    value: number
+    /** 请求数（#119 维度行字段补全：ModelStatsRow 自带、此前未展示）。 */
+    request_count: number
+    cache_hit_rate: number
+  }[]
+  rest: { count: number; sum: number; requests: number }
   /** Sum of all rows (>= 1, so callers can divide safely). */
   total: number
 }
@@ -139,9 +149,14 @@ export function topNModels(
     top: topRows.map((r) => ({
       model: r.model,
       value: modelMetricValue(r, metric),
+      request_count: Number(r.request_count),
       cache_hit_rate: Number(r.cache_hit_rate ?? 0),
     })),
-    rest: { count: rest.length, sum: restSum },
+    rest: {
+      count: rest.length,
+      sum: restSum,
+      requests: rest.reduce((s, r) => s + Number(r.request_count), 0),
+    },
     total,
   }
 }
@@ -288,12 +303,21 @@ export function projectRanking(
   }
 }
 
+/** 会话 Top-N 的排序指标（token-first cockpit 默认 tokens；cost 即
+ *  「最贵会话 Top-N」，#119 口径沿 ccusage session 报表默认成本排序）。 */
+export type SessionTopMetric = "tokens" | "cost"
+
 export interface SessionTopRow {
   session_id: string
   device_id: string
   title: string
   tokens: number
-  /** Share over the section total ([0,1]). */
+  /** 窗口成本（标价估算，binding 可空 → 0）。 */
+  cost: number
+  requests: number
+  /** 四桶分项（#119 维度行字段补全），roster 序由调用方投影。 */
+  buckets: TokenBuckets
+  /** Share over the section total of the CHOSEN metric ([0,1]). */
   share: number
 }
 
@@ -308,7 +332,8 @@ export interface SessionSectionStats {
   avgTurns: number | null
   /** Turn-count buckets by session: 1–3 / 4–8 / 9–16 / 17+. */
   turnBuckets: [number, number, number, number]
-  /** Top `topN` sessions by tokens (backend order preserved). */
+  /** Top `topN` sessions by the chosen metric（tokens 与后端既定序 tokens
+   *  desc 一致，行为不变）. */
   top: SessionTopRow[]
   /** All-row token sum, floored at 1 so callers can divide safely. */
   totalTokens: number
@@ -321,8 +346,14 @@ export interface SessionSectionStats {
 export function sessionSectionStats(
   rows: readonly SessionUsageRow[],
   topN: number,
+  metric: SessionTopMetric = "tokens",
 ): SessionSectionStats {
   const totalTokens = rows.reduce((s, r) => s + totalTokensOf(r), 0) || 1
+  // 成本总额同法兜底（可空 binding → 0，全零窗口除法安全）。
+  const totalCost =
+    rows.reduce((s, r) => s + Number(r.total_cost_usd ?? 0), 0) || 1
+  const metricValueOf = (r: SessionUsageRow) =>
+    metric === "cost" ? Number(r.total_cost_usd ?? 0) : totalTokensOf(r)
   const turnBuckets: [number, number, number, number] = [0, 0, 0, 0]
   let subagents = 0
   let turns = 0
@@ -347,16 +378,19 @@ export function sessionSectionStats(
     longestSpanMs: longest,
     avgTurns: rows.length > 0 ? turns / rows.length : null,
     turnBuckets,
-    top: rows.slice(0, topN).map((r) => {
-      const tokens = totalTokensOf(r)
-      return {
+    top: [...rows]
+      .sort((a, b) => metricValueOf(b) - metricValueOf(a))
+      .slice(0, topN)
+      .map((r) => ({
         session_id: r.session_id,
         device_id: r.device_id,
         title: r.title,
-        tokens,
-        share: tokens / totalTokens,
-      }
-    }),
+        tokens: totalTokensOf(r),
+        cost: Number(r.total_cost_usd ?? 0),
+        requests: Number(r.request_count),
+        buckets: tokenBuckets(r),
+        share: metricValueOf(r) / (metric === "cost" ? totalCost : totalTokens),
+      })),
     totalTokens,
   }
 }

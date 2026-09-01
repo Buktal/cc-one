@@ -87,6 +87,16 @@ export function ProjectSection({ filter }: { filter: FilterState }) {
                     t("usage.metric.cost"),
                     formatCost(r.total_cost_usd),
                   ),
+                  // 命中率（#119 维度行字段补全）——后端行自带；0 视为无
+                  // 缓存活动不渲染（与模型卡同一条渲染惯例）。
+                  ...(r.cache_hit_rate
+                    ? [
+                        formatMetricSeg(
+                          t("usage.hero.cacheHitRate"),
+                          formatPct(r.cache_hit_rate),
+                        ),
+                      ]
+                    : []),
                   formatMetricSeg(
                     t("usage.projects.lastActive"),
                     formatTime(r.last_active_at),

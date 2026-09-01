@@ -206,7 +206,7 @@ describe("topNModels", () => {
     ]
     const res = topNModels(rows, "tokens", 2)
     expect(res.top.map((t) => t.model)).toEqual(["b", "c"])
-    expect(res.rest).toEqual({ count: 2, sum: 15 })
+    expect(res.rest).toEqual({ count: 2, sum: 15, requests: 2 })
     expect(res.total).toBe(65)
   })
 
@@ -217,7 +217,13 @@ describe("topNModels", () => {
 
   it("no remainder when rows <= topN", () => {
     const res = topNModels([modelRow("a", 1, 1)], "tokens", 5)
-    expect(res.rest).toEqual({ count: 0, sum: 0 })
+    expect(res.rest).toEqual({ count: 0, sum: 0, requests: 0 })
+  })
+
+  it("carries request_count through to top rows (#119 field completion)", () => {
+    const rows = [modelRow("a", 10, 1), modelRow("b", 30, 3)]
+    const res = topNModels(rows, "tokens", 5)
+    expect(res.top.map((t) => t.request_count)).toEqual([1, 1])
   })
 
   it("total is >= 1 over empty input so callers can divide safely", () => {
@@ -445,6 +451,26 @@ describe("sessionSectionStats (#106 sections)", () => {
     expect(s.turnBuckets).toEqual([1, 0, 1, 1])
     expect(s.top.map((x) => x.session_id)).toEqual(["s1", "s2"])
     expect(s.top[0].share).toBeCloseTo(0.6)
+    // Top rows carry the completion fields (#119): cost / requests / buckets.
+    expect(s.top[0].cost).toBe(0)
+    expect(s.top[0].requests).toBe(1)
+    expect(s.top[0].buckets).toEqual({
+      input: 600,
+      output: 0,
+      cache_creation: 0,
+      cache_read: 0,
+    })
+  })
+
+  it("cost metric ranks priciest first with cost-denominated shares", () => {
+    const rows = [
+      sessionRow("cheap", 900, { total_cost_usd: 0.5 }),
+      sessionRow("pricy", 100, { total_cost_usd: 2.0 }),
+    ]
+    const s = sessionSectionStats(rows, 5, "cost")
+    expect(s.top.map((x) => x.session_id)).toEqual(["pricy", "cheap"])
+    expect(s.top[0].share).toBeCloseTo(2.0 / 2.5)
+    expect(s.top[0].cost).toBeCloseTo(2.0)
   })
 
   it("empty input → zeroed aggregates and null ratios/spans", () => {
