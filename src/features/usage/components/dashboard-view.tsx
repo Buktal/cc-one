@@ -18,6 +18,7 @@ import { Button } from "@/components/ui/button"
 import { cn } from "@/lib/utils"
 import { useSectionScroll } from "../use-section-scroll"
 import { ControlBar } from "./control-bar"
+import { DailyCostChart } from "./daily-cost-chart"
 import { DeviceSection } from "./device-section"
 import { KpiBand } from "./kpi-band"
 import { ModelDistribution } from "./model-distribution"
@@ -153,6 +154,11 @@ export function DashboardView() {
               onPickModel={(m) => dispatch(patchFilter({ model: m }))}
               onClearModel={() => dispatch(patchFilter({ model: "" }))}
             />
+          </div>
+          {/* #119 第一期落子：趋势区新增时间形态卡（整宽 —— 日历/标数柱
+              都是宽形，窄窗下随筛选自然退化）。四分区重组留待后期。 */}
+          <div className="min-[1080px]:col-span-12">
+            <DailyCostChart filter={filter} />
           </div>
         </div>
       </Section>

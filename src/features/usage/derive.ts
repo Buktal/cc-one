@@ -1,9 +1,10 @@
-// Pure read-model derivations for the usage dashboard: trend zero-fill, token
-// snapshot (multi-day delta vs window start + daily average, single-day delta
-// vs yesterday same hours + hourly average), top-N model aggregation, and
+// Pure read-model derivations for the usage dashboard: token snapshot
+// (multi-day delta vs window start + daily average, single-day delta vs
+// yesterday same hours + hourly average), top-N model aggregation, and
 // stop_reason → tone classification. Every function here is pure — `now` is
 // injected and i18n labels are applied by the caller — so each is testable
-// through its signature alone.
+// through its signature alone. Trend-specific derivations (hour zero-fill,
+// share-stacked view) live in derive-trend.ts.
 
 import dayjs, { type Dayjs } from "dayjs"
 
@@ -30,49 +31,6 @@ import type {
  *  differing dimension values can never silently share a cache entry. */
 export function filterId(f: FilterState): string {
   return FILTER_DIMENSIONS.map((k) => f[k]).join("|")
-}
-
-/** A zero-valued trend point used to pad empty hour buckets. */
-export function zeroTrendPoint(day: string): TrendPoint {
-  return {
-    day,
-    input_tokens: 0,
-    output_tokens: 0,
-    cache_creation_tokens: 0,
-    cache_read_tokens: 0,
-    total_tokens: 0,
-    total_cost_usd: 0,
-    request_count: 0,
-  }
-}
-
-/**
- * Pad an hourly trend so the x-axis spans the selected local day in full, not
- * only the hours that happen to have records (the backend GROUP BY omits empty
- * buckets). For the current day the axis stops at `now`'s hour (no future
- * buckets); for a past day it runs 00:00 → 23:00 so the whole day is visible.
- * `target` (the selected day) and `now` (the clock) are both injected — never
- * read inside — so the output is deterministic and testable. An empty input is
- * returned unchanged so the caller keeps its empty state. Only call this for
- * an hourly (single-day) range; a multi-day range is the backend's per-day
- * buckets as-is.
- */
-export function zeroFillTrend(
-  rawData: TrendPoint[],
-  target: Dayjs,
-  now: Dayjs,
-): TrendPoint[] {
-  if (rawData.length === 0) return rawData
-  const byKey = new Map(rawData.map((p) => [p.day, p]))
-  const out: TrendPoint[] = []
-  const end = target.isSame(now, "day") ? now : target.endOf("day")
-  let cur = target.startOf("day")
-  while (!cur.isAfter(end, "hour")) {
-    const key = cur.format("YYYY-MM-DDTHH")
-    out.push(byKey.get(key) ?? zeroTrendPoint(key))
-    cur = cur.add(1, "hour")
-  }
-  return out
 }
 
 export interface TokenSnapshot {

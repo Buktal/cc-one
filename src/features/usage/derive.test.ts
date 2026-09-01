@@ -22,8 +22,6 @@ import {
   tokenSnapshot,
   topNModels,
   windowDayCount,
-  zeroFillTrend,
-  zeroTrendPoint,
 } from "@/features/usage/derive"
 
 import type {
@@ -127,47 +125,6 @@ function modelRow(
     cache_hit_rate,
   }
 }
-
-describe("zeroFillTrend", () => {
-  it("returns input unchanged when empty (caller keeps its empty state)", () => {
-    const now = dayjs("2026-07-30T15:30")
-    expect(zeroFillTrend([], now, now)).toEqual([])
-  })
-
-  it("pads 00:00 → current hour for today, preserving real records", () => {
-    const now = dayjs("2026-07-30T15:30")
-    const filled = zeroFillTrend([trend("2026-07-30T15", 999)], now, now)
-    // 00:00 … 15:00 inclusive = 16 buckets.
-    expect(filled).toHaveLength(16)
-    expect(filled[0].day).toBe("2026-07-30T00")
-    expect(filled[0].total_tokens).toBe(0)
-    expect(filled[15].day).toBe("2026-07-30T15")
-    expect(filled[15].total_tokens).toBe(999)
-  })
-
-  it("fills every gap with a zero point of the right shape", () => {
-    const now = dayjs("2026-07-30T02:30")
-    const filled = zeroFillTrend([trend("2026-07-30T02", 5)], now, now)
-    expect(filled).toHaveLength(3)
-    expect(filled[0]).toEqual(zeroTrendPoint("2026-07-30T00"))
-  })
-
-  it("pads a past single day across the full 24h axis, not today's date", () => {
-    // Selecting a single past day must zero-fill that day (00:00 → 23:00),
-    // not the current day — the original bug fed `dayjs()` (today) and the
-    // real records never matched, collapsing the chart to a flat zero line.
-    const target = dayjs("2026-07-30T15:30")
-    const now = dayjs("2026-07-31T10:00")
-    const filled = zeroFillTrend([trend("2026-07-30T15", 999)], target, now)
-    // 00:00 … 23:00 = 24 buckets.
-    expect(filled).toHaveLength(24)
-    expect(filled[0].day).toBe("2026-07-30T00")
-    expect(filled[0].total_tokens).toBe(0)
-    expect(filled[23].day).toBe("2026-07-30T23")
-    expect(filled[15].day).toBe("2026-07-30T15")
-    expect(filled[15].total_tokens).toBe(999)
-  })
-})
 
 describe("tokenSnapshot", () => {
   it("delta = last vs first when both present and start > 0", () => {
