@@ -5,6 +5,17 @@ All notable changes to cc one are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.3.0] - 2026-10-07
+
+### Changed
+
+- **Workspace visual system rebuilt** — the title bar grows taller on a card surface: the icon-only nav collapse moves to ≤1360px and at ≤760px the nav takes its own second row, so window controls and status stay reachable at every width. Every view opens with a page heading (title + one-line description, new trilingual strings) so page identity survives the collapsed bar. Typography lands a three-tier stack: headings prefer Bahnschrift, body text gains PingFang SC / Microsoft YaHei CJK fallbacks, mono is pinned to Cascadia Code. (#119)
+- **Dashboard grouped into headed sections** — the card flow now reads under two semantic section headings (consumption sources / usage patterns), each with a description line; the 12-column grid classes move into the shared `src/styles/workspace.css`. (#119)
+- **Token hero rebuilt** — CardHeader + a token-ledger color strip in the header, and the card now carries its own loading / error / retry states via QueryState (use-token-snapshot exposes isLoading / error / retry). (#119)
+- **Card system tightened app-wide** — radius up to xl with reduced padding, interactive hover switches from shadow lift to border emphasis, and all usage cards unify on the CardHeader / CardTitle structure. (#119)
+- **Capsule switches standardized** — the hand-rolled capsule toggles in the trend absolute/share switch, model distribution and session ranking are replaced by shadcn ToggleGroup. (#119)
+- **Stylesheet split** — index.css extracts transcript typography (transcript.css) and workspace surfaces / grid (workspace.css). (#119)
+
 ## [2.2.0] - 2026-09-01
 
 ### Changed
@@ -341,6 +352,7 @@ First public, open-source release.
 - **macOS**: Apple Silicon (arm64) only; builds are unsigned — right-click → **Open** on first launch (or `xattr -dr com.apple.quarantine /Applications/cc one.app`). Intel Mac users can build from source.
 - **Providers**: Claude Code only; additional providers (Codex, Cursor, …) are planned.
 
+[2.3.0]: https://github.com/Buktal/cc-one/releases/tag/v2.3.0
 [2.2.0]: https://github.com/Buktal/cc-one/releases/tag/v2.2.0
 [2.1.0]: https://github.com/Buktal/cc-one/releases/tag/v2.1.0
 [2.0.3]: https://github.com/Buktal/cc-one/releases/tag/v2.0.3

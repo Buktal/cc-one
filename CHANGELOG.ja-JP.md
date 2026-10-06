@@ -4,6 +4,17 @@ cc one の主な変更点をすべて記録します。
 
 形式は [Keep a Changelog](https://keepachangelog.com/ja/1.1.0/) に基づき、本プロジェクトは[セマンティックバージョニング](https://semver.org/lang/ja/)に従います。
 
+## [2.3.0] - 2026-10-07
+
+### 変更
+
+- **ワークスペースのビジュアル体系を刷新** —— タイトルバーが高くなりカード面へ変更：アイコンのみのナビ折りたたみは ≤1360px に移り、≤760px ではナビが独立した第 2 行を占め、どの幅でもステータス点とウィンドウ操作は常に利用可能。各ビューの先頭にページ見出し（タイトル + 一行の説明、3 言語の新しい文言）を追加し、バー折りたたみ後もページの所在が分かる。タイポグラフィは 3 層スタックに：見出しは Bahnschrift 優先、本文は PingFang SC / Microsoft YaHei の中国語フォールバックを追加、等幅は Cascadia Code に固定。(#119)
+- **ダッシュボードを意味セクションへ分類** —— カード流は見出しと説明付きの 2 つの意味セクション（消費ソース / 使用パターン）に整理。12 列グリッドクラスは共有スタイルシート src/styles/workspace.css へ移管。(#119)
+- **合計カードを再構築** —— CardHeader + ヘッダーのトークン色帯を備え、カード自身がローディング / エラー / リトライ状態を持つ（QueryState、use-token-snapshot が isLoading / error / retry を公開）。(#119)
+- **カード体系を全アプリで引き締め** —— 角丸は xl へ、余白は縮小、interactive ホバーはシャドウ浮きから境界線強調へ変更、usage 各カードは CardHeader / CardTitle 構造に統一。(#119)
+- **カプセル切替を標準化** —— トレンド絶対/シェア、モデル分布、セッションランキングの手書きカプセル切替を shadcn ToggleGroup に統一。(#119)
+- **スタイル分割** —— index.css からトランスクリプト組版（transcript.css）とワークスペース面/グリッド（workspace.css）を分離。(#119)
+
 ## [2.2.0] - 2026-09-01
 
 ### 変更
@@ -339,6 +350,7 @@ cc one の主な変更点をすべて記録します。
 - **macOS**: Apple Silicon（arm64）のみ。ビルドは未署名——初回起動時に右クリック → **開く**（または `xattr -dr com.apple.quarantine /Applications/cc one.app`）。Intel Mac ユーザーはソースからビルド可能。
 - **プロバイダ**: 現在は Claude Code のみ。追加プロバイダ（Codex、Cursor など）を計画中。
 
+[2.3.0]: https://github.com/Buktal/cc-one/releases/tag/v2.3.0
 [2.2.0]: https://github.com/Buktal/cc-one/releases/tag/v2.2.0
 [2.1.0]: https://github.com/Buktal/cc-one/releases/tag/v2.1.0
 [2.0.3]: https://github.com/Buktal/cc-one/releases/tag/v2.0.3

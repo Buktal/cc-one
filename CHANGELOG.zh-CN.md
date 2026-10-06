@@ -4,6 +4,17 @@ cc one 的所有显著变更记录于此。
 
 格式基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，并遵循[语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [2.3.0] - 2026-10-07
+
+### 变更
+
+- **工作台视觉体系改版** —— 顶栏增高并换卡片面：导航收图标断点移至 ≤1360px，≤760px 时导航独占第二行，状态点与窗口操作在各宽度恒可达；每个视图开头新增页面标题（标题 + 一行描述，三语新文案），顶栏收图标后页面身份仍可见。字体栈三阶落地：标题优先 Bahnschrift，正文补 PingFang SC / Microsoft YaHei 中文回退，等宽钉在 Cascadia Code。(#119)
+- **看板按语义分区** —— 卡片流归于两个带标题与描述的语义分区（消耗来源 / 使用节奏）；12 列网格类下沉至公共样式表 src/styles/workspace.css。(#119)
+- **总量卡重构** —— CardHeader + 头部 token 色带，卡片自身带上加载 / 错误 / 重试态（QueryState，use-token-snapshot 暴露 isLoading / error / retry）。(#119)
+- **卡片体系全站收紧** —— 圆角升 xl、内距收紧，interactive 悬停由阴影位移改为边框强调，用量各卡统一 CardHeader / CardTitle 结构。(#119)
+- **胶囊切换标准化** —— 趋势绝对/占比、模型分布与会话排行的手写胶囊切换统一换装 shadcn ToggleGroup。(#119)
+- **样式拆分** —— index.css 拆出转录排版（transcript.css）与工作台面/网格（workspace.css）。(#119)
+
 ## [2.2.0] - 2026-09-01
 
 ### 变更
@@ -339,6 +350,7 @@ cc one 的所有显著变更记录于此。
 - **macOS**：仅 Apple Silicon（arm64）；构建未签名——首次启动右键 →「打开」（或 `xattr -dr com.apple.quarantine /Applications/cc one.app`）。Intel Mac 用户可从源码构建。
 - **Provider**：当前仅 Claude Code；更多 provider（Codex、Cursor 等）规划中。
 
+[2.3.0]: https://github.com/Buktal/cc-one/releases/tag/v2.3.0
 [2.2.0]: https://github.com/Buktal/cc-one/releases/tag/v2.2.0
 [2.1.0]: https://github.com/Buktal/cc-one/releases/tag/v2.1.0
 [2.0.3]: https://github.com/Buktal/cc-one/releases/tag/v2.0.3
