@@ -58,7 +58,7 @@ fn canonical_iso(dt: chrono::DateTime<chrono::Utc>) -> String {
 pub(crate) fn now_iso() -> String {
     let now_ms = chrono::Utc::now().timestamp_millis();
     let ms = LAST_MS
-        .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |last| {
+        .try_update(Ordering::Relaxed, Ordering::Relaxed, |last| {
             let last = last as i64;
             Some(if now_ms > last {
                 now_ms as u64
