@@ -60,26 +60,26 @@ export function DeviceSection({ filter }: { filter: FilterState }) {
     dispatch(patchFilter({ device_scope: selected === id ? "" : id }))
 
   return (
-    <QueryState
-      isLoading={isLoading}
-      error={error}
-      isEmpty={rows.length === 0}
-      emptyLabel={t("usage.devices.empty")}
-      emptyDescription={t("usage.devices.emptyDesc")}
-    >
-      <Card interactive className="h-full">
-        <CardHeader>
-          <CardTitle>{t("usage.devices.rankTitle")}</CardTitle>
-          {/* 副标进 CardAction（全页 header 单行制，与项目排行卡同形）。 */}
-          <CardAction>
-            <span className="text-muted-foreground text-xs tabular-nums">
-              {t("usage.devices.count", { n: formatCount(stats.devices) })}
-            </span>
-          </CardAction>
-        </CardHeader>
-        {/* 行少（单设备常见）时垂直居中——卡片被父级网格拉到行高，居中
+    <Card interactive>
+      <CardHeader>
+        <CardTitle>{t("usage.devices.rankTitle")}</CardTitle>
+        {/* 副标进 CardAction（全页 header 单行制，与项目排行卡同形）。 */}
+        <CardAction>
+          <span className="text-muted-foreground text-xs tabular-nums">
+            {t("usage.devices.count", { n: formatCount(stats.devices) })}
+          </span>
+        </CardAction>
+      </CardHeader>
+      {/* 行少（单设备常见）时垂直居中——卡片被父级网格拉到行高，居中
             让行距呼吸而不是底部大片留白。 */}
-        <CardContent className="flex flex-1 flex-col justify-center gap-1.5">
+      <CardContent className="flex flex-1 flex-col justify-center gap-1.5">
+        <QueryState
+          isLoading={isLoading}
+          error={error}
+          isEmpty={rows.length === 0}
+          emptyLabel={t("usage.devices.empty")}
+          emptyDescription={t("usage.devices.emptyDesc")}
+        >
           {rows.map((r) => {
             const m = meta.get(r.device_id)
             return (
@@ -121,8 +121,8 @@ export function DeviceSection({ filter }: { filter: FilterState }) {
               />
             )
           })}
-        </CardContent>
-      </Card>
-    </QueryState>
+        </QueryState>
+      </CardContent>
+    </Card>
   )
 }

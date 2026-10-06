@@ -30,25 +30,25 @@ export function DurationDistribution({ filter }: { filter: FilterState }) {
   }))
 
   return (
-    <QueryState
-      isLoading={isLoading}
-      error={error}
-      // 桶全零 = 窗口没有可分档的轮次（如纯空窗）→ 空态而非空环。
-      isEmpty={durTotal === 0}
-      emptyLabel={t("usage.requests.empty")}
-      emptyDescription={t("usage.requests.emptyDesc")}
-    >
-      <Card interactive className="h-full">
-        <CardHeader>
-          <CardTitle>{t("usage.requests.durTitle")}</CardTitle>
-          {/* 副标进 CardAction（全页 header 单行制，与轮次分布卡同形）。 */}
-          <CardAction>
-            <span className="text-muted-foreground text-xs tabular-nums">
-              {t("usage.requests.durSub")}
-            </span>
-          </CardAction>
-        </CardHeader>
-        <CardContent className="flex flex-1 flex-col justify-center gap-2">
+    <Card interactive>
+      <CardHeader>
+        <CardTitle>{t("usage.requests.durTitle")}</CardTitle>
+        {/* 副标进 CardAction（全页 header 单行制，与轮次分布卡同形）。 */}
+        <CardAction>
+          <span className="text-muted-foreground text-xs tabular-nums">
+            {t("usage.requests.durSub")}
+          </span>
+        </CardAction>
+      </CardHeader>
+      <CardContent className="flex flex-1 flex-col justify-center gap-2">
+        <QueryState
+          isLoading={isLoading}
+          error={error}
+          // 桶全零 = 窗口没有可分档的轮次（如纯空窗）→ 空态而非空环。
+          isEmpty={durTotal === 0}
+          emptyLabel={t("usage.requests.empty")}
+          emptyDescription={t("usage.requests.emptyDesc")}
+        >
           <SemicircleChart
             tiers={tiers}
             centerValue={formatCount(durTotal)}
@@ -63,9 +63,9 @@ export function DurationDistribution({ filter }: { filter: FilterState }) {
               {formatDuration(stats?.p95_turn_duration_ms)}
             </DurRow>
           </div>
-        </CardContent>
-      </Card>
-    </QueryState>
+        </QueryState>
+      </CardContent>
+    </Card>
   )
 }
 

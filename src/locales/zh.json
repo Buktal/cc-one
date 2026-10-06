@@ -748,5 +748,19 @@
   "span.daysHours": "{{d}} 天 {{h}} 小时",
   "span.hours": "{{h}} 小时",
   "span.hoursMinutes": "{{h}} 小时 {{m}} 分",
-  "span.minutes": "{{m}} 分钟"
+  "span.minutes": "{{m}} 分钟",
+  "pageDescription.dashboard": "查看 Token、成本与活跃情况，定位消耗来源。",
+  "pageDescription.sessions": "浏览、分组与收藏你的 AI 编码会话。",
+  "pageDescription.logs": "逐条查看请求用量与计费明细。",
+  "pageDescription.pricing": "维护模型价格，掌握成本计算依据。",
+  "pageDescription.library": "浏览和管理各设备的同步文件。",
+  "pageDescription.providers": "管理各应用的供应商与模型配置。",
+  "pageDescription.settings": "管理偏好设置、本机数据与多设备同步。",
+  "usage.dashboard.consumption": "用量与成本",
+  "usage.dashboard.efficiency": "执行效率",
+  "usage.dashboard.activity": "活跃规模",
+  "usage.dashboard.breakdown": "消耗来源",
+  "usage.dashboard.breakdownDesc": "按模型、会话和项目定位主要消耗。",
+  "usage.dashboard.patterns": "使用节奏",
+  "usage.dashboard.patternsDesc": "查看活跃时段、每日变化与轮次分布。"
 }

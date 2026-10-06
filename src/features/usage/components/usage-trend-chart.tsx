@@ -1,23 +1,3 @@
-// Usage trend chart — the four token buckets (input / output / cache
-// creation / cache read) as a STACKED AREA group (#119 看板改版: 四条独立
-// 折线升级为堆叠面积)。堆叠把「每桶各自多大」换成「四桶怎么构成、构成随
-// 时间怎么迁移」——桶与桶的此消彼长在同卡内直接可读。一卡三模式：
-//   abs   — 绝对值堆叠（原四折线的同一份数据，改为构成读法）；
-//   share — 100% 占比堆叠（shareStackTrend）：每点按「可见桶总量」归一，
-//           图例隐藏一桶 = 把它剔出构成（从分母剔除），而不是把它画成 0
-//           ——隐藏读作「不参与构成」，剩余桶的占比始终归一；
-//   cum   — 累计爬坡（cumulativeTrend，#119 二期）：窗口首点至今的 token
-//           前缀和，单面积渐隐 + 底部端值行（累计读数不靠 hover）。斜率
-//           即消耗加速度；单日窗口的逐小时累计同样成立。
-// Colors flow straight from the semantic B-tier chart tokens (--chart-input
-// / -output / -cache-create / -cache-read), so a skin swap changes the mood,
-// never the meaning.
-//
-// NOTE: the spec's efficiency sub-charts (avg turn duration / request·turn by
-// day) need per-day turn aggregates that TrendPoint does not carry today —
-// only the global UsageStats has them. Daily turn trends require a backend
-// change (extend TrendPoint); tracked in backlog.
-
 import dayjs from "dayjs"
 import { useMemo, useState } from "react"
 import { useTranslation } from "react-i18next"
@@ -29,6 +9,7 @@ import {
   Card,
   CardAction,
   CardContent,
+  CardDescription,
   CardHeader,
   CardTitle,
 } from "@/components/ui/card"
@@ -37,6 +18,7 @@ import {
   ChartContainer,
   ChartTooltip,
 } from "@/components/ui/chart"
+import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group"
 import {
   cumulativeTrend,
   shareStackTrend,
@@ -99,6 +81,7 @@ export function UsageTrendChart({ filter }: { filter: FilterState }) {
     data: rawData = [],
     isLoading,
     error,
+    refetch,
   } = useTrendQuery({
     filter,
     bucket,
@@ -144,42 +127,37 @@ export function UsageTrendChart({ filter }: { filter: FilterState }) {
   )
 
   return (
-    <Card interactive className="h-full">
+    <Card interactive>
       <CardHeader>
         <CardTitle>{t("usage.trend.title")}</CardTitle>
+        <CardDescription>
+          {data.length > 0
+            ? hourly
+              ? t("usage.trend.lastHours", { n: data.length })
+              : t("usage.trend.lastDays", { n: data.length })
+            : t("usage.trend.noData")}
+        </CardDescription>
         <CardAction>
-          <div className="flex items-center gap-2">
-            <span className="text-muted-foreground text-xs tabular-nums">
-              {data.length > 0
-                ? hourly
-                  ? t("usage.trend.lastHours", { n: data.length })
-                  : t("usage.trend.lastDays", { n: data.length })
-                : t("usage.trend.noData")}
-            </span>
-            {/* 绝对值/占比/累计模式开关 —— 胶囊开关惯例逐字同 model-distribution
-                的 header 写法（header 的 has-[card-action] 把开关待在自己的
-                auto 宽列里右对齐，不被标题宽度拉伸）。 */}
-            <div className="bg-muted/60 inline-flex items-center gap-0.5 rounded-md p-0.5">
-              {(["abs", "share", "cum"] as const).map((m) => (
-                <button
-                  key={m}
-                  type="button"
-                  onClick={() => setMode(m)}
-                  className={`rounded-[5px] px-2 py-0.5 text-xs font-medium transition-colors outline-none focus-visible:ring-2 focus-visible:ring-ring/40 ${
-                    mode === m
-                      ? "bg-accent-tint text-accent-brand-strong shadow-sm"
-                      : "text-muted-foreground hover:text-foreground"
-                  }`}
-                >
-                  {m === "abs"
-                    ? t("usage.trend.modeAbsolute")
-                    : m === "share"
-                      ? t("usage.trend.modeShare")
-                      : t("usage.trend.modeCumulative")}
-                </button>
-              ))}
-            </div>
-          </div>
+          <ToggleGroup
+            size="sm"
+            value={[mode]}
+            onValueChange={(values) => {
+              const next = values[0]
+              if (next === "abs" || next === "share" || next === "cum")
+                setMode(next)
+            }}
+            aria-label={t("usage.trend.title")}
+          >
+            <ToggleGroupItem value="abs">
+              {t("usage.trend.modeAbsolute")}
+            </ToggleGroupItem>
+            <ToggleGroupItem value="share">
+              {t("usage.trend.modeShare")}
+            </ToggleGroupItem>
+            <ToggleGroupItem value="cum">
+              {t("usage.trend.modeCumulative")}
+            </ToggleGroupItem>
+          </ToggleGroup>
         </CardAction>
       </CardHeader>
       {/* flex-1：hero 同行配平时图区吃满卡身剩余高（卡随行拉伸）。 */}
@@ -187,11 +165,18 @@ export function UsageTrendChart({ filter }: { filter: FilterState }) {
         <QueryState
           isLoading={isLoading}
           error={error}
+          errorAction={{
+            label: t("common.retry"),
+            onClick: () => void refetch(),
+          }}
           isEmpty={data.length === 0}
           emptyLabel={t("usage.trend.empty")}
           emptyDescription={t("usage.trend.emptyDesc")}
         >
-          <ChartContainer config={chartConfig} className="h-72 w-full">
+          <ChartContainer
+            config={chartConfig}
+            className="aspect-auto min-h-56 flex-1"
+          >
             <AreaChart
               data={data}
               margin={{ top: 8, right: 24, bottom: 0, left: 0 }}
@@ -258,7 +243,7 @@ export function UsageTrendChart({ filter }: { filter: FilterState }) {
                     stroke={b.color}
                     strokeWidth={1.5}
                     fill={b.color}
-                    fillOpacity={0.55}
+                    fillOpacity={0.32}
                     dot={false}
                     activeDot={{ r: 4, fill: b.color, strokeWidth: 0 }}
                     isAnimationActive={false}
@@ -313,7 +298,7 @@ function TrendLegend({
 }) {
   const { t } = useTranslation()
   return (
-    <div className="flex items-center justify-center gap-4 pt-3">
+    <div className="flex flex-wrap items-center justify-center gap-x-4 gap-y-2 pt-3">
       {buckets.map((b) => {
         const off = hidden.has(b.key)
         return (

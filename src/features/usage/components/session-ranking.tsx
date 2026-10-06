@@ -19,6 +19,7 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card"
+import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group"
 import {
   type SessionTopMetric,
   sessionSectionStats,
@@ -53,57 +54,53 @@ export function SessionRanking({ filter }: { filter: FilterState }) {
   const fmt = metric === "cost" ? formatCost : formatTokens
 
   return (
-    <QueryState
-      isLoading={isLoading}
-      error={error}
-      isEmpty={rows.length === 0}
-      emptyLabel={t("usage.sessions.empty")}
-      emptyDescription={t("usage.sessions.emptyDesc")}
-    >
-      {/* 卡体由父级网格定位（维度排行组内与模型分布同行）。 */}
-      <Card interactive className="h-full">
-        <CardHeader>
-          <CardTitle>{t("usage.sessions.topTitle")}</CardTitle>
-          <CardAction>
-            <div className="flex items-center gap-2">
-              {/* 副标进 CardAction（全页 header 单行制）——指标读数与开关
+    <Card interactive>
+      <CardHeader>
+        <CardTitle>{t("usage.sessions.topTitle")}</CardTitle>
+        <CardAction>
+          <div className="flex flex-wrap items-center justify-end gap-2">
+            {/* 副标进 CardAction（全页 header 单行制）——指标读数与开关
                   同行，开关切换时副标同步换口径。 */}
-              <span className="text-muted-foreground text-xs tabular-nums">
-                {metric === "cost"
-                  ? t("usage.sessions.topByCost", { n: TOP_N })
-                  : t("usage.sessions.topByTokens", { n: TOP_N })}
-              </span>
-              {/* tokens/cost 开关 —— 胶囊惯例同 model-distribution。 */}
-              <div className="bg-muted/60 inline-flex items-center gap-0.5 rounded-md p-0.5">
-                {(["tokens", "cost"] as const).map((m) => (
-                  <button
-                    key={m}
-                    type="button"
-                    onClick={() => setMetric(m)}
-                    className={`rounded-[5px] px-2 py-0.5 text-xs font-medium transition-colors outline-none focus-visible:ring-2 focus-visible:ring-ring/40 ${
-                      metric === m
-                        ? "bg-accent-tint text-accent-brand-strong shadow-sm"
-                        : "text-muted-foreground hover:text-foreground"
-                    }`}
-                  >
-                    {m === "tokens"
-                      ? t("usage.sessions.byTokens")
-                      : t("usage.sessions.byCost")}
-                  </button>
-                ))}
-              </div>
-              <button
-                type="button"
-                onClick={() => dispatch(setView("sessions"))}
-                className="text-primary hover:text-primary/80 inline-flex items-center gap-1 text-xs"
-              >
-                {t("usage.sessions.allLink")}
-                <ArrowRight className="size-3" />
-              </button>
-            </div>
-          </CardAction>
-        </CardHeader>
-        <CardContent className="flex flex-1 flex-col justify-center gap-1">
+            <span className="text-muted-foreground text-xs tabular-nums">
+              {metric === "cost"
+                ? t("usage.sessions.topByCost", { n: TOP_N })
+                : t("usage.sessions.topByTokens", { n: TOP_N })}
+            </span>
+            <ToggleGroup
+              size="sm"
+              value={[metric]}
+              onValueChange={(values) => {
+                const next = values[0]
+                if (next === "tokens" || next === "cost") setMetric(next)
+              }}
+              aria-label={t("usage.sessions.topTitle")}
+            >
+              <ToggleGroupItem value="tokens">
+                {t("usage.sessions.byTokens")}
+              </ToggleGroupItem>
+              <ToggleGroupItem value="cost">
+                {t("usage.sessions.byCost")}
+              </ToggleGroupItem>
+            </ToggleGroup>
+            <button
+              type="button"
+              onClick={() => dispatch(setView("sessions"))}
+              className="text-primary hover:text-primary/80 inline-flex items-center gap-1 text-xs"
+            >
+              {t("usage.sessions.allLink")}
+              <ArrowRight className="size-3" />
+            </button>
+          </div>
+        </CardAction>
+      </CardHeader>
+      <CardContent className="flex flex-1 flex-col justify-center gap-1">
+        <QueryState
+          isLoading={isLoading}
+          error={error}
+          isEmpty={rows.length === 0}
+          emptyLabel={t("usage.sessions.empty")}
+          emptyDescription={t("usage.sessions.emptyDesc")}
+        >
           {stats.top.map((r) => {
             const value = metric === "cost" ? r.cost : r.tokens
             return (
@@ -125,8 +122,8 @@ export function SessionRanking({ filter }: { filter: FilterState }) {
               />
             )
           })}
-        </CardContent>
-      </Card>
-    </QueryState>
+        </QueryState>
+      </CardContent>
+    </Card>
   )
 }

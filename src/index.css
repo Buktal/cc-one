@@ -2,12 +2,16 @@
 @import "tw-animate-css";
 @import "shadcn/tailwind.css";
 @import "@fontsource-variable/geist";
+@import "./styles/transcript.css";
+@import "./styles/workspace.css";
 
 @custom-variant dark (&:is(.dark *));
 
 @theme inline {
-  --font-heading: var(--font-sans);
-  --font-sans: "Geist Variable", sans-serif;
+  --font-heading:
+    "Bahnschrift", "Geist Variable", "Microsoft YaHei", sans-serif;
+  --font-sans: "Geist Variable", "PingFang SC", "Microsoft YaHei", sans-serif;
+  --font-mono: "Cascadia Code", "SFMono-Regular", Consolas, monospace;
   --color-sidebar-ring: var(--sidebar-ring);
   --color-sidebar-border: var(--sidebar-border);
   --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
@@ -53,127 +57,50 @@
   --radius-4xl: calc(var(--radius) * 2.6);
 }
 
-/*
- * Visual language & theming — extended for multi-skin.
- *
- * TWO TIERS — what changes when:
- *   A. Mode-scoped (light/dark): fonts + neutral surfaces.
- *      IRON RULE — a [data-skin] block may NEVER set any of these. Text
- *      legibility follows the mode, never the skin.
- *        --foreground / --muted-foreground / --card-foreground
- *        --background / --card / --popover / --border / --input / --sidebar-*
- *        --primary-foreground is the ONE font color a skin MAY set, because it
- *        is the button's pair color (it rides on the button surface, which IS
- *        skin-scoped) — not body text. It flows from --btn-fg / --btn-fg-dark.
- *   B. Skin-scoped: brand + data palette + button pair-color. A skin block owns:
- *        --brand (+ --brand-strong)         accent + button surface
- *        --btn-fg  / --btn-fg-dark          button text, light / dark
- *        --chart-input / -output / -cache-create / -cache-read
- *        --metric-cost
- *        (--sr-success/tool/warn/error, optionally, to recolor stop-reason
- *         chips independently of the chart — otherwise they alias the chart)
- *   Skin values are written TWICE: [data-skin] = light canvas values,
- *   .dark[data-skin] = the same hue families restated for #1C1C1E (see the
- *   dark palette section below for the why). Neutral's two palettes live in
- *   :root / .dark.
- *
- *   SURFACE RULE (anti-fork): a 主面 — button fill, input fill, tab /
- *   chip selected state — must be a PURE token (bg-card / bg-input / …),
- *   never an alpha mix (bg-input/30, bg-muted/40). Alpha blends re-derive a
- *   different color on every host surface (a /30 over a black card reads as
- *   muddy grey, over grey as dark grey — the exact fork that made the same
- *   control look different across views). Alpha stays legal ONLY for
- *   intentionally weakened layers (subtle banners, track backgrounds).
- *   EXEMPTION: brand-tint selection fills (--accent-tint: nav active,
- *   calendar selection) — the tint derives the brand hue on any host, and
- *   every use is the same token, so there is no cross-view fork to prevent.
- *
- *   INTERACTION RULE (hover vs selected — one direction per mode, everywhere):
- *     hover    = neutral grey on the mode-scoped --hover (light #e9e9ea
- *                darkens on white cards; dark #343438 lifts off black
- *                cards). Transient, never tinted.
- *     selected = brand tint --accent-tint + --accent-brand-strong text
- *                (light: pale brand on white; dark: brand fill that reads
- *                against #1c1c1e). Persistent.
- *   Both float the same way per mode — dark lightens, light darkens — so
- *   hover and selected can never pull in opposite directions. Containers /
- *   tracks / skeletons stay on --muted (dark #141416 presses in — that's a
- *   container's job, not a hover's).
- *
- * BUTTON RULE (skin-agnostic, defined once here, every skin inherits it):
- *     light  --primary = --brand-strong   --primary-foreground = --btn-fg
- *     dark   --primary = --brand          --primary-foreground = --btn-fg-dark
- * So a skin swap recolors every primary button / progress bar / synced dot in
- * BOTH modes — the light/dark control gap is closed by driving
- * --primary from the brand, not from a hardcoded neutral. Neutral's own brand
- * values are greyscale, which is how it stays black/white while still following
- * the same rule. --btn-fg / --btn-fg-dark are written out per skin so the pair
- * color is tunable without touching logic (AA: deep button ⇒ white text, pale
- * button ⇒ dark text; Crimson's red wants white in BOTH modes).
- *
- * DEFAULT SKIN = Neutral: greyscale chrome (--brand is a grey) over the default
- * multi-hue chart (data viz needs color even when the chrome is mono). NO
- * data-skin attribute is set for it. The four chromatic skins override the
- * B-tier only. Surfaces are flat solid — no glass, no backdrop-blur, no glow
- * (iOS dark idiom); they separate by lightness step + hairline border.
- * Font: Geist, CJK falls back to system (PingFang/YaHei).
- */
-
+/* Surfaces and text follow light/dark mode. Skins only own brand, button
+ * pairs and chart colors. Token buckets retain one shared palette throughout
+ * the app; solid control surfaces avoid color drift between hosts. */
 :root {
-  --background: oklch(0.965 0 0); /* off-white; pure #fff was too glaring */
-  /* 窗口级背景图（.dark 也有，见下）——与暗色同一条「紫→蓝」色相弧的
-     极浅版（紫调白 → 蓝调白），明暗镜像。只作用于「整窗画布」表面
-     （body / .bg-app），组件面不参与。 */
-  --background-image: linear-gradient(
-    to bottom right,
-    rgb(242, 240, 247),
-    rgb(224, 230, 243)
-  );
-  /* 速览卡片渐变（悬浮窗 .bg-glance）——与窗口渐变同一条「紫→蓝」色相弧，
-     但比窗口画布多一档饱和：悬浮窗是「今日快照」的聚焦内容，渐变得看得见
-     （窗口档太淡，暗色下几乎是灰）。明暗镜像见 .dark。 */
+  --background: #f4f6f8;
+
+  --background-image: none;
+
   --glance-image: linear-gradient(
     to bottom right,
     rgb(233, 226, 247),
     rgb(208, 220, 243)
   );
-  --foreground: oklch(0.145 0 0);
+  --foreground: #202733;
   --card: oklch(1 0 0);
-  --card-foreground: oklch(0.145 0 0);
+  --card-foreground: #202733;
   --popover: oklch(1 0 0);
   --popover-foreground: oklch(0.145 0 0);
-  /* Tooltip — 瞬时提示的「最浮层」：不与 popover 家族同面（弹层面常与
-     card 同色，tooltip 浮在其上会隐身）。亮色用浅灰底深字——几乎与
-     off-white 背景同档（0.96，用户一路调浅至此），区分靠边框 + 投影；
-     与暗色的 #3a3a3c 灰面同族（明暗翻转）。 */
+
   --tooltip: oklch(0.96 0 0);
   --tooltip-foreground: oklch(0.145 0 0);
   --tooltip-border: rgba(0, 0, 0, 0.16);
-  /* Button surface follows the brand (BUTTON RULE above). Neutral's
-     --brand-strong is near-black ⇒ black button; --btn-fg is its pair color. */
+
   --primary: var(--brand-strong);
   --primary-foreground: var(--btn-fg);
   --btn-fg: #ffffff;
   --secondary: oklch(0.94 0 0);
   --secondary-foreground: oklch(0.205 0 0);
-  --muted: oklch(0.94 0 0);
-  /* Deepened from 0.556 — light-mode secondary text & icons read too pale. */
+  --muted: #f1f3f6;
+
   --muted-foreground: oklch(0.42 0 0);
   --destructive: oklch(0.577 0.245 27.325);
-  --border: oklch(0.922 0 0);
+  --border: #e2e6ec;
   --input: oklch(0.922 0 0);
   --ring: oklch(0.708 0 0);
-  /* B-tier — default skin (Neutral). --brand is a grey, so the chrome stays
-     monochrome while the chart below stays multi-hue (data needs color). The
-     four chromatic skins override --brand / --brand-strong / --btn-fg. */
+
   --brand: oklch(0.45 0 0);
   --brand-strong: oklch(0.205 0 0);
-  --chart-input: #d89744; /* 输入 input_tokens — 琥珀 */
-  --chart-output: #cb3d49; /* 输出 output_tokens — 珊瑚红 */
-  --chart-cache-create: #2e59a7; /* 缓存创建 cache_creation — 深蓝 */
-  --chart-cache-read: #4c8045; /* 缓存命中 cache_read — 鼠尾草绿 */
-  --metric-cost: #9d2932; /* 成本 USD — 朱红（独立「钱」维度，非四桶）*/
-  --radius: 0.45rem;
+  --chart-input: #d89744;
+  --chart-output: #cb3d49;
+  --chart-cache-create: #2e59a7;
+  --chart-cache-read: #4c8045;
+  --metric-cost: #9d2932;
+  --radius: 0.6rem;
   --sidebar: oklch(0.985 0 0);
   --sidebar-foreground: oklch(0.145 0 0);
   --sidebar-primary: var(--brand-strong);
@@ -182,39 +109,26 @@
   --sidebar-accent-foreground: oklch(0.205 0 0);
   --sidebar-border: oklch(0.922 0 0);
   --sidebar-ring: oklch(0.708 0 0);
-  /* Selection accent derives from the brand, so it recolors with the skin
-     without a skin block having to repeat it: --accent-tint = selection fill,
-     --accent-brand = left rail + icon, --accent-brand-strong = label text. */
+
   --accent-brand: var(--brand);
   --accent-brand-strong: var(--brand-strong);
   --accent-tint: color-mix(in srgb, var(--brand) 10%, transparent);
-  /* INTERACTION RULE (see header comment): --hover = transient hover fill,
-     mode-scoped — light darkens (grey on white cards), dark lightens.
-     Selected state rides --accent-tint; --muted stays container/track. */
+
   --hover: oklch(0.92 0 0);
-  /* stop_reason semantic aliases (see .sem-chip). Default to the chart buckets
-     by hue family; a skin may override any --sr-* to recolor chips alone. */
+
   --sr-success: var(--chart-cache-read);
   --sr-tool: var(--chart-input);
   --sr-warn: var(--chart-output);
   --sr-error: var(--destructive);
-  /* 会话类型 semantic aliases (see .sem-chip): main = 常规主会话 → success 绿,
-     subagent = 派生的工具性活动 → tool 琥珀 — 与请求日志的结局色板同源, 扫一
-     眼即对应. 与 --sr-* 平行: 皮肤可覆盖任一 --type-* 单独重色. */
+
   --type-main: var(--sr-success);
   --type-sub: var(--sr-tool);
-  /* 分类徽标语义色（providers 列表）：官方固定蓝。chart 四桶是数据语义
-     （input/output/cache-*），皮肤会重映射——crimson 的 cache-create 是淡蓝、
-     sage 是橙、azure 是黄绿，借它当分类色换肤即漂移。分类语义色固定，皮肤
-     不覆盖。 */
+
   --cat-official: #2563eb;
-  /* Scrollbar — thin, no arrows (Windows WebView2). Flat semi-transparent
-     thumb over a transparent track, darkens on hover. */
+
   --scrollbar-thumb: rgba(0, 0, 0, 0.18);
   --scrollbar-thumb-hover: rgba(0, 0, 0, 0.3);
-  /* Code pane (.md-codeblock) — MODE-scoped surface (mode-scoped iron rule;
-     a skin never sets these): GitHub Light pane + tokens in light mode, GitHub
-     Dark in dark mode. */
+
   --md-code-bg: #f6f8fa;
   --md-code-fg: #24292f;
   --md-code-border: rgba(27, 31, 36, 0.12);
@@ -229,84 +143,51 @@
   --md-token-built-in: #953800;
   --md-token-tag: #116329;
   --md-token-operator: #24292f;
-  /* 热力中性墨阶（#119 日历热力等分位色阶图形）——中性属 MODE 范畴（铁律：
-     皮肤块不写中性），也不借四桶色以免 token 语义串味。0 = 空格（GitHub
-     NONE 档，在白卡上呈可辨的浅灰），1–4 = 数据四分位、亮色越深越热；
-     取值沿 dashboard-v2 原型已校验的亮色墨阶。 */
 }
 
 .dark {
-  /* 底/面对换（用户决策 2026-08）：暗色从「深底浅面」翻转为「浅底深面」。
-     明暗阶梯（用户决策 2026-08-14）：页面 #1c1c1e → 菜单栏/面板 --card
-     压到最深 #0d0d0f → 弹层/下拉中灰 #26262a 独占「浮起位」（页面若保持
-     原灰 #2c2c2e，弹层与之同处中灰区、浮在页面上看不出边界——压深页面
-     后弹层才立得住）→ 交互面 hover/tooltip 提亮。input 与面板同深
-     (#0d0d0f)，控件凹面靠边框与图标区分。 */
-  --background: #1c1c1e;
-  /* 窗口背景渐变（用户决策 2026-08-14）：左上深紫灰 rgb(44,37,54) →
-     右下蓝灰 rgb(58,70,92)，与亮色的紫调白→蓝调白同一条色相弧（明暗
-     镜像）。--background 纯色作兜底（fixed 锚定窗口，不随滚动）；组件
-     面不参与，只在整窗画布（body / .bg-app）上呈现。 */
-  --background-image: linear-gradient(
-    to bottom right,
-    rgb(44, 37, 54),
-    rgb(58, 70, 92)
-  );
-  /* 速览卡片渐变（暗色）：同色相弧提亮一档——深紫罗兰 → 蓝灰，暗色下
-     看得出紫蓝过渡（窗口档 rgb(44,37,54)→rgb(58,70,92) 太接近灰）。 */
+  --background: #171b22;
+
+  --background-image: none;
+
   --glance-image: linear-gradient(
     to bottom right,
     rgb(52, 43, 68),
     rgb(68, 82, 108)
   );
-  --foreground: #ffffff;
-  --card: #0d0d0f;
-  --card-foreground: #ffffff;
-  /* 弹层/下拉面板 — 中灰，浮于页面浅灰与黑卡之间（比 card 浅一档 =
-     浮起感，像 macOS 面板）。Tooltip 更浅 (#3a3a3c) 保持最顶层。 */
+  --foreground: #edf1f7;
+  --card: #10141b;
+  --card-foreground: #edf1f7;
+
   --popover: #26262a;
   --popover-foreground: #ffffff;
-  /* Tooltip — 暗色走「提亮」而非跟 card 的按深链：比灰底 (#2c2c2e) 亮一档，
-     在黑卡 (#1c1c1e) 上亮两档——两种表面都立得住（若用 #1c1c1e 会和
-     card 同色隐身）。 */
+
   --tooltip: #3a3a3c;
   --tooltip-foreground: #ffffff;
   --tooltip-border: rgba(255, 255, 255, 0.14);
-  /* BUTTON RULE: dark --primary is the brand's LIGHT shade; --btn-fg-dark is
-     its pair color. Neutral's --brand is a light grey ⇒ light-grey button with
-     dark text (near-white, easier on the eye than pure #fff on #1C1C1E). */
+
   --primary: var(--brand);
   --primary-foreground: var(--btn-fg-dark);
   --btn-fg-dark: oklch(0.2 0 0);
   --brand: oklch(0.72 0 0);
   --brand-strong: oklch(0.9 0 0);
-  /* 容器/轨道面 — muted 只管「弱化容器」本分（骨架、轨道、弱化块、分组
-     行底），不再兼 hover：交互悬浮走 --hover（提亮），选中走 --accent-tint
-     （品牌浅色）——方向统一为「暗色提亮、亮色加深」。 */
+
   --secondary: #141416;
   --secondary-foreground: #ffffff;
-  --muted: #141416;
+  --muted: #1c222b;
   --muted-foreground: rgba(235, 235, 245, 0.6);
   --destructive: #f87171;
   --border: rgba(255, 255, 255, 0.08);
-  /* 输入框 — 四档最深处（与页面底 #0d0d0f 同深），叠黑卡 (#1c1c1e) 上
-     呈明确凹面；hover 走 --hover 提亮，不再依赖 muted。 */
-  --input: #0d0d0f;
+
+  --input: #10141b;
   --ring: var(--brand);
-  /* B-tier data palette — default skin (Neutral), DARK values. The light
-     palette's mid-depth shades die on #1C1C1E (deep blue #2e59a7 ≈ 2.5:1,
-     deep green #4c8045 ≈ 3.6:1), so every bucket is restated in its own hue
-     family at a brighter stop — same hue, same meaning, either mode. Tuned
-     to the quietest stop that still passes: saturation pulled back so the
-     dark canvas reads calm, not neon (reds cap ≈4.5:1 before they glare).
-     (Chromatic skins restate theirs in the .dark[data-skin] blocks below.) */
-  --chart-input: #d49c54; /* 输入 — 琥珀 (7.0:1) */
-  --chart-output: #de545f; /* 输出 — 珊瑚红 (4.5:1) */
-  --chart-cache-create: #5685dc; /* 缓存创建 — 亮蓝 (4.7:1) */
-  --chart-cache-read: #61b356; /* 缓存命中 — 亮绿 (6.6:1) */
-  --metric-cost: #cd424d; /* 成本 — 朱红，比 output 深一档同 hue 区分 (3.6:1, KPI 大字) */
-  /* 热力墨阶（暗色镜像，同 :root 注）：越亮越热；0 = 空格，比 card
-     (#0d0d0f) 亮一档可辨。 */
+
+  --chart-input: #d49c54;
+  --chart-output: #de545f;
+  --chart-cache-create: #5685dc;
+  --chart-cache-read: #61b356;
+  --metric-cost: #cd424d;
+
   --sidebar: #0d0d0f;
   --sidebar-foreground: #ffffff;
   --sidebar-primary: var(--brand);
@@ -316,19 +197,14 @@
   --sidebar-border: rgba(255, 255, 255, 0.08);
   --sidebar-ring: var(--brand);
   --accent-brand: var(--brand);
-  /* Selection label text: dark mode uses the LIGHT shade (--brand) so the text
-     reads on the dark tint fill. Light mode uses --brand-strong (deep) on the
-     pale tint — see :root. Same var name, swapped source per mode. */
+
   --accent-brand-strong: var(--brand);
-  /* INTERACTION RULE: --hover lifts off every dark surface (card #0d0d0f,
-     popover #26262a, background #1c1c1e) — one lighter step, below tooltip
-     (#3a3a3c). Selected tint bumped 12% → 16% so the brand fill reads on the
-     black card instead of vanishing. */
+
   --accent-tint: color-mix(in srgb, var(--brand) 16%, transparent);
-  --hover: #343438;
+  --hover: #2c3440;
   --scrollbar-thumb: rgba(255, 255, 255, 0.16);
   --scrollbar-thumb-hover: rgba(255, 255, 255, 0.28);
-  /* Code pane — dark mode: GitHub Dark pane + tokens. */
+
   --md-code-bg: #101014;
   --md-code-fg: #e6e6eb;
   --md-code-border: rgba(255, 255, 255, 0.1);
@@ -345,22 +221,11 @@
   --md-token-operator: #c9d1d9;
 }
 
-/* ─────────────────────────────────────────────────────────────────────────
- * B-tier chromatic skins — override brand + data palette + button pair color.
- * Iron rule: NEVER set a body font color or neutral surface here. The BUTTON
- * RULE (light primary=brand-strong, dark primary=brand) is inherited from
- * :root/.dark, so each skin only states its brand shades and the two button
- * pair colors. --btn-fg = light-mode button text, --btn-fg-dark = dark-mode.
- * Chart + cost values are the designer-tuned palette per skin (hue-family
- * anchored); cost currently shares cache-read's hue on purpose.
- * ───────────────────────────────────────────────────────────────────────── */
-
-/* Sage — pale green accent, deep-green button. */
 [data-skin="sage"] {
   --brand: #b7d6b3;
   --brand-strong: #4c8045;
-  --btn-fg: #ffffff; /* light: deep-green button → white text */
-  --btn-fg-dark: #04130d; /* dark: pale-green button → dark text */
+  --btn-fg: #ffffff;
+  --btn-fg-dark: #04130d;
   --chart-input: #507dcf;
   --chart-output: #f4e20f;
   --chart-cache-create: #f2946c;
@@ -368,7 +233,6 @@
   --metric-cost: #4c8045;
 }
 
-/* Azure — misty blue accent, deep-blue button. */
 [data-skin="azure"] {
   --brand: #8ba9df;
   --brand-strong: #2e59a7;
@@ -381,12 +245,11 @@
   --metric-cost: #2e59a7;
 }
 
-/* Crimson — carmine red accent. Red wants white text in BOTH modes. */
 [data-skin="crimson"] {
   --brand: #bc313d;
   --brand-strong: #9d2932;
   --btn-fg: #ffffff;
-  --btn-fg-dark: #ffffff; /* dark: red button still wants white text */
+  --btn-fg-dark: #ffffff;
   --chart-input: #5b9953;
   --chart-output: #ffe941;
   --chart-cache-create: #abcce0;
@@ -394,7 +257,6 @@
   --metric-cost: #9d2932;
 }
 
-/* Mauve — smoky violet accent, deep-violet button. */
 [data-skin="mauve"] {
   --brand: #b7b0cd;
   --brand-strong: #494166;
@@ -407,23 +269,6 @@
   --metric-cost: #494166;
 }
 
-/* ─────────────────────────────────────────────────────────────────────────
- * DARK skin palettes — the [data-skin] blocks above state LIGHT values, and
- * on a #1C1C1E canvas those go wrong two ways: mid-depth shades (deep blue /
- * deep green / deep red, ≈1.8–3.6:1) vanish, and the pale brands are so
- * desaturated they read as grey, not brand (sage 30% sat, mauve 22% — the
- * "washed-out" feel). Each skin restates the failing stops here in the SAME
- * hue families at brighter stops — saturation held at the quietest level
- * that still reads (a skin block may be tuned back further, but the ratio
- * floor for the chart text chips is ≈4.5:1). Buckets that already pop on
- * dark (yellow / orange / light-blue outputs, ≥7:1) are left to inherit from
- * the light block. --btn-fg-dark pairs unchanged (crimson still wants white;
- * the lifted sage/azure/mauve still want dark text). Neutral needs no block —
- * .dark above carries its dark palette.
- * ───────────────────────────────────────────────────────────────────────── */
-
-/* Sage — brand from 30% to 42% saturation: the pale green finally reads as
-   green on dark instead of grey. Blue input + green cache-read lifted. */
 .dark[data-skin="sage"] {
   --brand: #93d08b;
   --chart-input: #5683d7;
@@ -431,11 +276,6 @@
   --metric-cost: #61b356;
 }
 
-/* Azure — brand deepened and slightly desaturated (#8ba9df s57% l71% →
-   #7497d8 s55% l65%: darker, so it reads as an accent on dark; saturation
-   pulled back with the rest of the dark palette). Red input + blue
-   cache-read lifted (the light blue cache-read #2e59a7 was 2.5:1,
-   invisible). */
 .dark[data-skin="azure"] {
   --brand: #7497d8;
   --chart-input: #de545f;
@@ -443,9 +283,6 @@
   --metric-cost: #5685dc;
 }
 
-/* Crimson — brand lifted from a muddy #bc313d (2.9:1 on dark) to a quieter
-   carmine; white button text still passes (~4:1, large solid button). Green
-   input + red cache-read lifted. */
 .dark[data-skin="crimson"] {
   --brand: #d2565e;
   --chart-input: #61b356;
@@ -453,8 +290,6 @@
   --metric-cost: #d85a62;
 }
 
-/* Mauve — brand from 22% to 34% saturation: smoky violet instead of pale
-   grey. Green output + violet cache-read lifted (cache-read was 1.8:1). */
 .dark[data-skin="mauve"] {
   --brand: #9c8ec7;
   --chart-output: #61b356;
@@ -468,12 +303,7 @@
     scrollbar-width: thin;
     scrollbar-color: var(--scrollbar-thumb) transparent;
   }
-  /*
-   * Chromium / WebView2 (Tauri Windows): strip the native arrow buttons and
-   * render a flat, rounded, semi-transparent thumb — matches the Pixso-dark
-   * flat idiom. The 2px transparent border + background-clip inset the thumb
-   * inside the track (macOS-overlay feel) so it never kisses the edge.
-   */
+
   ::-webkit-scrollbar {
     width: 8px;
     height: 8px;
@@ -495,17 +325,14 @@
   ::-webkit-scrollbar-corner {
     display: none;
   }
-  /* Prevent the small lightweight window's content from spilling into body
-     scrollbars — the mini-bar is a fixed-size edge strip, so the body must
-     never scroll. The full dashboard scrolls inside its own <main>, unaffected. */
+
   html,
   body {
     margin: 0;
   }
   body {
     @apply bg-background text-foreground overflow-hidden;
-    /* 暗色窗口渐变（--background-image）——body 是轻量窗口等无根容器的
-       兜底画布；主窗口由 shell 根容器 (.bg-app) 绘制同一渐变。 */
+
     background-image: var(--background-image);
     background-attachment: fixed;
   }
@@ -516,355 +343,4 @@
   [role="button"]:not(:disabled) {
     cursor: pointer;
   }
-}
-
-/* 窗口级表面（窗口根 / 会话详情面板等整窗画布）：--background 纯色兜底 +
-   暗色渐变 --background-image。fixed 让渐变锚定窗口而非随内容滚动。
-   组件面（按钮/输入/开关滑块/图例框）保持纯色，不参与渐变。 */
-.bg-app {
-  background-color: var(--background);
-  background-image: var(--background-image);
-  background-attachment: fixed;
-}
-
-/* 速览卡片画布（轻量模式悬浮窗 .bg-glance）：--card 纯色兜底 + 专属
-   紫→蓝渐变 --glance-image。悬浮窗全屏内容面用渐变（用户决策 2026-08-14：
-   速览卡片背景换成渐变色），内部卡片（TokenHero 等）保持 bg-card 浮在
-   渐变上——与 dashboard 的「右中卡在窗口渐变画布上」同一结构。 */
-.bg-glance {
-  background-color: var(--card);
-  background-image: var(--glance-image);
-}
-
-/* Sheet 弹层控件面（用户决策 2026-08-14 重调）：弹层宿主是 --popover
-   （亮 #fff / 暗 #26262a），bg-card 控件（Input/Select 触发器/outline 按钮）
-   亮色下与弹层同为白色、暗色下与弹层同族深色——控件立不起来。把 --card
-   在弹层作用域内重映射为 --input（亮浅灰 / 暗最深黑凹面），bg-card 控件
-   自动成立；弹层内若放 bg-card 的内容元素（气泡等）须改用其它面。
-   Textarea 亮色透明底 / CodeEditor 亮色透明（透出宿主）暗色 oneDark 面板
-   ——弹层内统一显式给 --input 面（gutter 一并盖回，token 色保留）。 */
-[data-slot="sheet-content"] {
-  --card: var(--input);
-}
-[data-slot="sheet-content"] [data-slot="textarea"] {
-  background-color: var(--input);
-}
-[data-slot="sheet-content"] .cm-editor,
-[data-slot="sheet-content"] .cm-gutters {
-  background-color: var(--input);
-}
-
-/* Scrollable region without a visible scrollbar — horizontal toolbars that
-   must never wrap scroll instead (wheel / drag still work); a visible track
-   would fight the toolbar's own rhythm. */
-.scrollbar-none {
-  scrollbar-width: none;
-}
-.scrollbar-none::-webkit-scrollbar {
-  display: none;
-}
-
-/* Dot-grid backdrop utility (opt-in; default surface is flat solid). */
-.bg-grid {
-  background-image: radial-gradient(var(--border) 1px, transparent 1px);
-  background-size: 16px 16px;
-}
-
-/*
- * Semantic chip — shared shape for status-like tags carrying a semantic color
- * via a --sr-* / --type-* alias (defaults to the chart palette in :root).
- * Tinted via color-mix (Chromium 111+ / Safari 16.2+, both within Tauri's
- * webview floor). Used by the request-log table (stop_reason) and the
- * sessions type column (main / subagent).
- */
-.sem-chip {
-  display: inline-flex;
-  align-items: center;
-  border-radius: 6px;
-  padding: 1px 8px;
-  font-size: 11px;
-  font-weight: 600;
-  line-height: 1.5;
-  white-space: nowrap;
-}
-.sr-success {
-  color: var(--sr-success);
-  background: color-mix(in srgb, var(--sr-success) 16%, transparent);
-}
-.sr-tool {
-  color: var(--sr-tool);
-  background: color-mix(in srgb, var(--sr-tool) 16%, transparent);
-}
-.sr-warn {
-  color: var(--sr-warn);
-  background: color-mix(in srgb, var(--sr-warn) 16%, transparent);
-}
-.sr-error {
-  color: var(--sr-error);
-  background: color-mix(in srgb, var(--sr-error) 16%, transparent);
-}
-.type-main {
-  color: var(--type-main);
-  background: color-mix(in srgb, var(--type-main) 16%, transparent);
-}
-.type-sub {
-  color: var(--type-sub);
-  background: color-mix(in srgb, var(--type-sub) 16%, transparent);
-}
-
-/*
- * Lightweight glance card reveal. The window has no native resize
- * animation (Tauri/WebView2), so the size jump is hidden behind a content-layer
- * clip-path wipe: content reveals from the TOP-RIGHT corner toward the
- * BOTTOM-LEFT — the card grows left/down from its right-edge dock, so this is
- * the natural direction (the focal corner appears first). Opaque window ⇒ the
- * body background fills the new size instantly; the clip then progressively
- * renders the card content over that same-color fill. prefers-reduced-motion ⇒
- * instant (no clip animation).
- */
-.lw-reveal-in {
-  animation: lw-reveal-in 300ms cubic-bezier(0.22, 1, 0.36, 1) both;
-}
-.lw-reveal-out {
-  animation: lw-reveal-out 200ms ease-in both;
-}
-@keyframes lw-reveal-in {
-  from {
-    clip-path: inset(0 0 92% 92%);
-  }
-  to {
-    clip-path: inset(0 0 0 0);
-  }
-}
-@keyframes lw-reveal-out {
-  from {
-    clip-path: inset(0 0 0 0);
-  }
-  to {
-    clip-path: inset(0 0 92% 92%);
-  }
-}
-@media (prefers-reduced-motion: reduce) {
-  .lw-reveal-in,
-  .lw-reveal-out {
-    animation: none;
-  }
-}
-
-/*
- * Turn-jump flash. When a turn-nav click lands on a message, the target bubble
- * pulses its brand ring three times so the eye lands with the scroll. A
- * box-shadow ring (not border) keeps the pulse from shifting the layout.
- * prefers-reduced-motion → no animation.
- */
-.msg-flash {
-  animation: msg-flash 0.3s ease-in-out 3;
-}
-@keyframes msg-flash {
-  0%,
-  100% {
-    box-shadow: 0 0 0 0 transparent;
-  }
-  50% {
-    box-shadow: 0 0 0 2px var(--color-accent-brand);
-  }
-}
-@media (prefers-reduced-motion: reduce) {
-  .msg-flash {
-    animation: none;
-  }
-}
-
-/*
- * Transcript markdown body (.md-body) — typography for rendered message
- * bubbles. All colors derive from theme variables, so light/dark (and every
- * skin) stay consistent; headings scale down inside a bubble (a message is
- * not a document page).
- */
-.md-body {
-  font-size: 13px;
-  line-height: 1.65;
-}
-.md-body > :first-child {
-  margin-top: 0;
-}
-.md-body > :last-child {
-  margin-bottom: 0;
-}
-.md-body p {
-  margin: 0.5em 0;
-}
-.md-body h1,
-.md-body h2 {
-  margin: 0.9em 0 0.4em;
-  font-size: 15px;
-  font-weight: 600;
-}
-.md-body h3 {
-  margin: 0.8em 0 0.35em;
-  font-size: 14px;
-  font-weight: 600;
-}
-.md-body h4,
-.md-body h5,
-.md-body h6 {
-  margin: 0.7em 0 0.3em;
-  font-size: 13px;
-  font-weight: 600;
-}
-.md-body ul,
-.md-body ol {
-  margin: 0.5em 0;
-  padding-left: 1.4em;
-}
-.md-body li {
-  margin: 0.2em 0;
-}
-.md-body li > p {
-  margin: 0.2em 0;
-}
-.md-body blockquote {
-  margin: 0.6em 0;
-  padding-left: 0.8em;
-  border-left: 3px solid var(--border);
-  color: var(--muted-foreground);
-}
-.md-body blockquote > :first-child {
-  margin-top: 0;
-}
-.md-body blockquote > :last-child {
-  margin-bottom: 0;
-}
-.md-body hr {
-  margin: 0.9em 0;
-  border: none;
-  border-top: 1px solid var(--border);
-}
-/* display:block + overflow-x lets wide tables scroll inside the bubble
-   instead of stretching it (GitHub-style). nowrap keeps cells aligned. */
-.md-body table {
-  display: block;
-  overflow-x: auto;
-  max-width: 100%;
-  margin: 0.6em 0;
-  border-collapse: collapse;
-  font-size: 12px;
-}
-.md-body th,
-.md-body td {
-  padding: 4px 10px;
-  border: 1px solid var(--border);
-  text-align: left;
-  white-space: nowrap;
-}
-.md-body th {
-  font-weight: 600;
-  background: var(--muted);
-}
-.md-body input[type="checkbox"] {
-  margin-right: 0.35em;
-  accent-color: var(--accent-brand);
-}
-
-/*
- * Code pane (.md-codeblock) — a MODE-scoped surface: the pane + token palette
- * swap with light/dark (GitHub Light ↔ GitHub Dark, via the --md-* vars set in
- * :root/.dark). The pane sits on the bubble with a hairline border; its own
- * scrollbar thumb matches the mode so the pre's scroll stays visible.
- */
-.md-codeblock {
-  margin: 0.6em 0;
-  overflow: hidden;
-  border-radius: 8px;
-  background: var(--md-code-bg);
-}
-.md-codeblock-header {
-  display: flex;
-  align-items: center;
-  gap: 0.5rem;
-  padding: 6px 12px;
-  border-bottom: 1px solid var(--md-code-border);
-}
-.md-codeblock-lang {
-  font-size: 10px;
-  font-weight: 500;
-  letter-spacing: 0.05em;
-  text-transform: uppercase;
-  color: var(--md-code-label);
-}
-.md-codeblock pre {
-  margin: 0;
-  scrollbar-width: thin;
-  scrollbar-color: var(--md-code-scrollbar) transparent;
-}
-.md-codeblock pre::-webkit-scrollbar-thumb {
-  background: var(--md-code-scrollbar);
-  background-clip: content-box;
-}
-.md-codeblock code {
-  color: var(--md-code-fg);
-}
-.md-codeblock .hljs-comment,
-.md-codeblock .hljs-quote {
-  color: var(--md-token-comment);
-  font-style: italic;
-}
-.md-codeblock .hljs-keyword,
-.md-codeblock .hljs-selector-tag,
-.md-codeblock .hljs-literal,
-.md-codeblock .hljs-doctag {
-  color: var(--md-token-keyword);
-}
-.md-codeblock .hljs-string,
-.md-codeblock .hljs-regexp,
-.md-codeblock .hljs-addition {
-  color: var(--md-token-string);
-}
-.md-codeblock .hljs-number,
-.md-codeblock .hljs-symbol,
-.md-codeblock .hljs-bullet {
-  color: var(--md-token-number);
-}
-.md-codeblock .hljs-title,
-.md-codeblock .hljs-section,
-.md-codeblock .hljs-name,
-.md-codeblock .hljs-selector-id {
-  color: var(--md-token-title);
-}
-.md-codeblock .hljs-attr,
-.md-codeblock .hljs-property,
-.md-codeblock .hljs-variable,
-.md-codeblock .hljs-template-variable,
-.md-codeblock .hljs-params,
-.md-codeblock .hljs-constant {
-  color: var(--md-token-attr);
-}
-.md-codeblock .hljs-built_in,
-.md-codeblock .hljs-meta,
-.md-codeblock .hljs-type {
-  color: var(--md-token-built-in);
-}
-.md-codeblock .hljs-tag,
-.md-codeblock .hljs-selector-class {
-  color: var(--md-token-tag);
-}
-.md-codeblock .hljs-operator,
-.md-codeblock .hljs-punctuation {
-  color: var(--md-token-operator);
-}
-.md-codeblock .hljs-emphasis {
-  font-style: italic;
-}
-.md-codeblock .hljs-strong {
-  font-weight: 600;
-}
-
-/* 分布行的「其他 / 未知」聚合条填充：斜纹与实体条目区分（#106 看板分区，
-   原型 variant-c-v2 的 .bar-fill.other）。颜色走 border token，换肤跟随。 */
-.bar-hatch {
-  background: repeating-linear-gradient(
-    45deg,
-    var(--border) 0 3px,
-    transparent 3px 6px
-  );
 }

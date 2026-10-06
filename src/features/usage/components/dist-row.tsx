@@ -54,7 +54,7 @@ export function DistRow({
         selected ? "bg-accent-tint" : clickable && "hover:bg-hover",
       )}
     >
-      <div className="flex items-baseline justify-between gap-2 text-xs">
+      <div className="flex flex-wrap items-baseline justify-between gap-x-2 gap-y-1 text-xs">
         <span className="flex min-w-0 items-baseline gap-1">
           <span
             className={cn(
@@ -74,9 +74,7 @@ export function DistRow({
             </Badge>
           ) : null}
         </span>
-        <span className="text-muted-foreground shrink-0 tabular-nums">
-          {value}
-        </span>
+        <span className="text-muted-foreground tabular-nums">{value}</span>
       </div>
       <div className="bg-muted h-1.5 w-full overflow-hidden rounded-full">
         <div

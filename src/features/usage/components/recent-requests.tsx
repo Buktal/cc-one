@@ -62,7 +62,7 @@ export function RecentRequests() {
             <div
               key={r.uuid}
               className={cn(
-                "flex items-center gap-3 py-2.5",
+                "flex flex-wrap items-center gap-x-3 gap-y-2 py-2.5",
                 i > 0 && "border-border/60 border-t",
               )}
             >

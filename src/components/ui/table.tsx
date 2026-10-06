@@ -58,7 +58,7 @@ function TableRow({ className, ...props }: React.ComponentProps<"tr">) {
       // 行投影 0 4px 12px -4px：x 零偏移的模糊外溢会在行盒左右缘各铺一条整行
       // 高的暗带，左缘正贴卡片内距，看着就是行首竖线——都不如纯底色干净。
       className={cn(
-        "border-b transition-colors duration-150 hover:bg-hover has-aria-expanded:bg-hover data-[state=selected]:bg-hover",
+        "border-b transition-colors duration-150 hover:bg-hover has-aria-expanded:bg-hover data-[state=selected]:bg-accent-tint focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-ring",
         className,
       )}
       {...props}
@@ -71,7 +71,7 @@ function TableHead({ className, ...props }: React.ComponentProps<"th">) {
     <th
       data-slot="table-head"
       className={cn(
-        "h-10 px-3 text-left align-middle font-medium whitespace-nowrap text-foreground [&:has([role=checkbox])]:pr-0",
+        "bg-muted px-3 py-2.5 text-left align-middle text-xs font-medium whitespace-nowrap text-muted-foreground [&:has([role=checkbox])]:pr-0",
         className,
       )}
       {...props}

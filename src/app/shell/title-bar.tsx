@@ -22,8 +22,8 @@
 // 由 wry 按属性存在性自动豁免。恒渲染（无禁用场景）——禁用场景必须完全不
 // 渲染该属性，空串/"false" 仍会触发检测（tauri#13440）。
 //
-// 窄窗退化（纯 CSS 媒体查询）：≤1360 胶囊藏时间 / ≤1180 导航收纯图标
-// （title 补全称）/ ≤980 胶囊藏设备名（心跳点恒显，状态永不整簇消失）。
+// 窄窗退化：≤1360 藏时间、导航收纯图标（title 补全称）；≤980 藏设备名；
+// ≤760 导航独占第二行。状态点与窗口动作始终可达。
 
 import { getCurrentWindow } from "@tauri-apps/api/window"
 import {
@@ -67,7 +67,7 @@ import { currentPlatform, topbarLayout } from "./topbar-layout"
 
 // 7 views split into two groups — 观察 (data views) and 管理 (system config).
 // The topbar renders the grouping as a vertical rule between the two runs (no
-// heading text); the full label + group rides the native title so the ≤1180
+// heading text); the full label + group rides the native title so the ≤1360
 // icon-only form keeps the same information on hover.
 const NAV_GROUPS: Array<{
   heading: string
@@ -122,15 +122,15 @@ export function TitleBar() {
     <header
       data-tauri-drag-region="true"
       className={cn(
-        "bg-app text-foreground relative flex h-11 min-w-0 shrink-0 select-none items-center gap-2",
+        "app-titlebar bg-card text-foreground relative flex min-h-12 min-w-0 shrink-0 select-none items-center gap-2",
         layout.paddingClass,
         layout.borderClass,
       )}
     >
-      {/* 导航（观察组 ‖ 管理组）。≤1180 收纯图标（title 补全称）。 */}
+      {/* 导航（观察组 ‖ 管理组）。≤1360 收纯图标（title 补全称）。 */}
       <nav
         aria-label={t("nav.aria")}
-        className="flex h-full shrink-0 items-center gap-0.5"
+        className="flex min-w-0 items-center gap-0.5"
       >
         {NAV_GROUPS.map((group, gi) => (
           <div key={group.heading} className="flex items-center gap-0.5">
@@ -151,10 +151,13 @@ export function TitleBar() {
       {/* 中间弹性留白：即拖拽区。wry 的 drag 检测按 mousedown target 元素本身
           的属性判定（非祖先冒泡），这个空隙 div 必须自带属性，否则落在其上
           的按下会被当成页面内容而不是拖拽。 */}
-      <div className="min-w-2 flex-1" data-tauri-drag-region="true" />
+      <div
+        className="titlebar-drag min-w-2 flex-1"
+        data-tauri-drag-region="true"
+      />
 
       {/* 右簇：状态胶囊 + 主题 + 采集主按钮 ‖ 轻量两键。 */}
-      <div className="flex shrink-0 items-center gap-2">
+      <div className="titlebar-actions flex shrink-0 items-center gap-2">
         <StatusCapsule />
         <ThemeToggle />
         <Button
@@ -202,10 +205,10 @@ export function TitleBar() {
   )
 }
 
-/** 顶栏导航按钮：icon + label，≤1180 收纯图标（原生 title 补「名称 · 组」
+/** 顶栏导航按钮：icon + label，≤1360 收纯图标（原生 title 补「名称 · 组」
  *  全称；beta 项追加提示句——图标态下 BETA 徽标随 label 一起隐藏）。
  *  选中项 = tint 填充 + 品牌色文字（交互规则）＋ wrapper 贴 bar 底的品牌色
- *  短线（结构指示，见文件头注释）；wrapper 拉满行高让线落在 header 底边。 */
+ *  短线。第二行导航沿用同一选中指示。 */
 function TopNavBtn({
   item,
   group,
@@ -230,16 +233,17 @@ function TopNavBtn({
         onClick={onClick}
         aria-current={active ? "page" : undefined}
         title={title}
+        aria-label={label}
         className={cn(
-          "text-muted-foreground hover:bg-hover hover:text-foreground inline-flex h-7 items-center gap-2 rounded-md px-2.5 text-[12.5px] whitespace-nowrap transition-colors",
-          "max-[1180px]:size-8 max-[1180px]:justify-center max-[1180px]:px-0",
+          "text-muted-foreground hover:bg-hover hover:text-foreground inline-flex min-h-8 items-center gap-2 rounded-md px-2.5 text-[12.5px] whitespace-nowrap transition-colors",
+          "max-[1360px]:size-8 max-[1360px]:justify-center max-[1360px]:px-0",
           active
             ? "bg-accent-tint font-medium text-accent-brand-strong hover:bg-accent-tint"
             : "",
         )}
       >
         <Icon className="size-[15px] shrink-0" />
-        <span className="max-[1180px]:hidden">
+        <span className="max-[1360px]:hidden">
           {label}
           {item.beta ? (
             // BETA 是软件里跨语言通用的状态徽标缩写（zh/ja 用户都按原文理
@@ -283,9 +287,9 @@ function WindowControls() {
   }, [])
 
   const sysBtn =
-    "text-muted-foreground hover:bg-muted hover:text-foreground inline-flex h-full w-[46px] shrink-0 items-center justify-center transition-colors"
+    "text-muted-foreground hover:bg-muted hover:text-foreground inline-flex min-h-12 w-[46px] shrink-0 items-center justify-center transition-colors"
   return (
-    <div className="flex h-full shrink-0 self-stretch">
+    <div className="window-controls flex min-h-12 shrink-0 self-stretch">
       <button
         type="button"
         aria-label={t("titlebar.minimize")}

@@ -56,31 +56,31 @@ export function DailyRequestChart({ filter }: { filter: FilterState }) {
   const tickInterval = tickIntervalFor(bars.length)
 
   return (
-    <QueryState
-      isLoading={isLoading}
-      error={error}
-      isEmpty={bars.length === 0}
-      emptyLabel={t("usage.requests.empty")}
-      emptyDescription={t("usage.requests.emptyDesc")}
-    >
-      <Card interactive className="h-full">
-        <CardHeader>
-          {/* 主标题跟桶粒度：单日窗口实为当日逐小时，标题不再写死「每日」。 */}
-          <CardTitle>
+    <Card interactive>
+      <CardHeader>
+        {/* 主标题跟桶粒度：单日窗口实为当日逐小时，标题不再写死「每日」。 */}
+        <CardTitle>
+          {hourly
+            ? t("usage.requests.todayTitle")
+            : t("usage.requests.dailyTitle")}
+        </CardTitle>
+        {/* 副标进 CardAction（全页 header 单行制，与每日成本卡同形）。 */}
+        <CardAction>
+          <span className="text-muted-foreground text-xs tabular-nums">
             {hourly
-              ? t("usage.requests.todayTitle")
-              : t("usage.requests.dailyTitle")}
-          </CardTitle>
-          {/* 副标进 CardAction（全页 header 单行制，与每日成本卡同形）。 */}
-          <CardAction>
-            <span className="text-muted-foreground text-xs tabular-nums">
-              {hourly
-                ? t("usage.requests.todayHours")
-                : t("usage.requests.lastDays", { n: bars.length })}
-            </span>
-          </CardAction>
-        </CardHeader>
-        <CardContent className="flex flex-1 flex-col justify-center">
+              ? t("usage.requests.todayHours")
+              : t("usage.requests.lastDays", { n: bars.length })}
+          </span>
+        </CardAction>
+      </CardHeader>
+      <CardContent className="flex flex-1 flex-col justify-center">
+        <QueryState
+          isLoading={isLoading}
+          error={error}
+          isEmpty={bars.length === 0}
+          emptyLabel={t("usage.requests.empty")}
+          emptyDescription={t("usage.requests.emptyDesc")}
+        >
           <ChartContainer config={chartConfig} className="h-44 w-full">
             <BarChart
               data={bars}
@@ -141,8 +141,8 @@ export function DailyRequestChart({ filter }: { filter: FilterState }) {
               </Bar>
             </BarChart>
           </ChartContainer>
-        </CardContent>
-      </Card>
-    </QueryState>
+        </QueryState>
+      </CardContent>
+    </Card>
   )
 }

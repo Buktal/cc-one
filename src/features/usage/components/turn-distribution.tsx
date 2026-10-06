@@ -32,32 +32,32 @@ export function TurnDistribution({ filter }: { filter: FilterState }) {
   }))
 
   return (
-    <QueryState
-      isLoading={isLoading}
-      error={error}
-      isEmpty={rows.length === 0}
-      emptyLabel={t("usage.sessions.empty")}
-      emptyDescription={t("usage.sessions.emptyDesc")}
-    >
-      <Card interactive className="h-full">
-        <CardHeader>
-          <CardTitle>{t("usage.sessions.turnDistTitle")}</CardTitle>
-          {/* 副标进 CardAction（全页 header 单行制，与时长分布卡同形）。 */}
-          <CardAction>
-            <span className="text-muted-foreground text-xs tabular-nums">
-              {t("usage.sessions.bySessionCount")}
-            </span>
-          </CardAction>
-        </CardHeader>
-        <CardContent className="flex flex-1 flex-col justify-center">
+    <Card interactive>
+      <CardHeader>
+        <CardTitle>{t("usage.sessions.turnDistTitle")}</CardTitle>
+        {/* 副标进 CardAction（全页 header 单行制，与时长分布卡同形）。 */}
+        <CardAction>
+          <span className="text-muted-foreground text-xs tabular-nums">
+            {t("usage.sessions.bySessionCount")}
+          </span>
+        </CardAction>
+      </CardHeader>
+      <CardContent className="flex flex-1 flex-col justify-center">
+        <QueryState
+          isLoading={isLoading}
+          error={error}
+          isEmpty={rows.length === 0}
+          emptyLabel={t("usage.sessions.empty")}
+          emptyDescription={t("usage.sessions.emptyDesc")}
+        >
           <SemicircleChart
             tiers={tiers}
             centerValue={formatCount(stats.sessions)}
             centerLabel={t("usage.kpi.sessions")}
             formatValue={formatCount}
           />
-        </CardContent>
-      </Card>
-    </QueryState>
+        </QueryState>
+      </CardContent>
+    </Card>
   )
 }

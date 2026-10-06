@@ -310,11 +310,9 @@ function Section({
   return (
     <section id={id} className="flex scroll-mt-4 flex-col gap-2.5">
       <div className="flex flex-col gap-1 px-0.5">
-        <h2 className="text-muted-foreground text-[11px] font-semibold tracking-[0.14em]">
-          {eyebrow}
-        </h2>
+        <h2 className="font-heading text-sm font-semibold">{eyebrow}</h2>
         {description ? (
-          <p className="text-muted-foreground/70 text-xs leading-relaxed">
+          <p className="text-muted-foreground text-xs leading-relaxed">
             {description}
           </p>
         ) : null}

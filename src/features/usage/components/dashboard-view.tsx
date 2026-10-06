@@ -1,24 +1,3 @@
-// Dashboard view (#119 三期改版) — 单页流式看板，无分区导航：卡片自带标题、
-// 从上到下即阅读序，吸顶 tabs + scrollspy（原 01-06 分区跳转）随布局重排
-// 一并退役（use-section-scroll 无其他使用方，已删）。The shared filter bar
-// (time / source / model / project / device + reset) sits in flow at the top
-// — the same shape as the logs view's header.
-//
-// 网格按「读数叙事」分行（#119 四期：卡按语义归组，两组内部相邻不插花）：
-//   总量      TokenHero 4 + 趋势 8        —— 总量锚点与主趋势同屏
-//   指标      KPI 数字带 12               —— 紧凑一行九格
-//   日历      日历热力 12                 —— 独占整行（宽窗周历 53 列要满幅）
-//   维度排行  模型分布 4 + 会话排行 8     —— 第一组相邻，组内优先序
-//             项目排行 7 + 设备排行 5       模型 > 会话 > 项目 > 设备；
-//                                           设备仅多机注册表渲染（单机没有
-//                                           排行可读），单机项目独占整行
-//   时间分布  每日成本 6 + 每日请求 6     —— 第二组相邻：两张逐日柱
-//             轮次分布 6 + 时长分布 6     —— 两张四档半环（原 session/
-//                                            request 分区按卡语义拆散归组）
-//   明细      近期请求                    —— 页脚流水
-// Single frozen layer by design; flat solid bg-card surface (index.css 平面
-// 铁律: no glass, no backdrop-blur).
-
 import { RotateCcw } from "lucide-react"
 import { useTranslation } from "react-i18next"
 import { useDevicesQuery } from "@/app/store/api"
@@ -63,81 +42,94 @@ export function DashboardView() {
   const multiDevice = devices.length > 1
 
   return (
-    <div className="mx-auto flex w-full max-w-[1380px] flex-col gap-3 pb-4">
+    <div className="dashboard-view mx-auto flex min-w-0 max-w-[1480px] flex-col gap-5 self-stretch pb-4">
       {/* 筛选行 —— 与日志页同形（整宽 in-flow）。重置右贴行尾。 */}
-      <div className="flex min-w-0 flex-wrap items-center gap-2">
+      <div className="dashboard-filters">
         <div className="min-w-0 flex-1">
           <ControlBar />
         </div>
         <Button
           variant="ghost"
           size="sm"
-          className="h-8 px-2.5 text-xs"
           onClick={() => dispatch(resetFilter())}
         >
-          <RotateCcw className="size-3.5" />
+          <RotateCcw data-icon="inline-start" />
           {t("usage.control.reset")}
         </Button>
       </div>
 
-      <div className="grid gap-3 min-[1080px]:grid-cols-12">
-        <div className="min-[1080px]:col-span-4">
+      <div className="dashboard-grid">
+        <div className="dashboard-span-4">
           <TokenHero filter={filter} />
         </div>
-        <div className="min-[1080px]:col-span-8">
+        <div className="dashboard-span-8">
           <UsageTrendChart filter={filter} />
         </div>
-        <div className="min-[1080px]:col-span-12">
+        <div className="dashboard-span-12">
           <KpiBand filter={filter} />
         </div>
-        <div className="min-[1080px]:col-span-12">
-          <CalendarHeatmap
-            filter={filter}
-            spanDays={spanDays}
-            onPickDay={(day) => dispatch(patchFilter(dayRangePatch(day, day)))}
-          />
-        </div>
-
-        {/* —— 维度排行组：四卡相邻，左→右即优先序（模型 > 会话 > 项目 >
-            设备）。设备卡在场时项目收窄 7/12；单机项目独占整行。 —— */}
-        <div className="min-[1080px]:col-span-4">
-          <ModelDistribution
-            filter={filter}
-            onPickModel={(m) => dispatch(patchFilter({ model: m }))}
-            onClearModel={() => dispatch(patchFilter({ model: "" }))}
-          />
-        </div>
-        <div className="min-[1080px]:col-span-8">
-          <SessionRanking filter={filter} />
-        </div>
-        <div
-          className={cn(
-            "min-[1080px]:col-span-12",
-            multiDevice && "min-[1080px]:col-span-7",
-          )}
-        >
-          <ProjectSection filter={filter} />
-        </div>
-        {multiDevice ? (
-          <div className="min-[1080px]:col-span-5">
-            <DeviceSection filter={filter} />
-          </div>
-        ) : null}
-
-        {/* —— 时间与分布组：四卡相邻（每日成本 > 每日请求 > 轮次 > 时长）—— */}
-        <div className="min-[1080px]:col-span-6">
-          <DailyCostChart filter={filter} />
-        </div>
-        <div className="min-[1080px]:col-span-6">
-          <DailyRequestChart filter={filter} />
-        </div>
-        <div className="min-[1080px]:col-span-6">
-          <TurnDistribution filter={filter} />
-        </div>
-        <div className="min-[1080px]:col-span-6">
-          <DurationDistribution filter={filter} />
-        </div>
       </div>
+
+      <section className="dashboard-section" aria-labelledby="usage-breakdown">
+        <div className="dashboard-section-heading">
+          <h2 id="usage-breakdown">{t("usage.dashboard.breakdown")}</h2>
+          <p>{t("usage.dashboard.breakdownDesc")}</p>
+        </div>
+        <div className="dashboard-grid">
+          <div className="dashboard-span-4">
+            <ModelDistribution
+              filter={filter}
+              onPickModel={(m) => dispatch(patchFilter({ model: m }))}
+              onClearModel={() => dispatch(patchFilter({ model: "" }))}
+            />
+          </div>
+          <div className="dashboard-span-8">
+            <SessionRanking filter={filter} />
+          </div>
+          <div
+            className={cn(
+              multiDevice ? "dashboard-span-7" : "dashboard-span-12",
+            )}
+          >
+            <ProjectSection filter={filter} />
+          </div>
+          {multiDevice ? (
+            <div className="dashboard-span-5">
+              <DeviceSection filter={filter} />
+            </div>
+          ) : null}
+        </div>
+      </section>
+
+      <section className="dashboard-section" aria-labelledby="usage-patterns">
+        <div className="dashboard-section-heading">
+          <h2 id="usage-patterns">{t("usage.dashboard.patterns")}</h2>
+          <p>{t("usage.dashboard.patternsDesc")}</p>
+        </div>
+        <div className="dashboard-grid">
+          <div className="dashboard-span-12">
+            <CalendarHeatmap
+              filter={filter}
+              spanDays={spanDays}
+              onPickDay={(day) =>
+                dispatch(patchFilter(dayRangePatch(day, day)))
+              }
+            />
+          </div>
+          <div className="dashboard-span-6">
+            <DailyCostChart filter={filter} />
+          </div>
+          <div className="dashboard-span-6">
+            <DailyRequestChart filter={filter} />
+          </div>
+          <div className="dashboard-span-6">
+            <TurnDistribution filter={filter} />
+          </div>
+          <div className="dashboard-span-6">
+            <DurationDistribution filter={filter} />
+          </div>
+        </div>
+      </section>
 
       <RecentRequests />
     </div>

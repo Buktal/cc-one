@@ -16,6 +16,9 @@ import { dayRangeToTs, effectiveDays, sameDayWindow } from "@/lib/date-range"
 import type { TrendBucket } from "@/types/generated/bindings"
 
 export interface TokenSnapshotView {
+  isLoading: boolean
+  error: unknown
+  retry: () => void
   stats: NonNullable<Awaited<ReturnType<typeof useStatsQuery>>["data"]>
   /** Window delta ratio: multi-day = last vs first day, single-day = today vs
    *  yesterday's same hours. null when no comparison base exists. */
@@ -29,7 +32,12 @@ export interface TokenSnapshotView {
 }
 
 export function useTokenSnapshot(filter: FilterState): TokenSnapshotView {
-  const { data: stats } = useStatsQuery(filter)
+  const {
+    currentData: stats,
+    isFetching,
+    error,
+    refetch,
+  } = useStatsQuery(filter)
   // 单日窗口 (today / 单日 custom) 判定与趋势图一致: 时间戳范围落在同一个
   // 本地日 → 小时粒度。此时多日的 delta/日均语义失真 (日趋势只有 1 个点,
   // delta 恒 null, 日均退化回总量), 改走 hourlySnapshot 的「vs 昨日同时段」。
@@ -61,6 +69,9 @@ export function useTokenSnapshot(filter: FilterState): TokenSnapshotView {
   const hourlySnap = singleDay ? hourlySnapshot(trend, yesterday, now) : null
   const multiSnap = singleDay ? null : tokenSnapshot(s, trend)
   return {
+    isLoading: isFetching && !stats,
+    error,
+    retry: () => void refetch(),
     stats: s,
     deltaPct: hourlySnap?.deltaPct ?? multiSnap?.deltaPct ?? null,
     singleDay,

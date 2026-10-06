@@ -748,5 +748,19 @@
   "span.daysHours": "{{d}} 日 {{h}} 時間",
   "span.hours": "{{h}} 時間",
   "span.hoursMinutes": "{{h}} 時間 {{m}} 分",
-  "span.minutes": "{{m}} 分"
+  "span.minutes": "{{m}} 分",
+  "pageDescription.dashboard": "Token・コスト・利用状況から消費の内訳を確認。",
+  "pageDescription.sessions": "AI コーディングのセッションを閲覧・整理・お気に入り登録。",
+  "pageDescription.logs": "リクエストごとの使用量とコストの明細を確認。",
+  "pageDescription.pricing": "コスト推計に使用するモデル単価を管理。",
+  "pageDescription.library": "各デバイスの同期ファイルを閲覧・管理。",
+  "pageDescription.providers": "アプリごとのプロバイダーとモデル設定を管理。",
+  "pageDescription.settings": "環境設定・ローカルデータ・デバイス同期を管理。",
+  "usage.dashboard.consumption": "使用量とコスト",
+  "usage.dashboard.efficiency": "実行効率",
+  "usage.dashboard.activity": "利用規模",
+  "usage.dashboard.breakdown": "消費の内訳",
+  "usage.dashboard.breakdownDesc": "消費の多いモデル・セッション・プロジェクトを確認。",
+  "usage.dashboard.patterns": "利用パターン",
+  "usage.dashboard.patternsDesc": "利用時間帯・日々の変化・ターン分布を確認。"
 }

@@ -750,5 +750,19 @@
   "span.daysHours": "{{d}}d {{h}}h",
   "span.hours": "{{h}}h",
   "span.hoursMinutes": "{{h}}h {{m}}m",
-  "span.minutes": "{{m}}m"
+  "span.minutes": "{{m}}m",
+  "pageDescription.dashboard": "Track tokens, cost and activity across your coding tools.",
+  "pageDescription.sessions": "Browse, organize and favorite your AI coding sessions.",
+  "pageDescription.logs": "Inspect usage and cost details for each request.",
+  "pageDescription.pricing": "Manage model rates used to estimate usage costs.",
+  "pageDescription.library": "Browse and manage files across your devices.",
+  "pageDescription.providers": "Manage providers and model settings for each app.",
+  "pageDescription.settings": "Manage preferences, local data and device sync.",
+  "usage.dashboard.consumption": "Usage & cost",
+  "usage.dashboard.efficiency": "Execution efficiency",
+  "usage.dashboard.activity": "Activity",
+  "usage.dashboard.breakdown": "Usage breakdown",
+  "usage.dashboard.breakdownDesc": "Find the models, sessions and projects driving usage.",
+  "usage.dashboard.patterns": "Activity patterns",
+  "usage.dashboard.patternsDesc": "Explore active hours, daily changes and turn distributions."
 }

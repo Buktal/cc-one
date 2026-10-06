@@ -1,15 +1,3 @@
-// KPI band — a compact metric strip (#119 三期改版: 原 Hero 旁的 8/12 大卡
-// 占位高、空白多，压成全宽一行九格的数字带：无卡头、格值 18px、格内
-// 值 + label + 口径 sub + 格尾 Sparkline，窄容器 3/5/9 列折行). 格序沿
-// R1 的主副行序（效率 → 规模 → 质量/成本）。#119: 有逐日/逐时序列的格
-// （请求 / 命中率 / 成本 / Token）在格尾带 Sparkline——数据随全局筛选
-// （同一条 trend 查询缓存），轮时长/会话数等待 TrendPoint 第三批扩展再配。
-// Every number flows through the metric DSL. The token delta/daily-average
-// caliber comes from use-token-snapshot (shared with the hero); the
-// 会话/项目/设备 cells read the SAME projectUsage / sessionUsage /
-// deviceUsage queries the sections below consume (one cache entry per
-// filter).
-
 import { useTranslation } from "react-i18next"
 import {
   useDeviceUsageQuery,
@@ -18,6 +6,7 @@ import {
   useTrendQuery,
 } from "@/app/store/api"
 import type { FilterState } from "@/app/store/slices/filterSlice"
+import { QueryState } from "@/components/query-state"
 import { Card, CardContent } from "@/components/ui/card"
 import { Sparkline } from "@/features/usage/components/sparkline"
 import {
@@ -57,6 +46,9 @@ export function KpiBand({ filter }: { filter: FilterState }) {
   const { t } = useTranslation()
   const {
     stats: s,
+    isLoading,
+    error,
+    retry,
     deltaPct,
     singleDay,
     dailyAvg,
@@ -201,15 +193,43 @@ export function KpiBand({ filter }: { filter: FilterState }) {
     },
   ]
 
+  const byKey = Object.fromEntries(
+    [...main, ...secondary].map((cell) => [cell.key, cell]),
+  )
+  const groups = [
+    { key: "consumption", cells: ["cost", "hitRate", "dailyTokens"] },
+    { key: "efficiency", cells: ["avgDuration", "perTurn", "longest"] },
+    { key: "activity", cells: ["sessions", "projects", "devices"] },
+  ]
+
   return (
     <Card interactive>
-      <CardContent className="flex flex-col gap-1 py-4">
-        {/* 单行九格自适应折行 — 格宽随容器伸缩，min-w-0 + truncate 兜底。 */}
-        <div className="grid grid-cols-3 gap-x-6 gap-y-4 min-[760px]:grid-cols-5 min-[1120px]:grid-cols-9">
-          {[...main, ...secondary].map((c) => (
-            <KpiCell key={c.key} cell={c} />
-          ))}
-        </div>
+      <CardContent>
+        <QueryState
+          isLoading={isLoading}
+          error={error}
+          isEmpty={false}
+          errorAction={{ label: t("common.retry"), onClick: retry }}
+        >
+          <div className="metric-groups">
+            {groups.map((group) => (
+              <section
+                key={group.key}
+                className="metric-group"
+                aria-label={t(`usage.dashboard.${group.key}`)}
+              >
+                <h2 className="text-xs font-semibold">
+                  {t(`usage.dashboard.${group.key}`)}
+                </h2>
+                <div className="metric-cells">
+                  {group.cells.map((key) => (
+                    <KpiCell key={key} cell={byKey[key]} />
+                  ))}
+                </div>
+              </section>
+            ))}
+          </div>
+        </QueryState>
       </CardContent>
     </Card>
   )
@@ -227,14 +247,14 @@ function accentStyle(accent?: "cost" | "accent") {
 function KpiCell({ cell }: { cell: Cell }) {
   return (
     <div className="min-w-0">
-      <div className="text-[18px] leading-tight font-semibold tabular-nums">
+      <div className="font-heading text-xl leading-tight font-semibold tracking-tight tabular-nums">
         <span style={accentStyle(cell.accent)}>{cell.value}</span>
       </div>
       <div className="text-muted-foreground mt-1 truncate text-[11.5px]">
         {cell.label}
       </div>
       {cell.sub ? (
-        <div className="text-muted-foreground mt-0.5 truncate text-[11px] tabular-nums">
+        <div className="text-muted-foreground mt-1 text-[11px] leading-relaxed tabular-nums">
           {cell.sub}
         </div>
       ) : null}

@@ -10,6 +10,8 @@ import { useState } from "react"
 import { useTranslation } from "react-i18next"
 import { useModelsQuery } from "@/app/store/api"
 import type { FilterState } from "@/app/store/slices/filterSlice"
+import { QueryState } from "@/components/query-state"
+import { Button } from "@/components/ui/button"
 import {
   Card,
   CardAction,
@@ -17,6 +19,7 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card"
+import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group"
 import { topNModels } from "@/features/usage/derive"
 import {
   formatCost,
@@ -42,7 +45,7 @@ export function ModelDistribution({
   onClearModel: () => void
 }) {
   const { t } = useTranslation()
-  const { data: rows = [] } = useModelsQuery(filter)
+  const { data: rows = [], isLoading, error, refetch } = useModelsQuery(filter)
   // 默认按 tokens 展示 (token-first cockpit), 开关同样 tokens 在前。
   const [metric, setMetric] = useState<"cost" | "tokens">("tokens")
 
@@ -75,58 +78,57 @@ export function ModelDistribution({
   ]
 
   return (
-    <Card interactive className="h-full">
+    <Card interactive>
       <CardHeader>
         <CardTitle>{t("usage.models.title")}</CardTitle>
         {/* 筛选 chip + 指标开关一起放进 CardAction (说明见下)。 */}
         <CardAction>
           <div className="flex items-center gap-2">
             {filter.model ? (
-              <button
-                type="button"
+              <Button
+                variant="secondary"
+                size="xs"
                 onClick={onClearModel}
                 aria-label={t("usage.models.clearFilter")}
-                className="bg-accent-tint text-accent-brand-strong hover:bg-accent-tint/70 inline-flex items-center gap-1 rounded-md px-2 py-0.5 text-xs font-medium outline-none transition-colors focus-visible:ring-2 focus-visible:ring-ring/40"
               >
                 <span className="max-w-32 truncate font-mono">
                   {filter.model}
                 </span>
-                <X className="size-3 shrink-0" />
-              </button>
+                <X data-icon="inline-end" />
+              </Button>
             ) : null}
-            {/* 指标开关: header 的 has-[card-action] 会切到
-                grid-cols-[1fr_auto], 开关待在自己的 auto 宽列里、justify-self-end
-                右对齐, 永不被标题宽度拉伸 (否则英文长标题会把胶囊背景撑出一截空隙)。
-                与同目录 usage-trend-chart 的 header 写法一致。 */}
-            <div className="bg-muted/60 inline-flex items-center gap-0.5 rounded-md p-0.5">
-              {(["tokens", "cost"] as const).map((m) => (
-                <button
-                  key={m}
-                  type="button"
-                  onClick={() => setMetric(m)}
-                  className={`rounded-[5px] px-2 py-0.5 text-xs font-medium transition-colors outline-none focus-visible:ring-2 focus-visible:ring-ring/40 ${
-                    metric === m
-                      ? "bg-accent-tint text-accent-brand-strong shadow-sm"
-                      : "text-muted-foreground hover:text-foreground"
-                  }`}
-                >
-                  {m === "tokens"
-                    ? t("usage.models.tokens")
-                    : t("usage.models.cost")}
-                </button>
-              ))}
-            </div>
+            <ToggleGroup
+              size="sm"
+              value={[metric]}
+              onValueChange={(values) => {
+                const next = values[0]
+                if (next === "tokens" || next === "cost") setMetric(next)
+              }}
+              aria-label={t("usage.models.title")}
+            >
+              <ToggleGroupItem value="tokens">
+                {t("usage.models.tokens")}
+              </ToggleGroupItem>
+              <ToggleGroupItem value="cost">
+                {t("usage.models.cost")}
+              </ToggleGroupItem>
+            </ToggleGroup>
           </div>
         </CardAction>
       </CardHeader>
       {/* flex-1 + 居中：与会话排行卡同行配平（行高由行数多的一侧决定）。 */}
       <CardContent className="flex flex-1 flex-col justify-center gap-2">
-        {items.length === 0 ? (
-          <span className="text-muted-foreground text-sm">
-            {t("usage.models.empty")}
-          </span>
-        ) : (
-          items.map((it) => {
+        <QueryState
+          isLoading={isLoading}
+          error={error}
+          isEmpty={items.length === 0}
+          emptyLabel={t("usage.models.empty")}
+          errorAction={{
+            label: t("common.retry"),
+            onClick: () => void refetch(),
+          }}
+        >
+          {items.map((it) => {
             // DSL: 分布行主值不带标签（模型名在行左即标签）—— `数量 · 占比`；
             // 缓存命中是有标签的段，与主值同行拼接进 value 半行。请求数在
             // sub 行（#119 维度行字段补全：ModelStatsRow 自带、此前未展示）。
@@ -165,8 +167,8 @@ export function ModelDistribution({
                 onClick={model == null ? undefined : () => onPickModel(model)}
               />
             )
-          })
-        )}
+          })}
+        </QueryState>
       </CardContent>
     </Card>
   )

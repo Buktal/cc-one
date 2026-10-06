@@ -50,27 +50,25 @@ export function ProjectSection({ filter }: { filter: FilterState }) {
     dispatch(patchFilter({ project: selected === project ? "" : project }))
 
   return (
-    <QueryState
-      isLoading={isLoading}
-      error={error}
-      isEmpty={rows.length === 0}
-      emptyLabel={t("usage.projects.empty")}
-      emptyDescription={t("usage.projects.emptyDesc")}
-    >
-      {/* 卡体由父级网格定位（#119 三期：项目排行并入概览网格 8/12），
-          本分区只提供卡片本身。 */}
-      <Card interactive className="h-full">
-        <CardHeader>
-          <CardTitle>{t("usage.projects.rankTitle")}</CardTitle>
-          {/* 副标进 CardAction（全页 header 单行制）——第二行副标会把内容
+    <Card interactive>
+      <CardHeader>
+        <CardTitle>{t("usage.projects.rankTitle")}</CardTitle>
+        {/* 副标进 CardAction（全页 header 单行制）——第二行副标会把内容
               起点压低一行，与同行其它卡的 header 形制也不再齐。 */}
-          <CardAction>
-            <span className="text-muted-foreground text-xs tabular-nums">
-              {t("usage.projects.topN", { n: TOP_N })}
-            </span>
-          </CardAction>
-        </CardHeader>
-        <CardContent className="flex flex-1 flex-col justify-center gap-1.5">
+        <CardAction>
+          <span className="text-muted-foreground text-xs tabular-nums">
+            {t("usage.projects.topN", { n: TOP_N })}
+          </span>
+        </CardAction>
+      </CardHeader>
+      <CardContent className="flex flex-1 flex-col justify-center gap-1.5">
+        <QueryState
+          isLoading={isLoading}
+          error={error}
+          isEmpty={rows.length === 0}
+          emptyLabel={t("usage.projects.empty")}
+          emptyDescription={t("usage.projects.emptyDesc")}
+        >
           {ranking.top.map((r) => (
             <DistRow
               key={r.project}
@@ -150,8 +148,8 @@ export function ProjectSection({ filter }: { filter: FilterState }) {
               ])}
             />
           ) : null}
-        </CardContent>
-      </Card>
-    </QueryState>
+        </QueryState>
+      </CardContent>
+    </Card>
   )
 }

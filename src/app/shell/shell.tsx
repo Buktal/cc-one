@@ -13,6 +13,7 @@
 //   补：滚动 wrapper 的高度是 auto，Chromium 下子元素的百分比 max-height
 //   解析为 none，锁不住。
 
+import { PageHeading } from "./page-heading"
 import { TitleBar } from "./title-bar"
 
 export function Shell({
@@ -24,7 +25,7 @@ export function Shell({
   fill?: boolean
 }) {
   return (
-    <div className="bg-app text-foreground flex h-screen w-screen flex-col overflow-hidden">
+    <div className="bg-app text-foreground flex min-h-0 flex-1 flex-col overflow-hidden [block-size:100dvh]">
       <TitleBar />
       {/* pt-3：顶栏（Windows/Linux 态有底线）与内容的间隔；px-4/pb-4 沿用
           侧栏时代的四周留白，看板与日志在宽屏铺满贴边（窄内容如 settings
@@ -33,7 +34,8 @@ export function Shell({
         {/* min-h-0: the main is a flex item on the column's main axis, where
             min-height:auto would let tall content stretch it past the viewport
             instead of scrolling internally. */}
-        <main className="flex min-h-0 min-w-0 flex-1 flex-col">
+        <main className="workspace-main flex min-h-0 min-w-0 flex-1 flex-col">
+          <PageHeading />
           {fill ? (
             children
           ) : (

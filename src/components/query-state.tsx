@@ -35,7 +35,7 @@ export function QueryState({
 }) {
   const { t } = useTranslation()
   if (isLoading) {
-    return <Skeleton className="h-24 w-full rounded-md" />
+    return <Skeleton className="min-h-24 flex-1 rounded-md" />
   }
   if (error) {
     return (
