@@ -39,6 +39,10 @@ thiserror = "2"
 rusqlite = { version = "0.31", features = ["bundled", "functions"] }
 # Cost precision (Decimal stored as TEXT).
 rust_decimal = { version = "1", features = ["serde"] }
+# Source-cited list prices (each row dated and checked against the provider's
+# pricing page) for the built-in seed and for models missing from the local
+# book. Compiled-in data, no network; `rust_decimal` gives exact Decimal rates.
+llm-prices = { version = "1.8.0", features = ["rust_decimal"] }
 # Timestamps as ISO8601 UTC.
 chrono = { version = "0.4", features = ["serde"] }
 # Device identity + record ids.

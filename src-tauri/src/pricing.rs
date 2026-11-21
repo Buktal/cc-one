@@ -76,13 +76,20 @@ impl PricingBook {
     /// zero are filled with the documented heuristics (cache write ≈ 1.25×
     /// input, cache read ≈ 0.1× input). Returns `None` if no model matches at
     /// all (⇒ zero-cost placeholder).
+    ///
+    /// When nothing in the book matches, the model's published list price from
+    /// `llm-prices` is used before giving up, so a model released after the
+    /// book was seeded or refreshed is billed instead of recorded at $0. Rows
+    /// in the book (user edits, LiteLLM refresh) always win.
     pub fn resolve(&self, model: &str) -> Option<ResolvedRate> {
         for candidate in normalization_candidates(model) {
             if let Some(p) = self.by_key.get(&candidate) {
                 return Some(ResolvedRate::from_pricing(p));
             }
         }
-        None
+        listed_price(model)
+            .or_else(|| listed_price(&crate::model::normalize_model_key(model)))
+            .map(|p| ResolvedRate::from_pricing(&p))
     }
 }
 
@@ -164,6 +171,36 @@ fn normalization_candidates(model: &str) -> Vec<String> {
     out
 }
 
+/// A model's published list price from `llm-prices` as a `ModelPricing` row.
+/// Cache writes map to the 5-minute lifetime, which is what a single
+/// `cache_creation` bucket bills at. A column the provider does not list stays
+/// 0, so the cache heuristics in `ResolvedRate` apply as for any other row.
+fn listed_price(model: &str) -> Option<ModelPricing> {
+    use llm_prices::Rate;
+    let p = llm_prices::lookup(model)?;
+    let rate = |r: Rate<'_>| p.rate_decimal(r).unwrap_or(Decimal::ZERO);
+    Some(ModelPricing {
+        model_key: p.model.to_string(),
+        display_name: p.model.to_string(),
+        input: p.rate_decimal(Rate::Input)?,
+        output: rate(Rate::Output),
+        cache_read: rate(Rate::CacheRead),
+        cache_creation: rate(Rate::CacheWrite("5m")),
+        is_builtin: true,
+    })
+}
+
+/// A seed row taken from the `llm-prices` table, so it carries the provider's
+/// current list price rather than a hand-copied one. Panics if the model is
+/// not in the table: a seed key that stops resolving must fail tests, not
+/// silently bill at $0.
+fn listed_row(key: &str, name: &str) -> ModelPricing {
+    let mut p = listed_price(key).unwrap_or_else(|| panic!("seed model {key} not in llm-prices"));
+    p.model_key = key.to_string();
+    p.display_name = name.to_string();
+    p
+}
+
 /// A small built-in seed so cost calc works offline before the LiteLLM fetch.
 /// These are **bootstrap placeholders** — refresh via LiteLLM or
 /// edit in the Pricing UI; treat values as approximate.
@@ -184,39 +221,11 @@ pub fn builtin_seed() -> Vec<ModelPricing> {
     vec![
         // The user's transit model via CC-Switch. Placeholder price, verify/override.
         row("glm-5.2", "GLM 5.2", "0.60", "2.20", "0.06", "0.75"),
-        // Anthropic Claude family (approx, public list prices).
-        row(
-            "claude-fable-5",
-            "Claude Fable 5",
-            "5.00",
-            "25.00",
-            "0.50",
-            "6.25",
-        ),
-        row(
-            "claude-opus-4-8",
-            "Claude Opus 4.8",
-            "15.00",
-            "75.00",
-            "1.50",
-            "18.75",
-        ),
-        row(
-            "claude-sonnet-5",
-            "Claude Sonnet 5",
-            "3.00",
-            "15.00",
-            "0.30",
-            "3.75",
-        ),
-        row(
-            "claude-haiku-4-5",
-            "Claude Haiku 4.5",
-            "1.00",
-            "5.00",
-            "0.10",
-            "1.25",
-        ),
+        // Anthropic Claude family: current list prices from llm-prices.
+        listed_row("claude-fable-5", "Claude Fable 5"),
+        listed_row("claude-opus-4-8", "Claude Opus 4.8"),
+        listed_row("claude-sonnet-5", "Claude Sonnet 5"),
+        listed_row("claude-haiku-4-5", "Claude Haiku 4.5"),
         row(
             "claude-3-5-haiku",
             "Claude 3.5 Haiku",
@@ -235,25 +244,19 @@ pub fn builtin_seed() -> Vec<ModelPricing> {
         ),
         // OpenAI (approx).
         row("gpt-5.6", "GPT-5.6", "2.50", "10.00", "0.25", "2.50"),
-        row("gpt-4o", "GPT-4o", "2.50", "10.00", "1.25", "2.50"),
+        listed_row("gpt-4o", "GPT-4o"),
         // OpenAI Codex variants (gpt-5.x) — base names; the prefix-fallback in
         // `resolve` maps variant suffixes (`-codex`, `-low/medium/high/…`) back
         // to these. Codex logs never expose cache_creation, so it is 0 here and
         // the cache-write heuristic does not affect Codex cost.
-        row("gpt-5.5", "GPT-5.5", "5", "30", "0.50", "0"),
-        row("gpt-5.4", "GPT-5.4", "2.50", "15", "0.25", "0"),
-        row("gpt-5.2", "GPT-5.2", "1.75", "14", "0.175", "0"),
-        // Google (approx).
-        row(
-            "gemini-2.5-pro",
-            "Gemini 2.5 Pro",
-            "1.25",
-            "5.00",
-            "0.125",
-            "1.25",
-        ),
+        listed_row("gpt-5.5", "GPT-5.5"),
+        listed_row("gpt-5.4", "GPT-5.4"),
+        listed_row("gpt-5.2", "GPT-5.2"),
+        // Google: list price from llm-prices.
+        listed_row("gemini-2.5-pro", "Gemini 2.5 Pro"),
         // DeepSeek (OpenCode's common backend). Values from CC-Switch's table;
-        // v4 and newer are not listed here — they fall to cost 0 and are
+        // v4 and newer are not listed here: `resolve` prices them from
+        // llm-prices when it lists them, otherwise they fall to cost 0 and are
         // top-up rebilled once a price is added via the Pricing UI / LiteLLM.
         row(
             "deepseek-v3.2",
@@ -446,6 +449,61 @@ mod tests {
         );
         assert!(book.resolve("gpt-4o").is_some());
         assert!(book.resolve("totally-unknown").is_none());
+        // A listed model the book lacks resolves via llm-prices.
+        assert!(book.resolve("claude-opus-5-5").is_some());
+    }
+
+    #[test]
+    fn seed_carries_current_list_prices() {
+        let book = seed_book();
+        let rates = |m: &str| {
+            let r = book.resolve(m).expect("seeded model resolves");
+            (r.input, r.output, r.cache_read, r.cache_creation)
+        };
+        // The hand-copied seed had 5/25, 15/75, 3/15 and Gemini output 5.
+        assert_eq!(
+            rates("claude-fable-5"),
+            (dec("10"), dec("50"), dec("1"), dec("12.5"))
+        );
+        assert_eq!(
+            rates("claude-opus-4-8"),
+            (dec("5"), dec("25"), dec("0.5"), dec("6.25"))
+        );
+        assert_eq!(
+            rates("claude-sonnet-5"),
+            (dec("2"), dec("10"), dec("0.2"), dec("2.5"))
+        );
+        assert_eq!(book.resolve("gemini-2.5-pro").unwrap().output, dec("10"));
+    }
+
+    #[test]
+    fn model_missing_from_book_bills_at_listed_price() {
+        // Not in the seed: used to resolve to None and be stored at $0.
+        let book = seed_book();
+        let rate = book
+            .resolve("claude-opus-5-5")
+            .expect("listed model resolves");
+        assert_eq!((rate.input, rate.output), (dec("4"), dec("20")));
+        let tokens = TokenCounts {
+            input: 1_000_000,
+            output: 0,
+            cache_creation: 0,
+            cache_read: 0,
+        };
+        assert!((CostCalculator::calc(tokens, Some(rate)).total_f64() - 4.0).abs() < 1e-9);
+        // DeepSeek v4 (the seed comment's known $0 case) now prices too.
+        assert!(book.resolve("deepseek-v4-pro").is_some());
+        // A book row still wins over the listed price.
+        let custom = PricingBook::from_iter([ModelPricing {
+            model_key: "claude-opus-5-5".into(),
+            display_name: "custom".into(),
+            input: dec("1"),
+            output: dec("2"),
+            cache_read: Decimal::ZERO,
+            cache_creation: Decimal::ZERO,
+            is_builtin: false,
+        }]);
+        assert_eq!(custom.resolve("claude-opus-5-5").unwrap().input, dec("1"));
     }
 
     #[test]
