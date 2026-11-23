@@ -31,7 +31,12 @@ jobs:
 
       - uses: actions/setup-node@v4
         with:
-          node-version: lts/*
+          # Pinned to 24, not lts/*: Node >= 25 no longer ships Corepack, so
+          # `corepack enable` no longer puts the Yarn shims ahead of the
+          # runner's global Yarn 1 — the Windows build then ran Yarn 1.22
+          # against packageManager yarn@4.18.0 and failed (v2.3.1 release
+          # run). Node 24 is LTS until 2028-04; re-evaluate on a bump.
+          node-version: 24
           # Note: the `corepack` input was removed from setup-node@v4;
           # corepack is enabled explicitly in the step below instead.
 
