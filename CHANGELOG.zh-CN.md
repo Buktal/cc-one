@@ -4,6 +4,19 @@ cc one 的所有显著变更记录于此。
 
 格式基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，并遵循[语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [2.3.1] - 2026-11-23
+
+### 修复
+
+- **定价表里没有的模型不再记 $0** —— 模型在定价表里匹配不到任何行时（键归一化与前缀回退之后），改用它的厂商公开标价，而不是直接放弃。标价来自编译进应用的 llm-prices 数据集，不联网获取。表内行（你在成本定价页的编辑、LiteLLM 拉取）始终优先于公开标价。(#120)
+- **内置 seed 价格修正** —— Claude、GPT-4o、GPT-5.x 与 Gemini 2.5 Pro 的 seed 行改由 llm-prices 提供，不再手抄，修正了 Claude Fable 5 5/25 → 10/50、Claude Opus 4.8 15/75 → 5/25、Claude Sonnet 5 3/15 → 2/10，以及 Gemini 2.5 Pro 的输出价 5 → 10（美元 / 百万 token，输入 / 输出）。seed 只在定价表为空时写入，已有安装会保留现有行——如需修正，请在成本定价页编辑或拉取 LiteLLM。(#120)
+
+### 变更
+
+- **升级后零成本历史会回算** —— 启动期回算（只补零成本行，已计价的历史从不重算）现在也覆盖经 llm-prices 能解析出价格的模型，因此升级前记下的这类行会在下次启动时补上价格、当天的成本合计随之上升；同步模式下，受影响的日子会在下次同步时推送。(#120)
+- **GPT-4o 与 Gemini 2.5 Pro 的缓存写入价改走通用估算** —— 数据集里 OpenAI 与 Google 没有缓存写入价，seed 不再为这两行手填数值，缓存创建 token 按通用的 1.25× 输入计价。(#120)
+- **新增运行时依赖 llm-prices 1.8.0（MIT）** —— 数据集每一行都记录来源的厂商定价页与核对日期。(#120)
+
 ## [2.3.0] - 2026-10-07
 
 ### 变更
@@ -350,6 +363,7 @@ cc one 的所有显著变更记录于此。
 - **macOS**：仅 Apple Silicon（arm64）；构建未签名——首次启动右键 →「打开」（或 `xattr -dr com.apple.quarantine /Applications/cc one.app`）。Intel Mac 用户可从源码构建。
 - **Provider**：当前仅 Claude Code；更多 provider（Codex、Cursor 等）规划中。
 
+[2.3.1]: https://github.com/Buktal/cc-one/releases/tag/v2.3.1
 [2.3.0]: https://github.com/Buktal/cc-one/releases/tag/v2.3.0
 [2.2.0]: https://github.com/Buktal/cc-one/releases/tag/v2.2.0
 [2.1.0]: https://github.com/Buktal/cc-one/releases/tag/v2.1.0

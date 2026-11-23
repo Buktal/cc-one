@@ -5,6 +5,19 @@ All notable changes to cc one are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.3.1] - 2026-11-23
+
+### Fixed
+
+- **Models missing from the pricing table no longer cost $0** — when no row of the table matches a model (after key normalization and prefix fallback), its published list price is used instead of giving up. The list prices come from the `llm-prices` dataset compiled into the app, so nothing is fetched over the network. Rows in the table (your edits on the Pricing page, the LiteLLM pull) always win over the list price. (#120)
+- **Built-in seed prices corrected** — the Claude, GPT-4o, GPT-5.x and Gemini 2.5 Pro seed rows now come from `llm-prices` instead of hand-copied values, which corrects Claude Fable 5 5/25 → 10/50, Claude Opus 4.8 15/75 → 5/25, Claude Sonnet 5 3/15 → 2/10 and the Gemini 2.5 Pro output price 5 → 10 (USD per 1M tokens, input / output). The seed is written only when the pricing table is empty, so an existing install keeps its current rows — correct them on the Pricing page or through the LiteLLM pull. (#120)
+
+### Changed
+
+- **Zero-cost history is topped up after the upgrade** — the startup rebill (zero-cost rows only; already-costed history is never re-costed) now also reaches rows whose model resolves through `llm-prices`, so such rows recorded before the upgrade are priced on the next launch and those days' cost totals rise accordingly; in Synced mode the affected days are pushed on the next sync. (#120)
+- **Cache-write rates for GPT-4o and Gemini 2.5 Pro follow the standard estimate** — the dataset lists no cache-write price for OpenAI or Google, so the seed no longer carries a hand-set value for these two rows and cache-creation tokens are billed at the usual 1.25× input. (#120)
+- **New runtime dependency: `llm-prices` 1.8.0 (MIT)** — every row of the dataset records the provider pricing page it came from and the date it was checked. (#120)
+
 ## [2.3.0] - 2026-10-07
 
 ### Changed
@@ -352,6 +365,7 @@ First public, open-source release.
 - **macOS**: Apple Silicon (arm64) only; builds are unsigned — right-click → **Open** on first launch (or `xattr -dr com.apple.quarantine /Applications/cc one.app`). Intel Mac users can build from source.
 - **Providers**: Claude Code only; additional providers (Codex, Cursor, …) are planned.
 
+[2.3.1]: https://github.com/Buktal/cc-one/releases/tag/v2.3.1
 [2.3.0]: https://github.com/Buktal/cc-one/releases/tag/v2.3.0
 [2.2.0]: https://github.com/Buktal/cc-one/releases/tag/v2.2.0
 [2.1.0]: https://github.com/Buktal/cc-one/releases/tag/v2.1.0
